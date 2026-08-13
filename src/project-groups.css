@@ -1,0 +1,325 @@
+.session-overview {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 15px 18px;
+  border-bottom: 1px solid #1b2430;
+  background: linear-gradient(
+    180deg,
+    rgba(18, 24, 34, 0.72),
+    rgba(11, 15, 21, 0.2)
+  );
+}
+.session-overview > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.session-overview b {
+  font-family: "DM Mono", monospace;
+  font-size: 17px;
+  line-height: 1;
+  color: #f1f4f9;
+}
+.session-overview small {
+  color: #65758b;
+  font-size: 9px;
+}
+.session-overview button {
+  margin-left: auto;
+  height: 34px;
+  padding: 0 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #7655c1;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #493079, #342257);
+  box-shadow: 0 6px 18px #5d3aa433;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.session-overview button:hover {
+  background: linear-gradient(135deg, #593b90, #40296b);
+}
+.session-overview button svg {
+  width: 13px;
+}
+.project-group {
+  margin: 0 2px 8px;
+}
+.project-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: #aab5c5;
+  text-align: left;
+}
+.project-heading:hover {
+  background: #121a24;
+  color: #eef2f7;
+}
+.project-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.project-toggle > svg:first-child {
+  width: 15px;
+  height: 15px;
+  color: #75849a;
+  flex: none;
+}
+.project-toggle > svg:last-child {
+  width: 13px;
+  height: 13px;
+  color: #59687b;
+  flex: none;
+}
+.project-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.project-heading b {
+  display: inline-block !important;
+  margin-left: auto;
+  min-width: 22px;
+  padding: 2px 7px;
+  border: 1px solid #2b3747;
+  border-radius: 999px;
+  background: #1a2330;
+  color: #8e9caf;
+  font-family: "DM Mono", monospace;
+  font-size: 9px !important;
+  line-height: 14px;
+  text-align: center;
+  flex: none;
+}
+.project-add {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #718096;
+  cursor: pointer;
+  flex: none;
+}
+.project-add:hover {
+  border-color: #5d438f;
+  background: #342653;
+  color: #c5adff;
+}
+.project-add svg {
+  width: 14px;
+  height: 14px;
+}
+.project-group > button {
+  position: relative;
+  display: block;
+  width: calc(100% - 12px);
+  min-height: 76px;
+  margin: 1px 0 4px 12px;
+  padding: 10px 11px 9px 13px;
+  border: 1px solid transparent;
+  border-left: 2px solid #252f3d;
+  border-radius: 4px 9px 9px 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease;
+}
+.project-group > button:hover {
+  border-color: #283345;
+  border-left-color: #7052b6;
+  background: #121923;
+}
+.project-group > button.selected {
+  border-color: #3c3159;
+  border-left-color: #9b76ee;
+  background: linear-gradient(90deg, #6543a63d, #141a24f5 64%);
+}
+.project-group strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: #dce3ec;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.project-group .thread-line {
+  margin: 0;
+}
+.project-group p {
+  margin: 3px 0 7px;
+}
+.project-group small {
+  font-family: "DM Mono", monospace;
+}
+.source-error {
+  margin: 9px 12px 0;
+  border: 1px solid #663243;
+  background: #2b1520;
+  border-radius: 8px;
+  color: #fb8fa2;
+  font-size: 9px;
+}
+.source-error summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  cursor: pointer;
+}
+.source-error summary svg {
+  width: 13px;
+}
+.source-error > div {
+  padding: 0 8px 8px;
+}
+.source-error pre {
+  max-height: 90px;
+  overflow: auto;
+  margin: 4px 0 0;
+  color: #bd8290;
+  white-space: pre-wrap;
+}
+.sync-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  margin-bottom: 12px;
+  border: 1px solid #24563c;
+  background: #10261a;
+  border-radius: 9px;
+  color: #56db94;
+}
+.sync-note svg {
+  width: 18px;
+}
+.sync-note div {
+  display: flex;
+  flex-direction: column;
+}
+.sync-note b {
+  font-size: 11px;
+}
+.sync-note small {
+  font-size: 8px;
+  color: #6fae89;
+}
+.provider-row mark {
+  margin-left: 5px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: #183a28;
+  color: #67db9c;
+  font-size: 7px;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #394657 transparent;
+}
+.form input.readonly {
+  color: #9ba8ba;
+  background: #0d1219;
+  border-style: dashed;
+  cursor: default;
+}
+.form .primary:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+.task-error {
+  display: flex;
+  gap: 11px;
+  margin: 18px 0;
+  padding: 13px 14px;
+  border: 1px solid #713044;
+  border-radius: 11px;
+  background: linear-gradient(145deg, #30141f, #1b1118);
+  color: #ff9aae;
+}
+.task-error > svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}
+.task-error b {
+  display: block;
+  color: #ffd2db;
+  font-size: 12px;
+}
+.task-error p {
+  margin: 5px 0;
+  color: #e8a5b2;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.task-error small {
+  color: #9c6672;
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+.thread-list::-webkit-scrollbar,
+.timeline::-webkit-scrollbar {
+  width: 6px;
+}
+.thread-list::-webkit-scrollbar-track,
+.timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thread-list::-webkit-scrollbar-thumb,
+.timeline::-webkit-scrollbar-thumb {
+  background: #394657;
+  border-radius: 999px;
+}
+@media (max-width: 760px) {
+  .session-overview {
+    padding: 14px 20px;
+  }
+  .project-group {
+    margin-bottom: 6px;
+  }
+  .project-heading {
+    min-height: 43px;
+    padding-inline: 11px !important;
+  }
+  .project-toggle span {
+    font-size: 13px;
+  }
+  .project-group > button {
+    min-height: 80px;
+    width: calc(100% - 16px);
+    margin-left: 16px;
+  }
+}
