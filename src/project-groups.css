@@ -46,6 +46,72 @@
 .session-overview button svg {
   width: 13px;
 }
+.watch-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  padding: 10px 12px 5px;
+}
+.watch-strip button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #242e3c;
+  border-radius: 9px;
+  background: #10161e;
+  color: #8f9caf;
+  font-size: 9px;
+  cursor: pointer;
+}
+.watch-strip button.active {
+  border-color: #665093;
+  background: #261d38;
+  color: #e4d9ff;
+}
+.watch-strip em {
+  margin-left: 5px;
+  color: #fb8196;
+  font-style: normal;
+}
+.watch-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+}
+.watch-dot.running {
+  background: #35d07f;
+  box-shadow: 0 0 7px #35d07f88;
+}
+.watch-dot.waiting {
+  background: #f6b94b;
+}
+.session-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 7px 12px 4px;
+  padding: 0 8px;
+  border: 1px solid #252f3d;
+  border-radius: 9px;
+  background: #0c1219;
+}
+.session-search > svg {
+  width: 14px;
+  color: #5e6d81;
+}
+.session-search input {
+  width: 100%;
+  height: 36px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #dce4ee;
+  font-size: 10px;
+}
+.session-search .icon-btn {
+  padding: 4px;
+}
 .project-group {
   margin: 0 2px 8px;
 }
@@ -183,6 +249,30 @@
 .project-group small {
   font-family: "DM Mono", monospace;
 }
+.thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.provider-badge {
+  max-width: 55%;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--provider) 48%, #26303d);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--provider) 14%, #111821);
+  color: color-mix(in srgb, var(--provider) 65%, #d9e1ec);
+  font-size: 8px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.thread-meta small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .source-error {
   margin: 9px 12px 0;
   border: 1px solid #663243;
@@ -221,6 +311,57 @@
   background: #10261a;
   border-radius: 9px;
   color: #56db94;
+}
+
+.sync-note.pending {
+  border-color: #7c5bd0;
+}
+
+.sync-note.pending .primary {
+  margin-left: auto;
+  min-height: 34px;
+  padding: 0 13px;
+  flex: none;
+}
+
+.terminal-connect {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid #293447;
+  border-radius: 10px;
+  background: #0b1119;
+}
+
+.terminal-connect > svg {
+  width: 18px;
+  color: #a78bfa;
+  flex: none;
+}
+
+.terminal-connect > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.terminal-connect small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.terminal-connect button {
+  margin-left: auto;
+  flex: none;
+  border: 1px solid #4f3d78;
+  background: #271d3d;
+  border-radius: 7px;
+  color: #d9ccff;
+  padding: 7px 9px;
+  cursor: pointer;
 }
 .sync-note svg {
   width: 18px;
@@ -267,6 +408,168 @@
   border-radius: 11px;
   background: linear-gradient(145deg, #30141f, #1b1118);
   color: #ff9aae;
+}
+.provider-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #344052;
+  border-radius: 9px;
+  background: #121923;
+  color: #adb9c9;
+  font-size: 9px;
+  cursor: pointer;
+}
+.provider-switch:hover {
+  border-color: #7155ac;
+  color: #d9c9ff;
+}
+.provider-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.provider-switch svg {
+  width: 13px;
+}
+.provider-switch span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.thread-actions-wrap {
+  position: relative;
+}
+.thread-actions {
+  position: absolute;
+  z-index: 15;
+  right: 0;
+  top: 39px;
+  width: 150px;
+  overflow: hidden;
+  border: 1px solid #303b4b;
+  border-radius: 10px;
+  background: #151c25;
+  box-shadow: 0 18px 45px #000a;
+}
+.thread-actions button {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: #b9c4d2;
+  text-align: left;
+  font-size: 10px;
+  cursor: pointer;
+}
+.thread-actions button:hover {
+  background: #222c39;
+  color: white;
+}
+.thread-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.migration-note {
+  display: flex;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #4d4168;
+  border-radius: 10px;
+  background: #1b1725;
+}
+.migration-note > svg {
+  width: 18px;
+  flex: none;
+  color: #b29ae8;
+}
+.migration-note b {
+  color: #dfd4f7;
+  font-size: 11px;
+}
+.migration-note p {
+  margin: 4px 0 0;
+  color: #9389a7;
+  font-size: 9px;
+  line-height: 1.55;
+}
+.migration-origin {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  margin: -14px auto 24px;
+  color: #82759a;
+  font-size: 9px;
+}
+.migration-origin svg {
+  width: 13px;
+}
+.input-action {
+  display: flex;
+  gap: 6px;
+}
+.input-action input {
+  flex: 1;
+}
+.input-action .icon-btn {
+  flex: none;
+  border: 1px solid #2c3746;
+  background: #111821;
+}
+.text-btn {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #8c71cf;
+  padding: 0;
+  font-size: 9px;
+  cursor: pointer;
+}
+.dir-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dir-toolbar code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #8290a4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dir-list {
+  max-height: 45vh;
+  overflow: auto;
+  margin: 10px 0;
+  border: 1px solid #252f3c;
+  border-radius: 9px;
+}
+.dir-list > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-bottom: 1px solid #1f2834;
+  background: #0e141c;
+  color: #b4bfcd;
+  text-align: left;
+  cursor: pointer;
+}
+.dir-list > button:hover {
+  background: #18212c;
+}
+.dir-list svg {
+  width: 14px;
+}
+.dir-list span {
+  flex: 1;
 }
 .task-error > svg {
   width: 19px;
@@ -321,5 +624,23 @@
     min-height: 80px;
     width: calc(100% - 16px);
     margin-left: 16px;
+  }
+  .provider-switch {
+    max-width: 110px;
+  }
+  .provider-switch span {
+    display: none;
+  }
+  .thread-actions {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 86px;
+    width: auto;
+  }
+  .thread-actions button {
+    min-height: 48px;
+    font-size: 12px;
   }
 }

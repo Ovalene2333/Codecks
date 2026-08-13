@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { ProviderStore } from "./store.js";
+import { ProjectStore } from "./projects.js";
+import { listDirectories } from "./fs-browse.js";
 import { CodexManager } from "./manager.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { lanAddresses } from "./network.js";
@@ -37,8 +39,15 @@ if (remote && cli.noToken)
   );
 
 const store = new ProviderStore(dataDir, process.env.CODEX_HOME);
+const projects = new ProjectStore(dataDir);
 await store.load();
+await projects.load();
 const manager = new CodexManager(store, dataDir, process.env.CODEX_BIN);
+const fullSnapshot = () => ({
+  ...manager.snapshot(),
+  projects: projects.list(),
+  preferences: projects.getPreferences(),
+});
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
@@ -80,7 +89,102 @@ app.get("/api/health", (_req, res) =>
 );
 app.get(
   "/api/snapshot",
-  route(async () => manager.snapshot()),
+  route(async () => fullSnapshot()),
+);
+app.post(
+  "/api/runtime/apply-provider-config",
+  route(async () => {
+    await manager.applyProviderConfig();
+    return fullSnapshot();
+  }),
+);
+app.get(
+  "/api/runtime/terminal-command",
+  route(async (req) => ({
+    command: manager.terminalCommand(
+      typeof req.query.providerId === "string"
+        ? req.query.providerId
+        : undefined,
+      typeof req.query.cwd === "string" ? req.query.cwd : undefined,
+    ),
+  })),
+);
+app.get(
+  "/api/projects",
+  route(async () => ({
+    projects: projects.list(),
+    preferences: projects.getPreferences(),
+  })),
+);
+app.put(
+  "/api/projects",
+  route(async (req) => {
+    const input = z
+      .object({
+        key: z.string().optional(),
+        cwd: z.string().optional(),
+        name: z.string().optional(),
+        pinned: z.boolean().optional(),
+        hidden: z.boolean().optional(),
+        defaults: z
+          .object({
+            providerId: z.string().optional(),
+            model: z.string().optional(),
+            reasoningEffort: z.string().optional(),
+            sandbox: z
+              .enum(["read-only", "workspace-write", "danger-full-access"])
+              .optional(),
+            approvalPolicy: z
+              .enum(["untrusted", "on-request", "never"])
+              .optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+    await projects.upsert(input);
+    return fullSnapshot();
+  }),
+);
+app.delete(
+  "/api/projects",
+  route(async (req) => {
+    const { key } = z.object({ key: z.string().min(1) }).parse(req.body);
+    await projects.remove(key);
+    return fullSnapshot();
+  }),
+);
+app.put(
+  "/api/preferences",
+  route(async (req) => {
+    const input = z
+      .object({
+        lastProviderId: z.string().optional(),
+        lastModel: z.string().optional(),
+        lastReasoningEffort: z.string().optional(),
+        lastSandbox: z
+          .enum(["read-only", "workspace-write", "danger-full-access"])
+          .optional(),
+        lastApprovalPolicy: z
+          .enum(["untrusted", "on-request", "never"])
+          .optional(),
+        recentDirs: z.array(z.string()).optional(),
+      })
+      .parse(req.body);
+    await projects.updatePreferences(input);
+    return fullSnapshot();
+  }),
+);
+app.get(
+  "/api/fs",
+  route(async (req) =>
+    listDirectories(
+      typeof req.query.path === "string" ? req.query.path : undefined,
+    ),
+  ),
+);
+app.get(
+  "/api/providers/:id/models",
+  route(async (req) => manager.listModels(param(req.params.id))),
 );
 app.post(
   "/api/providers",
@@ -99,26 +203,23 @@ app.post(
         enabled: z.boolean().optional(),
       })
       .parse(req.body);
-    const provider = await store.upsert(input);
-    manager.restart(provider.id);
-    await manager.ensure(provider.id);
-    return manager.snapshot();
+    await store.upsert(input);
+    return fullSnapshot();
   }),
 );
 app.delete(
   "/api/providers/:id",
   route(async (req) => {
     const id = param(req.params.id);
-    manager.restart(id);
     await store.remove(id);
-    return manager.snapshot();
+    return fullSnapshot();
   }),
 );
 app.post(
   "/api/refresh",
   route(async () => {
     await manager.refreshAll();
-    return manager.snapshot();
+    return fullSnapshot();
   }),
 );
 app.post(
@@ -130,13 +231,24 @@ app.post(
         cwd: z.string().min(1),
         name: z.string().optional(),
         model: z.string().optional(),
+        reasoningEffort: z.string().optional(),
+        personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
         approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
       })
       .parse(req.body);
-    return manager.createThread(input.providerId, input);
+    const thread = await manager.createThread(input.providerId, input);
+    await projects.rememberCreate({
+      cwd: input.cwd,
+      providerId: input.providerId,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      sandbox: input.sandbox,
+      approvalPolicy: input.approvalPolicy,
+    });
+    return thread;
   }),
 );
 app.get(
@@ -172,6 +284,100 @@ app.post(
     );
   }),
 );
+app.patch(
+  "/api/threads/:providerId/:threadId",
+  route(async (req) => {
+    const providerId = param(req.params.providerId);
+    const threadId = param(req.params.threadId);
+    const input = z
+      .object({
+        name: z.string().min(1).optional(),
+        settings: z
+          .object({
+            model: z.string().optional(),
+            reasoningEffort: z.string().optional(),
+            personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
+            approvalPolicy: z
+              .enum(["untrusted", "on-request", "never"])
+              .optional(),
+            sandbox: z
+              .enum(["read-only", "workspace-write", "danger-full-access"])
+              .optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+    if (input.name)
+      await manager.renameThread(providerId, threadId, input.name);
+    if (input.settings)
+      await manager.updateThreadSettings(providerId, threadId, input.settings);
+    return fullSnapshot();
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/fork",
+  route(async (req) =>
+    manager.forkThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    ),
+  ),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/migrate",
+  route(async (req) => {
+    const input = z
+      .object({
+        targetProviderId: z.string().min(1),
+        model: z.string().optional(),
+        reasoningEffort: z.string().optional(),
+      })
+      .parse(req.body);
+    const thread = await manager.migrateThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      input.targetProviderId,
+      input,
+    );
+    await projects.rememberCreate({
+      cwd: thread.cwd,
+      providerId: input.targetProviderId,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+    });
+    return thread;
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/archive",
+  route(async (req) => {
+    await manager.archiveThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    );
+    return fullSnapshot();
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/unarchive",
+  route(async (req) => {
+    await manager.unarchiveThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    );
+    return fullSnapshot();
+  }),
+);
+app.delete(
+  "/api/threads/:providerId/:threadId",
+  route(async (req) => {
+    await manager.deleteThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    );
+    return fullSnapshot();
+  }),
+);
 app.post(
   "/api/approvals/:id",
   route(async (req) => {
@@ -202,10 +408,14 @@ server.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
 wss.on("connection", (ws) =>
-  ws.send(JSON.stringify({ type: "snapshot", data: manager.snapshot() })),
+  ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
 );
 manager.on("event", (event) => {
-  const payload = JSON.stringify(event);
+  const payload = JSON.stringify(
+    event.type === "snapshot"
+      ? { type: "snapshot", data: fullSnapshot() }
+      : event,
+  );
   for (const client of wss.clients)
     if (client.readyState === WebSocket.OPEN) client.send(payload);
 });
@@ -229,11 +439,7 @@ manager.startAll().catch((error) => console.error("Codex 启动失败:", error))
 setInterval(async () => {
   try {
     if (await store.syncCcSwitch()) {
-      for (const provider of store
-        .listPublic()
-        .filter((p) => p.kind === "cc-switch"))
-        manager.restart(provider.id);
-      await manager.startAll();
+      manager.emit("event", { type: "snapshot", data: fullSnapshot() });
     }
   } catch (error) {
     console.error("CC Switch 同步失败:", error);

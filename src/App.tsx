@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertCircle,
+  ArrowRightLeft,
   ArrowLeft,
   Bot,
   Check,
@@ -9,12 +11,14 @@ import {
   CircleStop,
   Command,
   Folder,
+  FolderOpen,
   KeyRound,
   Menu,
   MessageSquarePlus,
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Server,
   Settings,
@@ -25,8 +29,22 @@ import {
   Zap,
 } from "lucide-react";
 import { api, getSnapshot, getToken, post, remove, setToken } from "./api";
-import type { Approval, Provider, Snapshot, ThreadSummary } from "./types";
-import { groupThreadsByProject } from "./projects";
+import type {
+  Approval,
+  ApprovalPolicy,
+  ProjectRecord,
+  Provider,
+  SandboxMode,
+  Snapshot,
+  ThreadSummary,
+} from "./types";
+import {
+  filterProjectGroups,
+  mergeProjectGroups,
+  resolveNewThreadDefaults,
+} from "./projects";
+import { DirBrowser } from "./DirBrowser";
+import { ModelPicker } from "./ModelPicker";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 const fmtTime = (time: number) =>
@@ -80,10 +98,14 @@ function Modal({
 
 function ProviderModal({
   providers,
+  runtime,
+  defaultCwd,
   onClose,
   onSaved,
 }: {
   providers: Provider[];
+  runtime?: Snapshot["runtime"];
+  defaultCwd?: string;
   onClose: () => void;
   onSaved: (s: Snapshot) => void;
 }) {
@@ -111,9 +133,9 @@ function ProviderModal({
         <div className="sync-note">
           <RefreshCw />
           <div>
-            <b>已连接 CC Switch</b>
+            <b>已连接 CC Switch · 只读同步</b>
             <small>
-              每 5 秒同步 Codex 供应商，并隔离每个供应商的运行空间。
+              供应商是 Session 的启动配置；已运行会话不会随 CCS 当前项变化。
             </small>
           </div>
         </div>
@@ -134,21 +156,46 @@ function ProviderModal({
               </b>
               <small>
                 {p.kind === "cc-switch"
-                  ? `CC Switch · ${p.baseUrl || "官方登录"}`
+                  ? `CC Switch · ${p.baseUrl || "官方登录"}${
+                      p.baseUrl && !p.hasApiKey ? " · 无独立 Key" : ""
+                    }`
                   : p.kind === "custom"
-                    ? `${p.baseUrl} · 独立空间`
-                    : "使用当前 Codex 配置"}
+                    ? `${p.baseUrl} · ${p.wireApi || "responses"}`
+                    : "使用当前 Codex 登录"}
               </small>
             </div>
-            <span className={p.online ? "online" : "offline-dot"}>
-              {p.online ? "在线" : "离线"}
+            <span className={runtime?.online ? "online" : "offline-dot"}>
+              {runtime?.configPending
+                ? "待应用"
+                : runtime?.online
+                  ? "已装入"
+                  : runtime?.starting
+                    ? "启动中"
+                    : "未装入"}
             </span>
+            {runtime?.online && (
+              <button
+                className="icon-btn"
+                type="button"
+                title={`复制 ${p.name} 的终端接入命令`}
+                onClick={async () => {
+                  const query = new URLSearchParams({ providerId: p.id });
+                  if (defaultCwd) query.set("cwd", defaultCwd);
+                  const result = await api<{ command: string }>(
+                    `/runtime/terminal-command?${query}`,
+                  );
+                  await navigator.clipboard.writeText(result.command);
+                }}
+              >
+                <Command />
+              </button>
+            )}
             {p.kind === "custom" && (
               <button
                 className="icon-btn danger"
                 title="删除"
                 onClick={async () => {
-                  if (confirm(`删除 ${p.name}？会保留其会话目录。`))
+                  if (confirm(`删除 ${p.name}？现有 Session 历史不会删除。`))
                     onSaved(await remove(`/providers/${p.id}`));
                 }}
               >
@@ -158,6 +205,43 @@ function ProviderModal({
           </div>
         ))}
       </div>
+      {runtime?.configPending && (
+        <div className="sync-note pending">
+          <RefreshCw />
+          <div>
+            <b>供应商配置有更新</b>
+            <small>所有任务空闲后应用；运行中的 Session 不会被自动中断。</small>
+          </div>
+          <button
+            className="primary"
+            onClick={async () =>
+              onSaved(await post("/runtime/apply-provider-config"))
+            }
+          >
+            应用
+          </button>
+        </div>
+      )}
+      {runtime?.online && (
+        <div className="terminal-connect">
+          <Command />
+          <div>
+            <b>从终端接入同一 Runtime</b>
+            <small>{runtime.remoteUrl} 仅监听本机，不经过 LAN / CF。</small>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              const result = await api<{ command: string }>(
+                `/runtime/terminal-command${defaultCwd ? `?cwd=${encodeURIComponent(defaultCwd)}` : ""}`,
+              );
+              await navigator.clipboard.writeText(result.command);
+            }}
+          >
+            复制命令
+          </button>
+        </div>
+      )}
       <form className="form" onSubmit={save}>
         <h3>添加自定义供应商</h3>
         <label>
@@ -223,22 +307,30 @@ function ProviderModal({
 function NewThreadModal({
   providers,
   initialCwd = "",
+  project,
+  preferences,
   onClose,
   onCreated,
 }: {
   providers: Provider[];
   initialCwd?: string;
+  project?: ProjectRecord;
+  preferences?: Snapshot["preferences"];
   onClose: () => void;
   onCreated: (p: string, id: string) => void;
 }) {
-  const online = providers.filter((p) => p.online);
-  const [form, setForm] = useState({
-    providerId: online[0]?.id || providers[0]?.id || "",
+  const defaults = resolveNewThreadDefaults({
     cwd: initialCwd,
-    name: "",
-    sandbox: "workspace-write",
-    approvalPolicy: "on-request",
+    project,
+    preferences,
+    providers,
   });
+  const [form, setForm] = useState({
+    ...defaults,
+    name: "",
+    personality: "pragmatic",
+  });
+  const [browse, setBrowse] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
@@ -277,25 +369,34 @@ function NewThreadModal({
             {providers.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
-                {p.online ? "" : "（离线）"}
               </option>
             ))}
           </select>
         </label>
+        <ModelPicker
+          providerId={form.providerId}
+          model={form.model}
+          reasoningEffort={form.reasoningEffort}
+          onChange={(next) => setForm((current) => ({ ...current, ...next }))}
+        />
         <label>
           工作目录
-          <input
-            required
-            readOnly={Boolean(initialCwd)}
-            className={initialCwd ? "readonly" : ""}
-            value={form.cwd}
-            onChange={(e) => setForm({ ...form, cwd: e.target.value })}
-            placeholder={
-              navigator.userAgent.includes("Windows")
-                ? "D:\\Code\\project 或 /mnt/d/Code/project"
-                : "/home/me/project"
-            }
-          />
+          <div className="input-action">
+            <input
+              required
+              value={form.cwd}
+              onChange={(e) => setForm({ ...form, cwd: e.target.value })}
+              placeholder="D:\\Code\\project 或 /mnt/d/Code/project"
+            />
+            <button
+              type="button"
+              className="icon-btn"
+              title="浏览目录"
+              onClick={() => setBrowse(true)}
+            >
+              <FolderOpen />
+            </button>
+          </div>
         </label>
         <label>
           会话名称（可选）
@@ -310,7 +411,9 @@ function NewThreadModal({
             沙箱
             <select
               value={form.sandbox}
-              onChange={(e) => setForm({ ...form, sandbox: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, sandbox: e.target.value as SandboxMode })
+              }
             >
               <option value="workspace-write">工作区可写</option>
               <option value="read-only">只读</option>
@@ -322,7 +425,10 @@ function NewThreadModal({
             <select
               value={form.approvalPolicy}
               onChange={(e) =>
-                setForm({ ...form, approvalPolicy: e.target.value })
+                setForm({
+                  ...form,
+                  approvalPolicy: e.target.value as ApprovalPolicy,
+                })
               }
             >
               <option value="on-request">按需询问</option>
@@ -332,11 +438,25 @@ function NewThreadModal({
           </label>
         </div>
         {error && <p className="error-text">{error}</p>}
-        <button className="primary" type="submit" disabled={submitting}>
+        <button
+          className="primary"
+          type="submit"
+          disabled={submitting || !form.providerId}
+        >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}
         </button>
       </form>
+      {browse && (
+        <DirBrowser
+          initialPath={form.cwd || preferences?.recentDirs?.[0]}
+          onClose={() => setBrowse(false)}
+          onSelect={(cwd) => {
+            setForm((current) => ({ ...current, cwd }));
+            setBrowse(false);
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -375,6 +495,97 @@ function ApprovalCard({
         </button>
       </div>
     </article>
+  );
+}
+
+function ProviderSwitchModal({
+  thread,
+  providers,
+  onClose,
+  onCreated,
+}: {
+  thread: ThreadSummary;
+  providers: Provider[];
+  onClose: () => void;
+  onCreated: (providerId: string, threadId: string) => void;
+}) {
+  const choices = providers.filter(
+    (provider) => provider.id !== thread.providerId,
+  );
+  const [targetProviderId, setTargetProviderId] = useState(
+    choices[0]?.id || "",
+  );
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState(
+    thread.reasoningEffort || "",
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (busy || !targetProviderId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const created = await post(
+        `/threads/${thread.providerId}/${thread.id}/migrate`,
+        {
+          targetProviderId,
+          model: model || undefined,
+          reasoningEffort: reasoningEffort || undefined,
+        },
+      );
+      onCreated(targetProviderId, created.id);
+      onClose();
+    } catch (e: any) {
+      setError(e.message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="切换此 Session 的供应商" onClose={() => !busy && onClose()}>
+      <form className="form" onSubmit={submit}>
+        <div className="migration-note">
+          <ArrowRightLeft />
+          <div>
+            <b>带完整历史创建供应商切换分支</b>
+            <p>
+              Codex 会 fork 当前 Session
+              的完整历史，并让新分支使用目标供应商；原分支保留，运行中或待审批时不能切换。
+            </p>
+          </div>
+        </div>
+        <label>
+          目标供应商
+          <select
+            value={targetProviderId}
+            onChange={(e) => setTargetProviderId(e.target.value)}
+          >
+            {choices.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {targetProviderId && (
+          <ModelPicker
+            providerId={targetProviderId}
+            model={model}
+            reasoningEffort={reasoningEffort}
+            onChange={(next) => {
+              setModel(next.model);
+              setReasoningEffort(next.reasoningEffort);
+            }}
+          />
+        )}
+        {error && <p className="error-text">{error}</p>}
+        <button className="primary" disabled={busy || !targetProviderId}>
+          <ArrowRightLeft />
+          {busy ? "正在创建分支…" : "创建切换分支"}
+        </button>
+      </form>
+    </Modal>
   );
 }
 
@@ -431,6 +642,8 @@ function Chat({
   events,
   onBack,
   onSnapshot,
+  onSwitchProvider,
+  onSelectThread,
 }: {
   thread: ThreadSummary;
   provider?: Provider;
@@ -438,10 +651,14 @@ function Chat({
   events: any[];
   onBack: () => void;
   onSnapshot: () => void;
+  onSwitchProvider: () => void;
+  onSelectThread: (providerId: string, threadId: string) => void;
 }) {
   const [full, setFull] = useState<any>();
   const [text, setText] = useState("");
   const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const load = useCallback(
     () =>
@@ -458,7 +675,8 @@ function Chat({
   }, [full, events]);
   const send = async () => {
     const value = text.trim();
-    if (!value) return;
+    if (!value || sending) return;
+    setSending(true);
     setText("");
     setError("");
     try {
@@ -468,6 +686,8 @@ function Chat({
     } catch (e: any) {
       setText(value);
       setError(e.message);
+    } finally {
+      setSending(false);
     }
   };
   const resolve = async (id: string, decision: string) => {
@@ -478,15 +698,19 @@ function Chat({
       setError(e.message);
     }
   };
-  const streamed = events
-    .filter(
-      (e) =>
-        e.providerId === thread.providerId &&
-        e.params?.threadId === thread.id &&
-        e.method === "item/agentMessage/delta",
-    )
-    .map((e) => e.params.delta)
-    .join("");
+  const streamed =
+    thread.status === "running"
+      ? events
+          .filter(
+            (e) =>
+              e.params?.threadId === thread.id &&
+              e.method === "item/agentMessage/delta" &&
+              (!thread.activeTurnId ||
+                e.params?.turnId === thread.activeTurnId),
+          )
+          .map((e) => e.params.delta)
+          .join("")
+      : "";
   const threadApprovals = approvals.filter(
     (a) => a.request.params?.threadId === thread.id,
   );
@@ -523,9 +747,84 @@ function Chat({
           </p>
         </div>
         <Status status={thread.status} />
-        <button className="icon-btn">
-          <MoreHorizontal />
+        <button
+          className="provider-switch"
+          onClick={onSwitchProvider}
+          disabled={thread.status === "running" || thread.status === "waiting"}
+          title="为此 Session 切换供应商"
+        >
+          <ArrowRightLeft />
+          <span>{provider?.name || "未知供应商"}</span>
         </button>
+        <div className="thread-actions-wrap">
+          <button
+            className="icon-btn"
+            onClick={() => setActionsOpen((open) => !open)}
+          >
+            <MoreHorizontal />
+          </button>
+          {actionsOpen && (
+            <div className="thread-actions">
+              <button
+                onClick={async () => {
+                  const name = prompt("新的 Session 名称", thread.name)?.trim();
+                  if (!name) return;
+                  setActionsOpen(false);
+                  try {
+                    await api(`/threads/${thread.providerId}/${thread.id}`, {
+                      method: "PATCH",
+                      body: JSON.stringify({ name }),
+                    });
+                    onSnapshot();
+                  } catch (e: any) {
+                    setError(e.message);
+                  }
+                }}
+              >
+                重命名
+              </button>
+              <button
+                disabled={
+                  thread.status === "running" || thread.status === "waiting"
+                }
+                onClick={async () => {
+                  setActionsOpen(false);
+                  try {
+                    const created = await post(
+                      `/threads/${thread.providerId}/${thread.id}/fork`,
+                    );
+                    onSelectThread(thread.providerId, created.id);
+                    onSnapshot();
+                  } catch (e: any) {
+                    setError(e.message);
+                  }
+                }}
+              >
+                复制为分支
+              </button>
+              <button
+                disabled={
+                  thread.status === "running" || thread.status === "waiting"
+                }
+                onClick={async () => {
+                  if (!confirm(`归档 ${thread.name}？`)) return;
+                  setActionsOpen(false);
+                  try {
+                    await post(
+                      `/threads/${thread.providerId}/${thread.id}/archive`,
+                    );
+                    onBack();
+                    onSnapshot();
+                  } catch (e: any) {
+                    setError(e.message);
+                  }
+                }}
+              >
+                归档 Session
+              </button>
+            </div>
+          )}
+        </div>
       </header>
       <div className="timeline">
         <div className="session-meta">
@@ -533,7 +832,17 @@ function Chat({
           {thread.cwd}
           <span>{thread.model}</span>
         </div>
-        {full?.turns?.flatMap((turn: any) => turn.items?.map(itemView))}
+        {full?.turns?.flatMap((turn: any) =>
+          (turn.items || []).map((item: any) => {
+            if (
+              streamed &&
+              item.type === "agentMessage" &&
+              (turn.id === thread.activeTurnId || turn.status === "inProgress")
+            )
+              return null;
+            return itemView(item);
+          }),
+        )}
         {streamed && (
           <div className="message agent streaming">
             {streamed}
@@ -586,12 +895,18 @@ function Chat({
               <CircleStop />
             </button>
           ) : (
-            <button className="send" onClick={send} disabled={!text.trim()}>
+            <button
+              className="send"
+              onClick={send}
+              disabled={!text.trim() || sending}
+            >
               <Send />
             </button>
           )}
         </div>
-        <small>Enter 发送 · Shift + Enter 换行</small>
+        <small>
+          {sending ? "正在提交指令…" : "Enter 发送 · Shift + Enter 换行"}
+        </small>
       </footer>
     </main>
   );
@@ -605,7 +920,15 @@ export function App() {
   );
   const [events, setEvents] = useState<any[]>([]);
   const [providerModal, setProviderModal] = useState(false);
-  const [threadModal, setThreadModal] = useState<{ cwd?: string } | null>(null);
+  const [threadModal, setThreadModal] = useState<{
+    cwd?: string;
+    project?: ProjectRecord;
+  } | null>(null);
+  const [switchThread, setSwitchThread] = useState<ThreadSummary | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "active" | "attention"
+  >("all");
   const [sidebar, setSidebar] = useState(true);
   const [authError, setAuthError] = useState(false);
   const refresh = useCallback(
@@ -666,6 +989,16 @@ export function App() {
                 : p,
             ),
           }));
+        else if (message.type === "runtime.status")
+          setSnapshot((s) => ({
+            ...s,
+            runtime: {
+              starting: false,
+              remoteUrl: "",
+              ...s.runtime,
+              ...message.data,
+            },
+          }));
         else if (message.type === "approval.requested")
           setSnapshot((s) => ({
             ...s,
@@ -691,8 +1024,43 @@ export function App() {
     connect();
     return () => clearTimeout(timer);
   }, [authError]);
-  const projects = useMemo(
-    () => groupThreadsByProject(snapshot.threads),
+  const projects = useMemo(() => {
+    const groups = mergeProjectGroups(
+      snapshot.projects || [],
+      snapshot.threads,
+    );
+    const statusThreads = (threads: ThreadSummary[]) =>
+      statusFilter === "active"
+        ? threads.filter(
+            (thread) =>
+              thread.status === "running" || thread.status === "waiting",
+          )
+        : statusFilter === "attention"
+          ? threads.filter(
+              (thread) =>
+                thread.status === "waiting" || thread.status === "error",
+            )
+          : threads;
+    return filterProjectGroups(
+      groups.map((group) => ({
+        ...group,
+        sessions: statusThreads(group.sessions),
+      })),
+      query,
+    ).filter(
+      (group) =>
+        group.sessions.length > 0 || (!query && statusFilter === "all"),
+    );
+  }, [snapshot.projects, snapshot.threads, query, statusFilter]);
+  const counts = useMemo(
+    () => ({
+      running: snapshot.threads.filter((thread) => thread.status === "running")
+        .length,
+      waiting: snapshot.threads.filter((thread) => thread.status === "waiting")
+        .length,
+      errors: snapshot.threads.filter((thread) => thread.status === "error")
+        .length,
+    }),
     [snapshot.threads],
   );
   const sourceErrors = snapshot.providers.filter(
@@ -776,6 +1144,42 @@ export function App() {
             新建
           </button>
         </div>
+        <div className="watch-strip">
+          <button
+            className={statusFilter === "active" ? "active" : ""}
+            onClick={() =>
+              setStatusFilter(statusFilter === "active" ? "all" : "active")
+            }
+          >
+            <span className="watch-dot running" />
+            {counts.running} 运行
+          </button>
+          <button
+            className={statusFilter === "attention" ? "active" : ""}
+            onClick={() =>
+              setStatusFilter(
+                statusFilter === "attention" ? "all" : "attention",
+              )
+            }
+          >
+            <span className="watch-dot waiting" />
+            {counts.waiting} 待处理
+            {counts.errors > 0 && <em>{counts.errors} 异常</em>}
+          </button>
+        </div>
+        <div className="session-search">
+          <Search />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索项目、Session、模型…"
+          />
+          {query && (
+            <button className="icon-btn" onClick={() => setQuery("")}>
+              <X />
+            </button>
+          )}
+        </div>
         <div className="section-label">
           <span>现有 Codex 会话</span>
           <button className="icon-btn" onClick={refresh}>
@@ -801,7 +1205,14 @@ export function App() {
                     className="project-add"
                     title={`在 ${basename(project.cwd)} 中新建会话`}
                     aria-label={`在 ${basename(project.cwd)} 中新建会话`}
-                    onClick={() => setThreadModal({ cwd: project.cwd })}
+                    onClick={() =>
+                      setThreadModal({
+                        cwd: project.cwd,
+                        project: snapshot.projects?.find(
+                          (item) => item.key === project.key,
+                        ),
+                      })
+                    }
                   >
                     <Plus />
                   </button>
@@ -824,7 +1235,26 @@ export function App() {
                         </div>
                         <strong>{t.name}</strong>
                         <p>{t.preview}</p>
-                        <small>{t.model}</small>
+                        <div className="thread-meta">
+                          <span
+                            className="provider-badge"
+                            style={
+                              {
+                                "--provider": snapshot.providers.find(
+                                  (provider) => provider.id === t.providerId,
+                                )?.color,
+                              } as any
+                            }
+                          >
+                            {snapshot.providers.find(
+                              (provider) => provider.id === t.providerId,
+                            )?.name || "原配置 / 外部"}
+                          </span>
+                          <small>{t.model}</small>
+                          <small>
+                            {t.controlMode === "managed" ? "受管" : "历史"}
+                          </small>
+                        </div>
                         {snapshot.approvals.some(
                           (a) =>
                             a.providerId === t.providerId &&
@@ -836,11 +1266,19 @@ export function App() {
               </div>
             );
           })}
-          {!snapshot.threads.length && (
+          {!projects.length && (
             <div className="empty-list">
-              <Bot />
-              <p>未找到现有会话</p>
-              <small>点击刷新或创建一个新的 Codex 会话</small>
+              {query || statusFilter !== "all" ? <Search /> : <Bot />}
+              <p>
+                {query || statusFilter !== "all"
+                  ? "没有匹配的 Session"
+                  : "未找到现有会话"}
+              </p>
+              <small>
+                {query || statusFilter !== "all"
+                  ? "清除搜索或状态筛选后重试"
+                  : "点击刷新或创建一个新的 Codex 会话"}
+              </small>
             </div>
           )}
         </div>
@@ -872,6 +1310,10 @@ export function App() {
             events={events}
             onBack={() => setSelected(undefined)}
             onSnapshot={refresh}
+            onSwitchProvider={() => setSwitchThread(current)}
+            onSelectThread={(providerId, threadId) =>
+              setSelected(`${providerId}:${threadId}`)
+            }
           />
         ) : (
           <div className="welcome">
@@ -897,6 +1339,8 @@ export function App() {
       {providerModal && (
         <ProviderModal
           providers={snapshot.providers}
+          runtime={snapshot.runtime}
+          defaultCwd={current?.cwd}
           onClose={() => setProviderModal(false)}
           onSaved={setSnapshot}
         />
@@ -905,10 +1349,23 @@ export function App() {
         <NewThreadModal
           providers={snapshot.providers}
           initialCwd={threadModal.cwd}
+          project={threadModal.project}
+          preferences={snapshot.preferences}
           onClose={() => setThreadModal(null)}
           onCreated={(p, id) => {
             setSelected(`${p}:${id}`);
             setTimeout(refresh, 400);
+          }}
+        />
+      )}
+      {switchThread && (
+        <ProviderSwitchModal
+          thread={switchThread}
+          providers={snapshot.providers}
+          onClose={() => setSwitchThread(null)}
+          onCreated={(providerId, threadId) => {
+            setSelected(`${providerId}:${threadId}`);
+            setTimeout(refresh, 300);
           }}
         />
       )}

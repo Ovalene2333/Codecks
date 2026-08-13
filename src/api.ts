@@ -14,6 +14,24 @@ export async function api<T = any>(url: string, options: RequestInit = {}): Prom
   return data
 }
 
-export const getSnapshot = () => api<Snapshot>('/snapshot')
-export const post = <T = any>(url: string, body?: any) => api<T>(url, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
-export const remove = <T = any>(url: string) => api<T>(url, { method: 'DELETE' })
+export const getSnapshot = () => api<Snapshot>("/snapshot");
+export const post = <T = any>(url: string, body?: any) =>
+  api<T>(url, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+export const put = <T = any>(url: string, body?: any) =>
+  api<T>(url, {
+    method: "PUT",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+export const patch = <T = any>(url: string, body?: any) =>
+  api<T>(url, {
+    method: "PATCH",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+export const remove = <T = any>(url: string, body?: any) =>
+  api<T>(url, {
+    method: "DELETE",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
