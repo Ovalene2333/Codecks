@@ -124,7 +124,9 @@ export function Sidebar({
   }, []);
 
   return (
-    <aside className={`${show ? "show" : ""} ${hiddenOnMobile ? "mobile-hidden" : ""}`}>
+    <aside
+      className={`sidebar ${show ? "show" : ""} ${hiddenOnMobile ? "mobile-hidden" : ""}`}
+    >
       <div className="brand">
         <span>
           <Sparkles />
@@ -202,22 +204,26 @@ export function Sidebar({
           <button
             type="button"
             className={statusFilter === "active" ? "active" : ""}
+            aria-pressed={statusFilter === "active"}
             onClick={() =>
               onStatusFilter(statusFilter === "active" ? "all" : "active")
             }
           >
             <span className="watch-dot running" />
-            {counts.running}
+            运行
+            <b>{counts.running}</b>
           </button>
           <button
             type="button"
             className={statusFilter === "attention" ? "active" : ""}
+            aria-pressed={statusFilter === "attention"}
             onClick={() =>
               onStatusFilter(statusFilter === "attention" ? "all" : "attention")
             }
           >
             <span className="watch-dot waiting" />
-            {counts.waiting}
+            待确认
+            <b>{counts.waiting}</b>
             {counts.errors > 0 && <em>{counts.errors}</em>}
           </button>
         </div>

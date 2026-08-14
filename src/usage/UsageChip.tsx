@@ -2,6 +2,7 @@ import { Gauge } from "lucide-react";
 import type { RuntimeSnapshot, TokenUsage } from "../types";
 import {
   formatResetCountdown,
+  formatWindowLength,
   OFFICIAL_USAGE_TITLE,
   usageChipMetric,
   usageTone,
@@ -44,6 +45,7 @@ export function UsageDrawer({
   const extra = limits?.byLimitId
     ? Object.entries(limits.byLimitId)
     : [];
+  const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
   return (
     <Drawer title={OFFICIAL_USAGE_TITLE} onClose={onClose}>
       <p className="usage-plan">
@@ -56,11 +58,21 @@ export function UsageDrawer({
         </p>
       ) : (
         <div className="usage-windows">
-          <UsageWindow label="主窗口" window={limits.primary} />
+          <UsageWindow
+            label={primaryLength ? `主窗口 · ${primaryLength}` : "主窗口"}
+            window={limits.primary}
+          />
           <UsageWindow label="次窗口" window={limits.secondary} />
+          <UsageWindow label="月度额度" window={limits.monthly} />
           {extra.map(([id, window]) => (
             <UsageWindow key={id} label={id} window={window} />
           ))}
+          {limits.resetCredits != null ? (
+            <p className="usage-session">可用重置次数：{limits.resetCredits}</p>
+          ) : null}
+          {limits.spendControlReached ? (
+            <p className="usage-unavailable">已触及消费控制上限</p>
+          ) : null}
         </div>
       )}
       {sessionUsage && (sessionUsage.used != null || sessionUsage.limit != null) && (

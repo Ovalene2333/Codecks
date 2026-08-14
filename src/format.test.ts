@@ -12,6 +12,7 @@ import {
   threadIsUnsent,
 } from "./format";
 import { userText } from "./session/TurnBlock";
+import { userImageParts } from "./session/images";
 
 test("sessionKey joins provider and thread id", () => {
   assert.equal(sessionKey({ providerId: "p", id: "t" }), "p:t");
@@ -90,4 +91,17 @@ test("userText does not assume content is an array of parts", () => {
     "hello",
   );
   assert.equal(userText({ type: "userMessage", content: "legacy string" }), "legacy string");
+});
+
+test("userImageParts reads data-url attachments from user messages", () => {
+  assert.deepEqual(
+    userImageParts({
+      type: "userMessage",
+      content: [
+        { type: "text", text: "看图" },
+        { type: "image", url: "data:image/png;base64,abc=" },
+      ],
+    }),
+    [{ url: "data:image/png;base64,abc=", alt: undefined }],
+  );
 });

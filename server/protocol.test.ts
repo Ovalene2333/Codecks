@@ -46,6 +46,41 @@ test("non-chatgpt account is not treated as a 0% bucket", () => {
   assert.equal(parseRateLimits(null), null);
 });
 
+test("account/read type=chatgpt is Official ChatGPT, not missing auth", () => {
+  const account = parseAccount({
+    account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+    requiresOpenaiAuth: true,
+  });
+  assert.equal(account?.chatgpt, true);
+  assert.equal(account?.authMode, "chatgpt");
+  assert.equal(account?.email, "user@example.com");
+  assert.equal(account?.planType, "pro");
+  assert.equal(isChatgptAccount(account), true);
+});
+
+test("personal access token is treated as ChatGPT-backed Official auth", () => {
+  const account = parseAccount({
+    account: { type: "personalAccessToken", email: "pat@example.com" },
+  });
+  assert.equal(isChatgptAccount(account), true);
+});
+
+test("official rateLimits/read fixture keeps primary percent", () => {
+  const parsed = parseRateLimits({
+    rateLimits: {
+      primary: { usedPercent: 25, windowDurationMins: 15, resetsAt: 1_730_947_200 },
+      secondary: null,
+      rateLimitReachedType: null,
+    },
+    rateLimitResetCredits: { availableCount: 2 },
+    individualLimit: { usedPercent: 10, limit: 100 },
+  });
+  assert.equal(parsed?.primary?.usedPercent, 25);
+  assert.equal(parsed?.primary?.windowDurationMins, 15);
+  assert.equal(parsed?.resetCredits, 2);
+  assert.equal(parsed?.monthly?.usedPercent, 10);
+});
+
 test("token usage extracts common keys without inventing totals", () => {
   const usage = parseTokenUsage({
     tokenUsage: { used_tokens: 12_000, context_window: 272_000 },

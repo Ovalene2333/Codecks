@@ -5,6 +5,13 @@
     "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono",
     monospace;
+  --fs-meta: 11px;
+  --fs-caption: 12px;
+  --fs-ui: 13px;
+  --fs-body: 14px;
+  --fs-title: 15px;
+  --fs-heading: 16px;
+  --fs-display: 26px;
   --text: #f1f4f8;
   --text-dim: #97a3b2;
   --muted: #97a3b2;
@@ -41,7 +48,7 @@ select {
 }
 
 body {
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   background: #090c10;
 }
@@ -53,7 +60,6 @@ aside {
 code,
 pre,
 kbd,
-.brand small,
 .thread-line time,
 .session-meta,
 .tool-item pre,
@@ -74,7 +80,7 @@ button,
 input,
 textarea,
 select {
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 
 button {
@@ -104,26 +110,28 @@ button:disabled {
 }
 
 .brand b {
-  font-size: 16px;
+  font-size: var(--fs-title);
   font-weight: 720;
 }
 
 .brand small {
   margin-top: 1px;
   color: #7f8b9b;
-  font-size: 9px;
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
 }
 
-.welcome h1 {
+.welcome h1,
+.welcome.work-entry h1 {
   margin: 0 0 8px;
-  font-size: 32px;
+  font-size: var(--fs-display);
   font-weight: 760;
   line-height: 1.18;
 }
 
 .welcome-lead {
   color: #a1adbc;
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.6;
 }
 
@@ -148,7 +156,7 @@ button:disabled {
   background: #8064e8;
   color: #fff;
   box-shadow: 0 5px 16px rgb(72 48 154 / 28%);
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 680;
   line-height: 1;
 }
@@ -174,7 +182,7 @@ button:disabled {
 .welcome .primary {
   min-height: 44px;
   padding: 0 20px;
-  font-size: 14px;
+  font-size: var(--fs-body);
 }
 
 .primary svg,
@@ -252,7 +260,7 @@ button:disabled {
   border-radius: 8px;
   background: var(--control);
   color: #dce3eb;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 620;
 }
 
@@ -286,7 +294,7 @@ button:disabled {
 .library-segment > button {
   min-height: 28px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   font-weight: 600;
 }
 
@@ -339,7 +347,7 @@ button:disabled {
 
 .sidebar-footer button,
 .action-sheet button {
-  font-size: 13px;
+  font-size: var(--fs-ui);
   font-weight: 600;
 }
 
@@ -358,7 +366,7 @@ button:disabled {
   border-radius: 8px;
   background: #0c1218;
   color: #eef2f7;
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 
 .form input:focus,
@@ -370,18 +378,84 @@ button:disabled {
 }
 
 .composer textarea {
-  font-size: 14px;
+  font-size: var(--fs-body);
   line-height: 1.55;
 }
 
 .message {
-  font-size: 15px;
+  font-size: var(--fs-title);
   line-height: 1.55;
 }
 
+.section-label,
+.brand small,
+.status,
+.system-pills span,
+.pill-btn,
+.chat-title p,
+.thread-list small,
+.thread-line time,
+.session-meta,
+.approval-title small,
+.approval-actions button,
+.form label,
+.provider-row small,
+.provider-row b,
+.toolbar-hint,
+.context-bar span,
+.pending-count,
+.provider-badge,
+.source-error,
+.migration-note p,
+.migration-origin,
+.text-btn,
+.task-error small,
+.terminal-connect small,
+.sync-note small,
+.composer > small {
+  font-size: var(--fs-meta);
+}
+
+.system-pills span,
+.pill-btn,
+.section-label,
+.chat-title p,
+.approval-title small,
+.form label,
+.provider-row small,
+.provider-row b,
+.text-btn,
+.migration-origin,
+.terminal-connect small,
+.sync-note small {
+  font-family: var(--font-sans);
+}
+
+.library-segment em,
+.project-heading b,
+.session-meta,
+.thread-line time,
+.context-bar span,
+.task-error small,
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+}
+
+.project-heading b {
+  font-size: var(--fs-meta) !important;
+}
+
 @media (max-width: 760px) {
-  .welcome h1 {
-    font-size: 28px;
+  .welcome h1,
+  .welcome.work-entry h1 {
+    font-size: 22px;
+  }
+
+  .message,
+  .message.agent {
+    font-size: var(--fs-body);
   }
 
   .primary,
@@ -400,18 +474,31 @@ button:disabled {
     min-width: 42px;
   }
 
-  .project-add,
-  .sidebar-meta .watch-strip button {
+  .project-add {
     width: 36px;
     height: 36px;
     min-width: 36px;
     min-height: 36px;
   }
 
+  .sidebar-meta .watch-strip button {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: 8px;
+  }
+
   .library-segment > button,
   .brand .usage-chip,
   .pill-btn {
     min-height: 36px;
+  }
+
+  .brand .usage-chip {
+    max-width: none;
+    font-size: var(--fs-caption);
   }
 }
 

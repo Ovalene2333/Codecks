@@ -16,20 +16,36 @@ export function formatResetCountdown(
   return `${Math.max(1, Math.round(seconds / 86_400))}d`;
 }
 
+export function formatWindowLength(minutes?: number) {
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return "";
+  if (minutes >= 1440 && minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+export function usageWindow(limits?: RateLimits | null) {
+  if (limits?.primary?.usedPercent != null) return limits.primary;
+  if (limits?.secondary?.usedPercent != null) return limits.secondary;
+  if (limits?.monthly?.usedPercent != null) return limits.monthly;
+  const extra = limits?.byLimitId ? Object.values(limits.byLimitId) : [];
+  return extra.find((window) => window.usedPercent != null);
+}
+
 export function usageChipMetric(
   limits?: RateLimits | null,
   error?: string,
 ): string {
-  if (error || !limits?.primary || limits.primary.usedPercent == null)
-    return USAGE_UNAVAILABLE;
-  const pct = Math.round(limits.primary.usedPercent);
-  const reset = formatResetCountdown(limits.primary);
+  const window = usageWindow(limits);
+  if (error || !window || window.usedPercent == null) return USAGE_UNAVAILABLE;
+  const pct = Math.round(window.usedPercent);
+  const reset = formatResetCountdown(window);
   return reset ? `${pct}% · ${reset}` : `${pct}%`;
 }
 
 export function usageTone(limits?: RateLimits | null) {
-  const pct = limits?.primary?.usedPercent ?? 0;
-  if (limits?.primary?.reached || pct >= 100) return "danger";
+  const window = usageWindow(limits);
+  const pct = window?.usedPercent ?? 0;
+  if (window?.reached || pct >= 100 || limits?.spendControlReached) return "danger";
   if (pct >= 85) return "warn";
   return "ok";
 }

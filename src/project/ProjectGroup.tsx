@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -32,6 +32,7 @@ export function ProjectGroupView({
   onDelete,
   onHistory,
   onSessionMenu,
+  providers,
 }: {
   project: ProjectGroupData;
   library: "active" | "archived";
@@ -55,6 +56,9 @@ export function ProjectGroupView({
   const [menu, setMenu] = useState(false);
   const visible = previewSessions(project.sessions, !collapsed);
   const hiddenCount = project.sessions.length - visible.length;
+  const providerById = new Map(
+    providers.map((item) => [item.id, item] as const),
+  );
   return (
     <div className={`project-group ${project.pinned ? "pinned" : ""}`}>
       <div className="project-heading">
@@ -97,6 +101,8 @@ export function ProjectGroupView({
       {visible.map((thread) => {
         const key = sessionKey(thread);
         const forks = forkCounts.get(thread.id) || 0;
+        const provider = providerById.get(thread.providerId);
+        const providerLabel = provider?.name || thread.providerId;
         return (
           <div
             key={key}
@@ -139,7 +145,23 @@ export function ProjectGroupView({
               >
                 {relativeTime(thread.updatedAt)}
               </time>
-              <small title={thread.model}>{thread.model}</small>
+              {providerLabel ? (
+                <small
+                  className="provider-badge session-provider"
+                  style={
+                    {
+                      "--provider": provider?.color || "#8b6cff",
+                    } as CSSProperties
+                  }
+                  title={
+                    thread.model
+                      ? `${providerLabel} · ${thread.model}`
+                      : providerLabel
+                  }
+                >
+                  {providerLabel}
+                </small>
+              ) : null}
               <small
                 className={thread.controlMode === "history" ? "history-badge" : "mode-badge"}
                 onClick={

@@ -16,6 +16,12 @@ import type {
 import { RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
 import { Timeline } from "./Timeline";
+import {
+  incompleteCommandHint,
+  parseComposerCommand,
+  type ComposerCommand,
+} from "./commands";
+import type { ComposerImage } from "./images";
 
 export function ChatWorkspace({
   thread,
@@ -51,7 +57,9 @@ export function ChatWorkspace({
     () => readThreadCache(threadCacheKey) || undefined,
   );
   const [text, setText] = useState("");
+  const [images, setImages] = useState<ComposerImage[]>([]);
   const [error, setError] = useState("");
+  const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
   const load = useCallback(
     () =>
@@ -75,18 +83,81 @@ export function ChatWorkspace({
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
     load();
   }, [events.length, load, thread.id]);
+  const commandPath = (name: string) =>
+    `/threads/${thread.providerId}/${thread.id}/${name}`;
+  const runCommand = async (command: ComposerCommand) => {
+    if (command.kind === "compact") return compact();
+    if (command.kind === "status") {
+      const usage = thread.tokenUsage;
+      const used =
+        usage?.used != null
+          ? `${usage.used}${usage.limit != null ? ` / ${usage.limit}` : ""}`
+          : "未知";
+      setStatusNote(
+        [
+          `模型 ${thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
+          `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${thread.approvalPolicy || "on-request"}`,
+          thread.personality ? `性格 ${thread.personality}` : "",
+          `上下文 ${used}`,
+          provider?.name ? `供应商 ${provider.name}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+      return;
+    }
+    if (command.kind === "review")
+      return post(commandPath("review"), {
+        target: command.target.type,
+        branch: command.target.branch,
+        sha: command.target.sha,
+        title: command.target.title,
+        instructions: command.target.instructions,
+      });
+    if (command.kind === "shell")
+      return post(commandPath("shell"), { command: command.command });
+    if (command.kind === "goal")
+      return post(commandPath("goal"), { objective: command.objective });
+    if (command.kind === "goal-clear")
+      return post(commandPath("goal"), { objective: null });
+    if (command.kind === "init") return post(commandPath("init"));
+    if (command.kind === "plan") return post(commandPath("plan"));
+    if (command.kind === "diff") return post(commandPath("diff"));
+  };
   const send = async () => {
     const value = text.trim();
-    if (!value || sending || thread.compacting) return;
+    if (sending || thread.compacting) return;
+    const command = parseComposerCommand(value);
+    const hint = incompleteCommandHint(value);
+    if (!command && hint) {
+      setError(hint);
+      return;
+    }
+    if (!command && !value && !images.length) return;
     setSending(true);
-    setText("");
     setError("");
+    setStatusNote("");
+    const pendingImages = images;
+    if (command) setText("");
+    else {
+      setText("");
+      setImages([]);
+    }
     try {
-      await post(`/threads/${thread.providerId}/${thread.id}/turns`, {
-        text: value,
-      });
+      if (command) await runCommand(command);
+      else
+        await post(commandPath("turns"), {
+          text: value,
+          images: pendingImages.map((image) => ({
+            url: image.url,
+            name: image.name,
+          })),
+        });
     } catch (err: any) {
-      setText(value);
+      if (!command) {
+        setText(value);
+        setImages(pendingImages);
+      } else setText(value);
       setError(err.message);
     } finally {
       setSending(false);
@@ -231,12 +302,20 @@ export function ChatWorkspace({
         </div>
       )}
       {error && <p className="error-banner">{error}</p>}
+      {statusNote && (
+        <pre className="command-status" role="status">
+          {statusNote}
+        </pre>
+      )}
       <Composer
         thread={thread}
         text={text}
+        images={images}
         sending={sending}
         onChange={setText}
+        onImages={setImages}
         onSend={send}
+        onError={setError}
         onStop={() =>
           post(`/threads/${thread.providerId}/${thread.id}/interrupt`, {
             turnId: thread.activeTurnId,

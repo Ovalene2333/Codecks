@@ -759,8 +759,11 @@ export function App() {
                 ),
             },
             {
-              label: "Official 账号额度",
-              onClick: () => setUsageOpen(true),
+              label: "审查当前改动",
+              onClick: () =>
+                post(`/threads/${sheet.providerId}/${sheet.id}/review`).then(
+                  refresh,
+                ),
             },
             {
               label: "复制为整段分支",

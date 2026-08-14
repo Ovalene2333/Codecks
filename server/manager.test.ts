@@ -976,6 +976,66 @@ test("idle sendTurn only starts a turn", async () => {
   assert.deepEqual(calls, ["turn/start"]);
 });
 
+test("sendTurn can attach pasted image data URLs", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp", status: "idle" });
+  const image = {
+    url: "data:image/png;base64,aGVsbG8=",
+    name: "shot.png",
+  };
+  await manager.sendTurn("provider", "t", "看看这张图", [image]);
+  assert.equal(calls[0].method, "turn/start");
+  assert.deepEqual(calls[0].params.input, [
+    { type: "text", text: "看看这张图", text_elements: [] },
+    { type: "image", url: image.url },
+  ]);
+});
+
+test("review, shell and goal use dedicated Codex methods", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return { ok: true };
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  await manager.reviewThread("provider", "t");
+  await manager.runShellCommand("provider", "t", "git status --short");
+  await manager.setThreadGoal("provider", "t", "把测试跑绿");
+  await manager.setThreadGoal("provider", "t", "");
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    [
+      "review/start",
+      "thread/shellCommand",
+      "thread/goal/set",
+      "thread/goal/clear",
+    ],
+  );
+  assert.equal(calls[0].params.target.type, "uncommittedChanges");
+  assert.equal(calls[1].params.command, "git status --short");
+  assert.equal(calls[2].params.objective, "把测试跑绿");
+});
+
 test("compact issues thread/compact/start", async () => {
   const provider = { id: "provider", kind: "local-profile" };
   const manager = new CodexManager(
@@ -1009,6 +1069,36 @@ test("non-chatgpt official usage yields null rateLimits not 0%", async () => {
   assert.equal(runtime.rateLimits, null);
   assert.match(runtime.rateLimitsError || "", /Official|ChatGPT|额度/);
   assert.notEqual(runtime.rateLimitsError, "0%");
+});
+
+test("account/read type=chatgpt loads Official rate limits", async () => {
+  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  const calls: string[] = [];
+  manager.client = {
+    online: true,
+    request: async (method: string) => {
+      calls.push(method);
+      if (method === "account/read")
+        return {
+          account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+          requiresOpenaiAuth: true,
+        };
+      if (method === "account/rateLimits/read")
+        return {
+          rateLimits: {
+            primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_730_947_200 },
+            secondary: { usedPercent: 8, resetsAt: 1_731_033_600 },
+          },
+        };
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const runtime = await manager.loadOfficialUsage();
+  assert.deepEqual(calls, ["account/read", "account/rateLimits/read"]);
+  assert.equal(runtime.account?.chatgpt, true);
+  assert.equal(runtime.account?.email, "user@example.com");
+  assert.equal(runtime.rateLimits?.primary?.usedPercent, 25);
+  assert.equal(runtime.rateLimitsError, undefined);
 });
 
 test("account/rateLimits/updated updates the snapshot", () => {

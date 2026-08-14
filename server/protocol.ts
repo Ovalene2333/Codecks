@@ -110,6 +110,8 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
 }
 
 export function parseRateLimitWindow(raw: unknown): RateLimitWindow | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw))
+    return { limit: raw };
   if (!raw || typeof raw !== "object") return undefined;
   const data = raw as Record<string, unknown>;
   const usedPercent = pickNumber(
@@ -142,6 +144,12 @@ export function parseRateLimitWindow(raw: unknown): RateLimitWindow | undefined 
     data.reset_at,
   );
   if (resetsAt != null && resetsAt > 0 && resetsAt < 1e12) resetsAt *= 1000;
+  const windowDurationMins = pickNumber(
+    data.windowDurationMins,
+    data.window_duration_mins,
+    data.windowMinutes,
+    data.window_minutes,
+  );
   const reached = Boolean(
     data.reached ||
       data.limitReached ||
@@ -153,10 +161,19 @@ export function parseRateLimitWindow(raw: unknown): RateLimitWindow | undefined 
     used == null &&
     limit == null &&
     resetAfterSeconds == null &&
-    resetsAt == null
+    resetsAt == null &&
+    windowDurationMins == null
   )
     return undefined;
-  return { usedPercent, used, limit, resetsAt, resetAfterSeconds, reached };
+  return {
+    usedPercent,
+    used,
+    limit,
+    resetsAt,
+    resetAfterSeconds,
+    windowDurationMins,
+    reached,
+  };
 }
 
 export function parseRateLimits(raw: unknown): RateLimits | null {
@@ -212,20 +229,64 @@ export function parseRateLimits(raw: unknown): RateLimits | null {
     data.planName,
     data.plan_name,
   );
+  const monthly = parseRateLimitWindow(
+    data.individualLimit ||
+      data.individual_limit ||
+      root.individualLimit ||
+      root.individual_limit ||
+      root.monthly,
+  );
+  const resetCredits = pickNumber(
+    (data.rateLimitResetCredits as Record<string, unknown> | undefined)
+      ?.availableCount,
+    (data.rate_limit_reset_credits as Record<string, unknown> | undefined)
+      ?.availableCount,
+    (data.rateLimitResetCredits as Record<string, unknown> | undefined)
+      ?.available_count,
+    (root.rateLimitResetCredits as Record<string, unknown> | undefined)
+      ?.availableCount,
+  );
+  const spendControlReached =
+    data.spendControlReached === true ||
+    data.spend_control_reached === true ||
+    root.spendControlReached === true ||
+    root.spend_control_reached === true
+      ? true
+      : data.spendControlReached === false ||
+          data.spend_control_reached === false ||
+          root.spendControlReached === false ||
+          root.spend_control_reached === false
+        ? false
+        : undefined;
+  const rateLimitReachedType = pickString(
+    data.rateLimitReachedType,
+    data.rate_limit_reached_type,
+    root.rateLimitReachedType,
+    root.rate_limit_reached_type,
+  );
+  if (rateLimitReachedType && primary && !primary.reached)
+    primary.reached = true;
   if (
     !primary &&
     !secondary &&
+    !monthly &&
     !Object.keys(byLimitId).length &&
     !planType &&
-    !planName
+    !planName &&
+    resetCredits == null &&
+    spendControlReached == null
   )
     return null;
   return {
     primary,
     secondary,
+    monthly,
     byLimitId: Object.keys(byLimitId).length ? byLimitId : undefined,
     planType,
     planName,
+    resetCredits,
+    spendControlReached,
+    rateLimitReachedType,
   };
 }
 
@@ -240,29 +301,52 @@ export function parseAccount(raw: unknown): AccountInfo | undefined {
     acc.plan && typeof acc.plan === "object"
       ? (acc.plan as Record<string, unknown>)
       : {};
-  const authMode = pickString(acc.authMode, acc.auth_mode, plan.authMode);
+  const authMode = pickString(
+    acc.authMode,
+    acc.auth_mode,
+    acc.type,
+    acc.accountType,
+    acc.account_type,
+    plan.authMode,
+    plan.type,
+    data.authMode,
+    data.auth_mode,
+  );
   const planType = pickString(
     acc.planType,
     acc.plan_type,
     plan.type,
     plan.planType,
     plan.plan_type,
+    data.planType,
+    data.plan_type,
   );
   const email = pickString(
     acc.email,
     acc.chatgptEmail,
     acc.chatgpt_email,
-    acc.chatgptAccountId,
+    data.email,
   );
-  const chatgpt =
-    acc.chatgpt === true || String(authMode || "").toLowerCase() === "chatgpt";
+  const chatgpt = isChatgptAuthMode(authMode) || acc.chatgpt === true;
   return { authMode, planType, email, chatgpt };
+}
+
+export function normalizeAuthMode(value?: string) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, "");
+}
+
+export function isChatgptAuthMode(value?: string) {
+  const mode = normalizeAuthMode(value);
+  return mode === "chatgpt" || mode === "personalaccesstoken";
 }
 
 export function isChatgptAccount(account?: AccountInfo | null) {
   if (!account) return false;
   if (account.chatgpt === true) return true;
-  return String(account.authMode || "").toLowerCase() === "chatgpt";
+  return isChatgptAuthMode(account.authMode);
 }
 
 export function classifyApprovalMethod(method: string): ApprovalKind {

@@ -32,15 +32,33 @@ export interface RateLimitWindow {
   limit?: number;
   resetsAt?: number;
   resetAfterSeconds?: number;
+  windowDurationMins?: number;
   reached?: boolean;
 }
 
 export interface RateLimits {
   primary?: RateLimitWindow;
   secondary?: RateLimitWindow;
+  monthly?: RateLimitWindow;
   byLimitId?: Record<string, RateLimitWindow>;
   planType?: string;
   planName?: string;
+  resetCredits?: number;
+  spendControlReached?: boolean;
+  rateLimitReachedType?: string;
+}
+
+export interface TurnImage {
+  url: string;
+  name?: string;
+}
+
+export interface ReviewTarget {
+  type: "uncommittedChanges" | "baseBranch" | "commit" | "custom";
+  branch?: string;
+  sha?: string;
+  title?: string;
+  instructions?: string;
 }
 
 export interface AccountInfo {

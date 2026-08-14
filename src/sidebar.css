@@ -10,7 +10,7 @@
 }
 .brand svg { width: 16px; }
 .brand b { font-size: 15px; }
-.brand small { letter-spacing: 1.2px; }
+.brand small { letter-spacing: 0; }
 .brand > div { min-width: 0; flex: 1; }
 .brand .usage-chip {
   margin-left: auto;
@@ -25,7 +25,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-caption);
   cursor: pointer;
 }
 .brand .usage-chip svg { width: 13px; height: 13px; flex: none; }
@@ -99,42 +99,65 @@
   margin-left: 4px;
   color: #7d8a9b;
   font-style: normal;
-  font-family: "DM Mono", monospace;
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .sidebar-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 0 14px 10px;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
 }
-.sidebar-meta > span { min-width: 0; flex: 1; }
+.sidebar-meta > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sidebar-meta .watch-strip {
   display: flex;
-  gap: 4px;
+  flex: none;
+  gap: 6px;
   padding: 0;
 }
 .sidebar-meta .watch-strip button {
-  min-height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
   cursor: pointer;
+}
+.sidebar-meta .watch-strip button b {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
 }
 .sidebar-meta .watch-strip button.active {
   background: #1a222d;
   color: var(--text);
 }
 .sidebar-meta .watch-strip em {
-  margin-left: 4px;
+  margin-left: 0;
   color: var(--danger);
   font-style: normal;
+  font-size: 11px;
 }
 
 .archive-error { margin: 0 12px 8px; }
@@ -247,7 +270,7 @@
   flex: 1;
   margin: 0;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.3;
   white-space: nowrap;
@@ -297,7 +320,7 @@
   align-items: center;
   gap: 6px;
   color: #7b8798;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {
@@ -307,6 +330,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.thread-list .thread-meta .provider-badge,
+.thread-list .session-provider {
+  display: inline-flex;
+  flex: 0 1 auto;
+  max-width: 48%;
+  min-width: 0;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--provider, #8b6cff) 46%, #26303d);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--provider, #8b6cff) 16%, #111821);
+  color: color-mix(in srgb, var(--provider, #8b6cff) 82%, #f3f6fb);
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-footer {
+  display: flex;
+  justify-content: flex-start;
+}
+.sidebar-footer button {
+  width: auto;
+  min-width: 0;
+  justify-content: flex-start;
+}
+.sidebar-footer button svg,
+.sidebar-footer svg:last-child {
+  margin-left: 0;
 }
 .status {
   text-transform: none;
@@ -333,4 +386,8 @@
   .project-menu button { min-height: 48px; }
   .session-row { min-height: 48px; padding: 8px 8px 8px 10px; }
   .session-row-more { opacity: 1; }
+  .sidebar-footer button {
+    width: 100%;
+    min-height: 44px;
+  }
 }

@@ -24,6 +24,13 @@ import {
   sandboxPolicyFromMode,
   timestampFromId,
 } from "./protocol.js";
+import {
+  buildTurnInput,
+  DIFF_SHELL_COMMAND,
+  INIT_PROMPT,
+  PLAN_PROMPT,
+  reviewParams,
+} from "./turn-input.js";
 import type {
   AccountInfo,
   ApprovalKind,
@@ -32,8 +39,10 @@ import type {
   Personality,
   Provider,
   RateLimits,
+  ReviewTarget,
   RpcMessage,
   ThreadSummary,
+  TurnImage,
 } from "./types.js";
 
 export class CodexManager extends EventEmitter {
@@ -653,19 +662,31 @@ export class CodexManager extends EventEmitter {
     }
   }
 
-  async sendTurn(providerId: string, threadId: string, text: string) {
+  private async prepareThread(
+    providerId: string,
+    threadId: string,
+  ) {
     const client = await this.ensure(providerId);
-    const key = threadId;
     // A thread returned by thread/start is already loaded, but has no rollout
     // until its first turn. Resuming it here fails with "no rollout found".
     // Threads discovered by thread/list, on the other hand, must be resumed.
-    if (!this.loadedThreads.has(key)) {
+    if (!this.loadedThreads.has(threadId)) {
       await this.resumeThread(client, providerId, threadId);
-      this.loadedThreads.add(key);
+      this.loadedThreads.add(threadId);
     }
     this.rememberRollout(threadId);
+    return client;
+  }
+
+  async sendTurn(
+    providerId: string,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const client = await this.prepareThread(providerId, threadId);
     const existing = this.threads.get(threadId);
-    const input = [{ type: "text", text, text_elements: [] }];
+    const input = buildTurnInput(text, images);
     if (
       existing?.status === "running" &&
       existing.activeTurnId &&
@@ -688,6 +709,60 @@ export class CodexManager extends EventEmitter {
     if (existing?.approvalPolicy)
       start.approvalPolicy = existing.approvalPolicy;
     return client.request("turn/start", start);
+  }
+
+  async reviewThread(
+    providerId: string,
+    threadId: string,
+    target?: ReviewTarget,
+    delivery: "inline" | "detached" = "inline",
+  ) {
+    const client = await this.prepareThread(providerId, threadId);
+    return client.request(
+      "review/start",
+      reviewParams(threadId, target, delivery),
+    );
+  }
+
+  async runShellCommand(
+    providerId: string,
+    threadId: string,
+    command: string,
+  ) {
+    const trimmed = command.trim();
+    if (!trimmed) throw new Error("请输入要执行的命令");
+    const client = await this.prepareThread(providerId, threadId);
+    return client.request("thread/shellCommand", {
+      threadId,
+      command: trimmed,
+    });
+  }
+
+  async setThreadGoal(
+    providerId: string,
+    threadId: string,
+    objective?: string | null,
+  ) {
+    const client = await this.prepareThread(providerId, threadId);
+    const text = objective?.trim();
+    if (!text)
+      return client.request("thread/goal/clear", { threadId });
+    return client.request("thread/goal/set", {
+      threadId,
+      objective: text,
+    });
+  }
+
+  sendInitTurn(providerId: string, threadId: string) {
+    return this.sendTurn(providerId, threadId, INIT_PROMPT);
+  }
+
+  sendPlanTurn(providerId: string, threadId: string) {
+    return this.sendTurn(providerId, threadId, PLAN_PROMPT);
+  }
+
+  showDiff(providerId: string, threadId: string) {
+    return this.runShellCommand(providerId, threadId, DIFF_SHELL_COMMAND);
   }
 
   async compactThread(providerId: string, threadId: string) {
@@ -874,6 +949,11 @@ export class CodexManager extends EventEmitter {
   ) {
     const message = legacyMessage || (messageOrProviderId as RpcMessage);
     const params = message.params || {};
+    if (message.method === "account/updated") {
+      const parsed = parseAccount(params.account || params);
+      if (parsed) this.account = parsed;
+      void this.loadOfficialUsage();
+    }
     if (message.method === "account/rateLimits/updated") {
       const parsed = parseRateLimits(params.rateLimits || params);
       this.rateLimits = parsed;

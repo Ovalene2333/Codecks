@@ -84,18 +84,21 @@
   inset: 0;
   z-index: 55;
   background: #03050888;
+  overflow: hidden;
 }
 .usage-drawer {
   position: absolute;
   top: 0;
   right: 0;
+  left: auto;
   width: min(360px, 100%);
   height: 100%;
   overflow: auto;
   padding: 18px;
   border-left: 1px solid var(--line);
   background: #10161e;
-  animation: drawer-in 160ms ease;
+  transform: none;
+  animation: drawer-in 200ms ease both;
 }
 .usage-drawer header {
   display: flex;
@@ -125,10 +128,15 @@
   line-height: 1.55;
 }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
-@keyframes drawer-in { from { transform: translateX(16px); opacity: 0.4; } }
+@keyframes drawer-in {
+  from { transform: translateX(24px); opacity: 0.4; }
+  to { transform: translateX(0); opacity: 1; }
+}
 @media (max-width: 760px) {
   .usage-drawer {
     top: auto;
+    right: 0;
+    left: 0;
     bottom: 0;
     width: 100%;
     height: auto;
@@ -136,10 +144,17 @@
     border-left: 0;
     border-top: 1px solid var(--line);
     border-radius: 16px 16px 0 0;
-    animation: sheet-in 160ms ease;
+    transform: none;
+    animation: sheet-in 220ms ease both;
   }
   .confirm-actions button,
   .danger-btn,
   .action-sheet button { min-height: 48px; }
 }
-@keyframes sheet-in { from { transform: translateY(16px); } }
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-drawer { animation: none; }
+}

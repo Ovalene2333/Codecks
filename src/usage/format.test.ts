@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  formatWindowLength,
   OFFICIAL_USAGE_TITLE,
   USAGE_UNAVAILABLE,
   usageChipMetric,
@@ -29,5 +30,20 @@ test("usage chip formats primary percent and reset countdown", () => {
   assert.equal(
     usageTone({ primary: { usedPercent: 40, reached: true } }),
     "danger",
+  );
+});
+
+test("window length uses days and hours instead of raw minutes", () => {
+  assert.equal(formatWindowLength(10080), "7d");
+  assert.equal(formatWindowLength(300), "5h");
+  assert.equal(formatWindowLength(15), "15m");
+});
+
+test("usage chip falls back to secondary when primary is missing", () => {
+  assert.equal(
+    usageChipMetric({
+      secondary: { usedPercent: 12, resetAfterSeconds: 3600 },
+    }),
+    "12% · 1h",
   );
 });

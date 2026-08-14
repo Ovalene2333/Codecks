@@ -105,8 +105,8 @@
   border-radius: 999px;
   background: #171e28;
   color: #8e9caf;
-  font-family: "DM Mono", monospace;
-  font-size: 10px !important;
+  font-family: var(--font-mono);
+  font-size: 11px !important;
   line-height: 16px;
   text-align: center;
   flex: none;
@@ -165,7 +165,7 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--provider) 14%, #111821);
   color: color-mix(in srgb, var(--provider) 72%, #d9e1ec);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 16px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -182,7 +182,7 @@
   background: #2b1520;
   border-radius: 8px;
   color: #fb8fa2;
-  font-size: 9px;
+  font-size: 11px;
 }
 .source-error summary {
   display: flex;
@@ -253,7 +253,7 @@
 
 .terminal-connect small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .terminal-connect button {
@@ -277,7 +277,7 @@
   font-size: 11px;
 }
 .sync-note small {
-  font-size: 8px;
+  font-size: 11px;
   color: #6fae89;
 }
 .provider-row mark {
@@ -286,7 +286,7 @@
   border-radius: 4px;
   background: #183a28;
   color: #67db9c;
-  font-size: 7px;
+  font-size: 11px;
 }
 * {
   scrollbar-width: thin;
@@ -323,7 +323,7 @@
   border-radius: 9px;
   background: #121923;
   color: #adb9c9;
-  font-size: 9px;
+  font-size: 12px;
   cursor: pointer;
 }
 .provider-switch:hover {
@@ -365,7 +365,7 @@
   background: transparent;
   color: #b9c4d2;
   text-align: left;
-  font-size: 10px;
+  font-size: 12px;
   cursor: pointer;
 }
 .thread-actions button:hover {
@@ -396,7 +396,7 @@
 .migration-note p {
   margin: 4px 0 0;
   color: #9389a7;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.55;
 }
 .migration-origin {
@@ -406,7 +406,7 @@
   width: fit-content;
   margin: -14px auto 24px;
   color: #82759a;
-  font-size: 9px;
+  font-size: 11px;
 }
 .migration-origin svg {
   width: 13px;
@@ -429,7 +429,7 @@
   background: transparent;
   color: #8c71cf;
   padding: 0;
-  font-size: 9px;
+  font-size: 12px;
   cursor: pointer;
 }
 .dir-toolbar {
@@ -493,8 +493,8 @@
 }
 .task-error small {
   color: #9c6672;
-  font-family: "DM Mono", monospace;
-  font-size: 9px;
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 .thread-list::-webkit-scrollbar,
 .timeline::-webkit-scrollbar {

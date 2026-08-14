@@ -209,7 +209,7 @@ export function Drawer({
 }) {
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
-      <aside className="usage-drawer" onMouseDown={(e) => e.stopPropagation()}>
+      <section className="usage-drawer" onMouseDown={(e) => e.stopPropagation()}>
         <header>
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose}>
@@ -217,7 +217,7 @@ export function Drawer({
           </button>
         </header>
         {children}
-      </aside>
+      </section>
     </div>
   );
 }

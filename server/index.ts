@@ -79,7 +79,7 @@ const fullSnapshot = () => ({
   preferences: projects.getPreferences(),
 });
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "24mb" }));
 
 const authorized = (value?: string) => {
   if (!token) return true;
@@ -294,13 +294,25 @@ app.get(
 app.post(
   "/api/threads/:providerId/:threadId/turns",
   route(async (req) => {
-    const { text } = z
-      .object({ text: z.string().min(1).max(100_000) })
-      .parse(req.body);
+    const input = z
+      .object({
+        text: z.string().max(100_000).optional().default(""),
+        images: z
+          .array(
+            z.object({
+              url: z.string().min(1).max(20_000_000),
+              name: z.string().max(200).optional(),
+            }),
+          )
+          .max(8)
+          .optional(),
+      })
+      .parse(req.body || {});
     return manager.sendTurn(
       param(req.params.providerId),
       param(req.params.threadId),
-      text,
+      input.text,
+      input.images,
     );
   }),
 );
@@ -362,6 +374,88 @@ app.post(
   "/api/threads/:providerId/:threadId/compact",
   route(async (req) =>
     manager.compactThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    ),
+  ),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/review",
+  route(async (req) => {
+    const input = z
+      .object({
+        target: z
+          .enum(["uncommittedChanges", "baseBranch", "commit", "custom"])
+          .optional(),
+        branch: z.string().min(1).optional(),
+        sha: z.string().min(1).optional(),
+        title: z.string().optional(),
+        instructions: z.string().optional(),
+        delivery: z.enum(["inline", "detached"]).optional(),
+      })
+      .parse(req.body || {});
+    return manager.reviewThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      {
+        type: input.target || "uncommittedChanges",
+        branch: input.branch,
+        sha: input.sha,
+        title: input.title,
+        instructions: input.instructions,
+      },
+      input.delivery,
+    );
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/shell",
+  route(async (req) => {
+    const { command } = z
+      .object({ command: z.string().min(1).max(20_000) })
+      .parse(req.body);
+    return manager.runShellCommand(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      command,
+    );
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/goal",
+  route(async (req) => {
+    const input = z
+      .object({ objective: z.string().max(20_000).nullable().optional() })
+      .parse(req.body || {});
+    return manager.setThreadGoal(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      input.objective,
+    );
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/init",
+  route(async (req) =>
+    manager.sendInitTurn(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    ),
+  ),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/plan",
+  route(async (req) =>
+    manager.sendPlanTurn(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    ),
+  ),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/diff",
+  route(async (req) =>
+    manager.showDiff(
       param(req.params.providerId),
       param(req.params.threadId),
     ),

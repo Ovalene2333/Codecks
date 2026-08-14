@@ -1,8 +1,9 @@
-import { Activity, Command, GitFork } from "lucide-react";
+import { Activity, Command, GitFork, ScanSearch } from "lucide-react";
 import { displayCommand, displayText, fmtTime } from "../format";
 import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown } from "./markdown";
+import { userImageParts } from "./images";
 
 export function userText(item: any) {
   if (Array.isArray(item?.content)) {
@@ -46,8 +47,44 @@ function TurnItem({
   cwd?: string;
   onCopy?: () => void;
 }) {
-  if (item.type === "userMessage")
-    return <div className="message user">{userText(item)}</div>;
+  if (item.type === "userMessage") {
+    const images = userImageParts(item);
+    const text = userText(item);
+    return (
+      <div className="message user">
+        {images.length > 0 && (
+          <div className="message-images">
+            {images.map((image, index) =>
+              image.url.startsWith("data:image/") ||
+              image.url.startsWith("blob:") ||
+              /^https?:/i.test(image.url) ? (
+                <img key={`${image.url}-${index}`} src={image.url} alt={image.alt || "图片"} />
+              ) : (
+                <span key={`${image.url}-${index}`} className="local-image">
+                  {image.alt || image.url}
+                </span>
+              ),
+            )}
+          </div>
+        )}
+        {text}
+      </div>
+    );
+  }
+  if (item.type === "enteredReviewMode")
+    return (
+      <div className="tool-row review-row">
+        <ScanSearch />
+        正在审查 {displayText(item.review) || "当前改动"}
+      </div>
+    );
+  if (item.type === "exitedReviewMode")
+    return (
+      <div className="tool-row review-row done">
+        <ScanSearch />
+        审查完成
+      </div>
+    );
   if (item.type === "agentMessage") {
     if (hideAgent) return <></>;
     return (
