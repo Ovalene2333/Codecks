@@ -39,12 +39,17 @@ export function NewThreadModal({
     project,
     preferences,
     providers,
+    runtimeWsl,
   });
   const [form, setForm] = useState({
     ...defaults,
     name: "",
     personality: "" as "" | Personality,
   });
+  const [emptyWslPathMode, setEmptyWslPathMode] = useState(runtimeWsl);
+  const wslPathMode = form.cwd.trim()
+    ? isWslCwd(form.cwd)
+    : emptyWslPathMode;
   const [browse, setBrowse] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -104,7 +109,10 @@ export function NewThreadModal({
             <input
               required
               value={form.cwd}
-              onChange={(e) => setForm({ ...form, cwd: e.target.value })}
+              onChange={(e) => {
+                const cwd = e.target.value;
+                setForm({ ...form, cwd });
+              }}
               placeholder={
                 runtimeWsl
                   ? "/home/you/project 或 /mnt/d/Code/project"
@@ -114,11 +122,13 @@ export function NewThreadModal({
             {runtimeWsl ? (
               <button
                 type="button"
-                className={`wsl-cwd-btn${isWslCwd(form.cwd) ? " is-wsl" : ""}`}
-                aria-pressed={isWslCwd(form.cwd)}
+                className={`wsl-cwd-btn${wslPathMode ? " is-wsl" : ""}`}
+                aria-pressed={wslPathMode}
                 title={
                   !form.cwd.trim()
-                    ? "先填写工作目录"
+                    ? wslPathMode
+                      ? "WSL 路径模式已启用"
+                      : "切换为 WSL 路径"
                     : isWslCwd(form.cwd)
                       ? toggleWslCwd(form.cwd) === form.cwd.trim()
                         ? "此目录只在 WSL 中，无法切回 Windows"
@@ -126,15 +136,17 @@ export function NewThreadModal({
                       : "切换为 WSL 目录"
                 }
                 disabled={
-                  !form.cwd.trim() ||
+                  Boolean(form.cwd.trim()) &&
                   toggleWslCwd(form.cwd) === form.cwd.trim()
                 }
-                onClick={() =>
-                  setForm((current) => ({
-                    ...current,
-                    cwd: toggleWslCwd(current.cwd),
-                  }))
-                }
+                onClick={() => {
+                  if (!form.cwd.trim()) {
+                    setEmptyWslPathMode((current) => !current);
+                    return;
+                  }
+                  const cwd = toggleWslCwd(form.cwd);
+                  setForm((current) => ({ ...current, cwd }));
+                }}
               >
                 WSL
               </button>

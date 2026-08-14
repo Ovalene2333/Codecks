@@ -12,6 +12,7 @@ import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown } from "./markdown";
 import { userImageParts } from "./images";
 import type { StreamedAgentMessage } from "./streaming";
+import { activeStreamItemId } from "./streaming";
 import { userMessageText } from "./user-message";
 
 export const userText = userMessageText;
@@ -34,18 +35,20 @@ function UnknownItem({ item }: { item: any }) {
 function TurnItem({
   item,
   streamed,
+  streaming,
   cwd,
   onCopy,
   onEditUserMessage,
-  onResendUserMessage,
+  onRetryUserMessage,
   messageActionsDisabled,
 }: {
   item: any;
   streamed?: string;
+  streaming?: boolean;
   cwd?: string;
   onCopy?: () => void;
   onEditUserMessage?: (item: any) => void;
-  onResendUserMessage?: (item: any) => void;
+  onRetryUserMessage?: (item: any) => void;
   messageActionsDisabled?: boolean;
 }) {
   if (item.type === "userMessage") {
@@ -75,7 +78,7 @@ function TurnItem({
           )}
           {text}
         </div>
-        {(onEditUserMessage || onResendUserMessage) && (
+        {(onEditUserMessage || onRetryUserMessage) && (
           <div className="message-actions" aria-label="消息操作">
             {onEditUserMessage && (
               <button
@@ -87,15 +90,15 @@ function TurnItem({
                 编辑
               </button>
             )}
-            {onResendUserMessage && (
+            {onRetryUserMessage && (
               <button
                 type="button"
-                title="重新发送"
+                title="从此处创建分支并重试"
                 disabled={messageActionsDisabled}
-                onClick={() => onResendUserMessage(item)}
+                onClick={() => onRetryUserMessage(item)}
               >
                 <RotateCcw />
-                重发
+                从此重试
               </button>
             )}
           </div>
@@ -119,14 +122,12 @@ function TurnItem({
     );
   if (item.type === "agentMessage") {
     return (
-      <div
-        className={`message agent ${streamed !== undefined ? "streaming" : ""}`}
-      >
+      <div className={`message agent ${streaming ? "streaming" : ""}`}>
         <AssistantMarkdown
           text={streamed !== undefined ? streamed : displayText(item.text)}
           onCopy={onCopy}
         />
-        {streamed !== undefined && <i />}
+        {streaming && <i />}
       </div>
     );
   }
@@ -182,7 +183,7 @@ export function TurnBlock({
   onCopy,
   onForkFrom,
   onEditUserMessage,
-  onResendUserMessage,
+  onRetryUserMessage,
   messageActionsDisabled,
 }: {
   turn: any;
@@ -192,7 +193,7 @@ export function TurnBlock({
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onEditUserMessage?: (item: any) => void;
-  onResendUserMessage?: (item: any) => void;
+  onRetryUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
 }) {
   const active =
@@ -203,6 +204,7 @@ export function TurnBlock({
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
   );
+  const streamingItemId = active ? activeStreamItemId(streamed) : undefined;
   const renderedStreamIds = new Set<string>();
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
@@ -225,10 +227,15 @@ export function TurnBlock({
             key={item.id || `${item.type}-${item.command || ""}`}
             item={item}
             streamed={liveText}
+            streaming={String(item.id) === streamingItemId}
             cwd={thread.cwd}
             onCopy={onCopy}
             onEditUserMessage={onEditUserMessage}
-            onResendUserMessage={onResendUserMessage}
+            onRetryUserMessage={
+              onRetryUserMessage
+                ? (item) => onRetryUserMessage(String(turn.id), item)
+                : undefined
+            }
             messageActionsDisabled={messageActionsDisabled}
           />
         );
@@ -237,9 +244,12 @@ export function TurnBlock({
         streamed
           .filter((message) => !renderedStreamIds.has(message.itemId))
           .map((message) => (
-            <div className="message agent streaming" key={message.itemId}>
+            <div
+              className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
+              key={message.itemId}
+            >
               <AssistantMarkdown text={message.text} onCopy={onCopy} />
-              <i />
+              {message.itemId === streamingItemId && <i />}
             </div>
           ))}
       {completed && turn.id && onForkFrom && (

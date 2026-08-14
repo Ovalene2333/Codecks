@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  activeStreamItemId,
   appendCodexEvent,
   collectStreamedAgentMessages,
 } from "./streaming.ts";
@@ -113,4 +114,23 @@ test("ordinary event limits do not evict an active accumulated stream", () => {
     events.some((event) => event?.params?.itemId === "active"),
     true,
   );
+});
+
+test("the most recently updated agent item owns the streaming cursor", () => {
+  let events: any[] = [];
+  events = appendCodexEvent(events, delta("A", "first"));
+  events = appendCodexEvent(events, delta("B", "second"));
+  events = appendCodexEvent(events, delta("C", "first"));
+  const messages = collectStreamedAgentMessages(
+    events,
+    "official",
+    "thread-1",
+    "turn-1",
+  );
+
+  assert.equal(activeStreamItemId(messages), "first");
+  assert.deepEqual(messages, [
+    { itemId: "second", text: "B" },
+    { itemId: "first", text: "AC" },
+  ]);
 });

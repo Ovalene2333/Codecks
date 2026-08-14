@@ -7,6 +7,7 @@ import { AssistantMarkdown } from "./markdown";
 import { TurnBlock } from "./TurnBlock";
 import type { PendingUserMessage } from "./optimistic";
 import type { StreamedAgentMessage } from "./streaming";
+import { activeStreamItemId } from "./streaming";
 
 export function Timeline({
   thread,
@@ -20,7 +21,7 @@ export function Timeline({
   onForkFrom,
   onOpenOrigin,
   onEditUserMessage,
-  onResendUserMessage,
+  onRetryUserMessage,
   messageActionsDisabled,
 }: {
   thread: ThreadSummary;
@@ -34,7 +35,7 @@ export function Timeline({
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
   onEditUserMessage?: (item: any) => void;
-  onResendUserMessage?: (item: any) => void;
+  onRetryUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
 }) {
   const timeline = useRef<HTMLDivElement>(null);
@@ -73,6 +74,7 @@ export function Timeline({
       turn?.status === "inProgress" ||
       turn?.status === "running",
   );
+  const streamingItemId = activeStreamItemId(streamed);
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
       <div className="session-meta">
@@ -106,7 +108,7 @@ export function Timeline({
               onCopy={onCopy}
               onForkFrom={onForkFrom}
               onEditUserMessage={onEditUserMessage}
-              onResendUserMessage={onResendUserMessage}
+              onRetryUserMessage={onRetryUserMessage}
               messageActionsDisabled={messageActionsDisabled}
             />
           </RenderErrorBoundary>
@@ -129,9 +131,12 @@ export function Timeline({
         {!hasActiveTurn && streamed.length > 0 && (
           <section className="turn-block active live-turn">
             {streamed.map((message) => (
-              <div className="message agent streaming" key={message.itemId}>
+              <div
+                className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
+                key={message.itemId}
+              >
                 <AssistantMarkdown text={message.text} onCopy={onCopy} />
-                <i />
+                {message.itemId === streamingItemId && <i />}
               </div>
             ))}
           </section>

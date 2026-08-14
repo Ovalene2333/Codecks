@@ -4,6 +4,7 @@ import type {
   Provider,
   ThreadSummary,
 } from "./types";
+import { toWslCwd } from "./wsl-path";
 
 export interface ProjectGroup {
   key: string;
@@ -150,6 +151,7 @@ export function resolveNewThreadDefaults(input: {
   project?: ProjectRecord | ProjectGroup;
   preferences?: DeckPreferences;
   providers: Provider[];
+  runtimeWsl?: boolean;
 }) {
   const online = input.providers.filter((provider) => provider.online);
   const defaults = input.project?.defaults;
@@ -161,9 +163,10 @@ export function resolveNewThreadDefaults(input: {
   const providerId =
     preferredProvider?.id || online[0]?.id || input.providers[0]?.id || "";
   const provider = input.providers.find((item) => item.id === providerId);
+  const cwd = input.cwd || input.project?.cwd || "";
   return {
     providerId,
-    cwd: input.cwd || input.project?.cwd || "",
+    cwd: input.runtimeWsl ? toWslCwd(cwd) : cwd,
     model: defaults?.model || prefs?.lastModel || provider?.model || "",
     reasoningEffort:
       defaults?.reasoningEffort || prefs?.lastReasoningEffort || "",

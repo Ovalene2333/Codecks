@@ -21,8 +21,7 @@ export function appendCodexEvent(events: any[], event: any) {
     const existingIndex = events.findIndex((item) => sameStream(item, event));
     if (existingIndex >= 0) {
       const current = events[existingIndex];
-      const next = [...events];
-      next[existingIndex] = {
+      const merged = {
         ...current,
         params: {
           ...current.params,
@@ -31,7 +30,11 @@ export function appendCodexEvent(events: any[], event: any) {
             displayText(event?.params?.delta),
         },
       };
-      return next;
+      return [
+        ...events.slice(0, existingIndex),
+        ...events.slice(existingIndex + 1),
+        merged,
+      ];
     }
   }
 
@@ -51,6 +54,10 @@ export function appendCodexEvent(events: any[], event: any) {
     .filter((item) => item?.method !== "item/agentMessage/delta")
     .slice(-149);
   return [...recentEvents, ...streams, event];
+}
+
+export function activeStreamItemId(messages: StreamedAgentMessage[]) {
+  return messages.at(-1)?.itemId;
 }
 
 export function collectStreamedAgentMessages(

@@ -5,6 +5,7 @@ import {
   mergeProjectGroups,
   normalizeProjectPath,
   previewSessions,
+  resolveNewThreadDefaults,
   threadsForProject,
 } from "./projects";
 import type { ThreadSummary } from "./types";
@@ -126,5 +127,53 @@ test("threadsForProject matches normalized windows and unix paths", () => {
   assert.deepEqual(
     found.map((item) => item.id),
     ["a", "b"],
+  );
+});
+
+test("new tasks default to a WSL path when the runtime uses --wsl", () => {
+  const providers = [
+    { id: "official", name: "Official", kind: "official", online: true },
+  ] as any;
+  assert.equal(
+    resolveNewThreadDefaults({
+      cwd: "D:\\Code\\demo",
+      providers,
+      runtimeWsl: true,
+    }).cwd,
+    "/mnt/d/Code/demo",
+  );
+  assert.equal(
+    resolveNewThreadDefaults({
+      project: {
+        key: "/mnt/d/code/demo",
+        cwd: "D:\\Code\\demo",
+        updatedAt: 1,
+      },
+      providers,
+      runtimeWsl: true,
+    }).cwd,
+    "/mnt/d/Code/demo",
+  );
+});
+
+test("new task path defaults stay unchanged outside --wsl", () => {
+  const providers = [
+    { id: "official", name: "Official", kind: "official", online: true },
+  ] as any;
+  assert.equal(
+    resolveNewThreadDefaults({
+      cwd: "D:\\Code\\demo",
+      providers,
+      runtimeWsl: false,
+    }).cwd,
+    "D:\\Code\\demo",
+  );
+  assert.equal(
+    resolveNewThreadDefaults({
+      cwd: "/home/tester/demo",
+      providers,
+      runtimeWsl: true,
+    }).cwd,
+    "/home/tester/demo",
   );
 });

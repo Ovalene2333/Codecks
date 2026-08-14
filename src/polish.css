@@ -452,10 +452,13 @@ aside,
 
 .form input:focus,
 .form select:focus,
-.auth-card input:focus,
-.session-search:focus-within {
+.auth-card input:focus {
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px rgb(201 196 184 / 16%);
+}
+
+.session-search input:focus-visible {
+  outline: none;
 }
 
 .composer textarea {
@@ -478,6 +481,17 @@ aside,
 .message {
   font-size: var(--fs-title);
   line-height: 1.55;
+}
+
+.message.streaming i {
+  width: 2px;
+  height: 1.2em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.78;
+  vertical-align: -0.2em;
+  animation: blink 1s steps(1, end) infinite;
 }
 
 .message.user {
@@ -674,5 +688,9 @@ aside,
 @media (prefers-reduced-motion: reduce) {
   button {
     transition: none;
+  }
+
+  .message.streaming i {
+    animation: none;
   }
 }
