@@ -452,6 +452,33 @@ app.post(
   }),
 );
 app.post(
+  "/api/threads/:providerId/:threadId/retry",
+  route(async (req) => {
+    const input = z
+      .object({
+        turnId: z.string().min(1),
+        text: z.string().max(100_000).optional().default(""),
+        images: z
+          .array(
+            z.object({
+              url: z.string().min(1).max(20_000_000),
+              name: z.string().max(200).optional(),
+            }),
+          )
+          .max(8)
+          .optional(),
+      })
+      .parse(req.body || {});
+    return manager.retryFromTurn(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      input.turnId,
+      input.text,
+      input.images,
+    );
+  }),
+);
+app.post(
   "/api/threads/:providerId/:threadId/compact",
   route(async (req) =>
     manager.compactThread(

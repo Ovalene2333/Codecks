@@ -33,3 +33,32 @@ test("an active turn renders exactly one streaming cursor", () => {
   assert.equal((html.match(/message agent streaming/g) || []).length, 1);
   assert.equal((html.match(/<i><\/i>/g) || []).length, 1);
 });
+
+test("history user messages expose retry-from-here instead of append resend", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "idle",
+    updatedAt: Date.now(),
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [{ id: "user-1", type: "userMessage", text: "再试一次" }],
+      },
+      index: 1,
+      thread,
+      streamed: [],
+      onRetryUserMessage: () => undefined,
+    }),
+  );
+
+  assert.match(html, /从此重试/);
+  assert.doesNotMatch(html, />重发</);
+});

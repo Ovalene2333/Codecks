@@ -226,8 +226,29 @@ export function ChatWorkspace({
     updateDraft(readHistoryDraft(item));
     setComposerFocusRequest((current) => current + 1);
   };
-  const resendUserMessage = (item: any) => {
-    void submit(readHistoryDraft(item), false);
+  const retryUserMessage = async (turnId: string, item: any) => {
+    if (sending || locked || thread.compacting) return;
+    const candidate = readHistoryDraft(item);
+    const value = candidate.text.trim();
+    if (!value && !candidate.images.length) return;
+    setSending(true);
+    setError("");
+    try {
+      const created = await post(commandPath("retry"), {
+        turnId,
+        text: value,
+        images: candidate.images.map((image) => ({
+          url: image.url,
+          name: image.name,
+        })),
+      });
+      onSelectThread(thread.providerId, created.id);
+      onSnapshot();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSending(false);
+    }
   };
   const resolve = async (id: string, body: ApprovalResolveBody) => {
     try {
@@ -346,8 +367,10 @@ export function ChatWorkspace({
           onForkFrom={(turnId) => forkFrom(turnId)}
           onOpenOrigin={onOpenOrigin}
           onEditUserMessage={editUserMessage}
-          onResendUserMessage={resendUserMessage}
-          messageActionsDisabled={sending || Boolean(thread.compacting)}
+          onRetryUserMessage={retryUserMessage}
+          messageActionsDisabled={
+            locked || sending || Boolean(thread.compacting)
+          }
         />
       </RenderErrorBoundary>
       {taskError && (

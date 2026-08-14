@@ -549,6 +549,56 @@ export class CodexManager extends EventEmitter {
     return this.threads.get(result.thread.id) || result.thread;
   }
 
+  private async createEmptyFork(
+    providerId: string,
+    source: ThreadSummary,
+  ) {
+    const branchName = `${source.name || "会话"} · 分支`;
+    const created = await this.createThread(providerId, {
+      cwd: source.cwd,
+      model: source.model,
+      reasoningEffort: source.reasoningEffort,
+      personality: source.personality,
+      approvalPolicy: source.approvalPolicy,
+      sandbox: source.sandbox,
+      name: branchName,
+    });
+    const branch = this.threads.get(created.id);
+    if (!branch) throw new Error("重试分支创建失败");
+    branch.forkedFromId = source.id;
+    branch.updatedAt = Date.now();
+    this.broadcast("thread.updated", branch);
+    return branch;
+  }
+
+  async retryFromTurn(
+    providerId: string,
+    threadId: string,
+    turnId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const source = this.threads.get(threadId);
+    if (!source) throw new Error("源会话不存在，请刷新后重试");
+    if (source.status === "running" || source.status === "waiting")
+      throw new Error("会话正在运行或等待确认，无法从历史消息重试");
+
+    const full = await this.readThread(providerId, threadId);
+    const turns = Array.isArray(full?.turns) ? full.turns : [];
+    const targetIndex = turns.findIndex((turn: any) => turn?.id === turnId);
+    if (targetIndex < 0) throw new Error("找不到这条消息所属的回合");
+
+    const previousTurnId =
+      targetIndex > 0 ? String(turns[targetIndex - 1]?.id || "") : "";
+    const branch = previousTurnId
+      ? await this.forkThread(providerId, threadId, {
+          lastTurnId: previousTurnId,
+        })
+      : await this.createEmptyFork(providerId, source);
+    await this.sendTurn(providerId, branch.id, text, images);
+    return this.threads.get(branch.id) || branch;
+  }
+
   async migrateThread(
     sourceProviderId: string,
     sourceThreadId: string,

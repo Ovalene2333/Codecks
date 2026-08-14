@@ -1292,6 +1292,104 @@ test("fork forwards lastTurnId and records forkedFromId", async () => {
   assert.equal(manager.threads.get("branch").name, "源会话 · 分支");
 });
 
+test("retry forks before the selected turn and starts it on the branch", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/read")
+        return {
+          thread: {
+            id: "src",
+            turns: [{ id: "turn-1" }, { id: "turn-2" }],
+          },
+        };
+      if (method === "thread/fork")
+        return { thread: { id: "branch", cwd: "/tmp" } };
+      return {};
+    },
+  });
+  manager.loadedThreads.add("src");
+  manager.upsertThread(provider, {
+    id: "src",
+    cwd: "/tmp",
+    name: "源会话",
+    status: "idle",
+  });
+
+  const created = await manager.retryFromTurn(
+    "provider",
+    "src",
+    "turn-2",
+    "重新执行",
+  );
+  const fork = calls.find((call) => call.method === "thread/fork");
+  const start = calls.find(
+    (call) => call.method === "turn/start" && call.params.threadId === "branch",
+  );
+  assert.equal(fork.params.lastTurnId, "turn-1");
+  assert.ok(start);
+  assert.equal(created.id, "branch");
+  assert.equal(manager.threads.get("branch").forkedFromId, "src");
+});
+
+test("retrying the first turn creates an empty source-linked branch", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/read")
+        return { thread: { id: "src", turns: [{ id: "turn-1" }] } };
+      if (method === "thread/start" && !params.threadId)
+        return { thread: { id: "empty-branch", cwd: "/tmp" } };
+      return {};
+    },
+  });
+  manager.loadedThreads.add("src");
+  manager.upsertThread(provider, {
+    id: "src",
+    cwd: "/tmp",
+    name: "源会话",
+    model: "m",
+    status: "idle",
+  });
+
+  const created = await manager.retryFromTurn(
+    "provider",
+    "src",
+    "turn-1",
+    "第一次重试",
+  );
+  assert.equal(
+    calls.some((call) => call.method === "thread/fork"),
+    false,
+  );
+  assert.equal(
+    calls.filter((call) => call.method === "thread/start").length,
+    1,
+  );
+  assert.equal(
+    calls.some(
+      (call) =>
+        call.method === "turn/start" &&
+        call.params.threadId === "empty-branch",
+    ),
+    true,
+  );
+  assert.equal(created.id, "empty-branch");
+  assert.equal(manager.threads.get("empty-branch").forkedFromId, "src");
+});
+
 test("running source rejects turn-level fork", async () => {
   const provider = { id: "provider", kind: "local-profile" };
   const manager = new CodexManager(
