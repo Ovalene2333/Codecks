@@ -339,6 +339,16 @@
   border-style: dashed;
   cursor: default;
 }
+.form .form-hint {
+  margin: 0 0 10px;
+  color: var(--muted, #8390a2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.form .section-label {
+  margin: 14px 0 6px;
+  color: #c5ced9;
+}
 .form .primary:disabled {
   opacity: 0.62;
   cursor: wait;

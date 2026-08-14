@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ProviderStore } from "./store.js";
+import type { ProjectStore } from "./projects.js";
 import { CodexClient } from "./codex-client.js";
 import {
   compileRuntimeProvider,
@@ -63,6 +64,7 @@ export class CodexManager extends EventEmitter {
     { providerId: string; request: RpcMessage }
   >();
   private loadedProviderRevision = -1;
+  private loadedConnectionRevision = -1;
   private loadedProviderIds = new Set<string>();
   private runtimePort?: number;
   private account?: AccountInfo;
@@ -77,6 +79,7 @@ export class CodexManager extends EventEmitter {
     private codexBin?: string,
     runtimePort?: number,
     private useWsl = false,
+    private projects?: ProjectStore,
   ) {
     super();
     this.runtimePort =
@@ -124,6 +127,7 @@ export class CodexManager extends EventEmitter {
       this.store.runtimeProviders(),
       `ws://127.0.0.1:${await this.resolveRuntimePort()}`,
       this.useWsl,
+      (providerId) => this.projects?.overlayForProvider(providerId),
     );
     this.client = client;
     client.on("notification", (msg) => this.onNotification(msg));
@@ -145,6 +149,7 @@ export class CodexManager extends EventEmitter {
       remoteUrl: this.runtimeUrl(),
     });
     this.loadedProviderRevision = this.store.revision;
+    this.loadedConnectionRevision = this.projects?.connectionRevision ?? 0;
     this.loadedProviderIds = new Set(
       this.store.runtimeProviders().map((provider) => provider.id),
     );
@@ -202,6 +207,12 @@ export class CodexManager extends EventEmitter {
         if (!seen.has(thread.id) && !this.loadedThreads.has(key))
           this.threads.delete(key);
       }
+      await this.projects?.rememberSeenMany(
+        [...this.threads.values()].map((thread) => ({
+          cwd: thread.cwd,
+          updatedAt: thread.updatedAt,
+        })),
+      );
     }
     this.broadcast("snapshot", this.snapshot());
   }
@@ -267,7 +278,9 @@ export class CodexManager extends EventEmitter {
       error: this.client?.lastError,
       configPending:
         Boolean(this.client?.online) &&
-        this.loadedProviderRevision !== this.store.revision,
+        (this.loadedProviderRevision !== this.store.revision ||
+          (this.projects != null &&
+            this.loadedConnectionRevision !== this.projects.connectionRevision)),
       account: this.account,
       rateLimits: this.rateLimits,
       rateLimitsError: this.rateLimitsError,
@@ -1006,6 +1019,7 @@ export class CodexManager extends EventEmitter {
     };
     this.threads.set(key, item);
     if (thread.turns?.length || thread.preview) this.rememberRollout(thread.id);
+    if (item.cwd) void this.projects?.rememberSeen(item.cwd, item.updatedAt);
     this.broadcast("thread.updated", item);
   }
 

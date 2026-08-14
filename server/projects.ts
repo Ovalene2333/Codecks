@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ApprovalPolicy,
+  ConnectionOverlay,
   DeckPreferences,
   ProjectDefaults,
   ProjectRecord,
@@ -35,11 +36,90 @@ export function normalizeProjectPath(cwd: string) {
   return value;
 }
 
+const CONNECTION_KEYS = [
+  "requestMaxRetries",
+  "streamMaxRetries",
+  "streamIdleTimeoutMs",
+] as const;
+
+export function pickConnectionOverlay(
+  source?: Partial<ConnectionOverlay> | null,
+): ConnectionOverlay {
+  const next: ConnectionOverlay = {};
+  const requestMaxRetries = source?.requestMaxRetries;
+  const streamMaxRetries = source?.streamMaxRetries;
+  const streamIdleTimeoutMs = source?.streamIdleTimeoutMs;
+  if (isRetryCount(requestMaxRetries)) next.requestMaxRetries = requestMaxRetries;
+  if (isRetryCount(streamMaxRetries)) next.streamMaxRetries = streamMaxRetries;
+  if (isIdleTimeout(streamIdleTimeoutMs))
+    next.streamIdleTimeoutMs = streamIdleTimeoutMs;
+  return next;
+}
+
+export function hasConnectionOverlay(source?: Partial<ConnectionOverlay> | null) {
+  return Object.keys(pickConnectionOverlay(source)).length > 0;
+}
+
+export function sameConnectionOverlay(
+  left?: Partial<ConnectionOverlay> | null,
+  right?: Partial<ConnectionOverlay> | null,
+) {
+  const a = pickConnectionOverlay(left);
+  const b = pickConnectionOverlay(right);
+  return (
+    a.requestMaxRetries === b.requestMaxRetries &&
+    a.streamMaxRetries === b.streamMaxRetries &&
+    a.streamIdleTimeoutMs === b.streamIdleTimeoutMs
+  );
+}
+
+export function resolveConnectionOverlay(
+  providerId: string,
+  records: ProjectRecord[],
+  prefs?: DeckPreferences,
+): ConnectionOverlay {
+  const scoped = records
+    .filter(
+      (item) =>
+        item.defaults?.providerId === providerId &&
+        hasConnectionOverlay(item.defaults),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  if (scoped[0]) return pickConnectionOverlay(scoped[0].defaults);
+  const unscoped = records
+    .filter(
+      (item) =>
+        !item.defaults?.providerId && hasConnectionOverlay(item.defaults),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  if (unscoped[0]) return pickConnectionOverlay(unscoped[0].defaults);
+  return pickConnectionOverlay(prefs);
+}
+
+function isRetryCount(value?: number | null): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 100
+  );
+}
+
+function isIdleTimeout(value?: number | null): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1_000 &&
+    value <= 3_600_000
+  );
+}
+
 export class ProjectStore {
   private projects = new Map<string, ProjectRecord>();
   private prefs: DeckPreferences = emptyPrefs();
   private projectsFile: string;
   private prefsFile: string;
+  private connectionRevisionValue = 0;
 
   constructor(private dataDir: string) {
     this.projectsFile = path.join(dataDir, "projects.json");
@@ -102,17 +182,66 @@ export class ProjectStore {
     return this.prefs;
   }
 
+  get connectionRevision() {
+    return this.connectionRevisionValue;
+  }
+
+  overlayForProvider(providerId: string) {
+    return resolveConnectionOverlay(providerId, this.list(), this.prefs);
+  }
+
+  async rememberSeen(cwd: string, updatedAt?: number) {
+    return this.rememberSeenMany([{ cwd, updatedAt }]);
+  }
+
+  async rememberSeenMany(
+    items: { cwd?: string; updatedAt?: number }[],
+  ): Promise<boolean> {
+    let changed = false;
+    for (const item of items) {
+      const cwd = (item.cwd || "").trim();
+      if (!cwd) continue;
+      const key = normalizeProjectPath(cwd);
+      if (key === "未指定路径") continue;
+      if (this.projects.has(key)) continue;
+      this.projects.set(key, {
+        key,
+        cwd,
+        updatedAt: item.updatedAt || Date.now(),
+      });
+      changed = true;
+    }
+    if (changed) await this.saveProjects();
+    return changed;
+  }
+
+  async setConnectionOverlay(overlay: ConnectionOverlay) {
+    const next = pickConnectionOverlay(overlay);
+    const prev = pickConnectionOverlay(this.prefs);
+    this.prefs.requestMaxRetries = next.requestMaxRetries ?? undefined;
+    this.prefs.streamMaxRetries = next.streamMaxRetries ?? undefined;
+    this.prefs.streamIdleTimeoutMs = next.streamIdleTimeoutMs ?? undefined;
+    if (next.requestMaxRetries == null) delete this.prefs.requestMaxRetries;
+    if (next.streamMaxRetries == null) delete this.prefs.streamMaxRetries;
+    if (next.streamIdleTimeoutMs == null)
+      delete this.prefs.streamIdleTimeoutMs;
+    this.touchConnection(prev, next);
+    await this.savePrefs();
+    return this.prefs;
+  }
+
   async upsert(
-    input: Partial<ProjectRecord> & { cwd?: string; key?: string },
+    input: Partial<ProjectRecord> & {
+      cwd?: string;
+      key?: string;
+      defaults?: ProjectDefaults & Partial<Record<keyof ConnectionOverlay, number | null>>;
+    },
   ): Promise<ProjectRecord> {
     const cwd = (input.cwd || input.key || "").trim();
     if (!cwd) throw new Error("需要工作目录");
     const key = normalizeProjectPath(input.key || cwd);
     const old = this.projects.get(key);
-    const defaults = {
-      ...old?.defaults,
-      ...stripUndefined(input.defaults),
-    };
+    const defaults = mergeDefaults(old?.defaults, input.defaults);
     const record: ProjectRecord = {
       key,
       cwd: old?.cwd || cwd,
@@ -120,9 +249,11 @@ export class ProjectStore {
         input.name !== undefined ? input.name.trim() || undefined : old?.name,
       pinned: input.pinned ?? old?.pinned,
       hidden: input.hidden ?? old?.hidden,
-      defaults: Object.keys(defaults).length ? defaults : undefined,
+      defaults: defaults && Object.keys(defaults).length ? defaults : undefined,
       updatedAt: Date.now(),
     };
+    if (input.defaults)
+      this.touchConnection(old?.defaults, record.defaults);
     this.projects.set(key, record);
     await this.saveProjects();
     return record;
@@ -181,6 +312,7 @@ export class ProjectStore {
   }
 
   async updatePreferences(input: Partial<DeckPreferences>) {
+    const oldPrefs = this.prefs;
     this.prefs = {
       ...this.prefs,
       ...stripUndefined(input),
@@ -188,8 +320,21 @@ export class ProjectStore {
         ? input.recentDirs.slice(0, 20)
         : this.prefs.recentDirs,
     };
+    if (
+      CONNECTION_KEYS.some((key) =>
+        Object.prototype.hasOwnProperty.call(input, key),
+      )
+    )
+      this.touchConnection(oldPrefs, this.prefs);
     await this.savePrefs();
     return this.prefs;
+  }
+
+  private touchConnection(
+    prev?: Partial<ConnectionOverlay> | null,
+    next?: Partial<ConnectionOverlay> | null,
+  ) {
+    if (!sameConnectionOverlay(prev, next)) this.connectionRevisionValue += 1;
   }
 
   private async saveProjects() {
@@ -210,6 +355,22 @@ export class ProjectStore {
 function stripUndefined<T extends object>(value?: T): Partial<T> {
   if (!value) return {};
   return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item !== undefined),
+    Object.entries(value).filter(([, item]) => item !== undefined && item !== null),
   ) as Partial<T>;
+}
+
+function mergeDefaults(
+  old?: ProjectDefaults,
+  input?: (ProjectDefaults &
+    Partial<Record<keyof ConnectionOverlay, number | null>>) | undefined,
+): ProjectDefaults | undefined {
+  if (!input) return old;
+  const defaults: ProjectDefaults = {
+    ...old,
+    ...stripUndefined(input),
+  };
+  for (const [key, value] of Object.entries(input)) {
+    if (value === null) delete defaults[key as keyof ProjectDefaults];
+  }
+  return Object.keys(defaults).length ? defaults : undefined;
 }

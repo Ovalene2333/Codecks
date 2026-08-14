@@ -306,15 +306,17 @@ export function App() {
 
   const saveProject = async (
     project: { key: string; cwd: string },
-    patch: Partial<ProjectRecord>,
+    patch: Partial<Omit<ProjectRecord, "defaults">> & { defaults?: object },
   ) => {
-    setSnapshot(
-      await put("/projects", {
-        key: project.key,
-        cwd: project.cwd,
-        ...patch,
-      }),
-    );
+    const next = await put<
+      Snapshot & { connectionApplied?: boolean; connectionPending?: boolean }
+    >("/projects", {
+      key: project.key,
+      cwd: project.cwd,
+      ...patch,
+    });
+    setSnapshot(next);
+    return next;
   };
 
   const runOnThreads = async (
@@ -712,8 +714,14 @@ export function App() {
           providers={snapshot.providers}
           onClose={() => setProjectEdit(null)}
           onSave={async (defaults, name) => {
-            await saveProject(projectEdit, { defaults, name });
-            pushToast("以后在此目录新建将使用这些设置");
+            const next = await saveProject(projectEdit, { defaults, name });
+            pushToast(
+              next.connectionApplied
+                ? "已保存，并已应用到 Runtime"
+                : next.connectionPending
+                  ? "已保存。有会话在跑，空闲后在供应商设置中应用"
+                  : "以后在此目录新建将使用这些设置",
+            );
           }}
         />
       )}

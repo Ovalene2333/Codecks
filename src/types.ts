@@ -90,7 +90,13 @@ export interface ApprovalQuestion {
   isOther?: boolean;
 }
 
-export interface ProjectDefaults {
+export interface ConnectionOverlay {
+  requestMaxRetries?: number | null;
+  streamMaxRetries?: number | null;
+  streamIdleTimeoutMs?: number | null;
+}
+
+export interface ProjectDefaults extends ConnectionOverlay {
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -108,7 +114,7 @@ export interface ProjectRecord {
   updatedAt: number;
 }
 
-export interface DeckPreferences {
+export interface DeckPreferences extends ConnectionOverlay {
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;

@@ -8,7 +8,11 @@ import { loadEnvFile } from "node:process";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { ProviderStore } from "./store.js";
-import { ProjectStore } from "./projects.js";
+import {
+  pickConnectionOverlay,
+  ProjectStore,
+  sameConnectionOverlay,
+} from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
 import { CodexManager } from "./manager.js";
 import { CLI_HELP, parseCli } from "./cli.js";
@@ -98,6 +102,7 @@ const manager = new CodexManager(
   useWsl ? process.env.CODEX_WSL_BIN : process.env.CODEX_BIN,
   undefined,
   useWsl,
+  projects,
 );
 const fullSnapshot = () => ({
   ...manager.snapshot(),
@@ -119,6 +124,18 @@ app.use("/api", (req, res, next) => {
   if (!authorized(bearer))
     return res.status(401).json({ error: "访问令牌无效" });
   next();
+});
+
+const connectionOverlaySchema = z.object({
+  requestMaxRetries: z.number().int().min(0).max(100).nullable().optional(),
+  streamMaxRetries: z.number().int().min(0).max(100).nullable().optional(),
+  streamIdleTimeoutMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .nullable()
+    .optional(),
 });
 
 const route =
@@ -215,11 +232,27 @@ app.put(
               .enum(["untrusted", "on-request", "never"])
               .optional(),
           })
+          .merge(connectionOverlaySchema)
           .optional(),
       })
       .parse(req.body);
+    const previous = input.key || input.cwd ? projects.get(input.key || input.cwd || "") : undefined;
     await projects.upsert(input);
-    return fullSnapshot();
+    let connectionApplied = false;
+    let connectionPending = false;
+    if (
+      input.defaults &&
+      !sameConnectionOverlay(previous?.defaults, input.defaults)
+    ) {
+      await projects.setConnectionOverlay(pickConnectionOverlay(input.defaults));
+      if (manager.busyThreads().length === 0) {
+        await manager.applyProviderConfig();
+        connectionApplied = true;
+      } else {
+        connectionPending = true;
+      }
+    }
+    return { ...fullSnapshot(), connectionApplied, connectionPending };
   }),
 );
 app.delete(
@@ -246,6 +279,7 @@ app.put(
           .optional(),
         recentDirs: z.array(z.string()).optional(),
       })
+      .merge(connectionOverlaySchema)
       .parse(req.body);
     await projects.updatePreferences(input);
     return fullSnapshot();

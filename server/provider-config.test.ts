@@ -73,6 +73,46 @@ test("does not fall back to Official ChatGPT login for a custom API", () => {
   assert.ok(result.args.some((arg) => arg.endsWith("wire_api='chat'")));
 });
 
+test("compiles connection overlay onto the isolated provider", () => {
+  const official = compileRuntimeProvider(
+    { ...base, id: "cc-official", name: "OpenAI Official" },
+    { requestMaxRetries: 8, streamMaxRetries: 10, streamIdleTimeoutMs: 120000 },
+  );
+  assert.ok(
+    official.args.includes(
+      "model_providers." + official.modelProvider + ".request_max_retries=8",
+    ),
+  );
+  assert.ok(
+    official.args.includes(
+      "model_providers." + official.modelProvider + ".stream_max_retries=10",
+    ),
+  );
+  assert.ok(
+    official.args.includes(
+      "model_providers." +
+        official.modelProvider +
+        ".stream_idle_timeout_ms=120000",
+    ),
+  );
+
+  const relay = compileRuntimeProvider(
+    {
+      ...base,
+      id: "cc-relay",
+      name: "Relay",
+      baseUrl: "https://relay.example/v1",
+    },
+    { requestMaxRetries: 2 },
+  );
+  assert.ok(
+    relay.args.includes(
+      "model_providers." + relay.modelProvider + ".request_max_retries=2",
+    ),
+  );
+  assert.ok(!relay.args.some((arg) => arg.includes("stream_max_retries")));
+});
+
 test("runtime bootstrap does not default Official onto a CCS relay", () => {
   const official = compileRuntimeProvider({
     ...base,

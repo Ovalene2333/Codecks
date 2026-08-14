@@ -7,8 +7,24 @@ import type {
   Provider,
   SandboxMode,
 } from "../types";
+
+export type ProjectDefaultsSave = Omit<
+  ProjectDefaults,
+  "requestMaxRetries" | "streamMaxRetries" | "streamIdleTimeoutMs"
+> & {
+  requestMaxRetries?: number | null;
+  streamMaxRetries?: number | null;
+  streamIdleTimeoutMs?: number | null;
+};
 import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
 import { Modal } from "../ui";
+
+function parseOptionalInt(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isInteger(parsed) ? parsed : undefined;
+}
 
 export function ProjectDefaultsModal({
   project,
@@ -19,7 +35,7 @@ export function ProjectDefaultsModal({
   project: ProjectRecord;
   providers: Provider[];
   onClose: () => void;
-  onSave: (defaults: ProjectDefaults, name?: string) => Promise<void>;
+  onSave: (defaults: ProjectDefaultsSave, name?: string) => Promise<void>;
 }) {
   const [name, setName] = useState(project.name || "");
   const [defaults, setDefaults] = useState<ProjectDefaults>(
@@ -33,7 +49,19 @@ export function ProjectDefaultsModal({
         onSubmit={async (event) => {
           event.preventDefault();
           try {
-            await onSave(defaults, name.trim() || undefined);
+            await onSave(
+              {
+                providerId: defaults.providerId,
+                model: defaults.model,
+                reasoningEffort: defaults.reasoningEffort,
+                sandbox: defaults.sandbox,
+                approvalPolicy: defaults.approvalPolicy,
+                requestMaxRetries: defaults.requestMaxRetries ?? null,
+                streamMaxRetries: defaults.streamMaxRetries ?? null,
+                streamIdleTimeoutMs: defaults.streamIdleTimeoutMs ?? null,
+              },
+              name.trim() || undefined,
+            );
             onClose();
           } catch (err: any) {
             setError(err.message);
@@ -109,6 +137,64 @@ export function ProjectDefaultsModal({
             </select>
           </label>
         </div>
+        <p className="section-label">Codex 连接</p>
+        <p className="form-hint">
+          写入该项目默认供应商的共享 Runtime。空着表示用 Codex 默认值。有会话在跑时会先记下，空闲后再应用。
+        </p>
+        <div className="form-grid">
+          <label>
+            请求重试
+            <input
+              type="number"
+              min={0}
+              max={100}
+              inputMode="numeric"
+              placeholder="默认 4"
+              value={defaults.requestMaxRetries ?? ""}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  requestMaxRetries: parseOptionalInt(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <label>
+            流重试
+            <input
+              type="number"
+              min={0}
+              max={100}
+              inputMode="numeric"
+              placeholder="默认 5"
+              value={defaults.streamMaxRetries ?? ""}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  streamMaxRetries: parseOptionalInt(event.target.value),
+                }))
+              }
+            />
+          </label>
+        </div>
+        <label>
+          流空闲超时（毫秒）
+          <input
+            type="number"
+            min={1000}
+            max={3600000}
+            step={1000}
+            inputMode="numeric"
+            placeholder="默认 300000"
+            value={defaults.streamIdleTimeoutMs ?? ""}
+            onChange={(event) =>
+              setDefaults((current) => ({
+                ...current,
+                streamIdleTimeoutMs: parseOptionalInt(event.target.value),
+              }))
+            }
+          />
+        </label>
         {error && <p className="error-text">{error}</p>}
         <button className="primary" type="submit">
           保存默认设置

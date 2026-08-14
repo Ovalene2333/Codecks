@@ -23,9 +23,11 @@ CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、
 Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会为每个供应商复制 `CODEX_HOME`，也不会把历史拆成孤岛。
 
 - 按工作目录分组，同一路径可以并行多个独立 session
+- 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
 - 查看运行、空闲、待审批和异常；接收增量回复；发送指令、粘贴图片、中断 turn、批准或拒绝命令与文件修改
 - 输入框支持 Codex 命令：`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`、`/status`，以及 `!command` 无沙箱执行
+- 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 
 ### 远程值守
 
@@ -223,7 +225,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_WSL_BIN` | `codex` | Windows `--wsl` 模式下的 WSL 内 Codex CLI |
 | `CODEX_WSL_SHELL` | `bash` | 加载 WSL Codex `PATH` 的登录 shell |
 | `CODEX_WSL_HOME` | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home |
-| `DATA_DIR` | `.data` | Deck 偏好与自定义供应商元数据 |
+| `DATA_DIR` | `.data` | Deck 偏好、项目缓存与自定义供应商元数据 |
 | `CODEX_DECK_RUNTIME_PORT` | _(自动)_ | 仅监听本机的 Codex control WebSocket 端口 |
 | `CC_SWITCH_DB` | _(自动发现)_ | CC Switch SQLite 数据库绝对路径 |
 | `CODEX_DECK_EXPOSE` | _(空)_ | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |

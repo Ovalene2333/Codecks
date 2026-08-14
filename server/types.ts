@@ -26,7 +26,13 @@ export type SandboxMode =
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type Personality = "friendly" | "pragmatic" | "none";
 
-export interface ProjectDefaults {
+export interface ConnectionOverlay {
+  requestMaxRetries?: number | null;
+  streamMaxRetries?: number | null;
+  streamIdleTimeoutMs?: number | null;
+}
+
+export interface ProjectDefaults extends ConnectionOverlay {
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -44,7 +50,7 @@ export interface ProjectRecord {
   updatedAt: number;
 }
 
-export interface DeckPreferences {
+export interface DeckPreferences extends ConnectionOverlay {
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;

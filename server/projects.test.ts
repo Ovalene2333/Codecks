@@ -104,6 +104,79 @@ test("load rematerializes aliased keys into one project", async () => {
   assert.equal(store.list()[0].name, "Sample");
 });
 
+test("rememberSeen records unknown directories without touching defaults", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-seen-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.upsert({
+    cwd: "/mnt/d/Code/kept",
+    name: "Kept",
+    defaults: { model: "gpt-a", requestMaxRetries: 8 },
+  });
+  assert.equal(
+    await store.rememberSeenMany([
+      { cwd: "/mnt/d/Code/kept", updatedAt: 99 },
+      { cwd: "D:\\Code\\fresh", updatedAt: 12 },
+      { cwd: "", updatedAt: 1 },
+    ]),
+    true,
+  );
+  assert.equal(await store.rememberSeen("D:\\Code\\fresh"), false);
+  const rows = store.list();
+  const kept = rows.find((item) => item.name === "Kept");
+  const fresh = rows.find((item) => item.cwd === "D:\\Code\\fresh");
+  assert.equal(kept?.defaults?.model, "gpt-a");
+  assert.equal(kept?.defaults?.requestMaxRetries, 8);
+  assert.equal(fresh?.name, undefined);
+  assert.equal(fresh?.defaults, undefined);
+});
+
+test("connection overlay prefers the latest project for a provider", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-overlay-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.upsert({
+    cwd: "/tmp/a",
+    defaults: { providerId: "relay", requestMaxRetries: 8 },
+  });
+  await store.upsert({
+    cwd: "/tmp/b",
+    defaults: { providerId: "relay", requestMaxRetries: 3, streamMaxRetries: 9 },
+  });
+  await store.upsert({
+    cwd: "/tmp/c",
+    defaults: { requestMaxRetries: 1 },
+  });
+  assert.deepEqual(store.overlayForProvider("relay"), {
+    requestMaxRetries: 3,
+    streamMaxRetries: 9,
+  });
+  assert.deepEqual(store.overlayForProvider("other"), {
+    requestMaxRetries: 1,
+  });
+  await store.setConnectionOverlay({ streamIdleTimeoutMs: 120000 });
+  const again = new ProjectStore(dir);
+  await again.load();
+  assert.equal(again.getPreferences().streamIdleTimeoutMs, 120000);
+  assert.equal(again.overlayForProvider("other").requestMaxRetries, 1);
+});
+
+test("clearing retry fields removes them from project defaults", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-clear-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.upsert({
+    cwd: "/tmp/a",
+    defaults: { model: "gpt-a", requestMaxRetries: 8 },
+  });
+  const saved = await store.upsert({
+    cwd: "/tmp/a",
+    defaults: { model: "gpt-a", requestMaxRetries: null },
+  });
+  assert.equal(saved.defaults?.model, "gpt-a");
+  assert.equal(saved.defaults?.requestMaxRetries, undefined);
+});
+
 test("hidden and remove only touch deck metadata", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-hide-"));
   const store = new ProjectStore(dir);

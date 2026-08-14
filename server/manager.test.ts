@@ -1309,3 +1309,56 @@ test("migrate copies source sandbox and approval", async () => {
   assert.equal(manager.threads.get("switched").approvalPolicy, "never");
 });
 
+test("refreshAll remembers newly seen project directories", async () => {
+  const seen: { cwd?: string; updatedAt?: number }[][] = [];
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => ({ id: "local", kind: "local-profile" }),
+      listPublic: () => [],
+      get: () => ({ id: "local", kind: "local-profile" }),
+      revision: 1,
+    } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    {
+      connectionRevision: 0,
+      overlayForProvider: () => ({}),
+      rememberSeen: async () => false,
+      rememberSeenMany: async (items: { cwd?: string; updatedAt?: number }[]) => {
+        seen.push(items);
+        return true;
+      },
+    } as any,
+  ) as any;
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => ({
+      data: params.archived
+        ? []
+        : [{ id: "hist", cwd: "D:\\Code\\from-history", preview: "old" }],
+    }),
+  });
+  await manager.refreshAll();
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0]?.cwd, "D:\\Code\\from-history");
+});
+
+test("configPending follows connection overlay revision", () => {
+  const manager = new CodexManager(
+    { revision: 3 } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    { connectionRevision: 2 } as any,
+  ) as any;
+  manager.client = { online: true };
+  manager.loadedProviderRevision = 3;
+  manager.loadedConnectionRevision = 1;
+  assert.equal(manager.runtimeStatus().configPending, true);
+  manager.loadedConnectionRevision = 2;
+  assert.equal(manager.runtimeStatus().configPending, false);
+});
+

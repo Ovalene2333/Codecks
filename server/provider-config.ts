@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Provider } from "./types.js";
+import type { ConnectionOverlay, Provider } from "./types.js";
 
 export interface RuntimeProviderConfig {
   providerId: string;
@@ -52,8 +52,32 @@ export function runtimeBootstrapArgs(_providers: RuntimeProviderConfig[]) {
  * Compile one CCS/custom connection record into process-local Codex config.
  * The returned arguments are passed with `-c`; no user config file is changed.
  */
+function connectionOverlayArgs(
+  prefix: string,
+  overlay?: ConnectionOverlay,
+) {
+  const args: string[] = [];
+  if (typeof overlay?.requestMaxRetries === "number")
+    args.push(
+      "-c",
+      `${prefix}.request_max_retries=${overlay.requestMaxRetries}`,
+    );
+  if (typeof overlay?.streamMaxRetries === "number")
+    args.push(
+      "-c",
+      `${prefix}.stream_max_retries=${overlay.streamMaxRetries}`,
+    );
+  if (typeof overlay?.streamIdleTimeoutMs === "number")
+    args.push(
+      "-c",
+      `${prefix}.stream_idle_timeout_ms=${overlay.streamIdleTimeoutMs}`,
+    );
+  return args;
+}
+
 export function compileRuntimeProvider(
   provider: Provider,
+  overlay?: ConnectionOverlay,
 ): RuntimeProviderConfig {
   if (isOfficialProvider(provider)) {
     const suffix = stableSuffix(provider.id);
@@ -70,6 +94,7 @@ export function compileRuntimeProvider(
         `${prefix}.wire_api=${toml(provider.wireApi || "responses")}`,
         "-c",
         `${prefix}.requires_openai_auth=true`,
+        ...connectionOverlayArgs(prefix, overlay),
       ],
       env: {},
     };
@@ -99,6 +124,7 @@ export function compileRuntimeProvider(
     args.push("-c", `${prefix}.env_key=${toml(envKey)}`);
     env[envKey] = apiKey;
   }
+  args.push(...connectionOverlayArgs(prefix, overlay));
 
   return {
     providerId: provider.id,

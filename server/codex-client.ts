@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import WebSocket from "ws";
-import type { Provider, RpcMessage } from "./types.js";
+import type { ConnectionOverlay, Provider, RpcMessage } from "./types.js";
 import {
   compileRuntimeProvider,
   runtimeBootstrapArgs,
@@ -162,6 +162,9 @@ export class CodexClient extends EventEmitter {
     private runtimeProviders?: Provider[],
     readonly remoteUrl?: string,
     private useWsl = false,
+    private overlayForProvider?: (
+      providerId: string,
+    ) => ConnectionOverlay | undefined,
   ) {
     super();
   }
@@ -185,7 +188,7 @@ export class CodexClient extends EventEmitter {
       delete env.OPENAI_API_KEY;
       delete env.CODEX_API_KEY;
       const compiledProviders = this.runtimeProviders.map((item) =>
-        compileRuntimeProvider(item),
+        compileRuntimeProvider(item, this.overlayForProvider?.(item.id)),
       );
       configArgs.push(...runtimeBootstrapArgs(compiledProviders));
       if (!this.useWsl) {
