@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Deck</title>
+  <desc id="desc">Three terminal sessions connected to one control point</desc>
+  <defs>
+    <linearGradient id="surface" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b1b45"/>
+      <stop offset="0.55" stop-color="#071634"/>
+      <stop offset="1" stop-color="#040e25"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="42" y1="74" x2="119" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#bd4cff"/>
+      <stop offset="1" stop-color="#7357ff"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="214" y1="74" x2="137" y2="208" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#25e6ff"/>
+      <stop offset="1" stop-color="#2f8cff"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="86" y1="48" x2="169" y2="198" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7a69ff"/>
+      <stop offset="0.55" stop-color="#5f72ff"/>
+      <stop offset="1" stop-color="#9d63ff"/>
+    </linearGradient>
+    <radialGradient id="node" cx="0" cy="0" r="1" gradientTransform="translate(124 202) rotate(52) scale(22)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="0.52" stop-color="#dffbff"/>
+      <stop offset="1" stop-color="#72dfff"/>
+    </radialGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#surface)"/>
+  <rect x="11" y="11" width="234" height="234" rx="53" fill="none" stroke="#526bba" stroke-opacity="0.28" stroke-width="2"/>
+
+  <path d="M76 72 48 82c-11 4-17 15-14 27l18 68c3 12 16 19 28 15l31-10 17 25"
+        fill="none" stroke="url(#violet)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m180 72 28 10c11 4 17 15 14 27l-18 68c-3 12-16 19-28 15l-31-10-17 25"
+        fill="none" stroke="url(#cyan)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M91 48h74c13 0 23 10 23 23v84c0 13-10 23-23 23h-19l-18 19-18-19H91c-13 0-23-10-23-23V71c0-13 10-23 23-23Z"
+        fill="#071633" stroke="url(#primary)" stroke-width="10" stroke-linejoin="round"/>
+
+  <path d="m105 93 28 28-28 28" fill="none" stroke="url(#primary)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M151 128v25" fill="none" stroke="#6978ff" stroke-width="12" stroke-linecap="round"/>
+
+  <circle cx="128" cy="207" r="15" fill="#6371ff" fill-opacity="0.32" filter="url(#softGlow)"/>
+  <circle cx="128" cy="207" r="11" fill="url(#node)" stroke="#7a75ff" stroke-width="4"/>
+</svg>

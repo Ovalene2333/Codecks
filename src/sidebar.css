@@ -8,6 +8,12 @@
   height: 32px;
   border-radius: 10px;
 }
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: block;
+}
 .brand svg { width: 16px; }
 .brand b { font-size: 15px; }
 .brand small { letter-spacing: 0; }

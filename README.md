@@ -1,5 +1,5 @@
 <div align="center">
-  <img width="160" src="src/assets/logo.svg" alt="Codex Deck">
+  <img width="160" src="docs/icon.svg" alt="Codex Deck">
   <h1>Codex Deck</h1>
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)

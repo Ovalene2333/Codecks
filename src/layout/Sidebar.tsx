@@ -5,9 +5,9 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   X,
 } from "lucide-react";
+import deckLogo from "../assets/logo.svg";
 import type { ProjectGroup } from "../projects";
 import type { Provider, RuntimeSnapshot, ThreadSummary } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
@@ -128,9 +128,7 @@ export function Sidebar({
       className={`sidebar ${show ? "show" : ""} ${hiddenOnMobile ? "mobile-hidden" : ""}`}
     >
       <div className="brand">
-        <span>
-          <Sparkles />
-        </span>
+        <img className="brand-logo" src={deckLogo} alt="" />
         <div>
           <b>Codex Deck</b>
           <small>REMOTE WORKSPACE</small>
