@@ -349,6 +349,70 @@
   margin: 14px 0 6px;
   color: #c5ced9;
 }
+.modal.project-settings-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.project-defaults-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.project-defaults-form .form-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+.project-defaults-form .connection-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.project-defaults-form .form-actions {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line, #27313d);
+}
+.project-defaults-form .form-actions .primary {
+  width: auto;
+  min-width: 96px;
+}
+.project-defaults-form .form-actions button[type="button"] {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--control-border, #303b49);
+  border-radius: 8px;
+  background: var(--control, #161d26);
+  color: #dce3eb;
+  cursor: pointer;
+}
+.project-defaults-form .form-actions button[type="button"]:hover {
+  border-color: #435064;
+  background: var(--control-hover, #1d2631);
+  color: #fff;
+}
+@media (max-width: 760px) {
+  .project-defaults-form .connection-grid {
+    grid-template-columns: 1fr;
+  }
+  .project-defaults-form .form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .project-defaults-form .form-actions .primary,
+  .project-defaults-form .form-actions button[type="button"] {
+    width: 100%;
+    min-height: 44px;
+  }
+}
 .form .primary:disabled {
   opacity: 0.62;
   cursor: wait;

@@ -7,6 +7,8 @@ import type {
   Provider,
   SandboxMode,
 } from "../types";
+import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
+import { Modal } from "../ui";
 
 export type ProjectDefaultsSave = Omit<
   ProjectDefaults,
@@ -16,8 +18,6 @@ export type ProjectDefaultsSave = Omit<
   streamMaxRetries?: number | null;
   streamIdleTimeoutMs?: number | null;
 };
-import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
-import { Modal } from "../ui";
 
 function parseOptionalInt(value: string) {
   const trimmed = value.trim();
@@ -43,9 +43,13 @@ export function ProjectDefaultsModal({
   );
   const [error, setError] = useState("");
   return (
-    <Modal title={`项目设置 · ${project.name || project.cwd}`} onClose={onClose}>
+    <Modal
+      className="project-settings-modal"
+      title={`项目设置 · ${project.name || project.cwd}`}
+      onClose={onClose}
+    >
       <form
-        className="form"
+        className="form project-defaults-form"
         onSubmit={async (event) => {
           event.preventDefault();
           try {
@@ -68,6 +72,7 @@ export function ProjectDefaultsModal({
           }
         }}
       >
+        <div className="form-body">
         <label>
           显示名称
           <input value={name} onChange={(event) => setName(event.target.value)} />
@@ -139,9 +144,9 @@ export function ProjectDefaultsModal({
         </div>
         <p className="section-label">Codex 连接</p>
         <p className="form-hint">
-          写入该项目默认供应商的共享 Runtime。空着表示用 Codex 默认值。有会话在跑时会先记下，空闲后再应用。
+          写入共享 Runtime。空着即用默认值；有会话在跑时先记下，空闲后再应用。
         </p>
-        <div className="form-grid">
+        <div className="form-grid connection-grid">
           <label>
             请求重试
             <input
@@ -176,29 +181,35 @@ export function ProjectDefaultsModal({
               }
             />
           </label>
+          <label>
+            空闲超时 ms
+            <input
+              type="number"
+              min={1000}
+              max={3600000}
+              step={1000}
+              inputMode="numeric"
+              placeholder="默认 300000"
+              value={defaults.streamIdleTimeoutMs ?? ""}
+              onChange={(event) =>
+                setDefaults((current) => ({
+                  ...current,
+                  streamIdleTimeoutMs: parseOptionalInt(event.target.value),
+                }))
+              }
+            />
+          </label>
         </div>
-        <label>
-          流空闲超时（毫秒）
-          <input
-            type="number"
-            min={1000}
-            max={3600000}
-            step={1000}
-            inputMode="numeric"
-            placeholder="默认 300000"
-            value={defaults.streamIdleTimeoutMs ?? ""}
-            onChange={(event) =>
-              setDefaults((current) => ({
-                ...current,
-                streamIdleTimeoutMs: parseOptionalInt(event.target.value),
-              }))
-            }
-          />
-        </label>
         {error && <p className="error-text">{error}</p>}
-        <button className="primary" type="submit">
-          保存默认设置
-        </button>
+        </div>
+        <div className="form-actions">
+          <button type="button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary" type="submit">
+            保存
+          </button>
+        </div>
       </form>
     </Modal>
   );
