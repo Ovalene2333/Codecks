@@ -17,6 +17,10 @@ export function normalizeProjectPath(cwd: string) {
   value = value.replace(/^\/\/\?\/unc\//i, "//");
   if (value.startsWith("//?/")) value = value.slice(4);
   value = value.replace(/\/+$/, "");
+  const wslUnc = value.match(
+    /^\/\/(?:wsl\$|wsl\.localhost)\/[^/]+(?:\/(.*))?$/i,
+  );
+  if (wslUnc) value = wslUnc[1] ? `/${wslUnc[1]}` : "/";
   const driveOnly = value.match(/^([a-zA-Z]):$/);
   if (driveOnly) return `/mnt/${driveOnly[1].toLowerCase()}`;
   const windows = value.match(/^([a-zA-Z]):\/(.*)$/);

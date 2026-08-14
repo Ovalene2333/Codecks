@@ -45,6 +45,17 @@ test("hidden project without sessions is omitted", () => {
   assert.equal(groups.length, 0);
 });
 
+test("wsl UNC share paths collapse onto the POSIX project key", () => {
+  assert.equal(
+    normalizeProjectPath("\\\\wsl.localhost\\Ubuntu\\mnt\\d\\Work\\sample_project"),
+    "/mnt/d/work/sample_project",
+  );
+  assert.equal(
+    normalizeProjectPath("\\\\wsl$\\Ubuntu\\home\\tester\\repo"),
+    "/home/tester/repo",
+  );
+});
+
 test("windows mnt hybrid paths collapse onto the wsl project key", () => {
   assert.equal(
     normalizeProjectPath("D:\\mnt\\d\\Work\\sample_project"),

@@ -297,7 +297,7 @@ Windows 上默认只读取 Windows 用户的 `~/.codex`，并启动 Windows 原�
 npm start -- --wsl
 ```
 
-该模式通过 `wsl.exe` 读取 WSL 用户的 `~/.codex`，启动前会尝试加载常见的 Node 版本管理脚本，再启动 `codex app-server`。终端会先打印 WSL 唤醒和 app-server 进度；发行版冷启动或久置后这一步可能要几秒，不是卡死。如果 `codex` 只解析到 `/mnt/...` 下的 Windows npm shim，Deck 会拒绝启动。Windows 工作目录会转换为 `/mnt/<盘符>/...`。新建会话时工作目录旁会多一个「WSL」按钮，把当前 Windows 路径改成 WSL 路径，之后文件夹浏览会进入 WSL 文件系统（主目录按钮是 WSL `$HOME`）。该按钮只在 `--wsl` 时出现。
+该模式通过 `wsl.exe` 读取 WSL 用户的 `~/.codex`，启动前会尝试加载常见的 Node 版本管理脚本，再启动 `codex app-server`。终端会先打印 WSL 唤醒和 app-server 进度；发行版冷启动或久置后这一步可能要几秒，不是卡死。如果 `codex` 只解析到 `/mnt/...` 下的 Windows npm shim，Deck 会拒绝启动。Windows 工作目录会转换为 `/mnt/<盘符>/...`。新建会话时工作目录旁会多一个「WSL」按钮：亮起表示当前是 WSL 路径，再点一次切回 `D:\...`；`/home/...` 这类只存在于 Linux 的目录不能切回 Windows。该按钮只在 `--wsl` 时出现。侧栏会把同一块盘上的 `D:\项目` 与 `/mnt/d/项目` 收成一个项目；Windows 与 WSL 各自的 `~/.codex` 仍然隔离，两边的 Session 不能在同一个 Deck 里合并，也不能互相 resume。
 
 - WSL 内命令不是 `codex`：设置 `CODEX_WSL_BIN`
 - 非 bash：设置 `CODEX_WSL_SHELL`

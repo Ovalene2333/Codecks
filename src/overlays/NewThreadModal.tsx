@@ -15,7 +15,7 @@ import type {
 import { Modal } from "../ui";
 import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
 import { basename } from "../format";
-import { isWslCwd, toWslCwd } from "../wsl-path";
+import { isWslCwd, toggleWslCwd } from "../wsl-path";
 
 export function NewThreadModal({
   providers,
@@ -115,16 +115,24 @@ export function NewThreadModal({
               <button
                 type="button"
                 className={`wsl-cwd-btn${isWslCwd(form.cwd) ? " is-wsl" : ""}`}
+                aria-pressed={isWslCwd(form.cwd)}
                 title={
-                  isWslCwd(form.cwd) ? "已是 WSL 目录" : "切换为 WSL 目录"
+                  !form.cwd.trim()
+                    ? "先填写工作目录"
+                    : isWslCwd(form.cwd)
+                      ? toggleWslCwd(form.cwd) === form.cwd.trim()
+                        ? "此目录只在 WSL 中，无法切回 Windows"
+                        : "切换为 Windows 目录"
+                      : "切换为 WSL 目录"
                 }
                 disabled={
-                  !form.cwd.trim() || toWslCwd(form.cwd) === form.cwd.trim()
+                  !form.cwd.trim() ||
+                  toggleWslCwd(form.cwd) === form.cwd.trim()
                 }
                 onClick={() =>
                   setForm((current) => ({
                     ...current,
-                    cwd: toWslCwd(current.cwd),
+                    cwd: toggleWslCwd(current.cwd),
                   }))
                 }
               >

@@ -492,13 +492,14 @@
   color: #eef2f7;
   background: #1d2631;
 }
-.wsl-cwd-btn.is-wsl,
-.wsl-cwd-btn:disabled {
+.wsl-cwd-btn.is-wsl {
   color: #c4b5fd;
   border-color: #5b4a9a;
+  background: #181325;
 }
 .wsl-cwd-btn:disabled {
   cursor: default;
+  opacity: 0.55;
 }
 .text-btn {
   justify-self: start;

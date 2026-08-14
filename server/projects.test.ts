@@ -25,6 +25,17 @@ test("windows drive plus /mnt/d alias joins the same project", () => {
   );
 });
 
+test("wsl UNC share paths join the corresponding POSIX project", () => {
+  assert.equal(
+    normalizeProjectPath("\\\\wsl.localhost\\Ubuntu\\mnt\\d\\Code\\demo"),
+    normalizeProjectPath("D:\\Code\\demo"),
+  );
+  assert.equal(
+    normalizeProjectPath("\\\\wsl$\\Ubuntu\\home\\tester\\repo"),
+    "/home/tester/repo",
+  );
+});
+
 test("windows extended-length prefixes join the same project", () => {
   assert.equal(
     normalizeProjectPath("\\\\?\\D:\\Code\\demo"),
