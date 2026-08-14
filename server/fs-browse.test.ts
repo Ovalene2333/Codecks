@@ -62,7 +62,11 @@ test("useWsl lists POSIX paths through the WSL adapter", async () => {
   );
 });
 
-test("useWsl still lists Windows paths on the host", async () => {
+test("useWsl still lists Windows paths on the host", async (t) => {
+  if (process.platform !== "win32") {
+    t.skip("windows only");
+    return;
+  }
   const root = path.join(tmpdir(), `codex-deck-fs-win-${Date.now()}`);
   await mkdir(path.join(root, "src"), { recursive: true });
   let called = false;

@@ -190,6 +190,14 @@ export class ProjectStore {
     return this.connectionRevisionValue;
   }
 
+  private nextUpdatedAt() {
+    let latest = 0;
+    for (const project of this.projects.values()) {
+      latest = Math.max(latest, project.updatedAt || 0);
+    }
+    return Math.max(Date.now(), latest + 1);
+  }
+
   overlayForProvider(providerId: string) {
     return resolveConnectionOverlay(providerId, this.list(), this.prefs);
   }
@@ -254,7 +262,7 @@ export class ProjectStore {
       pinned: input.pinned ?? old?.pinned,
       hidden: input.hidden ?? old?.hidden,
       defaults: defaults && Object.keys(defaults).length ? defaults : undefined,
-      updatedAt: Date.now(),
+      updatedAt: this.nextUpdatedAt(),
     };
     if (input.defaults)
       this.touchConnection(old?.defaults, record.defaults);
@@ -294,7 +302,7 @@ export class ProjectStore {
       pinned: old?.pinned,
       hidden: old?.hidden,
       defaults: Object.keys(defaults).length ? defaults : undefined,
-      updatedAt: Date.now(),
+      updatedAt: this.nextUpdatedAt(),
     });
     this.prefs = {
       ...this.prefs,
