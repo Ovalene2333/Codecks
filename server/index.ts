@@ -21,6 +21,7 @@ import {
   clearRuntimeLock,
   updateRuntimeLock,
 } from "./runtime-lock.js";
+import { startPhase, writeLine } from "./startup-progress.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -50,11 +51,31 @@ const dataDir = path.resolve(
   process.env.DATA_DIR || path.join(projectRoot, ".data"),
 );
 const useWsl = shouldUseWslRuntime(process.platform, cli.wsl);
-const codexHome = await resolveRuntimeCodexHome(
-  useWsl ? process.env.CODEX_WSL_HOME : process.env.CODEX_HOME,
-  dataDir,
-  { useWsl },
+writeLine(
+  process.stdout,
+  `Codex Deck 启动中（${useWsl ? "WSL" : process.platform}）`,
 );
+const wslWake =
+  useWsl && !process.env.CODEX_WSL_HOME
+    ? startPhase("正在唤醒 WSL，读取用户目录…", {
+        waitingLabel: "仍在等待 WSL",
+      })
+    : undefined;
+let codexHome: string;
+try {
+  codexHome = await resolveRuntimeCodexHome(
+    useWsl ? process.env.CODEX_WSL_HOME : process.env.CODEX_HOME,
+    dataDir,
+    { useWsl },
+  );
+} catch (error: any) {
+  const detail = error?.message || String(error);
+  wslWake?.fail(`无法唤醒 WSL：${detail}`);
+  if (!wslWake) process.stderr.write(`${detail}\n`);
+  process.exit(1);
+}
+if (wslWake) wslWake.done(`WSL Codex 主目录 ${codexHome}`);
+else if (useWsl) writeLine(process.stdout, `WSL Codex 主目录 ${codexHome}`);
 const port = cli.port;
 const host = cli.host;
 const lanListener = host !== "127.0.0.1" && host !== "localhost";
@@ -648,7 +669,18 @@ if (lanListener) {
 if (cli.tunnel)
   tunnel = startTunnel(cli.tunnel, port, token, cli.cloudflaredBin);
 
-manager.startAll().catch((error) => console.error("Codex 启动失败:", error));
+const runtimeStart = useWsl
+  ? startPhase("正在启动 WSL 中的 Codex app-server…", {
+      waitingLabel: "仍在等待 app-server",
+    })
+  : undefined;
+manager
+  .startAll()
+  .then(() => runtimeStart?.done("Codex runtime 已就绪"))
+  .catch((error) => {
+    runtimeStart?.fail(`Codex 启动失败：${error?.message || error}`);
+    console.error("Codex 启动失败:", error);
+  });
 setInterval(async () => {
   try {
     if (await store.syncCcSwitch()) {
