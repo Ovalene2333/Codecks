@@ -10,7 +10,7 @@
 
 Codex Deck 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
 
-CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Deck 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网和 Cloudflare Tunnel。
+CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Deck 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
 
 名字来自 **Codex** 与 **Deck**：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
 
@@ -66,18 +66,15 @@ npm run dev
 
 ## 远程访问
 
-启动后会生成访问令牌，并把带令牌的入口打印到终端。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌。
+远程访问拆成三层，互不绑定：
 
-```bash
-# 监听 0.0.0.0，并打印局域网 IPv4 入口
-npm start -- --lan
+| 层 | 做什么 | 常用参数 |
+| --- | --- | --- |
+| 监听 | Deck 听哪个网卡 | `--lan`、`--host`、`--port` |
+| 暴露 | 要不要、以及怎么把本地端口接到外面 | `--expose`、`--public-origin` |
+| 鉴权 | 谁能打开控制台 | `REMOTE_TOKEN`、`--token`、`--no-token` |
 
-# 局域网 + 临时 *.trycloudflare.com
-npm start -- --cf-tunnel
-
-# 局域网 + 固定域名 Named Tunnel
-npm start -- --share
-```
+启动后会生成访问令牌，并把带令牌的入口打印到终端。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌。`--public-origin` 或任何 `--expose` 都会视为远程入口，即使只监听 `127.0.0.1` 也会发令牌。
 
 也可直接调用构建产物，或使用对应 scripts：`npm run lan`、`npm run cf-tunnel`、`npm run share`。
 
@@ -85,15 +82,90 @@ npm start -- --share
 node dist-server/index.js --lan
 ```
 
-`--share` 需要同时设置 `CF_TUNNEL_TOKEN` 和 `CF_TUNNEL_HOSTNAME`（或 `--tunnel-token` / `--share-host`）。`--named-tunnel <名称>` 仍可用于已登录 cloudflared 的 Tunnel 名称或 UUID。
+### 实例
 
-如果 `cloudflared` 不在 `PATH`：
+**1. 同一 Wi-Fi 下用手机打开**
+
+只监听局域网，不拉隧道。终端会打印本机 IPv4 入口。
+
+```bash
+npm start -- --lan
+```
+
+**2. 已经有 Caddy / nginx / 独立 cloudflared / 路由器反代**
+
+Deck 继续听本机，只负责把带令牌的 https 入口打出来。反代把 `https://deck.example.com` 转到 `127.0.0.1:4174` 即可。
+
+```bash
+npm start -- --public-origin https://deck.example.com
+```
+
+等价写法：
+
+```bash
+npm start -- --expose announce --public-origin https://deck.example.com
+```
+
+**3. 临时公网地址（Cloudflare Quick Tunnel）**
+
+适合偶尔远程看一眼。每次启动会拿到一个新的 `*.trycloudflare.com`。需要本机有 `cloudflared`。
+
+```bash
+npm start -- --cf-tunnel
+npm start -- --expose cloudflare:quick
+```
+
+`cloudflared` 不在 `PATH` 时：
 
 ```bash
 npm start -- --cf-tunnel --cloudflared /path/to/cloudflared
 ```
 
-`--no-token` 可与 `--lan` / `--cf-tunnel` / `--named-tunnel` 组合，但不能与 `--token` 或 `REMOTE_TOKEN` 同时使用。它会让所有能访问入口的人直接拥有命令执行和文件修改能力，只应在可信网络或已有额外访问控制时使用。
+**4. 固定域名的 Cloudflare Named Tunnel**
+
+长期挂着同一个域名。`--share` 需要 connector token 和主机名，二者都可写在 `.env` 或命令行。
+
+```bash
+# .env 里已有 CF_TUNNEL_TOKEN 和 CF_TUNNEL_HOSTNAME
+npm start -- --share
+npm start -- --expose cloudflare:share
+
+# 或全部写在命令行
+npm start -- --share --share-host deck.example.com --tunnel-token <connector-token>
+npm start -- --expose cloudflare:share --public-origin https://deck.example.com --tunnel-token <connector-token>
+```
+
+本机已经 `cloudflared login`、按名称拉起已有 Tunnel 时：
+
+```bash
+npm start -- --named-tunnel deck-home --public-origin https://deck.example.com
+npm start -- --expose cloudflare:named=deck-home --public-origin https://deck.example.com
+```
+
+**5. 用 ngrok / 其它隧道命令**
+
+Deck 不内置这些工具，只负责启动你指定的命令，并从输出里抓公网 `https://` 地址。`{port}` 换成 Deck 端口，`{url}` 换成 `http://127.0.0.1:<port>`。
+
+```bash
+# ngrok：从 stdout 自动抓 https://*.ngrok-free.app
+npm start -- --expose command --tunnel-bin ngrok --tunnel-args "http {port}"
+
+# 输出格式不规则时，自己写提取正则
+npm start -- --expose command --tunnel-bin ngrok --tunnel-args "http {port}" --tunnel-url-pattern "https://[a-z0-9-]+\\.ngrok-free\\.app"
+
+# 域名已经固定（预留域名、自建 frp 等），不必再扫输出
+npm start -- --expose command --tunnel-bin cloudflared --tunnel-args "tunnel --url {url}" --public-origin https://deck.example.com
+```
+
+也可以全部放进 `.env`，然后直接 `npm start`：
+
+```dotenv
+CODEX_DECK_EXPOSE=command
+CODEX_DECK_TUNNEL_BIN=ngrok
+CODEX_DECK_TUNNEL_ARGS=http {port}
+```
+
+**6. 固定令牌，方便书签收藏**
 
 ```bash
 HOST=0.0.0.0 REMOTE_TOKEN='replace-with-a-long-random-string' npm start
@@ -106,6 +178,19 @@ $env:HOST = "0.0.0.0"
 $env:REMOTE_TOKEN = "replace-with-a-long-random-string"
 npm start
 ```
+
+### 兼容入口与注意
+
+| 旧参数 | 等同于 |
+| --- | --- |
+| `--cf-tunnel` / `--share-once` | `--expose cloudflare:quick` |
+| `--share` | `--expose cloudflare:share` |
+| `--named-tunnel <名称>` | `--expose cloudflare:named=<名称>` |
+| `--public-origin <url>` | `--expose announce --public-origin <url>` |
+
+`--share` 必须同时有 `CF_TUNNEL_TOKEN` 和主机名（`CF_TUNNEL_HOSTNAME` / `--share-host` / `--public-origin`）。`--expose command` 默认抓输出里第一个非回环 `https://`；扫不到就加 `--tunnel-url-pattern` 或 `--public-origin`。
+
+`--no-token` 可与 `--lan` / `--expose` / `--cf-tunnel` / `--named-tunnel` 组合，但不能与 `--token` 或 `REMOTE_TOKEN` 同时使用。它会让所有能访问入口的人直接拥有命令执行和文件修改能力，只应在可信网络或已有额外访问控制时使用。
 
 首次从非本机打开页面时，输入相同的 `REMOTE_TOKEN`。公网长期暴露时，建议再加一层身份验证（例如 Cloudflare Access）。
 
@@ -139,8 +224,13 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `DATA_DIR` | `.data` | Deck 偏好与自定义供应商元数据 |
 | `CODEX_DECK_RUNTIME_PORT` | _(自动)_ | 仅监听本机的 Codex control WebSocket 端口 |
 | `CC_SWITCH_DB` | _(自动发现)_ | CC Switch SQLite 数据库绝对路径 |
+| `CODEX_DECK_EXPOSE` | _(空)_ | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |
+| `CODEX_DECK_PUBLIC_ORIGIN` | _(空)_ | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN` |
+| `CODEX_DECK_TUNNEL_BIN` | _(空)_ | `command` 供应商的可执行文件 |
+| `CODEX_DECK_TUNNEL_ARGS` | _(空)_ | `command` 参数模板，支持 `{port}`、`{url}` |
+| `CODEX_DECK_TUNNEL_URL_PATTERN` | _(自动)_ | 从命令输出提取公网 URL 的正则 |
 | `CODEX_DECK_CLOUDFLARED` | _(PATH)_ | `cloudflared` 可执行文件 |
-| `CODEX_DECK_TUNNEL_PROTOCOL` | `http2` | Quick Tunnel 传输协议 |
+| `CODEX_DECK_TUNNEL_PROTOCOL` | `http2` | Cloudflare Quick Tunnel 传输协议 |
 | `CF_TUNNEL_TOKEN` | _(空)_ | Named Tunnel connector token（`--share`） |
 | `CF_TUNNEL_HOSTNAME` | _(空)_ | 固定公网域名（`--share`） |
 

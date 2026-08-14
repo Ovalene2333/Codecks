@@ -1,6 +1,12 @@
-import type { Snapshot } from "./types";
+import type {
+  ProjectRecord,
+  Provider,
+  Snapshot,
+  ThreadSummary,
+} from "./types";
 
-const SNAPSHOT_KEY = "codex-deck:snapshot:v1";
+export const SNAPSHOT_KEY = "codex-deck:snapshot:v2";
+const SNAPSHOT_LEGACY_KEYS = ["codex-deck:snapshot:v1"];
 const THREAD_PREFIX = "codex-deck:thread:v1:";
 const THREAD_INDEX_KEY = "codex-deck:thread-index:v1";
 const UI_KEY = "codex-deck:ui:v2";
@@ -25,8 +31,16 @@ export function configureCacheStorage(store: Storage | null | undefined) {
 function getStore(): Storage | null {
   if (injectedStore !== undefined) return injectedStore;
   try {
-    if (typeof sessionStorage === "undefined") return null;
-    return sessionStorage;
+    if (typeof localStorage === "undefined") return null;
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readRaw(store: Storage, key: string) {
+  try {
+    return store.getItem(key);
   } catch {
     return null;
   }
@@ -74,27 +88,130 @@ function evictOldestThread() {
   }
 }
 
-export function sanitizeSnapshot(snapshot: Snapshot): Snapshot {
+function compactThread(thread: ThreadSummary): ThreadSummary {
   return {
-    providers: snapshot.providers,
-    threads: snapshot.threads,
-    archivedThreads: snapshot.archivedThreads,
+    id: thread.id,
+    providerId: thread.providerId,
+    name: thread.name,
+    preview: thread.preview,
+    cwd: thread.cwd,
+    model: thread.model,
+    status: thread.status,
+    updatedAt: thread.updatedAt,
+    archived: thread.archived,
+    controlMode: thread.controlMode,
+    forkedFromId: thread.forkedFromId,
+  };
+}
+
+function compactProvider(provider: Provider): Provider {
+  return {
+    id: provider.id,
+    name: provider.name,
+    kind: provider.kind,
+    color: provider.color,
+    model: provider.model,
+    hasApiKey: provider.hasApiKey,
+    enabled: provider.enabled,
+    online: provider.online,
+    current: provider.current,
+  };
+}
+
+export function compactSnapshot(snapshot: Snapshot): Snapshot {
+  return {
+    providers: (snapshot.providers || []).map(compactProvider),
+    threads: (snapshot.threads || []).map(compactThread),
+    archivedThreads: (snapshot.archivedThreads || []).map(compactThread),
     projects: snapshot.projects,
     preferences: snapshot.preferences,
-    runtime: snapshot.runtime,
+    runtime: snapshot.runtime
+      ? {
+          online: snapshot.runtime.online,
+          starting: snapshot.runtime.starting,
+          remoteUrl: snapshot.runtime.remoteUrl,
+          error: snapshot.runtime.error,
+        }
+      : undefined,
     approvals: [],
   };
 }
 
+export function hasSidebarData(snapshot: Snapshot | null | undefined) {
+  return Boolean(
+    snapshot &&
+      ((snapshot.threads && snapshot.threads.length) ||
+        (snapshot.archivedThreads && snapshot.archivedThreads.length) ||
+        (snapshot.projects && snapshot.projects.length)),
+  );
+}
+
+export function sanitizeSnapshot(snapshot: Snapshot): Snapshot {
+  return compactSnapshot(snapshot);
+}
+
+function migrateLegacySnapshot(store: Storage): Snapshot | null {
+  for (const key of SNAPSHOT_LEGACY_KEYS) {
+    const raw = readRaw(store, key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw) as Snapshot;
+      if (hasSidebarData(parsed)) {
+        const next = compactSnapshot(parsed);
+        store.setItem(SNAPSHOT_KEY, JSON.stringify(next));
+        store.removeItem(key);
+        return next;
+      }
+    } catch {
+      // ignore broken legacy rows
+    }
+    try {
+      store.removeItem(key);
+    } catch {
+      // ignore
+    }
+  }
+  if (typeof sessionStorage === "undefined" || store === sessionStorage)
+    return null;
+  try {
+    for (const key of [SNAPSHOT_KEY, ...SNAPSHOT_LEGACY_KEYS]) {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as Snapshot;
+      if (hasSidebarData(parsed)) {
+        const next = compactSnapshot(parsed);
+        store.setItem(SNAPSHOT_KEY, JSON.stringify(next));
+        sessionStorage.removeItem(key);
+        return next;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export function readSnapshotCache(): Snapshot | null {
   if (memorySnapshot.current) return memorySnapshot.current;
+  const store = getStore();
   const cached = readJson<Snapshot>(SNAPSHOT_KEY);
-  if (cached) memorySnapshot.current = cached;
-  return cached;
+  if (hasSidebarData(cached)) {
+    memorySnapshot.current = cached;
+    return cached;
+  }
+  if (store) {
+    const migrated = migrateLegacySnapshot(store);
+    if (migrated) {
+      memorySnapshot.current = migrated;
+      return migrated;
+    }
+  }
+  return null;
 }
 
 export function writeSnapshotCache(snapshot: Snapshot) {
-  const next = sanitizeSnapshot(snapshot);
+  if (!hasSidebarData(snapshot)) return;
+  const next = compactSnapshot(snapshot);
   memorySnapshot.current = next;
   writeJson(SNAPSHOT_KEY, next);
 }
@@ -152,7 +269,7 @@ export function readUiCache(): DeckUiCache {
     expandedProjects: Array.isArray(cached?.expandedProjects)
       ? cached.expandedProjects.filter((item) => typeof item === "string")
       : [],
-    query: typeof cached?.query === "string" ? cached.query : "",
+    query: "",
   };
   memoryUi.current = next;
   return next;
@@ -161,7 +278,7 @@ export function readUiCache(): DeckUiCache {
 export function writeUiCache(state: DeckUiCache) {
   memoryUi.current = {
     expandedProjects: [...state.expandedProjects],
-    query: state.query,
+    query: "",
   };
   writeJson(UI_KEY, memoryUi.current);
 }
@@ -172,3 +289,22 @@ export function resetCacheForTests() {
   memoryUi.current = null;
   inflightThreads.clear();
 }
+
+export function projectNamesFromSnapshot(snapshot: Snapshot) {
+  const names = new Map<string, string>();
+  for (const project of snapshot.projects || []) {
+    const key = project.key || project.cwd;
+    if (key) names.set(key, project.name || basename(project.cwd));
+  }
+  for (const thread of snapshot.threads || []) {
+    const key = thread.cwd || "未指定路径";
+    if (!names.has(key)) names.set(key, basename(key));
+  }
+  return [...names.values()];
+}
+
+function basename(path: string) {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || path;
+}
+
+export type { ProjectRecord };

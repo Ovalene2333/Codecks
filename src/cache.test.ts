@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  compactSnapshot,
   configureCacheStorage,
   dedupeThreadLoad,
+  hasSidebarData,
   readSnapshotCache,
   readThreadCache,
   readUiCache,
@@ -48,7 +50,56 @@ test("sanitizeSnapshot drops stale approvals before caching", () => {
   assert.deepEqual(next.approvals, []);
 });
 
-test("snapshot cache hydrates from session storage", () => {
+test("empty snapshots are not treated as sidebar data", () => {
+  assert.equal(hasSidebarData(snapshot()), false);
+  assert.equal(
+    hasSidebarData(
+      snapshot({
+        threads: [
+          {
+            id: "t1",
+            providerId: "p",
+            name: "会话",
+            preview: "hi",
+            cwd: "/tmp",
+            model: "gpt",
+            status: "idle",
+            updatedAt: 1,
+          },
+        ],
+      }),
+    ),
+    true,
+  );
+});
+
+test("writeSnapshotCache ignores empty snapshots so a later load cannot wipe the library", () => {
+  resetCacheForTests();
+  const store = new MemoryStorage();
+  configureCacheStorage(store);
+  writeSnapshotCache(
+    snapshot({
+      threads: [
+        {
+          id: "t1",
+          providerId: "p",
+          name: "会话",
+          preview: "hi",
+          cwd: "/tmp",
+          model: "gpt",
+          status: "idle",
+          updatedAt: 1,
+        },
+      ],
+    }),
+  );
+  writeSnapshotCache(snapshot());
+  resetCacheForTests();
+  configureCacheStorage(store);
+  assert.equal(readSnapshotCache()?.threads[0]?.id, "t1");
+});
+
+test("snapshot cache hydrates from durable storage", () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());
   writeSnapshotCache(
@@ -73,6 +124,29 @@ test("snapshot cache hydrates from session storage", () => {
   assert.deepEqual(cached?.approvals, []);
 });
 
+test("compactSnapshot keeps only sidebar fields", () => {
+  const next = compactSnapshot(
+    snapshot({
+      threads: [
+        {
+          id: "t1",
+          providerId: "p",
+          name: "会话",
+          preview: "hi",
+          cwd: "/tmp",
+          model: "gpt",
+          status: "idle",
+          updatedAt: 1,
+          lastError: "secret",
+          tokenUsage: { used: 9 },
+        },
+      ],
+    }),
+  );
+  assert.equal(next.threads[0]?.lastError, undefined);
+  assert.equal(next.threads[0]?.tokenUsage, undefined);
+});
+
 test("thread cache returns the last write and dedupes inflight loads", async () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());
@@ -95,13 +169,13 @@ test("thread cache returns the last write and dedupes inflight loads", async () 
   assert.deepEqual(readThreadCache("p:t2"), { turns: [2] });
 });
 
-test("ui cache stores expanded projects and query", () => {
+test("ui cache restores expanded projects but not the search box", () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());
   writeUiCache({ expandedProjects: ["/tmp/app"], query: "slam" });
   resetCacheForTests();
   assert.deepEqual(readUiCache(), {
     expandedProjects: ["/tmp/app"],
-    query: "slam",
+    query: "",
   });
 });

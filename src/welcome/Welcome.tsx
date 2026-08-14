@@ -6,12 +6,14 @@ import { usageChipMetric } from "../usage/format";
 export function Welcome({
   recent,
   runtime,
+  loading,
   onNew,
   onOpenProject,
   onUsage,
 }: {
   recent: ProjectGroup[];
   runtime?: RuntimeSnapshot;
+  loading?: boolean;
   onNew: () => void;
   onOpenProject: (project: ProjectGroup) => void;
   onUsage: () => void;
@@ -36,7 +38,16 @@ export function Welcome({
             <span>在此新建</span>
           </button>
         ))}
-        {!recent.length && <p className="muted">还没有最近项目，先选一个目录开始。</p>}
+        {loading && !recent.length && (
+          <>
+            <div className="skeleton-recent" />
+            <div className="skeleton-recent" />
+            <div className="skeleton-recent" />
+          </>
+        )}
+        {!loading && !recent.length && (
+          <p className="muted">还没有最近项目，先选一个目录开始。</p>
+        )}
       </div>
       <button className="primary" onClick={onNew}>
         <Plus />

@@ -14,6 +14,7 @@ import {
 } from "./projects";
 import { sessionKey } from "./format";
 import {
+  hasSidebarData,
   readSnapshotCache,
   readUiCache,
   writeSnapshotCache,
@@ -33,15 +34,14 @@ import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
-const initialSnapshot = readSnapshotCache() || empty;
-const initialUi = readUiCache();
 
 export function App() {
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [snapshot, setSnapshot] = useState(() => readSnapshotCache() || empty);
+  const [loading, setLoading] = useState(() => !hasSidebarData(readSnapshotCache()));
   const [selected, setSelected] = useState<string>();
   const [library, setLibrary] = useState<"active" | "archived">("active");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
-    () => new Set(initialUi.expandedProjects),
+    () => new Set(readUiCache().expandedProjects),
   );
   const [events, setEvents] = useState<any[]>([]);
   const [providerModal, setProviderModal] = useState(false);
@@ -50,7 +50,7 @@ export function App() {
     project?: ProjectRecord;
   } | null>(null);
   const [switchThread, setSwitchThread] = useState<ThreadSummary | null>(null);
-  const [query, setQuery] = useState(initialUi.query);
+  const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "attention"
   >("all");
@@ -84,18 +84,19 @@ export function App() {
     );
   }, []);
 
-  const refresh = useCallback(
-    () =>
-      getSnapshot()
-        .then((next) => {
-          setSnapshot(next);
-          setAuthError(false);
-        })
-        .catch((error) => {
-          if (error.message.includes("令牌")) setAuthError(true);
-        }),
-    [],
-  );
+  const refresh = useCallback(() => {
+    setLoading(true);
+    return getSnapshot()
+      .then((next) => {
+        setSnapshot(next);
+        writeSnapshotCache(next);
+        setAuthError(false);
+      })
+      .catch((error) => {
+        if (error.message.includes("令牌")) setAuthError(true);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -108,15 +109,15 @@ export function App() {
   }, [refresh]);
 
   useEffect(() => {
-    writeSnapshotCache(snapshot);
+    if (hasSidebarData(snapshot)) writeSnapshotCache(snapshot);
   }, [snapshot]);
 
   useEffect(() => {
     writeUiCache({
       expandedProjects: [...expandedProjects],
-      query,
+      query: "",
     });
-  }, [expandedProjects, query]);
+  }, [expandedProjects]);
 
   useEffect(() => {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -514,6 +515,7 @@ export function App() {
         forkCounts={forkCounts}
         runtime={snapshot.runtime}
         archiveError={snapshot.runtime?.archiveError}
+        loading={loading}
         onClose={() => setSidebar(false)}
         onNew={() => setThreadModal({})}
         onRefresh={refresh}
@@ -620,6 +622,7 @@ export function App() {
           <Welcome
             recent={recentProjects}
             runtime={snapshot.runtime}
+            loading={loading}
             onNew={() => setThreadModal({})}
             onOpenProject={(project) =>
               setThreadModal({

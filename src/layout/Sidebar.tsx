@@ -29,6 +29,7 @@ export function Sidebar({
   forkCounts,
   runtime,
   archiveError,
+  loading,
   onClose,
   onNew,
   onRefresh,
@@ -66,6 +67,7 @@ export function Sidebar({
   forkCounts: Map<string, number>;
   runtime?: RuntimeSnapshot;
   archiveError?: string;
+  loading?: boolean;
   onClose: () => void;
   onNew: () => void;
   onRefresh: () => void;
@@ -178,15 +180,23 @@ export function Sidebar({
             归档 <em>{archivedCount}</em>
           </button>
         </div>
-        <button className="icon-btn" onClick={onRefresh} title="刷新">
+        <button
+          className={`icon-btn ${loading ? "refreshing" : ""}`}
+          onClick={onRefresh}
+          title={loading ? "正在读取项目…" : "刷新"}
+        >
           <RefreshCw />
         </button>
       </div>
       <div className="sidebar-meta">
         <span>
-          {searching
-            ? `${matchCount} 个匹配 · ${projects.length} 个项目`
-            : `${projectCount} 项目 · ${visibleSessions} 会话`}
+          {loading && !projectCount
+            ? "正在读取项目…"
+            : loading
+              ? `同步中 · ${projectCount} 项目`
+              : searching
+                ? `${matchCount} 个匹配 · ${projects.length} 个项目`
+                : `${projectCount} 项目 · ${visibleSessions} 会话`}
         </span>
         <div className="watch-strip">
           <button
@@ -239,7 +249,14 @@ export function Sidebar({
             providers={providers}
           />
         ))}
-        {!projects.length && (
+        {loading && !projects.length && (
+          <div className="sidebar-skeleton" aria-busy="true" aria-label="正在读取项目">
+            {Array.from({ length: 7 }, (_, index) => (
+              <div key={index} className="skeleton-project" />
+            ))}
+          </div>
+        )}
+        {!loading && !projects.length && (
           <div className="empty-list">
             {emptyKind === "search" ? <Search /> : <Bot />}
             <p>

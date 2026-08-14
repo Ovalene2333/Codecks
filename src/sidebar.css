@@ -139,6 +139,47 @@
 
 .archive-error { margin: 0 12px 8px; }
 
+.icon-btn.refreshing svg {
+  animation: spin 0.8s linear infinite;
+}
+.sidebar-skeleton {
+  display: grid;
+  gap: 6px;
+  padding: 6px 4px 12px;
+}
+.skeleton-project,
+.skeleton-recent {
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #121922 0%, #1c2530 45%, #121922 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+.skeleton-project:nth-child(2),
+.skeleton-recent:nth-child(2) { animation-delay: 0.1s; width: 92%; }
+.skeleton-project:nth-child(3),
+.skeleton-recent:nth-child(3) { animation-delay: 0.2s; width: 86%; }
+.skeleton-project:nth-child(4) { animation-delay: 0.15s; width: 94%; }
+.skeleton-project:nth-child(5) { animation-delay: 0.25s; width: 80%; }
+.skeleton-project:nth-child(6) { animation-delay: 0.18s; width: 90%; }
+.skeleton-project:nth-child(7) { animation-delay: 0.3s; width: 84%; }
+.skeleton-recent {
+  height: 56px;
+  width: 100%;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.refreshing svg,
+  .skeleton-project,
+  .skeleton-recent { animation: none; }
+}
+
 .project-heading { position: relative; min-height: 36px; }
 .pin-mark {
   width: 11px !important;

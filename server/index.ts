@@ -52,7 +52,8 @@ const codexHome = await resolveRuntimeCodexHome(
 );
 const port = cli.port;
 const host = cli.host;
-const remote = host !== "127.0.0.1" && host !== "localhost";
+const lanListener = host !== "127.0.0.1" && host !== "localhost";
+const remote = lanListener || Boolean(cli.tunnel);
 const token = cli.noToken
   ? ""
   : cli.token || (remote ? randomBytes(24).toString("base64url") : "");
@@ -475,7 +476,7 @@ manager.on("event", (event) => {
 let tunnel: TunnelController | undefined;
 server.listen(port, host, () => {
   console.log(`Codex Deck: http://${host}:${port}`);
-  if (remote) {
+  if (lanListener) {
     const urls = lanAddresses(port, token);
     if (urls.length)
       process.stdout.write(`\n局域网手机入口：\n${urls.join("\n")}\n\n`);
