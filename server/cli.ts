@@ -1,11 +1,17 @@
+export type TunnelOption =
+  | { mode: "quick" }
+  | { mode: "named"; name: string }
+  | { mode: "share"; hostname: string; tunnelToken: string };
+
 export interface CliOptions {
   host: string;
   port: number;
   lan: boolean;
-  tunnel?: { mode: "quick" } | { mode: "named"; name: string };
+  tunnel?: TunnelOption;
   cloudflaredBin?: string;
   token?: string;
   noToken: boolean;
+  wsl: boolean;
   help: boolean;
 }
 
@@ -17,18 +23,29 @@ export function parseCli(
   let port = numberPort(env.PORT || "4174");
   let lan = false;
   let tunnel: CliOptions["tunnel"];
+  let share = false;
+  let shareHost = "";
+  let tunnelToken = "";
   let cloudflaredBin = env.CODEX_DECK_CLOUDFLARED;
   let token = env.REMOTE_TOKEN;
   let noToken = false;
+  let wsl = false;
   let help = false;
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--lan") lan = true;
-    else if (arg === "--cf-tunnel") {
+    else if (arg === "--cf-tunnel" || arg === "--share-once") {
       lan = true;
       tunnel = { mode: "quick" };
-    } else if (arg === "--named-tunnel") {
+    } else if (arg === "--share") {
+      lan = true;
+      share = true;
+    } else if (arg === "--share-host")
+      shareHost = requiredValue(argv, ++index, "--share-host");
+    else if (arg === "--tunnel-token")
+      tunnelToken = requiredValue(argv, ++index, "--tunnel-token");
+    else if (arg === "--named-tunnel") {
       const name = argv[++index];
       if (!name || name.startsWith("-"))
         throw new Error(
@@ -41,15 +58,34 @@ export function parseCli(
       port = numberPort(requiredValue(argv, ++index, "--port"));
     else if (arg === "--token") token = requiredValue(argv, ++index, "--token");
     else if (arg === "--no-token") noToken = true;
+    else if (arg === "--wsl") wsl = true;
     else if (arg === "--cloudflared")
       cloudflaredBin = requiredValue(argv, ++index, "--cloudflared");
     else if (arg === "--help" || arg === "-h") help = true;
     else throw new Error(`未知参数：${arg}。使用 --help 查看帮助。`);
   }
+  if (share && tunnel?.mode === "quick")
+    throw new Error("请只选 --share（固定域名）或 --cf-tunnel / --share-once（临时域名）之一");
+  if (share) {
+    const hostname =
+      shareHost.trim() || env.CF_TUNNEL_HOSTNAME?.trim() || "";
+    const connector =
+      tunnelToken.trim() || env.CF_TUNNEL_TOKEN?.trim() || "";
+    if (!hostname || !connector) {
+      const missing = [
+        !connector ? "CF_TUNNEL_TOKEN / --tunnel-token" : "",
+        !hostname ? "CF_TUNNEL_HOSTNAME / --share-host" : "",
+      ].filter(Boolean);
+      throw new Error(
+        `固定域名分享（--share）必须同时设置 ${missing.join(" 和 ")}；若只要一次性临时域名，请用 --cf-tunnel。`,
+      );
+    }
+    tunnel = { mode: "share", hostname, tunnelToken: connector };
+  }
   if (lan) host = "0.0.0.0";
   if (noToken && token)
     throw new Error("--no-token 不能与 --token 或 REMOTE_TOKEN 同时使用");
-  return { host, port, lan, tunnel, cloudflaredBin, token, noToken, help };
+  return { host, port, lan, tunnel, cloudflaredBin, token, noToken, wsl, help };
 }
 
 function requiredValue(argv: string[], index: number, option: string) {
@@ -70,12 +106,17 @@ export const CLI_HELP = `Codex Deck
 用法：npm start -- [选项]
 
   --lan                    监听局域网并打印手机访问地址
+  --share                  固定域名 Named Tunnel（需 CF_TUNNEL_TOKEN + CF_TUNNEL_HOSTNAME）
+  --share-host <域名>      覆盖固定公网域名（默认使用 CF_TUNNEL_HOSTNAME）
+  --tunnel-token <token>   Cloudflare 隧道 connector token（也可用 CF_TUNNEL_TOKEN）
   --cf-tunnel              同时开启局域网和临时 trycloudflare.com 隧道
-  --named-tunnel <名称>    同时开启局域网和指定的 Cloudflare Named Tunnel
+  --share-once             同 --cf-tunnel
+  --named-tunnel <名称>    使用已登录 cloudflared 的 Tunnel 名称或 UUID
   --host <地址>            自定义监听地址（默认 127.0.0.1）
   --port <端口>            服务端口（默认 4174）
   --token <令牌>           指定访问令牌（也可设置 REMOTE_TOKEN）
   --no-token               关闭 API/WebSocket 鉴权（公开网络慎用）
+  --wsl                    Windows 上在 WSL 中启动 Codex runtime
   --cloudflared <路径>     指定 cloudflared 可执行文件
   -h, --help               显示帮助
 `;

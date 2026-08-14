@@ -67,6 +67,50 @@ export interface ModelInfo {
   supportsPersonality?: boolean;
 }
 
+export interface TokenUsage {
+  used?: number;
+  limit?: number;
+  input?: number;
+  output?: number;
+}
+
+export interface RateLimitWindow {
+  usedPercent?: number;
+  used?: number;
+  limit?: number;
+  resetsAt?: number;
+  resetAfterSeconds?: number;
+  reached?: boolean;
+}
+
+export interface RateLimits {
+  primary?: RateLimitWindow;
+  secondary?: RateLimitWindow;
+  byLimitId?: Record<string, RateLimitWindow>;
+  planType?: string;
+  planName?: string;
+}
+
+export interface AccountInfo {
+  authMode?: string;
+  planType?: string;
+  email?: string;
+  chatgpt?: boolean;
+}
+
+export type ApprovalKind =
+  | "command"
+  | "file"
+  | "permission"
+  | "question"
+  | "unknown";
+
+export interface FileChange {
+  path: string;
+  kind?: string;
+  diff?: string;
+}
+
 export interface ThreadSummary {
   id: string;
   providerId: string;
@@ -82,6 +126,12 @@ export interface ThreadSummary {
   archived?: boolean;
   reasoningEffort?: string;
   personality?: Personality;
+  sandbox?: SandboxMode;
+  approvalPolicy?: ApprovalPolicy;
+  forkedFromId?: string;
+  sessionId?: string;
+  tokenUsage?: TokenUsage;
+  compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
 }
@@ -92,6 +142,10 @@ export interface RuntimeStatus {
   remoteUrl: string;
   error?: string;
   configPending?: boolean;
+  account?: AccountInfo;
+  rateLimits?: RateLimits | null;
+  rateLimitsError?: string;
+  archiveError?: string;
 }
 
 export interface RpcMessage {

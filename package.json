@@ -2,6 +2,8 @@
   "name": "codex-deck",
   "version": "0.1.0",
   "private": true,
+  "description": "A mobile-first remote console for Codex CLI.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
@@ -9,7 +11,8 @@
     "start": "node dist-server/index.js",
     "lan": "node dist-server/index.js --lan",
     "cf-tunnel": "node dist-server/index.js --cf-tunnel",
-    "test": "node --import tsx --test server/**/*.test.ts"
+    "share": "node dist-server/index.js --share",
+    "test": "node --import tsx --test server/**/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "cookie": "^1.0.2",
@@ -17,6 +20,8 @@
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },

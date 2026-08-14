@@ -6,10 +6,32 @@ import {
   isOfficialProvider,
 } from "./provider-config.js";
 import { configuredRuntimePort, findFreeListenPort } from "./runtime-port.js";
+import {
+  windowsPathToWsl,
+  WSL_CODEX_SHELL_COMMAND,
+} from "./runtime-platform.js";
+import {
+  classifyApprovalMethod,
+  formatCommand,
+  isChatgptAccount,
+  parseAccount,
+  parseFileChanges,
+  parseRateLimits,
+  parseSandboxMode,
+  parseTimestamp,
+  parseTokenUsage,
+  pickString,
+  sandboxPolicyFromMode,
+  timestampFromId,
+} from "./protocol.js";
 import type {
+  AccountInfo,
+  ApprovalKind,
+  FileChange,
   ModelInfo,
   Personality,
   Provider,
+  RateLimits,
   RpcMessage,
   ThreadSummary,
 } from "./types.js";
@@ -19,6 +41,9 @@ export class CodexManager extends EventEmitter {
   private startingClient?: Promise<CodexClient>;
   private threads = new Map<string, ThreadSummary>();
   private loadedThreads = new Set<string>();
+  // thread/start is in-memory only. Codex writes a rollout on the first turn,
+  // when the thread is listed, or when it is forked/resumed from disk.
+  private knownRollouts = new Set<string>();
   private approvals = new Map<
     string,
     { providerId: string; request: RpcMessage }
@@ -26,12 +51,18 @@ export class CodexManager extends EventEmitter {
   private loadedProviderRevision = -1;
   private loadedProviderIds = new Set<string>();
   private runtimePort?: number;
+  private account?: AccountInfo;
+  private rateLimits: RateLimits | null = null;
+  private rateLimitsError?: string;
+  private archiveError?: string;
+  private pendingFileChanges = new Map<string, FileChange[]>();
 
   constructor(
     private store: ProviderStore,
     private dataDir: string,
     private codexBin?: string,
     runtimePort?: number,
+    private useWsl = false,
   ) {
     super();
     this.runtimePort =
@@ -70,6 +101,7 @@ export class CodexManager extends EventEmitter {
   private async startClient(previous?: CodexClient) {
     previous?.stop();
     this.loadedThreads.clear();
+    this.knownRollouts.clear();
     const profile = this.store.runtimeProfile();
     const client = new CodexClient(
       profile,
@@ -77,13 +109,15 @@ export class CodexManager extends EventEmitter {
       this.codexBin,
       this.store.runtimeProviders(),
       `ws://127.0.0.1:${await this.resolveRuntimePort()}`,
+      this.useWsl,
     );
     this.client = client;
     client.on("notification", (msg) => this.onNotification(msg));
     client.on("request", (msg) => this.onRequest(msg));
-    client.on("online", () =>
-      this.broadcast("runtime.status", { online: true }),
-    );
+    client.on("online", () => {
+      this.broadcast("runtime.status", { online: true });
+      void this.loadOfficialUsage();
+    });
     client.on("offline", (error) =>
       this.broadcast("runtime.status", { online: false, error }),
     );
@@ -104,6 +138,7 @@ export class CodexManager extends EventEmitter {
     this.client = undefined;
     this.startingClient = undefined;
     this.loadedThreads.clear();
+    this.knownRollouts.clear();
   }
 
   providerStatuses() {
@@ -136,7 +171,10 @@ export class CodexManager extends EventEmitter {
       listed = true;
       try {
         await this.pullThreadPages(client, true, seen);
-      } catch {}
+        this.archiveError = undefined;
+      } catch (error: any) {
+        this.archiveError = String(error?.message || "归档会话列表加载失败");
+      }
     } catch {}
     // Only drop stale rows after a successful unarchived listing. A failed
     // thread/list (timeout, current-provider filter error) must not wipe
@@ -168,6 +206,7 @@ export class CodexManager extends EventEmitter {
           ...thread,
           archived: archived || thread.archived,
         });
+        this.rememberRollout(thread.id);
         seen.add(thread.id);
       }
       loaded += result.data?.length || result.threads?.length || 0;
@@ -195,10 +234,9 @@ export class CodexManager extends EventEmitter {
       providers: this.providerStatuses(),
       threads: this.listThreads(),
       archivedThreads: this.listArchivedThreads(),
-      approvals: [...this.approvals.entries()].map(([id, value]) => ({
-        id,
-        ...value,
-      })),
+      approvals: [...this.approvals.entries()].map(([id, value]) =>
+        this.approvalView(id, value),
+      ),
       runtime: this.runtimeStatus(),
     };
   }
@@ -212,6 +250,10 @@ export class CodexManager extends EventEmitter {
       configPending:
         Boolean(this.client?.online) &&
         this.loadedProviderRevision !== this.store.revision,
+      account: this.account,
+      rateLimits: this.rateLimits,
+      rateLimitsError: this.rateLimitsError,
+      archiveError: this.archiveError,
     };
   }
 
@@ -221,8 +263,20 @@ export class CodexManager extends EventEmitter {
       process.platform === "win32"
         ? `"${value.replace(/"/g, '""')}"`
         : `'${value.replace(/'/g, `'"'"'`)}'`;
-    const parts = ["codex", "--remote", this.runtimeStatus().remoteUrl];
-    if (cwd) parts.push("-C", quote(cwd));
+    const parts = this.useWsl
+      ? [
+          "wsl.exe",
+          "--exec",
+          process.env.CODEX_WSL_SHELL || "bash",
+          "-lc",
+          `'${WSL_CODEX_SHELL_COMMAND.replace(/'/g, `'"'"'`)}'`,
+          "codex-deck",
+          process.env.CODEX_WSL_BIN || "codex",
+          "--remote",
+          this.runtimeStatus().remoteUrl,
+        ]
+      : ["codex", "--remote", this.runtimeStatus().remoteUrl];
+    if (cwd) parts.push("-C", quote(this.useWsl ? windowsPathToWsl(cwd) : cwd));
     if (provider) {
       const compiled = compileRuntimeProvider(provider);
       if (compiled.model) parts.push("-m", quote(compiled.model));
@@ -269,12 +323,14 @@ export class CodexManager extends EventEmitter {
     const client = await this.ensure(providerId);
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
+    const sandbox = input.sandbox || "workspace-write";
+    const approvalPolicy = input.approvalPolicy || "on-request";
     const start: Record<string, unknown> = {
-      cwd: input.cwd,
+      cwd: this.useWsl ? windowsPathToWsl(input.cwd) : input.cwd,
       model: input.model || runtimeProvider.model || undefined,
       modelProvider: runtimeProvider.modelProvider,
-      approvalPolicy: input.approvalPolicy || "on-request",
-      sandbox: input.sandbox || "workspace-write",
+      approvalPolicy,
+      sandbox,
     };
     if (input.reasoningEffort) start.reasoningEffort = input.reasoningEffort;
     if (input.personality) start.personality = input.personality;
@@ -291,8 +347,16 @@ export class CodexManager extends EventEmitter {
         ...result.thread,
         name: input.name || result.thread.name,
         model: input.model || result.thread.model,
-        reasoningEffort: input.reasoningEffort,
+        reasoningEffort: input.reasoningEffort || result.reasoningEffort,
         personality: input.personality,
+        sandbox:
+          parseSandboxMode(
+            result.sandbox,
+            result.activePermissionProfile,
+            sandbox,
+          ) || sandbox,
+        approvalPolicy:
+          pickString(result.approvalPolicy, approvalPolicy) || approvalPolicy,
       },
       "idle",
     );
@@ -351,11 +415,16 @@ export class CodexManager extends EventEmitter {
   ) {
     await this.ensureLoaded(providerId, threadId);
     const client = await this.ensure(providerId);
+    const params: Record<string, unknown> = { threadId };
+    if (settings.model) params.model = settings.model;
+    if (settings.reasoningEffort) params.effort = settings.reasoningEffort;
+    if (settings.personality) params.personality = settings.personality;
+    if (settings.approvalPolicy)
+      params.approvalPolicy = settings.approvalPolicy;
+    if (settings.sandbox)
+      params.sandboxPolicy = sandboxPolicyFromMode(settings.sandbox);
     try {
-      await client.request("thread/settings/update", {
-        threadId,
-        ...settings,
-      });
+      await client.request("thread/settings/update", params);
     } catch (error: any) {
       throw new Error(
         `当前 Codex 不支持中途修改会话设置：${error.message || error}`,
@@ -367,25 +436,79 @@ export class CodexManager extends EventEmitter {
       if (settings.reasoningEffort)
         existing.reasoningEffort = settings.reasoningEffort;
       if (settings.personality) existing.personality = settings.personality;
+      if (settings.approvalPolicy)
+        existing.approvalPolicy = settings.approvalPolicy as ThreadSummary["approvalPolicy"];
+      if (settings.sandbox)
+        existing.sandbox = settings.sandbox as ThreadSummary["sandbox"];
       existing.updatedAt = Date.now();
       this.broadcast("thread.updated", existing);
     }
     return existing;
   }
 
-  async forkThread(providerId: string, threadId: string) {
+  async forkThread(
+    providerId: string,
+    threadId: string,
+    options: { lastTurnId?: string } = {},
+  ) {
+    const source = this.threads.get(threadId);
+    if (
+      options.lastTurnId &&
+      source &&
+      (source.status === "running" || source.status === "waiting")
+    )
+      throw new Error("会话正在运行，无法从中间回合分支");
     await this.ensureLoaded(providerId, threadId);
     const client = await this.ensure(providerId);
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
-    const result = await client.request("thread/fork", {
+    const params: Record<string, unknown> = {
       threadId,
-      model: runtimeProvider.model,
+      model: source?.model || runtimeProvider.model,
       modelProvider: runtimeProvider.modelProvider,
-    });
+    };
+    if (source?.sandbox) params.sandbox = source.sandbox;
+    if (source?.approvalPolicy) params.approvalPolicy = source.approvalPolicy;
+    if (options.lastTurnId) params.lastTurnId = options.lastTurnId;
+    const result = await client.request("thread/fork", params);
     this.loadedThreads.add(result.thread.id);
-    this.upsertThread(provider, result.thread, "idle");
-    return result.thread;
+    this.rememberRollout(result.thread.id);
+    const branchName = `${source?.name || result.thread.name || "会话"} · 分支`;
+    try {
+      await client.request("thread/name/set", {
+        threadId: result.thread.id,
+        name: branchName,
+      });
+    } catch {}
+    this.upsertThread(
+      provider,
+      {
+        ...result.thread,
+        name: branchName,
+        forkedFromId: threadId,
+        sessionId:
+          result.thread.sessionId ||
+          result.thread.session_id ||
+          result.thread.id,
+        sandbox:
+          parseSandboxMode(
+            result.sandbox,
+            result.activePermissionProfile,
+            source?.sandbox,
+            result.thread.sandbox,
+          ) || source?.sandbox,
+        approvalPolicy:
+          pickString(
+            result.approvalPolicy,
+            source?.approvalPolicy,
+            result.thread.approvalPolicy,
+          ) || source?.approvalPolicy,
+        reasoningEffort: source?.reasoningEffort,
+        model: source?.model || result.thread.model,
+      },
+      "idle",
+    );
+    return this.threads.get(result.thread.id) || result.thread;
   }
 
   async migrateThread(
@@ -403,16 +526,26 @@ export class CodexManager extends EventEmitter {
     const target = this.store.get(targetProviderId);
     if (!target || !target.enabled) throw new Error("目标供应商不可用");
 
+    if (this.canSwitchWithoutFork(source))
+      return this.migrateUnsentThread(source, target, options);
+
     const client = await this.ensure(targetProviderId);
     const runtimeProvider = compileRuntimeProvider(target);
-    const result = await client.request("thread/fork", {
-      threadId: sourceThreadId,
-      model: options.model || runtimeProvider.model,
-      modelProvider: runtimeProvider.modelProvider,
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
+    let result: any;
+    try {
+      result = await client.request("thread/fork", {
+        threadId: sourceThreadId,
+        model: options.model || runtimeProvider.model,
+        modelProvider: runtimeProvider.modelProvider,
+        approvalPolicy: source.approvalPolicy || "on-request",
+        sandbox: source.sandbox || "workspace-write",
+      });
+    } catch (error: unknown) {
+      if (!isMissingRolloutError(error)) throw error;
+      return this.migrateUnsentThread(source, target, options);
+    }
     this.loadedThreads.add(result.thread.id);
+    this.rememberRollout(result.thread.id);
     if (
       result.thread?.modelProvider &&
       result.thread.modelProvider !== runtimeProvider.modelProvider
@@ -424,8 +557,56 @@ export class CodexManager extends EventEmitter {
       ...result.thread,
       model: options.model || runtimeProvider.model,
       reasoningEffort: options.reasoningEffort || source.reasoningEffort,
+      sandbox:
+        parseSandboxMode(
+          result.sandbox,
+          result.activePermissionProfile,
+          source.sandbox,
+        ) || source.sandbox,
+      approvalPolicy:
+        pickString(result.approvalPolicy, source.approvalPolicy) ||
+        source.approvalPolicy,
+      forkedFromId: sourceThreadId,
+      migratedFrom: { providerId: sourceProviderId, threadId: sourceThreadId },
     });
     return result.thread;
+  }
+
+  private canSwitchWithoutFork(thread: ThreadSummary) {
+    return (
+      this.loadedThreads.has(thread.id) && !this.knownRollouts.has(thread.id)
+    );
+  }
+
+  private rememberRollout(threadId?: string) {
+    if (threadId) this.knownRollouts.add(threadId);
+  }
+
+  private async migrateUnsentThread(
+    source: ThreadSummary,
+    target: Provider,
+    options: { model?: string; reasoningEffort?: string },
+  ) {
+    const created = await this.createThread(target.id, {
+      cwd: source.cwd,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort || source.reasoningEffort,
+      personality: source.personality,
+      approvalPolicy: source.approvalPolicy,
+      sandbox: source.sandbox,
+      name:
+        source.name && source.name !== "新会话" ? source.name : undefined,
+    });
+    const next = this.threads.get(created.id);
+    if (next) {
+      next.migratedFrom = {
+        providerId: source.providerId,
+        threadId: source.id,
+      };
+      this.broadcast("thread.updated", next);
+    }
+    this.removeThread(source.id);
+    return this.threads.get(created.id) || created;
   }
 
   async archiveThread(providerId: string, threadId: string) {
@@ -479,24 +660,45 @@ export class CodexManager extends EventEmitter {
     // until its first turn. Resuming it here fails with "no rollout found".
     // Threads discovered by thread/list, on the other hand, must be resumed.
     if (!this.loadedThreads.has(key)) {
-      const provider = this.store.get(providerId)!;
-      const runtimeProvider = compileRuntimeProvider(provider);
-      await client
-        .request("thread/resume", {
-          threadId,
-          model: runtimeProvider.model,
-          modelProvider: runtimeProvider.modelProvider,
-          excludeTurns: true,
-        })
-        .catch((error) => {
-          if (!String(error.message).includes("already")) throw error;
-        });
+      await this.resumeThread(client, providerId, threadId);
       this.loadedThreads.add(key);
     }
-    return client.request("turn/start", {
-      threadId,
-      input: [{ type: "text", text, text_elements: [] }],
-    });
+    this.rememberRollout(threadId);
+    const existing = this.threads.get(threadId);
+    const input = [{ type: "text", text, text_elements: [] }];
+    if (
+      existing?.status === "running" &&
+      existing.activeTurnId &&
+      !existing.compacting
+    ) {
+      try {
+        return await client.request("turn/steer", {
+          threadId,
+          expectedTurnId: existing.activeTurnId,
+          input,
+        });
+      } catch (error: any) {
+        if (!String(error?.message || "").toLowerCase().includes("no active turn"))
+          throw error;
+      }
+    }
+    const start: Record<string, unknown> = { threadId, input };
+    if (existing?.sandbox)
+      start.sandboxPolicy = sandboxPolicyFromMode(existing.sandbox);
+    if (existing?.approvalPolicy)
+      start.approvalPolicy = existing.approvalPolicy;
+    return client.request("turn/start", start);
+  }
+
+  async compactThread(providerId: string, threadId: string) {
+    const client = await this.ensure(providerId);
+    const existing = this.threads.get(threadId);
+    if (existing) {
+      existing.compacting = true;
+      existing.updatedAt = Date.now();
+      this.broadcast("thread.updated", existing);
+    }
+    return client.request("thread/compact/start", { threadId });
   }
 
   async interrupt(providerId: string, threadId: string, turnId: string) {
@@ -506,19 +708,68 @@ export class CodexManager extends EventEmitter {
     });
   }
 
-  async resolveApproval(approvalId: string, decision: string) {
+  async resolveApproval(
+    approvalId: string,
+    body:
+      | string
+      | {
+          decision?: string;
+          permissions?: unknown;
+          scope?: "session" | "turn";
+          answers?: unknown;
+        },
+  ) {
     const approval = this.approvals.get(approvalId);
     if (!approval) throw new Error("审批已处理或不存在");
-    const client = await this.ensure(approval.providerId);
+    const payload = typeof body === "string" ? { decision: body } : body;
     const method = approval.request.method || "";
-    let result: any = { decision };
-    if (method === "item/permissions/requestApproval")
-      throw new Error("权限配置审批暂不支持，请在桌面端处理");
-    if (method.includes("requestUserInput"))
-      throw new Error("交互式问答暂不支持");
+    const kind = classifyApprovalMethod(method);
+    let result: Record<string, unknown>;
+    if (kind === "command" || kind === "file") {
+      if (!payload.decision) throw new Error("缺少审批决定");
+      result = { decision: payload.decision };
+    } else if (kind === "permission") {
+      result = { permissions: payload.permissions, scope: payload.scope };
+    } else if (kind === "question") {
+      result = { answers: payload.answers };
+    } else {
+      throw new Error("未知审批类型，未向 Codex 发送响应");
+    }
+    const client = await this.ensure(approval.providerId);
     client.respond(approval.request.id!, result);
     this.approvals.delete(approvalId);
     this.broadcast("approval.resolved", { approvalId });
+  }
+
+  async loadOfficialUsage() {
+    const client = this.client;
+    if (!client?.online) return this.runtimeStatus();
+    try {
+      const accountRaw = await client.request("account/read", {});
+      this.account = parseAccount(accountRaw);
+      if (!isChatgptAccount(this.account)) {
+        this.rateLimits = null;
+        this.rateLimitsError =
+          "当前 Runtime 未使用 Official ChatGPT 登录，额度不可用";
+        this.broadcast("runtime.status", this.runtimeStatus());
+        return this.runtimeStatus();
+      }
+      try {
+        const limitsRaw = await client.request("account/rateLimits/read", {});
+        this.rateLimits = parseRateLimits(limitsRaw);
+        this.rateLimitsError = this.rateLimits
+          ? undefined
+          : "Official 账号额度暂不可用";
+      } catch (error: any) {
+        this.rateLimits = null;
+        this.rateLimitsError = String(error?.message || "额度读取失败");
+      }
+    } catch (error: any) {
+      this.rateLimits = null;
+      this.rateLimitsError = String(error?.message || "账号信息读取失败");
+    }
+    this.broadcast("runtime.status", this.runtimeStatus());
+    return this.runtimeStatus();
   }
 
   private upsertThread(
@@ -548,7 +799,17 @@ export class CodexManager extends EventEmitter {
       model: thread.model || provider.model || old?.model || "default",
       status: status || latestStatus || old?.status || "idle",
       updatedAt:
-        Date.parse(thread.updatedAt || thread.createdAt || "") || Date.now(),
+        parseTimestamp(
+          thread.updatedAt,
+          thread.updated_at,
+          thread.lastUpdatedAt,
+          thread.last_updated_at,
+          thread.createdAt,
+          thread.created_at,
+        ) ||
+        old?.updatedAt ||
+        timestampFromId(thread.id) ||
+        Date.now(),
       activeTurnId: latestTurn
         ? latestTurn.status === "inProgress"
           ? latestTurn.id
@@ -559,12 +820,42 @@ export class CodexManager extends EventEmitter {
       archived: thread.archived ?? old?.archived,
       reasoningEffort: thread.reasoningEffort || old?.reasoningEffort,
       personality: thread.personality || old?.personality,
+      sandbox:
+        parseSandboxMode(
+          thread.sandbox,
+          thread.sandboxMode,
+          thread.sandbox_mode,
+          thread.sandboxPolicy,
+          thread.sandbox_policy,
+          thread.activePermissionProfile,
+        ) || old?.sandbox,
+      approvalPolicy:
+        (pickString(thread.approvalPolicy, thread.approval_policy) as
+          | ThreadSummary["approvalPolicy"]
+          | undefined) || old?.approvalPolicy,
+      forkedFromId:
+        pickString(
+          thread.forkedFromId,
+          thread.forked_from_id,
+          thread.parentThreadId,
+        ) || old?.forkedFromId,
+      sessionId:
+        pickString(thread.sessionId, thread.session_id) || old?.sessionId,
+      tokenUsage:
+        parseTokenUsage(thread.tokenUsage || thread.token_usage) ||
+        old?.tokenUsage,
+      compacting:
+        typeof thread.compacting === "boolean"
+          ? thread.compacting
+          : old?.compacting,
+      migratedFrom: thread.migratedFrom || old?.migratedFrom,
       controlMode:
         status || this.loadedThreads.has(thread.id)
           ? "managed"
           : old?.controlMode || "history",
     };
     this.threads.set(key, item);
+    if (thread.turns?.length || thread.preview) this.rememberRollout(thread.id);
     this.broadcast("thread.updated", item);
   }
 
@@ -583,6 +874,20 @@ export class CodexManager extends EventEmitter {
   ) {
     const message = legacyMessage || (messageOrProviderId as RpcMessage);
     const params = message.params || {};
+    if (message.method === "account/rateLimits/updated") {
+      const parsed = parseRateLimits(params.rateLimits || params);
+      this.rateLimits = parsed;
+      this.rateLimitsError = parsed ? undefined : this.rateLimitsError;
+      this.broadcast("runtime.status", this.runtimeStatus());
+    }
+    const item = params.item;
+    if (item?.id && (item.type === "fileChange" || item.changes)) {
+      const changes = parseFileChanges(item.changes);
+      if (changes) {
+        this.pendingFileChanges.set(item.id, changes);
+        this.attachFileChanges(item.id);
+      }
+    }
     const thread = params.thread;
     const threadId = params.threadId || thread?.id;
     if (threadId && message.method === "thread/started")
@@ -615,6 +920,7 @@ export class CodexManager extends EventEmitter {
               : "idle";
       }
       if (message.method === "turn/started") {
+        this.rememberRollout(existing.id);
         existing.status = "running";
         existing.activeTurnId = params.turn?.id;
         existing.lastError = undefined;
@@ -623,9 +929,11 @@ export class CodexManager extends EventEmitter {
       if (message.method === "turn/completed") {
         existing.status = params.turn?.status === "failed" ? "error" : "idle";
         existing.activeTurnId = undefined;
+        existing.compacting = false;
         const error = this.turnError(params.turn?.error);
         existing.lastError = error?.message;
         existing.errorCode = error?.code;
+        if (this.isUsageLimitError(error?.code)) void this.loadOfficialUsage();
       }
       if (message.method === "error" && !params.willRetry) {
         const error = this.turnError(params.error);
@@ -633,17 +941,52 @@ export class CodexManager extends EventEmitter {
         existing.activeTurnId = undefined;
         existing.lastError = error?.message || "Codex 任务失败";
         existing.errorCode = error?.code;
+        if (this.isUsageLimitError(error?.code)) void this.loadOfficialUsage();
       }
       if (message.method === "thread/name/updated" && params.name)
         existing.name = params.name;
+      if (
+        message.method === "thread/tokenUsage/updated" ||
+        message.method === "thread/token_usage/updated"
+      ) {
+        existing.tokenUsage =
+          parseTokenUsage(params.tokenUsage || params.usage || params) ||
+          existing.tokenUsage;
+      }
+      if (
+        message.method === "thread/compact/started" ||
+        message.method === "thread/compact/start"
+      )
+        existing.compacting = true;
+      if (
+        message.method === "thread/compact/completed" ||
+        message.method === "thread/compacted"
+      )
+        existing.compacting = false;
       if (message.method === "thread/settings/updated") {
         const settings = params.threadSettings || params.settings || {};
         if (settings.model) existing.model = settings.model;
-        if (settings.reasoningEffort)
-          existing.reasoningEffort = settings.reasoningEffort;
+        if (settings.effort || settings.reasoningEffort)
+          existing.reasoningEffort =
+            settings.effort || settings.reasoningEffort;
         if (settings.personality) existing.personality = settings.personality;
+        const sandbox = parseSandboxMode(
+          settings.sandboxPolicy,
+          settings.sandbox_policy,
+          settings.sandbox,
+          settings.activePermissionProfile,
+        );
+        if (sandbox) existing.sandbox = sandbox;
+        if (settings.approvalPolicy)
+          existing.approvalPolicy = settings.approvalPolicy;
       }
-      existing.updatedAt = Date.now();
+      if (
+        message.method === "turn/started" ||
+        message.method === "turn/completed" ||
+        (message.method === "error" && !params.willRetry) ||
+        message.method === "thread/name/updated"
+      )
+        existing.updatedAt = Date.now();
       this.broadcast("thread.updated", existing);
     }
     this.broadcast("codex.event", {
@@ -661,26 +1004,52 @@ export class CodexManager extends EventEmitter {
       thread.status = "waiting";
       this.broadcast("thread.updated", thread);
     }
-    this.broadcast("approval.requested", { id, providerId, request });
+    this.broadcast(
+      "approval.requested",
+      this.approvalView(id, { providerId, request }),
+    );
   }
 
   private async ensureLoaded(providerId: string, threadId: string) {
     const key = threadId;
     if (this.loadedThreads.has(key)) return;
     const client = await this.ensure(providerId);
+    await this.resumeThread(client, providerId, threadId);
+    this.loadedThreads.add(key);
+  }
+
+  private async resumeThread(
+    client: { request: (method: string, params?: unknown) => Promise<any> },
+    providerId: string,
+    threadId: string,
+  ) {
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
-    await client
-      .request("thread/resume", {
-        threadId,
-        model: runtimeProvider.model,
-        modelProvider: runtimeProvider.modelProvider,
-        excludeTurns: true,
-      })
-      .catch((error) => {
-        if (!String(error.message).includes("already")) throw error;
-      });
-    this.loadedThreads.add(key);
+    const existing = this.threads.get(threadId);
+    const params: Record<string, unknown> = {
+      threadId,
+      model: runtimeProvider.model,
+      modelProvider: runtimeProvider.modelProvider,
+      excludeTurns: true,
+    };
+    if (existing?.sandbox) params.sandbox = existing.sandbox;
+    if (existing?.approvalPolicy)
+      params.approvalPolicy = existing.approvalPolicy;
+    const result = await client.request("thread/resume", params).catch((error) => {
+      if (!String(error.message).includes("already")) throw error;
+    });
+    this.rememberRollout(threadId);
+    if (existing && result) {
+      const applied = parseSandboxMode(
+        result.sandbox,
+        result.activePermissionProfile,
+      );
+      if (applied) existing.sandbox = applied;
+      const approval = pickString(result.approvalPolicy);
+      if (approval)
+        existing.approvalPolicy =
+          approval as ThreadSummary["approvalPolicy"];
+    }
   }
 
   private markArchived(threadId: string, archived: boolean) {
@@ -695,6 +1064,7 @@ export class CodexManager extends EventEmitter {
     const key = threadId;
     this.threads.delete(key);
     this.loadedThreads.delete(key);
+    this.knownRollouts.delete(key);
     this.broadcast("thread.deleted", { threadId });
   }
 
@@ -711,6 +1081,57 @@ export class CodexManager extends EventEmitter {
       isOfficialProvider(provider),
     );
     return matched || official || this.store.runtimeProfile();
+  }
+
+  private approvalView(
+    id: string,
+    approval: { providerId: string; request: RpcMessage },
+  ) {
+    const params = approval.request.params || {};
+    const itemId = params.itemId || params.item?.id;
+    const kind: ApprovalKind = classifyApprovalMethod(
+      approval.request.method || "",
+    );
+    const changes =
+      parseFileChanges(
+        params.fileChange?.changes ||
+          params.changes ||
+          params.file_change?.changes,
+      ) || (itemId ? this.pendingFileChanges.get(itemId) : undefined);
+    return {
+      id,
+      providerId: approval.providerId,
+      request: approval.request,
+      kind,
+      cwd: params.cwd,
+      command: formatCommand(params.command),
+      reason: params.reason,
+      changes,
+      questions: params.questions || params.items,
+      availableDecisions:
+        params.availableDecisions || params.available_decisions,
+      permissions: params.permissions,
+      itemId,
+      networkApproval: Boolean(
+        params.networkApprovalContext || params.network_approval_context,
+      ),
+    };
+  }
+
+  private attachFileChanges(itemId: string) {
+    for (const [id, approval] of this.approvals) {
+      const params = approval.request.params || {};
+      if (params.itemId === itemId || params.item?.id === itemId)
+        this.broadcast(
+          "approval.updated",
+          this.approvalView(id, approval),
+        );
+    }
+  }
+
+  private isUsageLimitError(code?: string) {
+    const value = String(code || "").toLowerCase();
+    return value === "usagelimitexceeded" || value === "usage_limit_exceeded";
   }
 
   private turnError(error: any) {
@@ -731,4 +1152,8 @@ export class CodexManager extends EventEmitter {
   private broadcast(type: string, data: any) {
     this.emit("event", { type, data });
   }
+}
+
+function isMissingRolloutError(error: unknown) {
+  return /no rollout found/i.test(String((error as any)?.message || error));
 }

@@ -24,7 +24,7 @@ test("thread/list asks for every model provider so CCS default does not hide his
           : [
               {
                 id: "hist",
-                cwd: "\\\\?\\D:\\Code\\BSHT",
+                cwd: "\\\\?\\D:\\Code\\demo",
                 preview: "old",
                 modelProvider: "custom",
               },
@@ -49,7 +49,7 @@ test("a failed thread/list does not wipe already loaded history", async () => {
   ) as any;
   manager.upsertThread(provider, {
     id: "kept",
-    cwd: "D:\\Code\\BSHT",
+    cwd: "D:\\Code\\demo",
     preview: "already visible",
   });
   manager.ensure = async () => ({
@@ -368,6 +368,66 @@ test("settings update is forwarded to a loaded thread", async () => {
   assert.equal(manager.listThreads()[0].model, "new");
 });
 
+test("sandbox settings are sent as sandboxPolicy objects, not kebab strings", async () => {
+  const provider = { id: "provider", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return {};
+    },
+  });
+  manager.loadedThreads.add("one");
+  manager.upsertThread(provider, {
+    id: "one",
+    cwd: "/tmp",
+    sandbox: "read-only",
+  });
+  await manager.updateThreadSettings("provider", "one", {
+    sandbox: "workspace-write",
+    reasoningEffort: "high",
+  });
+  assert.equal(calls[0].method, "thread/settings/update");
+  assert.equal(calls[0].params.sandbox, undefined);
+  assert.deepEqual(calls[0].params.sandboxPolicy, { type: "workspaceWrite" });
+  assert.equal(calls[0].params.effort, "high");
+  assert.equal(calls[0].params.reasoningEffort, undefined);
+  assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
+});
+
+test("turn/start re-applies the stored workspace-write policy", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/start")
+        return {
+          thread: { id: "fresh", cwd: "/tmp/project" },
+          sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+        };
+      if (method === "turn/start") return { turn: { id: "turn-1" } };
+      return {};
+    },
+  });
+  await manager.createThread("provider", {
+    cwd: "/tmp/project",
+    sandbox: "workspace-write",
+  });
+  await manager.sendTurn("provider", "fresh", "写一个文件");
+  const turn = calls.find((call) => call.method === "turn/start");
+  assert.deepEqual(turn.params.sandboxPolicy, { type: "workspaceWrite" });
+  assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
+});
+
 test("provider switch forks full history with a new model provider", async () => {
   const providers: Record<string, any> = {
     source: { id: "source", name: "Source", model: "old", enabled: true },
@@ -428,6 +488,149 @@ test("provider switch forks full history with a new model provider", async () =>
   );
 });
 
+test("unsent thread switches provider without forking a missing rollout", async () => {
+  const providers: Record<string, any> = {
+    source: { id: "source", name: "Source", model: "old", enabled: true },
+    target: {
+      id: "target",
+      name: "Target",
+      kind: "cc-switch",
+      model: "new",
+      baseUrl: "https://target.example/v1",
+      wireApi: "responses",
+      enabled: true,
+    },
+  };
+  const manager = new CodexManager(
+    { get: (id: string) => providers[id] } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  let starts = 0;
+  manager.ensure = async (providerId: string) => ({
+    request: async (method: string, params: any) => {
+      calls.push({ providerId, method, params });
+      if (method === "thread/start") {
+        starts += 1;
+        return {
+          thread: {
+            id: starts === 1 ? "fresh" : "switched",
+            cwd: params.cwd || "/tmp/project",
+          },
+        };
+      }
+      if (method === "thread/fork")
+        throw new Error("no rollout found for thread id fresh");
+      return {};
+    },
+  });
+
+  await manager.createThread("source", {
+    cwd: "/tmp/project",
+    sandbox: "read-only",
+    approvalPolicy: "never",
+    name: "空任务",
+  });
+  const switched = await manager.migrateThread("source", "fresh", "target", {
+    model: "new",
+  });
+
+  assert.equal(switched.id, "switched");
+  assert.equal(
+    calls.filter((call) => call.method === "thread/fork").length,
+    0,
+  );
+  const started = calls.find(
+    (call) => call.method === "thread/start" && call.providerId === "target",
+  );
+  assert.equal(started.params.cwd, "/tmp/project");
+  assert.equal(started.params.model, "new");
+  assert.equal(started.params.sandbox, "read-only");
+  assert.equal(started.params.approvalPolicy, "never");
+  assert.equal(manager.threads.get("fresh"), undefined);
+  assert.equal(manager.threads.get("switched").providerId, "target");
+  assert.equal(manager.threads.get("switched").sandbox, "read-only");
+  assert.equal(manager.threads.get("switched").approvalPolicy, "never");
+  assert.equal(manager.threads.get("switched").migratedFrom.threadId, "fresh");
+});
+
+test("provider switch falls back to a new thread when fork finds no rollout", async () => {
+  const providers: Record<string, any> = {
+    source: { id: "source", name: "Source", model: "old", enabled: true },
+    target: {
+      id: "target",
+      name: "Target",
+      kind: "cc-switch",
+      model: "new",
+      baseUrl: "https://target.example/v1",
+      wireApi: "responses",
+      enabled: true,
+    },
+  };
+  const manager = new CodexManager(
+    { get: (id: string) => providers[id] } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      if (method === "thread/fork")
+        throw new Error("no rollout found for thread id old-thread");
+      if (method === "thread/start")
+        return { thread: { id: "started", cwd: "/tmp/project" } };
+      return {};
+    },
+  });
+  manager.upsertThread(providers.source, {
+    id: "old-thread",
+    cwd: "/tmp/project",
+    status: "idle",
+  });
+
+  const switched = await manager.migrateThread(
+    "source",
+    "old-thread",
+    "target",
+  );
+  assert.equal(switched.id, "started");
+  assert.deepEqual(calls, ["thread/fork", "thread/start"]);
+  assert.equal(manager.threads.get("old-thread"), undefined);
+});
+
+test("provider switch still reports unrelated fork errors", async () => {
+  const providers: Record<string, any> = {
+    source: { id: "source", name: "Source", enabled: true },
+    target: {
+      id: "target",
+      name: "Target",
+      kind: "cc-switch",
+      model: "new",
+      baseUrl: "https://target.example/v1",
+      enabled: true,
+    },
+  };
+  const manager = new CodexManager(
+    { get: (id: string) => providers[id] } as any,
+    "/tmp",
+  ) as any;
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      if (method === "thread/fork") throw new Error("connection lost");
+      throw new Error(`unexpected ${method}`);
+    },
+  });
+  manager.upsertThread(providers.source, {
+    id: "old-thread",
+    cwd: "/tmp/project",
+    status: "idle",
+  });
+  await assert.rejects(
+    () => manager.migrateThread("source", "old-thread", "target"),
+    /connection lost/,
+  );
+});
+
 test("terminal command connects to the shared runtime without exposing secrets", () => {
   const provider = {
     id: "relay",
@@ -474,3 +677,450 @@ test("thread history restores and then clears the latest turn error", () => {
   assert.equal(manager.listThreads()[0].status, "idle");
   assert.equal(manager.listThreads()[0].lastError, undefined);
 });
+
+test("upsertThread keeps sandbox, fork, session and usage across thread/list refresh", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "kept",
+    cwd: "/tmp/p",
+    sandbox: "read-only",
+    approvalPolicy: "never",
+    forkedFromId: "src",
+    sessionId: "sess-1",
+    tokenUsage: { used: 12_000, limit: 272_000 },
+  });
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      if (method !== "thread/list") throw new Error(method);
+      return {
+        data: params.archived
+          ? []
+          : [{ id: "kept", cwd: "/tmp/p", preview: "refreshed" }],
+      };
+    },
+  });
+  await manager.refreshAll();
+  const thread = manager.listThreads()[0];
+  assert.equal(thread.sandbox, "read-only");
+  assert.equal(thread.approvalPolicy, "never");
+  assert.equal(thread.forkedFromId, "src");
+  assert.equal(thread.sessionId, "sess-1");
+  assert.deepEqual(thread.tokenUsage, { used: 12_000, limit: 272_000 });
+});
+
+test("list refresh without timestamps keeps the previous updatedAt", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "aged",
+    cwd: "/tmp/p",
+    updatedAt: "2024-01-02T03:04:05.000Z",
+  });
+  const before = manager.listThreads()[0].updatedAt;
+  assert.equal(before, Date.parse("2024-01-02T03:04:05.000Z"));
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      if (method !== "thread/list") throw new Error(method);
+      return {
+        data: params.archived ? [] : [{ id: "aged", cwd: "/tmp/p", preview: "later" }],
+      };
+    },
+  });
+  await manager.refreshAll();
+  assert.equal(manager.listThreads()[0].updatedAt, before);
+});
+
+test("upsertThread falls back to UUIDv7 time when list has no timestamp", () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  const id = "019ffddc-408f-7e00-b7a1-5444c1acadf8";
+  manager.upsertThread(provider, { id, cwd: "/tmp/p" });
+  assert.equal(
+    manager.listThreads()[0].updatedAt,
+    Number.parseInt("019ffddc408f", 16),
+  );
+});
+
+test("upsertThread reads updated_at unix seconds", () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "unix",
+    cwd: "/tmp/p",
+    updated_at: 1_704_164_645,
+  });
+  assert.equal(manager.listThreads()[0].updatedAt, 1_704_164_645_000);
+});
+
+test("failed archived list is recorded on runtime instead of swallowed", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      if (params.archived) throw new Error("archive list exploded");
+      return { data: [] };
+    },
+  });
+  await manager.refreshAll();
+  assert.equal(manager.runtimeStatus().archiveError, "archive list exploded");
+});
+
+test("createThread omits personality when unset", async () => {
+  const provider = {
+    id: "provider",
+    name: "OpenAI",
+    kind: "local-profile",
+    model: "m",
+  };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/start")
+        return { thread: { id: "fresh", cwd: "/tmp" } };
+      return {};
+    },
+  });
+  await manager.createThread("provider", { cwd: "/tmp" });
+  assert.equal("personality" in calls[0].params, false);
+  assert.equal(calls[0].params.sandbox, "workspace-write");
+  assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
+});
+
+test("acceptForSession is forwarded as-is on command approval respond", async () => {
+  const manager = new CodexManager(
+    { get: () => ({ id: "p" }) } as any,
+    "/tmp",
+  ) as any;
+  const responds: any[] = [];
+  manager.ensure = async () => ({
+    respond: (_id: unknown, result: unknown) => responds.push(result),
+  });
+  manager.approvals.set("a1", {
+    providerId: "p",
+    request: {
+      id: 9,
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "t", command: "ls" },
+    },
+  });
+  await manager.resolveApproval("a1", { decision: "acceptForSession" });
+  assert.deepEqual(responds, [{ decision: "acceptForSession" }]);
+});
+
+test("permission and question approvals respond without throwing", async () => {
+  const manager = new CodexManager(
+    { get: () => ({ id: "p" }) } as any,
+    "/tmp",
+  ) as any;
+  const responds: any[] = [];
+  manager.ensure = async () => ({
+    respond: (_id: unknown, result: unknown) => responds.push(result),
+  });
+  manager.approvals.set("perm", {
+    providerId: "p",
+    request: {
+      id: 1,
+      method: "item/permissions/requestApproval",
+      params: { permissions: [{ name: "net" }] },
+    },
+  });
+  manager.approvals.set("q", {
+    providerId: "p",
+    request: {
+      id: 2,
+      method: "item/requestUserInput",
+      params: { questions: [{ prompt: "x" }] },
+    },
+  });
+  await manager.resolveApproval("perm", {
+    permissions: [{ name: "net", granted: true }],
+    scope: "session",
+  });
+  await manager.resolveApproval("q", { answers: [{ text: "yes" }] });
+  assert.deepEqual(responds, [
+    { permissions: [{ name: "net", granted: true }], scope: "session" },
+    { answers: [{ text: "yes" }] },
+  ]);
+});
+
+test("unknown approval method does not respond", async () => {
+  const manager = new CodexManager(
+    { get: () => ({ id: "p" }) } as any,
+    "/tmp",
+  ) as any;
+  let responded = false;
+  manager.ensure = async () => ({
+    respond: () => {
+      responded = true;
+    },
+  });
+  manager.approvals.set("u", {
+    providerId: "p",
+    request: { id: 3, method: "item/mystery/please", params: {} },
+  });
+  await assert.rejects(
+    () => manager.resolveApproval("u", { decision: "accept" }),
+    /未知审批类型/,
+  );
+  assert.equal(responded, false);
+  assert.equal(manager.approvals.has("u"), true);
+});
+
+test("running thread with activeTurnId steers instead of starting", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push(method);
+      return { method, params };
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  const thread = manager.threads.get("t");
+  thread.status = "running";
+  thread.activeTurnId = "turn-9";
+  await manager.sendTurn("provider", "t", "追加");
+  assert.deepEqual(calls, ["turn/steer"]);
+});
+
+test("steer no active turn falls back to turn/start", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      if (method === "turn/steer") throw new Error("no active turn");
+      return {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  const thread = manager.threads.get("t");
+  thread.status = "running";
+  thread.activeTurnId = "turn-9";
+  await manager.sendTurn("provider", "t", "追加");
+  assert.deepEqual(calls, ["turn/steer", "turn/start"]);
+});
+
+test("idle sendTurn only starts a turn", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      return {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp", status: "idle" });
+  await manager.sendTurn("provider", "t", "新指令");
+  assert.deepEqual(calls, ["turn/start"]);
+});
+
+test("compact issues thread/compact/start", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      return { ok: true };
+    },
+  });
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  await manager.compactThread("provider", "t");
+  assert.deepEqual(calls, ["thread/compact/start"]);
+  assert.equal(manager.listThreads()[0].compacting, true);
+});
+
+test("non-chatgpt official usage yields null rateLimits not 0%", async () => {
+  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  manager.client = {
+    online: true,
+    request: async (method: string) => {
+      if (method === "account/read")
+        return { account: { auth_mode: "apikey" } };
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const runtime = await manager.loadOfficialUsage();
+  assert.equal(runtime.rateLimits, null);
+  assert.match(runtime.rateLimitsError || "", /Official|ChatGPT|额度/);
+  assert.notEqual(runtime.rateLimitsError, "0%");
+});
+
+test("account/rateLimits/updated updates the snapshot", () => {
+  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  manager.onNotification({
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        primary: { used_percent: 42, resets_in_seconds: 3600 },
+      },
+    },
+  });
+  const runtime = manager.runtimeStatus();
+  assert.equal(runtime.rateLimits?.primary?.usedPercent, 42);
+  assert.equal(runtime.rateLimitsError, undefined);
+});
+
+test("fork forwards lastTurnId and records forkedFromId", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/fork")
+        return { thread: { id: "branch", cwd: "/tmp" } };
+      return {};
+    },
+  });
+  manager.loadedThreads.add("src");
+  manager.upsertThread(provider, {
+    id: "src",
+    cwd: "/tmp",
+    name: "源会话",
+    sandbox: "read-only",
+    approvalPolicy: "never",
+  });
+  const created = await manager.forkThread("provider", "src", {
+    lastTurnId: "turn-3",
+  });
+  const fork = calls.find((call) => call.method === "thread/fork");
+  assert.equal(fork.params.lastTurnId, "turn-3");
+  assert.equal(created.forkedFromId, "src");
+  assert.equal(manager.threads.get("branch").forkedFromId, "src");
+  assert.equal(manager.threads.get("branch").name, "源会话 · 分支");
+});
+
+test("running source rejects turn-level fork", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "src",
+    cwd: "/tmp",
+    status: "running",
+  });
+  manager.threads.get("src").status = "running";
+  await assert.rejects(
+    () => manager.forkThread("provider", "src", { lastTurnId: "turn-1" }),
+    /无法从中间回合分支/,
+  );
+});
+
+test("migrate copies source sandbox and approval", async () => {
+  const providers: Record<string, any> = {
+    source: { id: "source", name: "Source", model: "old", enabled: true },
+    target: {
+      id: "target",
+      name: "Target",
+      kind: "cc-switch",
+      model: "new",
+      baseUrl: "https://target.example/v1",
+      wireApi: "responses",
+      enabled: true,
+    },
+  };
+  const manager = new CodexManager(
+    { get: (id: string) => providers[id] } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/fork")
+        return {
+          thread: {
+            id: "switched",
+            cwd: "/tmp/project",
+            modelProvider: compileRuntimeProvider(providers.target)
+              .modelProvider,
+          },
+        };
+      return {};
+    },
+  });
+  manager.upsertThread(providers.source, {
+    id: "old-thread",
+    cwd: "/tmp/project",
+    status: "idle",
+    sandbox: "read-only",
+    approvalPolicy: "never",
+  });
+  await manager.migrateThread("source", "old-thread", "target");
+  assert.equal(calls[0].params.sandbox, "read-only");
+  assert.equal(calls[0].params.approvalPolicy, "never");
+  assert.equal(manager.threads.get("switched").sandbox, "read-only");
+  assert.equal(manager.threads.get("switched").approvalPolicy, "never");
+});
+

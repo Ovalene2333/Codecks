@@ -1,922 +1,47 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Activity,
-  AlertCircle,
-  ArrowRightLeft,
-  ArrowLeft,
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  CircleStop,
-  Command,
-  Folder,
-  FolderOpen,
-  KeyRound,
-  Menu,
-  MessageSquarePlus,
-  MoreHorizontal,
-  Plus,
-  RefreshCw,
-  Search,
-  Send,
-  Server,
-  Settings,
-  ShieldAlert,
-  Sparkles,
-  Trash2,
-  X,
-  Zap,
-} from "lucide-react";
-import { api, getSnapshot, getToken, post, remove, setToken } from "./api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, KeyRound, Menu } from "lucide-react";
+import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
 import type {
-  Approval,
-  ApprovalPolicy,
   ProjectRecord,
-  Provider,
-  SandboxMode,
   Snapshot,
   ThreadSummary,
 } from "./types";
 import {
   filterProjectGroups,
   mergeProjectGroups,
-  resolveNewThreadDefaults,
+  threadsForProject,
+  type ProjectGroup,
 } from "./projects";
-import { DirBrowser } from "./DirBrowser";
-import { ModelPicker } from "./ModelPicker";
+import { sessionKey } from "./format";
+import {
+  readSnapshotCache,
+  readUiCache,
+  writeSnapshotCache,
+  writeUiCache,
+} from "./cache";
+import { ActionSheet, ConfirmDialog, RenderErrorBoundary, ToastStack } from "./ui";
+import { Sidebar } from "./layout/Sidebar";
+import { ChatWorkspace } from "./session/ChatWorkspace";
+import { Welcome } from "./welcome/Welcome";
+import { NewThreadModal } from "./overlays/NewThreadModal";
+import { ProviderModal } from "./overlays/ProviderModal";
+import { ProviderSwitchModal } from "./overlays/ProviderSwitchModal";
+import { RenameModal } from "./overlays/RenameModal";
+import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
+import { UsageDrawer } from "./usage/UsageChip";
+import { SessionToolbar } from "./layout/SessionToolbar";
+import { Modal } from "./ui";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
-const fmtTime = (time: number) =>
-  new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(time);
-const basename = (p: string) =>
-  p.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || p;
-
-function Status({ status }: { status: ThreadSummary["status"] }) {
-  const labels = {
-    starting: "启动中",
-    running: "运行中",
-    waiting: "待确认",
-    idle: "空闲",
-    error: "异常",
-    offline: "离线",
-  };
-  return (
-    <span className={`status ${status}`}>
-      <i />
-      {labels[status]}
-    </span>
-  );
-}
-
-function Modal({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: React.ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <header>
-          <h2>{title}</h2>
-          <button className="icon-btn" onClick={onClose}>
-            <X />
-          </button>
-        </header>
-        {children}
-      </section>
-    </div>
-  );
-}
-
-function ProviderModal({
-  providers,
-  runtime,
-  defaultCwd,
-  onClose,
-  onSaved,
-}: {
-  providers: Provider[];
-  runtime?: Snapshot["runtime"];
-  defaultCwd?: string;
-  onClose: () => void;
-  onSaved: (s: Snapshot) => void;
-}) {
-  const [form, setForm] = useState({
-    name: "",
-    baseUrl: "",
-    apiKey: "",
-    model: "",
-    wireApi: "responses",
-  });
-  const [error, setError] = useState("");
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    try {
-      onSaved(await post("/providers", { ...form, kind: "custom" }));
-      onClose();
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-  return (
-    <Modal title="供应商与隔离" onClose={onClose}>
-      {providers.some((p) => p.kind === "cc-switch") && (
-        <div className="sync-note">
-          <RefreshCw />
-          <div>
-            <b>已连接 CC Switch · 只读同步</b>
-            <small>
-              供应商是 Session 的启动配置；已运行会话不会随 CCS 当前项变化。
-            </small>
-          </div>
-        </div>
-      )}
-      <div className="provider-list">
-        {providers.map((p) => (
-          <div className="provider-row" key={p.id}>
-            <span
-              className="provider-logo"
-              style={{ "--color": p.color } as any}
-            >
-              <Server />
-            </span>
-            <div>
-              <b>
-                {p.name}
-                {p.current && <mark>当前</mark>}
-              </b>
-              <small>
-                {p.kind === "cc-switch"
-                  ? `CC Switch · ${p.baseUrl || "官方登录"}${
-                      p.baseUrl && !p.hasApiKey ? " · 无独立 Key" : ""
-                    }`
-                  : p.kind === "custom"
-                    ? `${p.baseUrl} · ${p.wireApi || "responses"}`
-                    : "使用当前 Codex 登录"}
-              </small>
-            </div>
-            <span className={runtime?.online ? "online" : "offline-dot"}>
-              {runtime?.configPending
-                ? "待应用"
-                : runtime?.online
-                  ? "已装入"
-                  : runtime?.starting
-                    ? "启动中"
-                    : "未装入"}
-            </span>
-            {runtime?.online && (
-              <button
-                className="icon-btn"
-                type="button"
-                title={`复制 ${p.name} 的终端接入命令`}
-                onClick={async () => {
-                  const query = new URLSearchParams({ providerId: p.id });
-                  if (defaultCwd) query.set("cwd", defaultCwd);
-                  const result = await api<{ command: string }>(
-                    `/runtime/terminal-command?${query}`,
-                  );
-                  await navigator.clipboard.writeText(result.command);
-                }}
-              >
-                <Command />
-              </button>
-            )}
-            {p.kind === "custom" && (
-              <button
-                className="icon-btn danger"
-                title="删除"
-                onClick={async () => {
-                  if (confirm(`删除 ${p.name}？现有 Session 历史不会删除。`))
-                    onSaved(await remove(`/providers/${p.id}`));
-                }}
-              >
-                <Trash2 />
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-      {runtime?.configPending && (
-        <div className="sync-note pending">
-          <RefreshCw />
-          <div>
-            <b>供应商配置有更新</b>
-            <small>所有任务空闲后应用；运行中的 Session 不会被自动中断。</small>
-          </div>
-          <button
-            className="primary"
-            onClick={async () =>
-              onSaved(await post("/runtime/apply-provider-config"))
-            }
-          >
-            应用
-          </button>
-        </div>
-      )}
-      {runtime?.online && (
-        <div className="terminal-connect">
-          <Command />
-          <div>
-            <b>从终端接入同一 Runtime</b>
-            <small>{runtime.remoteUrl} 仅监听本机，不经过 LAN / CF。</small>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              const result = await api<{ command: string }>(
-                `/runtime/terminal-command${defaultCwd ? `?cwd=${encodeURIComponent(defaultCwd)}` : ""}`,
-              );
-              await navigator.clipboard.writeText(result.command);
-            }}
-          >
-            复制命令
-          </button>
-        </div>
-      )}
-      <form className="form" onSubmit={save}>
-        <h3>添加自定义供应商</h3>
-        <label>
-          显示名称
-          <input
-            required
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="例如：公司网关"
-          />
-        </label>
-        <label>
-          Base URL
-          <input
-            required
-            type="url"
-            value={form.baseUrl}
-            onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-            placeholder="https://api.example.com/v1"
-          />
-        </label>
-        <div className="form-grid">
-          <label>
-            模型
-            <input
-              required
-              value={form.model}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder="模型 ID"
-            />
-          </label>
-          <label>
-            接口
-            <select
-              value={form.wireApi}
-              onChange={(e) => setForm({ ...form, wireApi: e.target.value })}
-            >
-              <option value="responses">Responses</option>
-              <option value="chat">Chat Completions</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          API Key
-          <input
-            required
-            type="password"
-            value={form.apiKey}
-            onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-            placeholder="只保存在本机服务端"
-          />
-        </label>
-        {error && <p className="error-text">{error}</p>}
-        <button className="primary" type="submit">
-          <Plus />
-          添加并连接
-        </button>
-      </form>
-    </Modal>
-  );
-}
-
-function NewThreadModal({
-  providers,
-  initialCwd = "",
-  project,
-  preferences,
-  onClose,
-  onCreated,
-}: {
-  providers: Provider[];
-  initialCwd?: string;
-  project?: ProjectRecord;
-  preferences?: Snapshot["preferences"];
-  onClose: () => void;
-  onCreated: (p: string, id: string) => void;
-}) {
-  const defaults = resolveNewThreadDefaults({
-    cwd: initialCwd,
-    project,
-    preferences,
-    providers,
-  });
-  const [form, setForm] = useState({
-    ...defaults,
-    name: "",
-    personality: "pragmatic",
-  });
-  const [browse, setBrowse] = useState(false);
-  const [error, setError] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const submittingRef = useRef(false);
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError("");
-    try {
-      const thread = await post("/threads", form);
-      onCreated(form.providerId, thread.id);
-      onClose();
-    } catch (e: any) {
-      setError(e.message);
-      submittingRef.current = false;
-      setSubmitting(false);
-    }
-  };
-  return (
-    <Modal
-      title={
-        initialCwd ? `在 ${basename(initialCwd)} 中新建会话` : "启动新会话"
-      }
-      onClose={() => {
-        if (!submitting) onClose();
-      }}
-    >
-      <form className="form" onSubmit={submit}>
-        <label>
-          供应商
-          <select
-            value={form.providerId}
-            onChange={(e) => setForm({ ...form, providerId: e.target.value })}
-          >
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <ModelPicker
-          providerId={form.providerId}
-          model={form.model}
-          reasoningEffort={form.reasoningEffort}
-          onChange={(next) => setForm((current) => ({ ...current, ...next }))}
-        />
-        <label>
-          工作目录
-          <div className="input-action">
-            <input
-              required
-              value={form.cwd}
-              onChange={(e) => setForm({ ...form, cwd: e.target.value })}
-              placeholder="D:\\Code\\project 或 /mnt/d/Code/project"
-            />
-            <button
-              type="button"
-              className="icon-btn"
-              title="浏览目录"
-              onClick={() => setBrowse(true)}
-            >
-              <FolderOpen />
-            </button>
-          </div>
-        </label>
-        <label>
-          会话名称（可选）
-          <input
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="修复登录问题"
-          />
-        </label>
-        <div className="form-grid">
-          <label>
-            沙箱
-            <select
-              value={form.sandbox}
-              onChange={(e) =>
-                setForm({ ...form, sandbox: e.target.value as SandboxMode })
-              }
-            >
-              <option value="workspace-write">工作区可写</option>
-              <option value="read-only">只读</option>
-              <option value="danger-full-access">完全访问</option>
-            </select>
-          </label>
-          <label>
-            审批策略
-            <select
-              value={form.approvalPolicy}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  approvalPolicy: e.target.value as ApprovalPolicy,
-                })
-              }
-            >
-              <option value="on-request">按需询问</option>
-              <option value="untrusted">严格询问</option>
-              <option value="never">不询问</option>
-            </select>
-          </label>
-        </div>
-        {error && <p className="error-text">{error}</p>}
-        <button
-          className="primary"
-          type="submit"
-          disabled={submitting || !form.providerId}
-        >
-          <Sparkles />
-          {submitting ? "正在创建…" : "创建会话"}
-        </button>
-      </form>
-      {browse && (
-        <DirBrowser
-          initialPath={form.cwd || preferences?.recentDirs?.[0]}
-          onClose={() => setBrowse(false)}
-          onSelect={(cwd) => {
-            setForm((current) => ({ ...current, cwd }));
-            setBrowse(false);
-          }}
-        />
-      )}
-    </Modal>
-  );
-}
-
-function ApprovalCard({
-  approval,
-  onResolve,
-}: {
-  approval: Approval;
-  onResolve: (id: string, d: string) => void;
-}) {
-  const p = approval.request.params || {};
-  const isFile = approval.request.method.includes("fileChange");
-  return (
-    <article className="approval-card">
-      <div className="approval-title">
-        <ShieldAlert />
-        <div>
-          <b>{isFile ? "Codex 请求修改文件" : "Codex 请求执行命令"}</b>
-          <small>{p.reason || p.cwd || "需要你的确认"}</small>
-        </div>
-      </div>
-      {p.command && (
-        <pre>
-          {typeof p.command === "string" ? p.command : p.command.join(" ")}
-        </pre>
-      )}
-      <div className="approval-actions">
-        <button onClick={() => onResolve(approval.id, "decline")}>拒绝</button>
-        <button
-          className="approve"
-          onClick={() => onResolve(approval.id, "accept")}
-        >
-          <Check />
-          允许一次
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function ProviderSwitchModal({
-  thread,
-  providers,
-  onClose,
-  onCreated,
-}: {
-  thread: ThreadSummary;
-  providers: Provider[];
-  onClose: () => void;
-  onCreated: (providerId: string, threadId: string) => void;
-}) {
-  const choices = providers.filter(
-    (provider) => provider.id !== thread.providerId,
-  );
-  const [targetProviderId, setTargetProviderId] = useState(
-    choices[0]?.id || "",
-  );
-  const [model, setModel] = useState("");
-  const [reasoningEffort, setReasoningEffort] = useState(
-    thread.reasoningEffort || "",
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (busy || !targetProviderId) return;
-    setBusy(true);
-    setError("");
-    try {
-      const created = await post(
-        `/threads/${thread.providerId}/${thread.id}/migrate`,
-        {
-          targetProviderId,
-          model: model || undefined,
-          reasoningEffort: reasoningEffort || undefined,
-        },
-      );
-      onCreated(targetProviderId, created.id);
-      onClose();
-    } catch (e: any) {
-      setError(e.message);
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal title="切换此 Session 的供应商" onClose={() => !busy && onClose()}>
-      <form className="form" onSubmit={submit}>
-        <div className="migration-note">
-          <ArrowRightLeft />
-          <div>
-            <b>带完整历史创建供应商切换分支</b>
-            <p>
-              Codex 会 fork 当前 Session
-              的完整历史，并让新分支使用目标供应商；原分支保留，运行中或待审批时不能切换。
-            </p>
-          </div>
-        </div>
-        <label>
-          目标供应商
-          <select
-            value={targetProviderId}
-            onChange={(e) => setTargetProviderId(e.target.value)}
-          >
-            {choices.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {targetProviderId && (
-          <ModelPicker
-            providerId={targetProviderId}
-            model={model}
-            reasoningEffort={reasoningEffort}
-            onChange={(next) => {
-              setModel(next.model);
-              setReasoningEffort(next.reasoningEffort);
-            }}
-          />
-        )}
-        {error && <p className="error-text">{error}</p>}
-        <button className="primary" disabled={busy || !targetProviderId}>
-          <ArrowRightLeft />
-          {busy ? "正在创建分支…" : "创建切换分支"}
-        </button>
-      </form>
-    </Modal>
-  );
-}
-
-function itemView(item: any) {
-  if (item.type === "userMessage")
-    return (
-      <div className="message user" key={item.id}>
-        {item.content
-          ?.filter((x: any) => x.type === "text")
-          .map((x: any) => x.text)
-          .join("\n")}
-      </div>
-    );
-  if (item.type === "agentMessage")
-    return (
-      <div className="message agent" key={item.id}>
-        {item.text}
-      </div>
-    );
-  if (item.type === "reasoning")
-    return (
-      <details className="tool-item" key={item.id}>
-        <summary>
-          <Activity />
-          思考过程
-        </summary>
-        <div>{item.summary?.join("\n") || item.content?.join("\n")}</div>
-      </details>
-    );
-  if (item.type === "commandExecution")
-    return (
-      <details className="tool-item" key={item.id}>
-        <summary>
-          <Command />
-          {item.status === "inProgress" ? "正在执行" : "已执行"} ·{" "}
-          {item.command}
-        </summary>
-        {item.aggregatedOutput && <pre>{item.aggregatedOutput}</pre>}
-      </details>
-    );
-  if (item.type === "fileChange")
-    return (
-      <div className="tool-item compact" key={item.id}>
-        <Zap /> 修改了 {item.changes?.length || 0} 个文件
-      </div>
-    );
-  return null;
-}
-
-function Chat({
-  thread,
-  provider,
-  approvals,
-  events,
-  onBack,
-  onSnapshot,
-  onSwitchProvider,
-  onSelectThread,
-}: {
-  thread: ThreadSummary;
-  provider?: Provider;
-  approvals: Approval[];
-  events: any[];
-  onBack: () => void;
-  onSnapshot: () => void;
-  onSwitchProvider: () => void;
-  onSelectThread: (providerId: string, threadId: string) => void;
-}) {
-  const [full, setFull] = useState<any>();
-  const [text, setText] = useState("");
-  const [error, setError] = useState("");
-  const [sending, setSending] = useState(false);
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
-  const load = useCallback(
-    () =>
-      api(`/threads/${thread.providerId}/${thread.id}`)
-        .then(setFull)
-        .catch((e) => setError(e.message)),
-    [thread.id, thread.providerId],
-  );
-  useEffect(() => {
-    load();
-  }, [load, events.length]);
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [full, events]);
-  const send = async () => {
-    const value = text.trim();
-    if (!value || sending) return;
-    setSending(true);
-    setText("");
-    setError("");
-    try {
-      await post(`/threads/${thread.providerId}/${thread.id}/turns`, {
-        text: value,
-      });
-    } catch (e: any) {
-      setText(value);
-      setError(e.message);
-    } finally {
-      setSending(false);
-    }
-  };
-  const resolve = async (id: string, decision: string) => {
-    try {
-      await post(`/approvals/${encodeURIComponent(id)}`, { decision });
-      onSnapshot();
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-  const streamed =
-    thread.status === "running"
-      ? events
-          .filter(
-            (e) =>
-              e.params?.threadId === thread.id &&
-              e.method === "item/agentMessage/delta" &&
-              (!thread.activeTurnId ||
-                e.params?.turnId === thread.activeTurnId),
-          )
-          .map((e) => e.params.delta)
-          .join("")
-      : "";
-  const threadApprovals = approvals.filter(
-    (a) => a.request.params?.threadId === thread.id,
-  );
-  const latestTurnError = full?.turns?.at?.(-1)?.error;
-  const rawTaskError = thread.lastError || latestTurnError?.message;
-  const rawErrorInfo = thread.errorCode || latestTurnError?.codexErrorInfo;
-  const taskErrorCode =
-    typeof rawErrorInfo === "string"
-      ? rawErrorInfo
-      : rawErrorInfo && typeof rawErrorInfo === "object"
-        ? Object.keys(rawErrorInfo)[0]
-        : undefined;
-  const taskError = rawTaskError
-    ? taskErrorCode === "unauthorized"
-      ? `登录状态已失效：${rawTaskError}`
-      : rawTaskError
-    : "";
-  return (
-    <main className="chat">
-      <header className="chat-header">
-        <button className="icon-btn mobile-back" onClick={onBack}>
-          <ArrowLeft />
-        </button>
-        <span
-          className="provider-logo small"
-          style={{ "--color": provider?.color } as any}
-        >
-          <Bot />
-        </span>
-        <div className="chat-title">
-          <h2>{thread.name}</h2>
-          <p>
-            {basename(thread.cwd)} · {provider?.name}
-          </p>
-        </div>
-        <Status status={thread.status} />
-        <button
-          className="provider-switch"
-          onClick={onSwitchProvider}
-          disabled={thread.status === "running" || thread.status === "waiting"}
-          title="为此 Session 切换供应商"
-        >
-          <ArrowRightLeft />
-          <span>{provider?.name || "未知供应商"}</span>
-        </button>
-        <div className="thread-actions-wrap">
-          <button
-            className="icon-btn"
-            onClick={() => setActionsOpen((open) => !open)}
-          >
-            <MoreHorizontal />
-          </button>
-          {actionsOpen && (
-            <div className="thread-actions">
-              <button
-                onClick={async () => {
-                  const name = prompt("新的 Session 名称", thread.name)?.trim();
-                  if (!name) return;
-                  setActionsOpen(false);
-                  try {
-                    await api(`/threads/${thread.providerId}/${thread.id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ name }),
-                    });
-                    onSnapshot();
-                  } catch (e: any) {
-                    setError(e.message);
-                  }
-                }}
-              >
-                重命名
-              </button>
-              <button
-                disabled={
-                  thread.status === "running" || thread.status === "waiting"
-                }
-                onClick={async () => {
-                  setActionsOpen(false);
-                  try {
-                    const created = await post(
-                      `/threads/${thread.providerId}/${thread.id}/fork`,
-                    );
-                    onSelectThread(thread.providerId, created.id);
-                    onSnapshot();
-                  } catch (e: any) {
-                    setError(e.message);
-                  }
-                }}
-              >
-                复制为分支
-              </button>
-              <button
-                disabled={
-                  thread.status === "running" || thread.status === "waiting"
-                }
-                onClick={async () => {
-                  if (!confirm(`归档 ${thread.name}？`)) return;
-                  setActionsOpen(false);
-                  try {
-                    await post(
-                      `/threads/${thread.providerId}/${thread.id}/archive`,
-                    );
-                    onBack();
-                    onSnapshot();
-                  } catch (e: any) {
-                    setError(e.message);
-                  }
-                }}
-              >
-                归档 Session
-              </button>
-            </div>
-          )}
-        </div>
-      </header>
-      <div className="timeline">
-        <div className="session-meta">
-          <Folder />
-          {thread.cwd}
-          <span>{thread.model}</span>
-        </div>
-        {full?.turns?.flatMap((turn: any) =>
-          (turn.items || []).map((item: any) => {
-            if (
-              streamed &&
-              item.type === "agentMessage" &&
-              (turn.id === thread.activeTurnId || turn.status === "inProgress")
-            )
-              return null;
-            return itemView(item);
-          }),
-        )}
-        {streamed && (
-          <div className="message agent streaming">
-            {streamed}
-            <i />
-          </div>
-        )}
-        {threadApprovals.map((a) => (
-          <ApprovalCard key={a.id} approval={a} onResolve={resolve} />
-        ))}
-        {taskError && (
-          <div className="task-error" role="alert">
-            <ShieldAlert />
-            <div>
-              <b>Codex 执行失败</b>
-              <p>{taskError}</p>
-              {taskErrorCode && <small>错误类型：{taskErrorCode}</small>}
-            </div>
-          </div>
-        )}
-        {error && <p className="error-banner">{error}</p>}
-        <div ref={bottom} />
-      </div>
-      <footer className="composer">
-        <div className="composer-box">
-          <textarea
-            rows={1}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-            placeholder={
-              thread.status === "running"
-                ? "追加指令或等待 Codex…"
-                : "向 Codex 发送指令…"
-            }
-          />
-          {thread.status === "running" && thread.activeTurnId ? (
-            <button
-              className="send stop"
-              onClick={() =>
-                post(`/threads/${thread.providerId}/${thread.id}/interrupt`, {
-                  turnId: thread.activeTurnId,
-                })
-              }
-            >
-              <CircleStop />
-            </button>
-          ) : (
-            <button
-              className="send"
-              onClick={send}
-              disabled={!text.trim() || sending}
-            >
-              <Send />
-            </button>
-          )}
-        </div>
-        <small>
-          {sending ? "正在提交指令…" : "Enter 发送 · Shift + Enter 换行"}
-        </small>
-      </footer>
-    </main>
-  );
-}
+const initialSnapshot = readSnapshotCache() || empty;
+const initialUi = readUiCache();
 
 export function App() {
-  const [snapshot, setSnapshot] = useState(empty);
+  const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [selected, setSelected] = useState<string>();
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(
-    new Set(),
+  const [library, setLibrary] = useState<"active" | "archived">("active");
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    () => new Set(initialUi.expandedProjects),
   );
   const [events, setEvents] = useState<any[]>([]);
   const [providerModal, setProviderModal] = useState(false);
@@ -925,24 +50,53 @@ export function App() {
     project?: ProjectRecord;
   } | null>(null);
   const [switchThread, setSwitchThread] = useState<ThreadSummary | null>(null);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialUi.query);
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "attention"
   >("all");
   const [sidebar, setSidebar] = useState(true);
   const [authError, setAuthError] = useState(false);
+  const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    body: React.ReactNode;
+    confirmLabel?: string;
+    danger?: boolean;
+    run: () => Promise<void> | void;
+  } | null>(null);
+  const [rename, setRename] = useState<
+    | { kind: "thread"; thread: ThreadSummary }
+    | { kind: "project"; project: ProjectGroup }
+    | null
+  >(null);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [projectEdit, setProjectEdit] = useState<ProjectRecord | null>(null);
+  const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
+  const [sheet, setSheet] = useState<ThreadSummary | null>(null);
+  const [phoneSettings, setPhoneSettings] = useState(false);
+
+  const pushToast = useCallback((message: string) => {
+    const id = Date.now() + Math.random();
+    setToasts((current) => [...current, { id, message }]);
+    window.setTimeout(
+      () => setToasts((current) => current.filter((item) => item.id !== id)),
+      2000,
+    );
+  }, []);
+
   const refresh = useCallback(
     () =>
       getSnapshot()
-        .then((s) => {
-          setSnapshot(s);
+        .then((next) => {
+          setSnapshot(next);
           setAuthError(false);
         })
-        .catch((e) => {
-          if (e.message.includes("令牌")) setAuthError(true);
+        .catch((error) => {
+          if (error.message.includes("令牌")) setAuthError(true);
         }),
     [],
   );
+
   useEffect(() => {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const sharedToken = fragment.get("token");
@@ -952,6 +106,18 @@ export function App() {
     }
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    writeSnapshotCache(snapshot);
+  }, [snapshot]);
+
+  useEffect(() => {
+    writeUiCache({
+      expandedProjects: [...expandedProjects],
+      query,
+    });
+  }, [expandedProjects, query]);
+
   useEffect(() => {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     let timer: number;
@@ -962,60 +128,83 @@ export function App() {
       ws.onmessage = ({ data }) => {
         const message = JSON.parse(data);
         if (message.type === "snapshot") setSnapshot(message.data);
-        else if (message.type === "thread.updated")
-          setSnapshot((s) => ({
-            ...s,
-            threads: [
-              message.data,
-              ...s.threads.filter(
-                (t) =>
-                  !(
-                    t.id === message.data.id &&
-                    t.providerId === message.data.providerId
-                  ),
-              ),
-            ].sort((a, b) => b.updatedAt - a.updatedAt),
+        else if (message.type === "thread.updated") {
+          const next = message.data as ThreadSummary;
+          const same = (thread: ThreadSummary) =>
+            thread.id === next.id && thread.providerId === next.providerId;
+          setSnapshot((current) => ({
+            ...current,
+            threads: next.archived
+              ? current.threads.filter((thread) => !same(thread))
+              : [next, ...current.threads.filter((thread) => !same(thread))].sort(
+                  (a, b) => b.updatedAt - a.updatedAt,
+                ),
+            archivedThreads: next.archived
+              ? [
+                  next,
+                  ...(current.archivedThreads || []).filter((thread) => !same(thread)),
+                ].sort((a, b) => b.updatedAt - a.updatedAt)
+              : (current.archivedThreads || []).filter((thread) => !same(thread)),
           }));
-        else if (message.type === "provider.status")
-          setSnapshot((s) => ({
-            ...s,
-            providers: s.providers.map((p) =>
-              p.id === message.data.providerId
+        } else if (message.type === "thread.deleted") {
+          const id = message.data.threadId;
+          setSnapshot((current) => ({
+            ...current,
+            threads: current.threads.filter((thread) => thread.id !== id),
+            archivedThreads: (current.archivedThreads || []).filter(
+              (thread) => thread.id !== id,
+            ),
+          }));
+          setSelected((current) =>
+            current?.endsWith(`:${id}`) ? undefined : current,
+          );
+        } else if (message.type === "provider.status")
+          setSnapshot((current) => ({
+            ...current,
+            providers: current.providers.map((provider) =>
+              provider.id === message.data.providerId
                 ? {
-                    ...p,
+                    ...provider,
                     online: message.data.online,
                     error: message.data.error,
                   }
-                : p,
+                : provider,
             ),
           }));
         else if (message.type === "runtime.status")
-          setSnapshot((s) => ({
-            ...s,
+          setSnapshot((current) => ({
+            ...current,
             runtime: {
               starting: false,
               remoteUrl: "",
-              ...s.runtime,
+              ...current.runtime,
               ...message.data,
             },
           }));
         else if (message.type === "approval.requested")
-          setSnapshot((s) => ({
-            ...s,
+          setSnapshot((current) => ({
+            ...current,
             approvals: [
-              ...s.approvals.filter((a) => a.id !== message.data.id),
+              ...current.approvals.filter((item) => item.id !== message.data.id),
               message.data,
             ],
           }));
+        else if (message.type === "approval.updated")
+          setSnapshot((current) => ({
+            ...current,
+            approvals: current.approvals.map((item) =>
+              item.id === message.data.id ? { ...item, ...message.data } : item,
+            ),
+          }));
         else if (message.type === "approval.resolved")
-          setSnapshot((s) => ({
-            ...s,
-            approvals: s.approvals.filter(
-              (a) => a.id !== message.data.approvalId,
+          setSnapshot((current) => ({
+            ...current,
+            approvals: current.approvals.filter(
+              (item) => item.id !== message.data.approvalId,
             ),
           }));
         else if (message.type === "codex.event")
-          setEvents((v) => [...v.slice(-150), message.data]);
+          setEvents((current) => [...current.slice(-150), message.data]);
       };
       ws.onclose = () => {
         timer = window.setTimeout(connect, 2500);
@@ -1024,11 +213,14 @@ export function App() {
     connect();
     return () => clearTimeout(timer);
   }, [authError]);
+
+  const libraryThreads =
+    library === "archived"
+      ? snapshot.archivedThreads || []
+      : snapshot.threads;
+
   const projects = useMemo(() => {
-    const groups = mergeProjectGroups(
-      snapshot.projects || [],
-      snapshot.threads,
-    );
+    const groups = mergeProjectGroups(snapshot.projects || [], libraryThreads);
     const statusThreads = (threads: ThreadSummary[]) =>
       statusFilter === "active"
         ? threads.filter(
@@ -1047,11 +239,19 @@ export function App() {
         sessions: statusThreads(group.sessions),
       })),
       query,
-    ).filter(
-      (group) =>
-        group.sessions.length > 0 || (!query && statusFilter === "all"),
-    );
-  }, [snapshot.projects, snapshot.threads, query, statusFilter]);
+      {
+        providerName: (id) =>
+          snapshot.providers.find((provider) => provider.id === id)?.name || "",
+      },
+    ).filter((group) => group.sessions.length > 0);
+  }, [
+    snapshot.projects,
+    snapshot.providers,
+    libraryThreads,
+    query,
+    statusFilter,
+  ]);
+
   const counts = useMemo(
     () => ({
       running: snapshot.threads.filter((thread) => thread.status === "running")
@@ -1063,24 +263,206 @@ export function App() {
     }),
     [snapshot.threads],
   );
-  const sourceErrors = snapshot.providers.filter(
-    (provider) => provider.kind === "local-profile" && provider.error,
+
+  const allThreads = useMemo(
+    () => [...snapshot.threads, ...(snapshot.archivedThreads || [])],
+    [snapshot.threads, snapshot.archivedThreads],
   );
-  const toggleProject = (key: string) =>
-    setCollapsedProjects((current) => {
-      const next = new Set(current);
-      next.has(key) ? next.delete(key) : next.add(key);
-      return next;
+
+  const forkCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const thread of allThreads) {
+      if (!thread.forkedFromId) continue;
+      map.set(thread.forkedFromId, (map.get(thread.forkedFromId) || 0) + 1);
+    }
+    return map;
+  }, [allThreads]);
+
+  const current = allThreads.find((thread) => sessionKey(thread) === selected);
+
+  const recentProjects = useMemo(() => {
+    const fromPrefs = (snapshot.preferences?.recentDirs || [])
+      .map((cwd) =>
+        mergeProjectGroups(snapshot.projects || [], snapshot.threads).find(
+          (group) => group.cwd === cwd || group.key.includes(cwd.toLowerCase()),
+        ),
+      )
+      .filter(Boolean) as ProjectGroup[];
+    const fromSessions = mergeProjectGroups(
+      snapshot.projects || [],
+      snapshot.threads,
+    ).filter((group) => group.sessions.length);
+    const seen = new Set<string>();
+    const list: ProjectGroup[] = [];
+    for (const group of [...fromPrefs, ...fromSessions]) {
+      if (seen.has(group.key)) continue;
+      seen.add(group.key);
+      list.push(group);
+      if (list.length === 3) break;
+    }
+    return list;
+  }, [snapshot.preferences, snapshot.projects, snapshot.threads]);
+
+  const saveProject = async (
+    project: { key: string; cwd: string },
+    patch: Partial<ProjectRecord>,
+  ) => {
+    setSnapshot(
+      await put("/projects", {
+        key: project.key,
+        cwd: project.cwd,
+        ...patch,
+      }),
+    );
+  };
+
+  const runOnThreads = async (
+    threads: ThreadSummary[],
+    work: (thread: ThreadSummary) => Promise<void>,
+  ) => {
+    const results = await Promise.allSettled(threads.map((thread) => work(thread)));
+    const failed = results.filter((item) => item.status === "rejected").length;
+    return { ok: results.length - failed, failed };
+  };
+
+  const selectedInProject = (projectKey: string) =>
+    Boolean(current && threadsForProject([current], projectKey).length);
+
+  const archiveProject = (project: ProjectGroup) => {
+    const targets = threadsForProject(snapshot.threads, project.key);
+    if (!targets.length) {
+      pushToast("这个项目没有可归档的现有会话");
+      return;
+    }
+    const running = targets.some(
+      (thread) => thread.status === "running" || thread.status === "waiting",
+    );
+    setConfirm({
+      title: "归档项目",
+      body: (
+        <p>
+          将归档 <b>{project.name}</b> 下的 <b>{targets.length}</b> 个现有会话？可在归档箱恢复。
+          不会改动磁盘上的项目文件。
+          {running ? " 运行中或待确认的会话可能无法归档。" : ""}
+        </p>
+      ),
+      confirmLabel: "归档项目",
+      run: async () => {
+        const { ok, failed } = await runOnThreads(targets, (thread) =>
+          post(`/threads/${thread.providerId}/${thread.id}/archive`).then(
+            () => undefined,
+          ),
+        );
+        await saveProject(project, { hidden: true });
+        if (selectedInProject(project.key)) setSelected(undefined);
+        await refresh();
+        pushToast(
+          failed
+            ? `已归档 ${ok} 个会话，${failed} 个失败`
+            : `已归档 ${project.name} 的 ${ok} 个会话`,
+        );
+      },
     });
-  const current = snapshot.threads.find(
-    (t) => `${t.providerId}:${t.id}` === selected,
-  );
-  useEffect(() => {
-    if (!selected && snapshot.threads.length && window.innerWidth > 760)
-      setSelected(
-        `${snapshot.threads[0].providerId}:${snapshot.threads[0].id}`,
-      );
-  }, [snapshot.threads, selected]);
+  };
+
+  const restoreProject = (project: ProjectGroup) => {
+    const targets = threadsForProject(
+      snapshot.archivedThreads || [],
+      project.key,
+    );
+    if (!targets.length) {
+      pushToast("这个项目没有可恢复的归档会话");
+      return;
+    }
+    setConfirm({
+      title: "恢复项目",
+      body: (
+        <p>
+          将恢复 <b>{project.name}</b> 下的 <b>{targets.length}</b> 个归档会话到现有库？
+        </p>
+      ),
+      confirmLabel: "恢复项目",
+      run: async () => {
+        const { ok, failed } = await runOnThreads(targets, (thread) =>
+          post(`/threads/${thread.providerId}/${thread.id}/unarchive`).then(
+            () => undefined,
+          ),
+        );
+        await saveProject(project, { hidden: false });
+        await refresh();
+        setLibrary("active");
+        pushToast(
+          failed
+            ? `已恢复 ${ok} 个会话，${failed} 个失败`
+            : `已恢复 ${project.name} 的 ${ok} 个会话`,
+        );
+      },
+    });
+  };
+
+  const deleteProject = (project: ProjectGroup) => {
+    const targets = threadsForProject(allThreads, project.key);
+    setConfirm({
+      title: "删除项目",
+      body: (
+        <p>
+          确定永久删除 <b>{project.name}</b>
+          {targets.length ? ` 及其下 ${targets.length} 个会话` : ""}？
+          {targets.length ? " 会话不可恢复。" : ""}
+          不会删除磁盘上的项目文件。
+        </p>
+      ),
+      confirmLabel: "删除项目",
+      danger: true,
+      run: async () => {
+        const { ok, failed } = await runOnThreads(targets, (thread) =>
+          remove(`/threads/${thread.providerId}/${thread.id}`).then(
+            () => undefined,
+          ),
+        );
+        if (failed) {
+          await refresh();
+          pushToast(`已删除 ${ok} 个会话，${failed} 个失败，项目未移除`);
+          return;
+        }
+        setSnapshot(await remove("/projects", { key: project.key }));
+        if (selectedInProject(project.key)) setSelected(undefined);
+        await refresh();
+        pushToast(
+          targets.length
+            ? `已删除 ${project.name} 及 ${ok} 个会话`
+            : `已删除项目 ${project.name}`,
+        );
+      },
+    });
+  };
+
+  const selectThread = (thread: ThreadSummary) => {
+    setSelected(sessionKey(thread));
+    setLibrary(thread.archived ? "archived" : "active");
+    setSidebar(false);
+  };
+
+  const openOrigin = (thread: ThreadSummary) => {
+    if (!thread.forkedFromId) return;
+    const source = allThreads.find((item) => item.id === thread.forkedFromId);
+    if (!source) return;
+    setLibrary(source.archived ? "archived" : "active");
+    setSelected(sessionKey(source));
+  };
+
+  const origin = current?.forkedFromId
+    ? (() => {
+        const source = allThreads.find((item) => item.id === current.forkedFromId);
+        return source
+          ? {
+              name: source.name,
+              archived: Boolean(source.archived),
+            }
+          : { name: "源会话" };
+      })()
+    : undefined;
+
   if (authError)
     return (
       <div className="auth-page">
@@ -1091,9 +473,9 @@ export function App() {
           <h1>连接 Codex Deck</h1>
           <p>输入服务端设置的 REMOTE_TOKEN。令牌只保存在这个浏览器中。</p>
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const value = new FormData(e.currentTarget).get(
+            onSubmit={(event) => {
+              event.preventDefault();
+              const value = new FormData(event.currentTarget).get(
                 "token",
               ) as string;
               setToken(value);
@@ -1113,227 +495,140 @@ export function App() {
         </div>
       </div>
     );
+
   return (
     <div className="app-shell">
-      <aside
-        className={`${sidebar ? "show" : ""} ${current ? "mobile-hidden" : ""}`}
-      >
-        <div className="brand">
-          <span>
-            <Sparkles />
-          </span>
-          <div>
-            <b>Codex Deck</b>
-            <small>REMOTE WORKSPACE</small>
-          </div>
-          <button className="icon-btn" onClick={() => setSidebar(false)}>
-            <X />
-          </button>
-        </div>
-        <div className="session-overview">
-          <div>
-            <b>{projects.length}</b>
-            <small>项目</small>
-          </div>
-          <div>
-            <b>{snapshot.threads.length}</b>
-            <small>会话</small>
-          </div>
-          <button onClick={() => setThreadModal({})}>
-            <Plus />
-            新建
-          </button>
-        </div>
-        <div className="watch-strip">
-          <button
-            className={statusFilter === "active" ? "active" : ""}
-            onClick={() =>
-              setStatusFilter(statusFilter === "active" ? "all" : "active")
-            }
-          >
-            <span className="watch-dot running" />
-            {counts.running} 运行
-          </button>
-          <button
-            className={statusFilter === "attention" ? "active" : ""}
-            onClick={() =>
-              setStatusFilter(
-                statusFilter === "attention" ? "all" : "attention",
-              )
-            }
-          >
-            <span className="watch-dot waiting" />
-            {counts.waiting} 待处理
-            {counts.errors > 0 && <em>{counts.errors} 异常</em>}
-          </button>
-        </div>
-        <div className="session-search">
-          <Search />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索项目、Session、模型…"
-          />
-          {query && (
-            <button className="icon-btn" onClick={() => setQuery("")}>
-              <X />
-            </button>
-          )}
-        </div>
-        <div className="section-label">
-          <span>现有 Codex 会话</span>
-          <button className="icon-btn" onClick={refresh}>
-            <RefreshCw />
-          </button>
-        </div>
-        <div className="thread-list">
-          {projects.map((project) => {
-            const collapsed = collapsedProjects.has(project.key);
-            return (
-              <div className="project-group" key={project.key}>
-                <div className="project-heading">
-                  <button
-                    className="project-toggle"
-                    onClick={() => toggleProject(project.key)}
-                  >
-                    <Folder />
-                    <span title={project.cwd}>{basename(project.cwd)}</span>
-                    {collapsed ? <ChevronRight /> : <ChevronDown />}
-                  </button>
-                  <b>{project.sessions.length}</b>
-                  <button
-                    className="project-add"
-                    title={`在 ${basename(project.cwd)} 中新建会话`}
-                    aria-label={`在 ${basename(project.cwd)} 中新建会话`}
-                    onClick={() =>
-                      setThreadModal({
-                        cwd: project.cwd,
-                        project: snapshot.projects?.find(
-                          (item) => item.key === project.key,
-                        ),
-                      })
-                    }
-                  >
-                    <Plus />
-                  </button>
-                </div>
-                {!collapsed &&
-                  project.sessions.map((t) => {
-                    const sessionKey = `${t.providerId}:${t.id}`;
-                    return (
-                      <button
-                        key={sessionKey}
-                        className={selected === sessionKey ? "selected" : ""}
-                        onClick={() => {
-                          setSelected(sessionKey);
-                          setSidebar(false);
-                        }}
-                      >
-                        <div className="thread-line">
-                          <Status status={t.status} />
-                          <time>{fmtTime(t.updatedAt)}</time>
-                        </div>
-                        <strong>{t.name}</strong>
-                        <p>{t.preview}</p>
-                        <div className="thread-meta">
-                          <span
-                            className="provider-badge"
-                            style={
-                              {
-                                "--provider": snapshot.providers.find(
-                                  (provider) => provider.id === t.providerId,
-                                )?.color,
-                              } as any
-                            }
-                          >
-                            {snapshot.providers.find(
-                              (provider) => provider.id === t.providerId,
-                            )?.name || "原配置 / 外部"}
-                          </span>
-                          <small>{t.model}</small>
-                          <small>
-                            {t.controlMode === "managed" ? "受管" : "历史"}
-                          </small>
-                        </div>
-                        {snapshot.approvals.some(
-                          (a) =>
-                            a.providerId === t.providerId &&
-                            a.request.params?.threadId === t.id,
-                        ) && <em>1</em>}
-                      </button>
-                    );
-                  })}
-              </div>
-            );
-          })}
-          {!projects.length && (
-            <div className="empty-list">
-              {query || statusFilter !== "all" ? <Search /> : <Bot />}
-              <p>
-                {query || statusFilter !== "all"
-                  ? "没有匹配的 Session"
-                  : "未找到现有会话"}
-              </p>
-              <small>
-                {query || statusFilter !== "all"
-                  ? "清除搜索或状态筛选后重试"
-                  : "点击刷新或创建一个新的 Codex 会话"}
-              </small>
-            </div>
-          )}
-        </div>
-        <div className="sidebar-footer">
-          <button onClick={() => setProviderModal(true)}>
-            <Settings />
-            供应商设置
-            <ChevronRight />
-          </button>
-        </div>
-      </aside>
+      <Sidebar
+        show={sidebar}
+        hiddenOnMobile={Boolean(current)}
+        projectCount={mergeProjectGroups(snapshot.projects || [], snapshot.threads).length}
+        sessionCount={snapshot.threads.length}
+        archivedCount={(snapshot.archivedThreads || []).length}
+        library={library}
+        query={query}
+        statusFilter={statusFilter}
+        counts={counts}
+        projects={projects}
+        selected={selected}
+        expandedProjects={expandedProjects}
+        forkCounts={forkCounts}
+        runtime={snapshot.runtime}
+        archiveError={snapshot.runtime?.archiveError}
+        onClose={() => setSidebar(false)}
+        onNew={() => setThreadModal({})}
+        onRefresh={refresh}
+        onProviders={() => setProviderModal(true)}
+        onUsage={() => setUsageOpen(true)}
+        onLibrary={setLibrary}
+        onQuery={setQuery}
+        onStatusFilter={setStatusFilter}
+        onToggleProject={(key) =>
+          setExpandedProjects((currentSet) => {
+            const next = new Set(currentSet);
+            next.has(key) ? next.delete(key) : next.add(key);
+            return next;
+          })
+        }
+        onSelect={selectThread}
+        onAddInProject={(project) =>
+          setThreadModal({
+            cwd: project.cwd,
+            project: snapshot.projects?.find((item) => item.key === project.key),
+          })
+        }
+        onPin={(project) =>
+          saveProject(project, { pinned: !project.pinned })
+        }
+        onHide={(project) => saveProject(project, { hidden: true })}
+        onRenameProject={(project) => setRename({ kind: "project", project })}
+        onDefaults={(project) =>
+          setProjectEdit(
+            snapshot.projects?.find((item) => item.key === project.key) || {
+              key: project.key,
+              cwd: project.cwd,
+              name: project.name,
+              defaults: project.defaults,
+              updatedAt: project.updatedAt,
+            },
+          )
+        }
+        onArchiveProject={archiveProject}
+        onRestoreProject={restoreProject}
+        onDeleteProject={deleteProject}
+        onHistory={setHistoryHelp}
+        onSessionMenu={setSheet}
+        providers={snapshot.providers}
+      />
       <section className="workspace">
-        {!sidebar && (
+        {!sidebar && !current && (
           <button className="floating-menu" onClick={() => setSidebar(true)}>
             <Menu />
           </button>
         )}
-        <button className="new-thread" onClick={() => setThreadModal({})}>
-          <MessageSquarePlus />
-          新会话
-        </button>
         {current ? (
-          <Chat
-            thread={current}
-            provider={snapshot.providers.find(
-              (p) => p.id === current.providerId,
-            )}
-            approvals={snapshot.approvals}
-            events={events}
-            onBack={() => setSelected(undefined)}
-            onSnapshot={refresh}
-            onSwitchProvider={() => setSwitchThread(current)}
-            onSelectThread={(providerId, threadId) =>
-              setSelected(`${providerId}:${threadId}`)
+          <RenderErrorBoundary
+            resetKey={sessionKey(current)}
+            fallback={
+              <main className="chat">
+                <header className="chat-header">
+                  <div className="chat-header-row1">
+                    <button
+                      className="icon-btn mobile-back"
+                      onClick={() => {
+                        setSelected(undefined);
+                        setSidebar(true);
+                      }}
+                      title="返回"
+                    >
+                      <ArrowLeft />
+                    </button>
+                    <div className="chat-title">
+                      <h2>会话无法显示</h2>
+                    </div>
+                  </div>
+                </header>
+                <p className="error-banner">
+                  这个会话的内容触发了渲染错误。请返回列表，或刷新后再试。
+                </p>
+              </main>
             }
-          />
+          >
+            <ChatWorkspace
+              thread={current}
+              provider={snapshot.providers.find(
+                (provider) => provider.id === current.providerId,
+              )}
+              approvals={snapshot.approvals}
+              events={events}
+              origin={origin}
+              onBack={() => {
+                setSelected(undefined);
+                setSidebar(true);
+              }}
+              onSnapshot={refresh}
+              onSwitchProvider={() => setSwitchThread(current)}
+              onMenu={() => setSheet(current)}
+              onSelectThread={(providerId, threadId) =>
+                setSelected(`${providerId}:${threadId}`)
+              }
+              onToast={pushToast}
+              onUsage={() => setUsageOpen(true)}
+              onOpenOrigin={() => openOrigin(current)}
+            />
+          </RenderErrorBoundary>
         ) : (
-          <div className="welcome">
-            <span>
-              <Bot />
-            </span>
-            <h1>你的 Codex，随身在线</h1>
-            <p>选择一个项目下的现有会话继续工作，或启动新的并行任务。</p>
-            <button className="primary" onClick={() => setThreadModal({})}>
-              <Plus />
-              启动新会话
-            </button>
-            <div className="system-pills">
-              <span>{projects.length} 个项目</span>
-              <span>
-                {snapshot.threads.filter((t) => t.status === "running").length}{" "}
-                个任务运行中
-              </span>
-            </div>
-          </div>
+          <Welcome
+            recent={recentProjects}
+            runtime={snapshot.runtime}
+            onNew={() => setThreadModal({})}
+            onOpenProject={(project) =>
+              setThreadModal({
+                cwd: project.cwd,
+                project: snapshot.projects?.find((item) => item.key === project.key),
+              })
+            }
+            onUsage={() => setUsageOpen(true)}
+          />
         )}
       </section>
       {providerModal && (
@@ -1343,6 +638,20 @@ export function App() {
           defaultCwd={current?.cwd}
           onClose={() => setProviderModal(false)}
           onSaved={setSnapshot}
+          onToast={pushToast}
+          onConfirmDelete={(provider, run) =>
+            setConfirm({
+              title: "删除供应商",
+              body: (
+                <p>
+                  确定删除 <b>{provider.name}</b>？现有 Session 历史不会删除。
+                </p>
+              ),
+              danger: true,
+              confirmLabel: "删除",
+              run,
+            })
+          }
         />
       )}
       {threadModal && (
@@ -1352,8 +661,9 @@ export function App() {
           project={threadModal.project}
           preferences={snapshot.preferences}
           onClose={() => setThreadModal(null)}
-          onCreated={(p, id) => {
-            setSelected(`${p}:${id}`);
+          onCreated={(providerId, id) => {
+            setSelected(`${providerId}:${id}`);
+            setLibrary("active");
             setTimeout(refresh, 400);
           }}
         />
@@ -1369,6 +679,196 @@ export function App() {
           }}
         />
       )}
+      {rename?.kind === "thread" && (
+        <RenameModal
+          title="重命名会话"
+          initial={rename.thread.name}
+          onClose={() => setRename(null)}
+          onSubmit={async (name) => {
+            await api(
+              `/threads/${rename.thread.providerId}/${rename.thread.id}`,
+              { method: "PATCH", body: JSON.stringify({ name }) },
+            );
+            refresh();
+          }}
+        />
+      )}
+      {rename?.kind === "project" && (
+        <RenameModal
+          title="重命名项目"
+          initial={rename.project.name}
+          onClose={() => setRename(null)}
+          onSubmit={async (name) => {
+            await saveProject(rename.project, { name });
+          }}
+        />
+      )}
+      {projectEdit && (
+        <ProjectDefaultsModal
+          project={projectEdit}
+          providers={snapshot.providers}
+          onClose={() => setProjectEdit(null)}
+          onSave={async (defaults, name) => {
+            await saveProject(projectEdit, { defaults, name });
+            pushToast("以后在此目录新建将使用这些设置");
+          }}
+        />
+      )}
+      {historyHelp && (
+        <Modal title="历史会话" onClose={() => setHistoryHelp(null)}>
+          <p>
+            这条记录来自已有 Codex 历史，可以查看内容。Deck 不会假接管外部 stdin
+            会话。
+          </p>
+          <button
+            className="primary"
+            type="button"
+            onClick={async () => {
+              const result = await api<{ command: string }>(
+                `/runtime/terminal-command?cwd=${encodeURIComponent(historyHelp.cwd)}`,
+              );
+              await navigator.clipboard.writeText(result.command);
+              pushToast("已复制");
+            }}
+          >
+            复制 --remote 命令
+          </button>
+        </Modal>
+      )}
+      {sheet && (
+        <ActionSheet
+          title={sheet.name}
+          onClose={() => setSheet(null)}
+          actions={[
+            {
+              label: "重命名",
+              onClick: () => setRename({ kind: "thread", thread: sheet }),
+            },
+            {
+              label: "会话设置",
+              onClick: () => setPhoneSettings(true),
+            },
+            {
+              label: "压缩上下文",
+              onClick: () =>
+                post(`/threads/${sheet.providerId}/${sheet.id}/compact`).then(
+                  refresh,
+                ),
+            },
+            {
+              label: "Official 账号额度",
+              onClick: () => setUsageOpen(true),
+            },
+            {
+              label: "复制为整段分支",
+              disabled: sheet.status === "running" || sheet.status === "waiting",
+              onClick: async () => {
+                const created = await post(
+                  `/threads/${sheet.providerId}/${sheet.id}/fork`,
+                  {},
+                );
+                setSelected(`${sheet.providerId}:${created.id}`);
+                refresh();
+              },
+            },
+            {
+              label: "切换供应商",
+              disabled: sheet.status === "running" || sheet.status === "waiting",
+              onClick: () => setSwitchThread(sheet),
+            },
+            {
+              label: sheet.archived ? "恢复会话" : "归档会话",
+              onClick: () =>
+                setConfirm({
+                  title: sheet.archived ? "恢复会话" : "归档会话",
+                  body: (
+                    <p>
+                      {sheet.archived ? "恢复" : "归档"} <b>{sheet.name}</b>？
+                    </p>
+                  ),
+                  confirmLabel: sheet.archived ? "恢复" : "归档",
+                  run: async () => {
+                    if (sheet.archived)
+                      await post(
+                        `/threads/${sheet.providerId}/${sheet.id}/unarchive`,
+                      );
+                    else
+                      await post(
+                        `/threads/${sheet.providerId}/${sheet.id}/archive`,
+                      );
+                    if (sessionKey(sheet) === selected) setSelected(undefined);
+                    refresh();
+                  },
+                }),
+            },
+            {
+              label: "永久删除",
+              danger: true,
+              onClick: () =>
+                setConfirm({
+                  title: "永久删除会话",
+                  body: (
+                    <p>
+                      确定永久删除 <b>{sheet.name}</b>？此操作不可恢复。
+                    </p>
+                  ),
+                  confirmLabel: "删除",
+                  danger: true,
+                  run: async () => {
+                    await remove(`/threads/${sheet.providerId}/${sheet.id}`);
+                    if (sessionKey(sheet) === selected) setSelected(undefined);
+                    refresh();
+                  },
+                }),
+            },
+          ]}
+        />
+      )}
+      {phoneSettings && current && (
+        <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
+          <SessionToolbar
+            thread={current}
+            locked={current.status === "running" || current.status === "waiting"}
+            onSettings={async (settings) => {
+              await api(`/threads/${current.providerId}/${current.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ settings }),
+              });
+              refresh();
+            }}
+            onCompact={() =>
+              post(`/threads/${current.providerId}/${current.id}/compact`).then(
+                refresh,
+              )
+            }
+          />
+        </Modal>
+      )}
+      {usageOpen && (
+        <UsageDrawer
+          runtime={snapshot.runtime}
+          sessionUsage={current?.tokenUsage}
+          onClose={() => setUsageOpen(false)}
+        />
+      )}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          danger={confirm.danger}
+          onClose={() => setConfirm(null)}
+          onConfirm={async () => {
+            try {
+              await confirm.run();
+              setConfirm(null);
+            } catch (error: any) {
+              pushToast(error?.message || "操作失败");
+            }
+          }}
+        />
+      )}
+      <ToastStack toasts={toasts} />
     </div>
   );
 }

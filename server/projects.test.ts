@@ -1,27 +1,38 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { normalizeProjectPath, ProjectStore } from "./projects.js";
 
 test("windows and wsl paths collapse to the same project key", () => {
   assert.equal(
-    normalizeProjectPath("D:\\Code\\codex_auto_pilot"),
-    normalizeProjectPath("/mnt/d/Code/codex_auto_pilot"),
+    normalizeProjectPath("D:\\Code\\demo-app"),
+    normalizeProjectPath("/mnt/d/Code/demo-app"),
   );
   assert.equal(normalizeProjectPath("D:\\"), "/mnt/d");
   assert.equal(normalizeProjectPath("D:"), "/mnt/d");
 });
 
-test("windows extended-length prefixes join the same project", () => {
+test("windows drive plus /mnt/d alias joins the same project", () => {
   assert.equal(
-    normalizeProjectPath("\\\\?\\D:\\Code\\BSHT"),
-    normalizeProjectPath("D:\\Code\\BSHT"),
+    normalizeProjectPath("D:\\mnt\\d\\Work\\sample_project"),
+    normalizeProjectPath("/mnt/d/Work/sample_project"),
   );
   assert.equal(
-    normalizeProjectPath("\\\\?\\D:\\Code\\BSHT"),
-    normalizeProjectPath("/mnt/d/Code/BSHT"),
+    normalizeProjectPath("/mnt/d/mnt/d/Work/sample_project"),
+    "/mnt/d/work/sample_project",
+  );
+});
+
+test("windows extended-length prefixes join the same project", () => {
+  assert.equal(
+    normalizeProjectPath("\\\\?\\D:\\Code\\demo"),
+    normalizeProjectPath("D:\\Code\\demo"),
+  );
+  assert.equal(
+    normalizeProjectPath("\\\\?\\D:\\Code\\demo"),
+    normalizeProjectPath("/mnt/d/Code/demo"),
   );
 });
 
@@ -66,6 +77,31 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
   assert.equal(project.defaults?.providerId, "local");
   assert.equal(store.getPreferences().lastModel, "gpt-b");
   assert.deepEqual(store.getPreferences().recentDirs, ["/mnt/d/Code/one"]);
+});
+
+test("load rematerializes aliased keys into one project", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-alias-"));
+  await writeFile(
+    path.join(dir, "projects.json"),
+    JSON.stringify([
+      {
+        key: "D:\\mnt\\d\\Work\\sample_project",
+        cwd: "D:\\mnt\\d\\Work\\sample_project",
+        updatedAt: 2,
+      },
+      {
+        key: "/mnt/d/work/sample_project",
+        cwd: "/mnt/d/Work/sample_project",
+        name: "Sample",
+        updatedAt: 1,
+      },
+    ]),
+  );
+  const store = new ProjectStore(dir);
+  await store.load();
+  assert.equal(store.list().length, 1);
+  assert.equal(store.list()[0].key, "/mnt/d/work/sample_project");
+  assert.equal(store.list()[0].name, "Sample");
 });
 
 test("hidden and remove only touch deck metadata", async () => {

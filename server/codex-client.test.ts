@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { codexLaunchSpec } from "./codex-client.js";
+import {
+  codexLaunchSpec,
+  codexRuntimeEnvironment,
+} from "./codex-client.js";
+import { WSL_CODEX_SHELL_COMMAND } from "./runtime-platform.js";
+
+test("runtime uses the native Codex home for every provider", () => {
+  const home = "D:\\Users\\tester\\.codex";
+  const env = codexRuntimeEnvironment(
+    { id: "local", name: "Local", kind: "local-profile", codexHome: home },
+    { PATH: "test-path" },
+  );
+
+  assert.equal(env.CODEX_HOME, home);
+  assert.equal(env.PATH, "test-path");
+});
 
 test("launches Windows cmd shims through cmd.exe to avoid spawn EINVAL", () => {
   assert.deepEqual(
@@ -84,6 +99,38 @@ test("launches a loopback WebSocket runtime for terminal sharing", () => {
     {
       command: "codex",
       args: ["app-server", "--listen", "ws://127.0.0.1:4175"],
+    },
+  );
+});
+
+test("Windows WSL mode launches the runtime through wsl.exe", () => {
+  assert.deepEqual(
+    codexLaunchSpec(
+      "codex",
+      "win32",
+      {
+        WSL_EXE: "C:\\Windows\\System32\\wsl.exe",
+        CODEX_WSL_SHELL: "bash",
+      },
+      ["-c", "model='gpt-5'"],
+      "ws://127.0.0.1:4175",
+      true,
+    ),
+    {
+      command: "C:\\Windows\\System32\\wsl.exe",
+      args: [
+        "--exec",
+        "bash",
+        "-lc",
+        WSL_CODEX_SHELL_COMMAND,
+        "codex-deck",
+        "codex",
+        "app-server",
+        "--listen",
+        "ws://127.0.0.1:4175",
+        "-c",
+        "model='gpt-5'",
+      ],
     },
   );
 });

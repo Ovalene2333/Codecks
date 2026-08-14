@@ -1,10 +1,29 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
+import type { TunnelOption } from "./cli.js";
 
 export interface TunnelController {
   kill(): void;
 }
-export type TunnelMode = { mode: "quick" } | { mode: "named"; name: string };
+export type TunnelMode = TunnelOption;
+
+export function normalizePublicOrigin(hostname: string): string {
+  const raw = hostname.trim();
+  if (!raw) throw new Error("公网域名不能为空");
+  const withProto = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withProto);
+  } catch {
+    throw new Error(`公网域名无效：${hostname}`);
+  }
+  if (parsed.protocol !== "https:") throw new Error("公网隧道地址必须使用 https");
+  const host = parsed.hostname.toLowerCase();
+  if (!host || host === "localhost" || host === "127.0.0.1") {
+    throw new Error("公网隧道地址不能是本机回环地址");
+  }
+  return parsed.origin;
+}
 
 export function resolveCloudflaredBin(explicit?: string) {
   const candidates = [
@@ -12,8 +31,6 @@ export function resolveCloudflaredBin(explicit?: string) {
     process.env.CODEX_DECK_CLOUDFLARED?.trim(),
     "cloudflared",
     "cloudflared.exe",
-    "/mnt/d/software/cloudflared/cloudflared.exe",
-    "D:\\software\\cloudflared\\cloudflared.exe",
   ].filter((value): value is string => Boolean(value));
   for (const candidate of candidates) {
     if (
@@ -27,15 +44,16 @@ export function resolveCloudflaredBin(explicit?: string) {
 }
 
 export function cloudflaredArgs(mode: TunnelMode, port: number) {
-  return mode.mode === "quick"
-    ? [
-        "tunnel",
-        "--url",
-        `http://127.0.0.1:${port}`,
-        "--protocol",
-        process.env.CODEX_DECK_TUNNEL_PROTOCOL || "http2",
-      ]
-    : ["tunnel", "--url", `http://127.0.0.1:${port}`, "run", mode.name];
+  if (mode.mode === "quick")
+    return [
+      "tunnel",
+      "--url",
+      `http://127.0.0.1:${port}`,
+      "--protocol",
+      process.env.CODEX_DECK_TUNNEL_PROTOCOL || "http2",
+    ];
+  if (mode.mode === "share") return ["tunnel", "run", "--token", mode.tunnelToken];
+  return ["tunnel", "--url", `http://127.0.0.1:${port}`, "run", mode.name];
 }
 
 export function startTunnel(
@@ -45,6 +63,8 @@ export function startTunnel(
   binary?: string,
 ): TunnelController {
   const bin = resolveCloudflaredBin(binary);
+  const fixedOrigin =
+    mode.mode === "share" ? normalizePublicOrigin(mode.hostname) : undefined;
   let active: ChildProcessWithoutNullStreams | undefined;
   let retry: NodeJS.Timeout | undefined;
   let stopped = false;
@@ -56,12 +76,18 @@ export function startTunnel(
     process.stdout.write(
       mode.mode === "quick"
         ? "正在创建 Cloudflare 临时隧道…\n"
-        : `正在连接 Cloudflare Named Tunnel：${mode.name}\n`,
+        : mode.mode === "share"
+          ? `正在连接 Cloudflare Named Tunnel（固定域名 ${fixedOrigin}）…\n`
+          : `正在连接 Cloudflare Named Tunnel：${mode.name}\n`,
     );
     const child = spawn(bin, args, {
       stdio: "pipe",
       windowsHide: true,
-      env: process.env,
+      env: {
+        ...process.env,
+        TUNNEL_TRANSPORT_PROTOCOL:
+          process.env.CODEX_DECK_TUNNEL_PROTOCOL || "http2",
+      },
     });
     active = child;
     let output = "";
@@ -80,13 +106,19 @@ export function startTunnel(
         );
       }
       if (
-        mode.mode === "named" &&
+        (mode.mode === "named" || mode.mode === "share") &&
         !ready &&
         /Registered tunnel connection/i.test(output)
       ) {
         ready = true;
         failures = 0;
-        process.stdout.write(`Named Tunnel 已连接：${mode.name}\n`);
+        const origin =
+          fixedOrigin || (mode.mode === "named" ? mode.name : "");
+        process.stdout.write(
+          mode.mode === "share"
+            ? `\nNamed Tunnel 已连接：${origin}\n公网入口：\n${accessUrl(origin, token)}\n\n`
+            : `Named Tunnel 已连接：${mode.name}\n`,
+        );
       }
     };
     child.stdout.on("data", consume);

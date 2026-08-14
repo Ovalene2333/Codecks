@@ -41,7 +41,8 @@ export function extractProviderApiKey(provider: Provider) {
 /**
  * Process-level -c flags. Do not create `model_providers.custom` here: a
  * nameless override makes Codex exit with "provider name must not be empty".
- * CCS leftovers stay out because the isolated runtime home omits config.toml.
+ * Every provider is fully defined here so the native config.toml does not
+ * determine which connection a Deck thread uses.
  */
 export function runtimeBootstrapArgs(_providers: RuntimeProviderConfig[]) {
   return [] as string[];

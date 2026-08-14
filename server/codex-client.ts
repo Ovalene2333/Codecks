@@ -6,14 +6,15 @@ import path from "node:path";
 import readline from "node:readline";
 import WebSocket from "ws";
 import type { Provider, RpcMessage } from "./types.js";
-import { findCcSwitchDb } from "./cc-switch.js";
-import { loadOfficialAuth } from "./official-auth.js";
 import {
   compileRuntimeProvider,
-  extractProviderApiKey,
   runtimeBootstrapArgs,
 } from "./provider-config.js";
-import { prepareRuntimeHome } from "./runtime-home.js";
+import { nativeWindowsSandboxMode } from "./runtime-home.js";
+import {
+  exposeEnvironmentToWsl,
+  WSL_CODEX_SHELL_COMMAND,
+} from "./runtime-platform.js";
 
 type Pending = {
   resolve: (value: any) => void;
@@ -25,18 +26,47 @@ export interface LaunchSpec {
   args: string[];
 }
 
+export function codexRuntimeEnvironment(
+  provider: Provider,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    CODEX_HOME: provider.codexHome || path.join(os.homedir(), ".codex"),
+  };
+}
+
 export function codexLaunchSpec(
   bin = "codex",
   platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
   configArgs: string[] = [],
   listen = "stdio://",
+  useWsl = false,
 ): LaunchSpec {
   const appArgs = [
     "app-server",
     ...(listen === "stdio://" ? ["--stdio"] : ["--listen", listen]),
     ...configArgs,
   ];
+  if (platform === "win32" && useWsl) {
+    if (/[\r\n]/.test(bin)) throw new Error("CODEX_BIN 不能包含换行符");
+    const shell = env.CODEX_WSL_SHELL || "bash";
+    if (/[\r\n]/.test(shell))
+      throw new Error("CODEX_WSL_SHELL 不能包含换行符");
+    return {
+      command: env.WSL_EXE || "wsl.exe",
+      args: [
+        "--exec",
+        shell,
+        "-lc",
+        WSL_CODEX_SHELL_COMMAND,
+        "codex-deck",
+        bin,
+        ...appArgs,
+      ],
+    };
+  }
   if (platform !== "win32" || /\.exe$/i.test(bin))
     return { command: bin, args: appArgs };
   if (/[\r\n]/.test(bin)) throw new Error("CODEX_BIN 不能包含换行符");
@@ -128,6 +158,7 @@ export class CodexClient extends EventEmitter {
     private codexBin = "codex",
     private runtimeProviders?: Provider[],
     readonly remoteUrl?: string,
+    private useWsl = false,
   ) {
     super();
   }
@@ -142,45 +173,41 @@ export class CodexClient extends EventEmitter {
   }
 
   private async doStart() {
-    const env = { ...process.env };
+    const env = codexRuntimeEnvironment(this.provider);
+    const wslEnvNames = new Set(["CODEX_HOME"]);
     const configArgs: string[] = [];
     if (this.runtimeProviders) {
       const nativeHome =
         this.provider.codexHome || path.join(os.homedir(), ".codex");
-      const runtimeHome = path.join(this.dataDir, "runtime-home");
-      const officialAuth = await loadOfficialAuth({
-        nativeAuthPath: path.join(nativeHome, "auth.json"),
-        existingOfficialAuthPath: path.join(runtimeHome, "auth.json"),
-        ccSwitchDb: await findCcSwitchDb(process.env.CC_SWITCH_DB),
-        customApiKeys: this.runtimeProviders
-          .map((item) => extractProviderApiKey(item))
-          .filter(Boolean),
-      });
-      env.CODEX_HOME = await prepareRuntimeHome(
-        runtimeHome,
-        nativeHome,
-        officialAuth,
-      );
       delete env.OPENAI_API_KEY;
       delete env.CODEX_API_KEY;
       const compiledProviders = this.runtimeProviders.map((item) =>
         compileRuntimeProvider(item),
       );
       configArgs.push(...runtimeBootstrapArgs(compiledProviders));
+      if (!this.useWsl) {
+        const windowsSandbox = await nativeWindowsSandboxMode(nativeHome);
+        if (windowsSandbox)
+          configArgs.push("-c", `windows.sandbox='${windowsSandbox}'`);
+      }
       for (const compiled of compiledProviders) {
         configArgs.push(...compiled.args);
         Object.assign(env, compiled.env);
+        for (const name of Object.keys(compiled.env)) wslEnvNames.add(name);
       }
-    } else if (this.provider.codexHome) {
-      env.CODEX_HOME = this.provider.codexHome;
     }
+
+    const launchEnv = this.useWsl
+      ? exposeEnvironmentToWsl(env, wslEnvNames)
+      : env;
 
     const launch = codexLaunchSpec(
       this.codexBin,
       process.platform,
-      env,
+      launchEnv,
       configArgs,
       this.remoteUrl || "stdio://",
+      this.useWsl,
     );
     this.stderr = "";
     this.processOutput = "";
@@ -188,7 +215,7 @@ export class CodexClient extends EventEmitter {
     this.stopping = false;
     this.launchSummary = `${launch.command} ${launch.args.join(" ")}`;
     this.child = spawn(launch.command, launch.args, {
-      env,
+      env: launchEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });

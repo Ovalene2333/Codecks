@@ -19,6 +19,59 @@ export type SandboxMode =
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type Personality = "friendly" | "pragmatic" | "none";
 
+export interface TokenUsage {
+  used?: number;
+  limit?: number;
+  input?: number;
+  output?: number;
+}
+
+export interface RateLimitWindow {
+  usedPercent?: number;
+  used?: number;
+  limit?: number;
+  resetsAt?: number;
+  resetAfterSeconds?: number;
+  reached?: boolean;
+}
+
+export interface RateLimits {
+  primary?: RateLimitWindow;
+  secondary?: RateLimitWindow;
+  byLimitId?: Record<string, RateLimitWindow>;
+  planType?: string;
+  planName?: string;
+}
+
+export interface AccountInfo {
+  authMode?: string;
+  planType?: string;
+  email?: string;
+  chatgpt?: boolean;
+}
+
+export type ApprovalKind =
+  | "command"
+  | "file"
+  | "permission"
+  | "question"
+  | "unknown";
+
+export interface FileChange {
+  path: string;
+  kind?: string;
+  diff?: string;
+}
+
+export interface ApprovalQuestion {
+  id?: string;
+  prompt?: string;
+  header?: string;
+  question?: string;
+  options?: { label: string; value?: string; isOther?: boolean }[];
+  isOther?: boolean;
+}
+
 export interface ProjectDefaults {
   providerId?: string;
   model?: string;
@@ -75,14 +128,49 @@ export interface ThreadSummary {
   archived?: boolean;
   reasoningEffort?: string;
   personality?: Personality;
+  sandbox?: SandboxMode;
+  approvalPolicy?: ApprovalPolicy;
+  forkedFromId?: string;
+  sessionId?: string;
+  tokenUsage?: TokenUsage;
+  compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+}
+
+export interface ApprovalResolveBody {
+  decision?: "accept" | "acceptForSession" | "decline" | "cancel";
+  permissions?: unknown;
+  scope?: "session" | "turn";
+  answers?: unknown;
 }
 
 export interface Approval {
   id: string;
   providerId: string;
   request: { method: string; params: any };
+  kind?: ApprovalKind;
+  cwd?: string;
+  command?: string;
+  reason?: string;
+  changes?: FileChange[];
+  questions?: ApprovalQuestion[];
+  availableDecisions?: string[];
+  permissions?: unknown;
+  itemId?: string;
+  networkApproval?: boolean;
+}
+
+export interface RuntimeSnapshot {
+  online: boolean;
+  starting: boolean;
+  remoteUrl: string;
+  error?: string;
+  configPending?: boolean;
+  account?: AccountInfo;
+  rateLimits?: RateLimits | null;
+  rateLimitsError?: string;
+  archiveError?: string;
 }
 
 export interface Snapshot {
@@ -92,11 +180,5 @@ export interface Snapshot {
   approvals: Approval[];
   projects?: ProjectRecord[];
   preferences?: DeckPreferences;
-  runtime?: {
-    online: boolean;
-    starting: boolean;
-    remoteUrl: string;
-    error?: string;
-    configPending?: boolean;
-  };
+  runtime?: RuntimeSnapshot;
 }

@@ -19,9 +19,20 @@ export function normalizeProjectPath(cwd: string) {
   const driveOnly = value.match(/^([a-zA-Z]):$/);
   if (driveOnly) return `/mnt/${driveOnly[1].toLowerCase()}`;
   const windows = value.match(/^([a-zA-Z]):\/(.*)$/);
-  if (windows)
-    return `/mnt/${windows[1].toLowerCase()}/${windows[2]}`.toLowerCase();
-  return value.toLowerCase() || "未指定路径";
+  if (windows) {
+    const rest = windows[2];
+    const nested = rest.match(/^mnt\/([a-zA-Z])(?:\/(.*))?$/i);
+    if (nested) {
+      const tail = nested[2] || "";
+      return `/mnt/${nested[1].toLowerCase()}${tail ? `/${tail.toLowerCase()}` : ""}`;
+    }
+    return `/mnt/${windows[1].toLowerCase()}/${rest}`.toLowerCase();
+  }
+  value = value.toLowerCase() || "未指定路径";
+  const doubled = value.match(/^\/mnt\/([a-z])\/mnt\/\1(?:\/(.*))?$/);
+  if (doubled)
+    return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
+  return value;
 }
 
 export class ProjectStore {
@@ -44,8 +55,20 @@ export class ProjectStore {
       ) as ProjectRecord[];
       for (const row of Array.isArray(rows) ? rows : []) {
         if (!row?.key && !row?.cwd) continue;
-        const key = row.key || normalizeProjectPath(row.cwd);
-        this.projects.set(key, { ...row, key });
+        const key = normalizeProjectPath(row.key || row.cwd);
+        const existing = this.projects.get(key);
+        const defaults = { ...existing?.defaults, ...row.defaults };
+        this.projects.set(key, {
+          ...existing,
+          ...row,
+          key,
+          cwd: existing?.cwd || row.cwd,
+          name: row.name || existing?.name,
+          pinned: row.pinned ?? existing?.pinned,
+          hidden: row.hidden ?? existing?.hidden,
+          defaults: Object.keys(defaults).length ? defaults : undefined,
+          updatedAt: Math.max(existing?.updatedAt || 0, row.updatedAt || 0),
+        });
       }
     } catch (error: any) {
       if (error.code !== "ENOENT") throw error;

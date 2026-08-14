@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 
 export function ModelPicker({
@@ -7,11 +8,15 @@ export function ModelPicker({
   model,
   reasoningEffort,
   onChange,
+  compact,
+  disabled,
 }: {
   providerId: string;
   model: string;
   reasoningEffort: string;
   onChange: (next: { model: string; reasoningEffort: string }) => void;
+  compact?: boolean;
+  disabled?: boolean;
 }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [manual, setManual] = useState(false);
@@ -27,8 +32,9 @@ export function ModelPicker({
     api<ModelInfo[]>(`/providers/${providerId}/models`)
       .then((list) => {
         if (cancelled) return;
-        setModels(list);
-        setManual(!list.length);
+        const next = Array.isArray(list) ? list : [];
+        setModels(next);
+        setManual(!next.length);
         if (!model) {
           const fallback = list.find((item) => item.isDefault) || list[0];
           if (fallback)
@@ -56,11 +62,12 @@ export function ModelPicker({
   const efforts = selected?.supportedReasoningEfforts || [];
   return (
     <>
-      <label>
-        模型
+      <label className={compact ? "toolbar-select" : undefined}>
+        {compact ? <span>模型</span> : "模型"}
         {manual || !models.length ? (
           <input
             value={model}
+            disabled={disabled}
             onChange={(e) =>
               onChange({ model: e.target.value, reasoningEffort })
             }
@@ -69,6 +76,7 @@ export function ModelPicker({
         ) : (
           <select
             value={model}
+            disabled={disabled}
             onChange={(e) => {
               const next = models.find(
                 (item) => item.model === e.target.value || item.id === e.target.value,
@@ -91,7 +99,7 @@ export function ModelPicker({
             ))}
           </select>
         )}
-        {models.length > 0 && (
+        {models.length > 0 && !compact && (
           <button
             type="button"
             className="text-btn"
@@ -102,18 +110,22 @@ export function ModelPicker({
         )}
       </label>
       {efforts.length > 0 && (
-        <label>
-          推理强度
+        <label className={compact ? "toolbar-select" : undefined}>
+          {compact ? <span>Reasoning effort</span> : "Reasoning effort"}
           <select
             value={reasoningEffort}
+            disabled={disabled}
             onChange={(e) =>
               onChange({ model, reasoningEffort: e.target.value })
             }
           >
             {efforts.map((item) => (
-              <option key={item.reasoningEffort} value={item.reasoningEffort}>
-                {item.reasoningEffort}
-                {item.description ? ` · ${item.description}` : ""}
+              <option
+                key={item.reasoningEffort}
+                value={item.reasoningEffort}
+                title={item.description || undefined}
+              >
+                {reasoningEffortLabel(item.reasoningEffort)}
               </option>
             ))}
           </select>

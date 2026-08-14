@@ -25,9 +25,20 @@ export function normalizeProjectPath(cwd: string) {
   const driveOnly = value.match(/^([a-zA-Z]):$/);
   if (driveOnly) return `/mnt/${driveOnly[1].toLowerCase()}`;
   const windows = value.match(/^([a-zA-Z]):\/(.*)$/);
-  if (windows)
-    return `/mnt/${windows[1].toLowerCase()}/${windows[2]}`.toLowerCase();
-  return value.toLowerCase() || "未指定路径";
+  if (windows) {
+    const rest = windows[2];
+    const nested = rest.match(/^mnt\/([a-zA-Z])(?:\/(.*))?$/i);
+    if (nested) {
+      const tail = nested[2] || "";
+      return `/mnt/${nested[1].toLowerCase()}${tail ? `/${tail.toLowerCase()}` : ""}`;
+    }
+    return `/mnt/${windows[1].toLowerCase()}/${rest}`.toLowerCase();
+  }
+  value = value.toLowerCase() || "未指定路径";
+  const doubled = value.match(/^\/mnt\/([a-z])\/mnt\/\1(?:\/(.*))?$/);
+  if (doubled)
+    return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
+  return value;
 }
 
 export function projectBasename(cwd: string) {
@@ -46,15 +57,17 @@ export function mergeProjectGroups(
 ): ProjectGroup[] {
   const groups = new Map<string, ProjectGroup>();
   for (const record of records) {
-    groups.set(record.key, {
-      key: record.key,
-      cwd: record.cwd,
-      name: record.name || projectBasename(record.cwd),
-      pinned: record.pinned,
-      hidden: record.hidden,
-      defaults: record.defaults,
-      sessions: [],
-      updatedAt: record.updatedAt,
+    const key = normalizeProjectPath(record.key || record.cwd);
+    const existing = groups.get(key);
+    groups.set(key, {
+      key,
+      cwd: existing?.cwd || record.cwd,
+      name: existing?.name || record.name || projectBasename(record.cwd),
+      pinned: existing?.pinned || record.pinned,
+      hidden: existing?.hidden || record.hidden,
+      defaults: existing?.defaults || record.defaults,
+      sessions: existing?.sessions || [],
+      updatedAt: Math.max(existing?.updatedAt || 0, record.updatedAt || 0),
     });
   }
   for (const thread of [...threads].sort((a, b) => b.updatedAt - a.updatedAt)) {
@@ -79,7 +92,26 @@ export function mergeProjectGroups(
     });
 }
 
-export function filterProjectGroups(groups: ProjectGroup[], query: string) {
+export function threadsForProject(
+  threads: ThreadSummary[],
+  projectKey: string,
+) {
+  const key = normalizeProjectPath(projectKey);
+  return threads.filter(
+    (thread) => normalizeProjectPath(thread.cwd || "未指定路径") === key,
+  );
+}
+
+export function previewSessions<T>(sessions: T[], expanded: boolean) {
+  if (expanded || sessions.length <= 1) return sessions;
+  return sessions.slice(0, 1);
+}
+
+export function filterProjectGroups(
+  groups: ProjectGroup[],
+  query: string,
+  options?: { providerName?: (providerId: string) => string },
+) {
   const needle = query.trim().toLowerCase();
   if (!needle) return groups;
   return groups
@@ -89,12 +121,16 @@ export function filterProjectGroups(groups: ProjectGroup[], query: string) {
         group.cwd.toLowerCase().includes(needle);
       const sessions = projectHit
         ? group.sessions
-        : group.sessions.filter(
-            (thread) =>
+        : group.sessions.filter((thread) => {
+            const provider = options?.providerName?.(thread.providerId) || "";
+            return (
               thread.name.toLowerCase().includes(needle) ||
               thread.preview.toLowerCase().includes(needle) ||
-              thread.model.toLowerCase().includes(needle),
-          );
+              thread.model.toLowerCase().includes(needle) ||
+              thread.cwd.toLowerCase().includes(needle) ||
+              provider.toLowerCase().includes(needle)
+            );
+          });
       return { ...group, sessions };
     })
     .filter(

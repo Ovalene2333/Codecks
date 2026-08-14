@@ -1,8 +1,10 @@
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadEnvFile } from "node:process";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { ProviderStore } from "./store.js";
@@ -12,20 +14,41 @@ import { CodexManager } from "./manager.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { lanAddresses } from "./network.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
+import { resolveRuntimeCodexHome } from "./runtime-home.js";
+import { shouldUseWslRuntime } from "./runtime-platform.js";
 
-const cli = parseCli(process.argv.slice(2));
-if (cli.help) {
-  process.stdout.write(CLI_HELP);
-  process.exit(0);
-}
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
   here,
   "..",
   ...(here.endsWith("dist-server") ? [] : [".."]),
 );
+for (const file of [
+  path.join(process.cwd(), ".env"),
+  path.join(projectRoot, ".env"),
+]) {
+  if (!existsSync(file)) continue;
+  try {
+    loadEnvFile(file);
+  } catch {
+    // already-set keys stay; missing file is skipped above
+  }
+  break;
+}
+
+const cli = parseCli(process.argv.slice(2));
+if (cli.help) {
+  process.stdout.write(CLI_HELP);
+  process.exit(0);
+}
 const dataDir = path.resolve(
   process.env.DATA_DIR || path.join(projectRoot, ".data"),
+);
+const useWsl = shouldUseWslRuntime(process.platform, cli.wsl);
+const codexHome = await resolveRuntimeCodexHome(
+  useWsl ? process.env.CODEX_WSL_HOME : process.env.CODEX_HOME,
+  dataDir,
+  { useWsl },
 );
 const port = cli.port;
 const host = cli.host;
@@ -38,11 +61,17 @@ if (remote && cli.noToken)
     "\n⚠ 安全警告：--no-token 已关闭鉴权。任何能访问该地址的人都可以操作 Codex、执行命令和修改文件。\n\n",
   );
 
-const store = new ProviderStore(dataDir, process.env.CODEX_HOME);
+const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
 await store.load();
 await projects.load();
-const manager = new CodexManager(store, dataDir, process.env.CODEX_BIN);
+const manager = new CodexManager(
+  store,
+  dataDir,
+  useWsl ? process.env.CODEX_WSL_BIN : process.env.CODEX_BIN,
+  undefined,
+  useWsl,
+);
 const fullSnapshot = () => ({
   ...manager.snapshot(),
   projects: projects.list(),
@@ -83,6 +112,7 @@ app.get("/api/health", (_req, res) =>
     ok: true,
     platform: process.platform,
     wsl: Boolean(process.env.WSL_DISTRO_NAME),
+    runtimeWsl: useWsl,
     authRequired: Boolean(token),
     ccSwitch: store.ccSwitchPath || null,
   }),
@@ -316,8 +346,21 @@ app.patch(
 );
 app.post(
   "/api/threads/:providerId/:threadId/fork",
+  route(async (req) => {
+    const input = z
+      .object({ lastTurnId: z.string().optional() })
+      .parse(req.body || {});
+    return manager.forkThread(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      input,
+    );
+  }),
+);
+app.post(
+  "/api/threads/:providerId/:threadId/compact",
   route(async (req) =>
-    manager.forkThread(
+    manager.compactThread(
       param(req.params.providerId),
       param(req.params.threadId),
     ),
@@ -381,13 +424,22 @@ app.delete(
 app.post(
   "/api/approvals/:id",
   route(async (req) => {
-    const { decision } = z
+    const input = z
       .object({
-        decision: z.enum(["accept", "acceptForSession", "decline", "cancel"]),
+        decision: z
+          .enum(["accept", "acceptForSession", "decline", "cancel"])
+          .optional(),
+        permissions: z.unknown().optional(),
+        scope: z.enum(["session", "turn"]).optional(),
+        answers: z.unknown().optional(),
       })
       .parse(req.body);
-    return manager.resolveApproval(param(req.params.id), decision);
+    return manager.resolveApproval(param(req.params.id), input);
   }),
+);
+app.post(
+  "/api/runtime/rate-limits",
+  route(async () => manager.loadOfficialUsage()),
 );
 
 const webDir = path.join(projectRoot, "dist-web");

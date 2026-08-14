@@ -1,33 +1,50 @@
-# Codex Deck
+<div align="center">
+  <img width="160" src="docs/logo.png" alt="Codex Deck">
+  <h1>Codex Deck</h1>
 
-一个移动端优先的 Codex 远程控制台。它通过 Codex CLI 的结构化 `app-server` 协议管理真实会话，并自动只读同步 CC Switch 中的 Codex 供应商。
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=111)](https://react.dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+</div>
 
-## 能做什么
+Codex Deck 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
 
-- CC Switch 同步：自动发现 `~/.cc-switch/cc-switch.db`；WSL 下也会只读查找 Windows 的 CC Switch 数据库。每 5 秒同步连接信息，但不会修改 CCS 当前项。
-- Session 级供应商：一个共享 Codex runtime 在启动时加载 CCS 中的 Official、中转、Responses/Chat 等连接定义；每个新 Session 独立选择 `modelProvider + model`，密钥只进入 runtime 进程环境。
-- 真实会话库：Deck 使用当前系统真实的 `~/.codex`，启动时读取已有 session，不再为供应商复制 `CODEX_HOME` 或制造历史孤岛。
-- 终端共同值守：Deck runtime 仅在本机环回地址开放 control WebSocket；普通终端通过供应商设置里复制的 `codex --remote ws://127.0.0.1:<port>` 接入，与网页同时查看和控制同一批 Session。
-- 项目多会话：左侧只显示按工作目录分组的会话，同一个路径可以创建、运行和切换多个独立 Codex session；Windows `D:\...` 与 WSL `/mnt/d/...` 路径会归入同组。
-- 实时管理：查看运行、空闲、待审批和异常状态；接收增量回复；发送新指令、中断 turn、批准或拒绝命令与文件修改。
-- Win / WSL：Node 服务可直接跑在 Windows 或 WSL；工作目录填写运行 Codex 一侧可访问的绝对路径。
-- 单网页：生产构建后由同一个 Node 服务提供前端、API 和 WebSocket，适合本机、局域网或 Cloudflare Tunnel。
+CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Deck 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网和 Cloudflare Tunnel。
 
-> `app-server` 当前仍是 Codex CLI 的实验接口。建议使用较新的 Codex CLI，并在升级后运行一次构建和测试。
+名字来自 **Codex** 与 **Deck**：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
 
-## 推荐日常工作流
+> `app-server` 目前仍是 Codex CLI 的实验接口。请使用较新的 CLI，升级后重新构建并重启 Deck。
 
-先启动 Deck，然后在“供应商设置”中复制终端接入命令。通用命令是：
+## 特性
 
-```bash
-codex --remote ws://127.0.0.1:<runtime-port>
-```
+### 真实会话，而不是复制品
 
-页面可按当前项目生成带 `-C` 的命令。你可以在多个终端中分别运行这些命令；TUI 和网页连接同一个 runtime，所以网页能看到实时运行、审批和错误状态，并能继续发送指令。
+Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会为每个供应商复制 `CODEX_HOME`，也不会把历史拆成孤岛。
 
-直接运行普通 `codex` 创建的旧 Session 仍会出现在历史列表，但 Deck 无法安全附着到那个已经拥有 stdin/审批通道的外部进程，因此不会伪装成实时受管状态。以后用 `--remote` 方式启动即可完全值守。
+- 按工作目录分组，同一路径可以并行多个独立 session
+- Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
+- 查看运行、空闲、待审批和异常；接收增量回复；发送指令、中断 turn、批准或拒绝命令与文件修改
 
-当前 Codex 版本的 provider 是 thread 创建属性，不能对同一个 thread 热切换。Deck 的“切换供应商”会调用 `thread/fork`：完整复制历史到一个新分支并使用目标供应商，原分支保留以便回退；这不是空白新会话。
+### 远程值守
+
+runtime 的 control WebSocket 只监听本机回环地址。终端用 `codex --remote` 接入后，可以和网页同时查看、审批、继续同一批 Session。
+
+- 一个共享 Codex runtime，每个新 Session 独立选择 `modelProvider + model`
+- 「切换供应商」会 `thread/fork`：完整复制历史到新分支，原分支保留以便回退
+- 普通 `codex` 创建的旧 Session 仍会出现在历史里，但不会伪装成实时受管状态
+
+### 多家中转同时在线，把额度用完
+
+CC Switch 负责把供应商写进 Codex 的 live 配置，一次只能启用一个当前项。Claude Code 往往能跟着切；Codex 通常要重启进程才认新配置。真正麻烦的不是「CC Switch 不会切」，而是不能让 Session A 走这家、Session B 走那家。
+
+Deck 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中转站和模型。
+
+- 不用为了换一家而改 CC Switch 当前项
+- 多个中转站可以同时各跑各的 Session，额度分开花
+- 自动发现 CC Switch 数据库，周期性只读同步，不改写当前项
+- 网页仍保留手动供应商入口，给没有安装 CC Switch 的环境用
+- Node 服务可跑在 Windows 或 WSL；Windows 上可用 `--wsl` 读取 WSL 的 `~/.codex` 并在 WSL 中启动 runtime
 
 ## 快速开始
 
@@ -36,163 +53,180 @@ codex --remote ws://127.0.0.1:<runtime-port>
 ```bash
 npm install
 npm run build
-```
-
-仅本机访问：
-
-```bash
 npm start
 ```
 
-### 局域网与 Cloudflare Tunnel 参数
+浏览器打开 [http://127.0.0.1:4174](http://127.0.0.1:4174)。
 
-启动后会自动生成访问令牌，并将带令牌的手机入口打印到终端；也可以用 `REMOTE_TOKEN` 或 `--token` 固定令牌。
+开发模式（前端 `5173`，后端 `4174`）：
 
 ```bash
-# 自动监听 0.0.0.0，并打印所有可用的局域网 IPv4 入口
-npm start -- --lan
-
-# 明确关闭访问令牌（局域网或公网中的任何人都可控制 Codex）
-npm start -- --lan --no-token
-
-# 局域网入口 + 临时 *.trycloudflare.com 入口
-npm start -- --cf-tunnel
-
-# 局域网入口 + 指定 Cloudflare Named Tunnel
-npm start -- --named-tunnel codex-deck
+npm run dev
 ```
 
-三个参数也可直接用于构建后的入口：
+## 远程访问
+
+启动后会生成访问令牌，并把带令牌的入口打印到终端。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌。
+
+```bash
+# 监听 0.0.0.0，并打印局域网 IPv4 入口
+npm start -- --lan
+
+# 局域网 + 临时 *.trycloudflare.com
+npm start -- --cf-tunnel
+
+# 局域网 + 固定域名 Named Tunnel
+npm start -- --share
+```
+
+也可直接调用构建产物，或使用对应 scripts：`npm run lan`、`npm run cf-tunnel`、`npm run share`。
 
 ```bash
 node dist-server/index.js --lan
-node dist-server/index.js --cf-tunnel
-node dist-server/index.js --named-tunnel codex-deck
 ```
 
-`--named-tunnel` 使用 cloudflared 已登录账号中的 Tunnel 名称或 UUID。启动器会显式把该 Tunnel 的 origin 指向当前服务的 `http://127.0.0.1:<port>`；Cloudflare DNS 仍需预先把你的固定域名路由到该 Tunnel。
+`--share` 需要同时设置 `CF_TUNNEL_TOKEN` 和 `CF_TUNNEL_HOSTNAME`（或 `--tunnel-token` / `--share-host`）。`--named-tunnel <名称>` 仍可用于已登录 cloudflared 的 Tunnel 名称或 UUID。
 
-如果 `cloudflared` 不在 PATH：
+如果 `cloudflared` 不在 `PATH`：
 
 ```bash
 npm start -- --cf-tunnel --cloudflared /path/to/cloudflared
 ```
 
-WSL 示例：
+`--no-token` 可与 `--lan` / `--cf-tunnel` / `--named-tunnel` 组合，但不能与 `--token` 或 `REMOTE_TOKEN` 同时使用。它会让所有能访问入口的人直接拥有命令执行和文件修改能力，只应在可信网络或已有额外访问控制时使用。
 
 ```bash
-npm start -- --cf-tunnel --cloudflared /mnt/d/software/cloudflared/cloudflared.exe
+HOST=0.0.0.0 REMOTE_TOKEN='replace-with-a-long-random-string' npm start
 ```
 
-可选的简写脚本：
-
-```bash
-npm run lan
-npm run cf-tunnel
-```
-
-LAN 和 Cloudflare 是两个独立入口，不包含自动探测或双模式切换逻辑。每个入口都使用当前页面的同源 API 和 WebSocket。
-
-`--no-token` 可以与 `--lan`、`--cf-tunnel` 或 `--named-tunnel` 组合，但不能与 `--token`/`REMOTE_TOKEN` 同时使用。该选项会让所有能访问入口的人直接拥有命令执行和文件修改能力，只应在可信网络或已有 Cloudflare Access 保护时使用。
-
-也可以通过环境变量手动控制监听：
-
-```bash
-HOST=0.0.0.0 REMOTE_TOKEN='换成足够长的随机字符串' npm start
-```
-
-Windows PowerShell：
+PowerShell：
 
 ```powershell
-$env:HOST='0.0.0.0'
-$env:REMOTE_TOKEN='换成足够长的随机字符串'
+$env:HOST = "0.0.0.0"
+$env:REMOTE_TOKEN = "replace-with-a-long-random-string"
 npm start
 ```
 
-打开 `http://127.0.0.1:4174`。首次远程打开时输入相同的 `REMOTE_TOKEN`。
+首次从非本机打开页面时，输入相同的 `REMOTE_TOKEN`。公网长期暴露时，建议再加一层身份验证（例如 Cloudflare Access）。
 
-开发模式使用 `npm run dev`，前端端口为 5173，后端端口为 4174。
+## 日常工作流
 
-长期使用 Named Tunnel 时，仍建议在 Cloudflare Access 增加一层身份验证。
+1. 启动 Deck
+2. 在「供应商设置」里复制终端接入命令
+3. 在一个或多个终端中运行：
 
-## CC Switch
+```bash
+codex --remote ws://127.0.0.1:<runtime-port>
+```
+
+页面也可按当前项目生成带 `-C` 的命令。TUI 和网页连接同一个 runtime，因此网页能看到实时运行、审批和错误，并继续发送指令。
+
+当前 Codex 版本里，provider 是 thread 创建属性，不能对同一个 thread 热切换。
+
+## 配置
+
+复制 [`.env.example`](.env.example) 为 `.env` 后按需填写。不要提交 `.env`。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | HTTP 监听地址 |
+| `PORT` | `4174` | HTTP 端口 |
+| `REMOTE_TOKEN` | _(空)_ | API / WebSocket Bearer 令牌；非本机监听时必填 |
+| `CODEX_BIN` | `codex` | Codex CLI 路径 |
+| `CODEX_WSL_BIN` | `codex` | Windows `--wsl` 模式下的 WSL 内 Codex CLI |
+| `CODEX_WSL_SHELL` | `bash` | 加载 WSL Codex `PATH` 的登录 shell |
+| `CODEX_WSL_HOME` | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home |
+| `DATA_DIR` | `.data` | Deck 偏好与自定义供应商元数据 |
+| `CODEX_DECK_RUNTIME_PORT` | _(自动)_ | 仅监听本机的 Codex control WebSocket 端口 |
+| `CC_SWITCH_DB` | _(自动发现)_ | CC Switch SQLite 数据库绝对路径 |
+| `CODEX_DECK_CLOUDFLARED` | _(PATH)_ | `cloudflared` 可执行文件 |
+| `CODEX_DECK_TUNNEL_PROTOCOL` | `http2` | Quick Tunnel 传输协议 |
+| `CF_TUNNEL_TOKEN` | _(空)_ | Named Tunnel connector token（`--share`） |
+| `CF_TUNNEL_HOSTNAME` | _(空)_ | 固定公网域名（`--share`） |
+
+### CC Switch
 
 默认数据库路径：
 
 - Windows：`%USERPROFILE%\.cc-switch\cc-switch.db`
-- Linux：`~/.cc-switch/cc-switch.db`
-- WSL：自动扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
+- Linux / macOS：`~/.cc-switch/cc-switch.db`
+- WSL：扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
 
-自定义位置可设置 `CC_SWITCH_DB=/absolute/path/cc-switch.db`。Deck 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应继续在 CC Switch 中完成。网页中仍保留手动供应商入口，用于没有安装 CC Switch 的环境。
+自定义位置设置 `CC_SWITCH_DB`。Deck 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。
 
-CC Switch 的“本地路由”供应商如果指向 Windows 的 `127.0.0.1`，在 WSL 2 的镜像网络模式通常可直接访问；传统 NAT 模式下可能需要将配置中的地址改成 Windows 主机地址，或直接在 Windows 运行 Deck。
+CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Deck。
 
-## 配置
+## 安全
 
-| 环境变量                     | 默认值      | 用途                                        |
-| ---------------------------- | ----------- | ------------------------------------------- |
-| `HOST`                       | `127.0.0.1` | HTTP 监听地址                               |
-| `PORT`                       | `4174`      | HTTP 端口                                   |
-| `REMOTE_TOKEN`               | 空          | API/WebSocket Bearer 令牌；非本机监听时必填 |
-| `CODEX_BIN`                  | `codex`     | Codex CLI 路径                              |
-| `DATA_DIR`                   | `.data`     | Deck 偏好与自定义供应商元数据               |
-| `CODEX_DECK_RUNTIME_PORT`    | 自动分配    | 仅监听本机的 Codex control WebSocket 端口；不设则每次启动选空闲端口 |
-| `CC_SWITCH_DB`               | 自动发现    | CC Switch SQLite 数据库绝对路径             |
-| `CODEX_DECK_CLOUDFLARED`     | 自动发现    | cloudflared 可执行文件路径                  |
-| `CODEX_DECK_TUNNEL_PROTOCOL` | `http2`     | Quick Tunnel 传输协议                       |
+- API Key、OAuth 内容和生成的供应商配置不会通过 API 返回给浏览器
+- `.data/` 可能含自定义供应商密钥，已加入 `.gitignore`
+- runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
+- 网页具备执行命令和批准文件修改的能力；公网使用时请同时启用令牌与额外访问控制
 
-## 数据与安全
+详见 [SECURITY.md](SECURITY.md)。
 
-- API Key、OAuth 内容和生成的供应商配置不会由 API 返回给浏览器。
-- `.data/providers.json` 可能含自定义供应商密钥，已加入 `.gitignore`，不要同步或公开。CCS 密钥不会返回网页，也不会出现在复制的终端命令中。
-- runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露；公网只开放带 Deck 鉴权的网页/API。
-- 网页具备执行命令和批准文件修改的能力。公网使用时，令牌与 Cloudflare Access 两层防护都值得启用。
-
-## 验证
+## 开发
 
 ```bash
+npm install
+npm run dev
 npm test
 npm run build
 ```
 
-## 常见问题
+## 故障排除
 
-### Windows 显示 `spawn EINVAL` 或 `connect ECONNREFUSED`
+### Windows 上 `spawn EINVAL` 或 `connect ECONNREFUSED`
 
-请先重新执行 `npm run build` 并彻底退出旧进程后重启 Deck。npm 全局安装的 Codex 在 Windows 上同时带有无扩展名脚本和 `codex.cmd`；Deck 会优先通过 `node` 启动官方 `codex.js`（或直接启动 `codex.exe`），避免把供应商 `-c` 参数拼进 `cmd.exe` 后再被二次加引号，导致 `--listen` 失效、runtime 端口无人监听。
+重新执行 `npm run build`，彻底退出旧进程后再启动。npm 全局安装的 Codex 在 Windows 上同时带有无扩展名脚本和 `codex.cmd`；Deck 会优先通过 `node` 启动官方入口（或直接启动 `codex.exe`），避免把供应商参数拼进 `cmd.exe`。
 
-如 Codex 不在 PATH，可显式设置原生可执行文件：
-
-```powershell
-$env:CODEX_BIN="$env:APPDATA\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe"
-npm start -- --lan
-```
+如果 Codex 不在 `PATH`，用 `CODEX_BIN` 指向实际可执行文件。
 
 ### 现有 Session 列表为空
 
-Deck 通过 Codex `app-server` 的 `thread/list` 读取当前系统 `~/.codex` 中的历史。修改后必须重新构建并彻底重启后端：
+Deck 通过 `thread/list` 读取当前系统 `~/.codex`。修改代码后需要重新构建并彻底重启后端：
 
 ```bash
 npm run build
 npm start -- --lan
 ```
 
-启动日志若显示某个 app-server 退出，请先运行 `codex --version`，或通过 `CODEX_BIN` 指向实际可用的 Codex CLI。
+启动日志若显示 app-server 退出，先运行 `codex --version`，或用 `CODEX_BIN` 指向可用的 CLI。
 
 ### Windows 与 WSL
 
-Windows 和 WSL 是两个独立运行环境，各自拥有原生 `~/.codex` 与 SQLite runtime。不要让 WSL 直接打开 Windows 的 `.codex`（反向亦然）。需要同时值守两边时，分别启动两个 Deck 实例并使用不同 HTTP 端口；runtime 端口默认自动分配，也可显式设置 `PORT=4184 CODEX_DECK_RUNTIME_PORT=4185`。
+Windows 上默认只读取 Windows 用户的 `~/.codex`，并启动 Windows 原生 runtime。若要使用 WSL 的 Codex：
 
-### 自定义供应商与 OpenAI Official 如何隔离
+```powershell
+npm start -- --wsl
+```
 
-带 Base URL 的中转供应商只使用该 CCS 记录自己的 API Key。OpenAI Official 只使用 CCS 保存在 `codex_oauth_auth.json` 里的 ChatGPT 登录，**不会**读取 `~/.codex/auth.json` 里当前 CCS 项写进去的中转 Key。
+该模式通过 `wsl.exe` 读取 WSL 用户的 `~/.codex`，启动前会尝试加载常见的 Node 版本管理脚本，再启动 `codex app-server`。如果 `codex` 只解析到 `/mnt/...` 下的 Windows npm shim，Deck 会拒绝启动。Windows 工作目录会转换为 `/mnt/<盘符>/...`。
 
-CCS 切换供应商时会改写本机 `auth.json`：当前项若是 Niko / Spacetime，文件里往往是那家的 Key。Deck 启动 runtime 时会另写一份只含 Official ChatGPT 登录的 `auth.json`（不写空的 access_token），并把会话目录接到原来的 `~/.codex`。Official Session 使用 `requires_openai_auth`，由 Codex 自己刷新 ChatGPT 登录，不会把 CCS 当前项的 Key 发到 `api.openai.com`。
+- WSL 内命令不是 `codex`：设置 `CODEX_WSL_BIN`
+- 非 bash：设置 `CODEX_WSL_SHELL`
+- 非默认 Codex home：设置 WSL 路径格式的 `CODEX_WSL_HOME`
 
-旧的 Niko CCS 记录没有独立 Key，会误走 Official 登录。新的 Niko API 已有自己的 Key，用它新建 Session 即可。若 Official 仍报 401，请先在 CCS 里把 OpenAI Official 设为当前项并重新登录，再回 Deck 点“应用”后新建 Official Session。
+Windows 的 `CODEX_HOME` 不会被 WSL 模式复用。在 Linux 或 WSL 内启动 Deck 时，`--wsl` 不改变行为。Windows 和 WSL 的 `.codex` 彼此隔离，单个 Deck 实例只加载所选平台的 Session。
 
-如果某个中转供应商标了“无独立 Key”，在 CCS 里补上 API Key，再在 Deck 供应商设置中点击“应用”后开新 Session。已有旧 Session 不会自动改鉴权。
+### 自定义供应商与 OpenAI Official
 
-### CCS 更新为什么显示“待应用”
+带 Base URL 的中转供应商只使用该记录自己的 API Key。OpenAI Official 使用原生 `~/.codex/auth.json` 中的 ChatGPT 登录状态。自定义供应商通过进程启动参数和独立环境变量注入，不会改写 `config.toml`。
 
-CCS 连接定义只在 app-server 启动时加载。Deck 检测到变化后不会自动杀掉正在工作的 Session，而是在供应商设置中显示“待应用”。等任务空闲后点击“应用”会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
+CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Deck 点击「应用」。
+
+中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Deck 供应商设置中点击「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
+
+### 为什么显示「待应用」
+
+连接定义只在 app-server 启动时加载。Deck 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点击「应用」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
+
+## 许可证
+
+本项目使用 [MIT](LICENSE) 协议开源。
+
+## 更多
+
+- [贡献指南](CONTRIBUTING.md)
+- [行为准则](CODE_OF_CONDUCT.md)
+- [安全说明](SECURITY.md)
