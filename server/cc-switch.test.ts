@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { CcSwitchSource } from './cc-switch.js'
+import { CcSwitchSource, findCcSwitchDb } from './cc-switch.js'
 
 test('reads codex providers from cc switch without exposing unrelated apps', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'cc-switch-'))
@@ -21,4 +21,12 @@ test('reads codex providers from cc switch without exposing unrelated apps', asy
   assert.equal(providers[0].model, 'gpt-test')
   assert.equal(providers[0].baseUrl, 'https://example.test/v1')
   assert.equal(providers[0].current, true)
+})
+
+test('findCcSwitchDb uses an explicit path and does not fall through', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'cc-switch-'))
+  const file = path.join(dir, 'cc-switch.db')
+  await writeFile(file, '')
+  assert.equal(await findCcSwitchDb(file), file)
+  assert.equal(await findCcSwitchDb(path.join(dir, 'missing.db')), undefined)
 })

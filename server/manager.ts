@@ -297,10 +297,14 @@ export class CodexManager extends EventEmitter {
     return parts.join(" ");
   }
 
-  async applyProviderConfig() {
-    const busy = this.listThreads().filter(
+  busyThreads() {
+    return this.listThreads().filter(
       (thread) => thread.status === "running" || thread.status === "waiting",
     );
+  }
+
+  async applyProviderConfig() {
+    const busy = this.busyThreads();
     if (busy.length)
       throw new Error(
         `仍有 ${busy.length} 个会话正在运行或等待审批，请处理后再应用供应商配置`,

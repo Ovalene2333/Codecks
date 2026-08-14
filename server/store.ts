@@ -92,6 +92,31 @@ export class ProviderStore {
     return true;
   }
 
+  /** Re-discover the CC Switch DB and replace the in-memory CCS provider list. */
+  async refreshCcSwitch() {
+    const db = await findCcSwitchDb(process.env.CC_SWITCH_DB);
+    if (!db) {
+      const removed = this.detachCcSwitch();
+      return { connected: false, changed: removed };
+    }
+    const pathChanged = this.cc?.dbPath !== db;
+    this.cc = new CcSwitchSource(db);
+    const changed = await this.syncCcSwitch(pathChanged);
+    return { connected: true, changed, path: db };
+  }
+
+  private detachCcSwitch() {
+    const hadSource = Boolean(this.cc);
+    const hadProviders = this.providers.some((p) => p.kind === "cc-switch");
+    this.cc = undefined;
+    this.ccSignature = "";
+    if (hadProviders) {
+      this.providers = this.providers.filter((p) => p.kind !== "cc-switch");
+      this.revisionValue += 1;
+    }
+    return hadSource || hadProviders;
+  }
+
   get ccSwitchPath() {
     return this.cc?.dbPath;
   }

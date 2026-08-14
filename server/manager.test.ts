@@ -81,6 +81,20 @@ test("a real Codex thread has one identity independent of provider selection", (
   assert.equal(manager.listThreads()[0].providerId, "windows");
 });
 
+test("applyProviderConfig refuses while a session is running", async () => {
+  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  manager.upsertThread(
+    { id: "local", model: "m" },
+    { id: "busy", cwd: "D:\\demo", preview: "run" },
+    "running",
+  );
+  assert.equal(manager.busyThreads().length, 1);
+  await assert.rejects(
+    () => manager.applyProviderConfig(),
+    /仍有 1 个会话正在运行或等待审批/,
+  );
+});
+
 test("concurrent provider requests share one app-server startup", async () => {
   const manager = new CodexManager({ get: () => ({}) } as any, "/tmp") as any;
   let starts = 0;

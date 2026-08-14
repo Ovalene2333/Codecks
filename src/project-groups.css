@@ -207,6 +207,7 @@
 .sync-note {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 11px;
   margin-bottom: 12px;
@@ -216,15 +217,49 @@
   color: #56db94;
 }
 
+.sync-note.offline {
+  border-color: #2a3544;
+  background: #121922;
+  color: #9aa8b8;
+}
+
 .sync-note.pending {
   border-color: #7c5bd0;
 }
 
+.sync-note > button,
 .sync-note.pending .primary {
   margin-left: auto;
-  min-height: 34px;
+  min-height: 36px;
   padding: 0 13px;
   flex: none;
+  border: 1px solid #2d6a48;
+  background: #163d2a;
+  color: #8eecc0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.sync-note.offline > button {
+  border-color: #3a4658;
+  background: #1a2330;
+  color: #d5deea;
+}
+
+.sync-note > button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.sync-note.pending .primary {
+  border: 0;
+  background: linear-gradient(135deg, #8b5cf6, #6840ce);
+  color: white;
+}
+
+.sync-note.reloading > svg {
+  animation: spin 0.8s linear infinite;
 }
 
 .terminal-connect {
@@ -268,10 +303,13 @@
 }
 .sync-note svg {
   width: 18px;
+  flex: none;
 }
 .sync-note div {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
 .sync-note b {
   font-size: 11px;
@@ -279,6 +317,9 @@
 .sync-note small {
   font-size: 11px;
   color: #6fae89;
+}
+.sync-note.offline small {
+  color: #6f7c8f;
 }
 .provider-row mark {
   margin-left: 5px;
@@ -537,5 +578,16 @@
   .thread-actions button {
     min-height: 48px;
     font-size: 12px;
+  }
+  .sync-note > button,
+  .sync-note.pending .primary {
+    width: 100%;
+    margin-left: 0;
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-note.reloading > svg {
+    animation: none;
   }
 }

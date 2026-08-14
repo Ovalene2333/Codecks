@@ -129,6 +129,26 @@ app.post(
     return fullSnapshot();
   }),
 );
+app.post(
+  "/api/runtime/reload",
+  route(async () => {
+    const ccs = await store.refreshCcSwitch();
+    manager.emit("event", { type: "snapshot", data: fullSnapshot() });
+    const busy = manager.busyThreads();
+    let restarted = false;
+    if (busy.length === 0) {
+      await manager.applyProviderConfig();
+      restarted = true;
+    }
+    return {
+      ...fullSnapshot(),
+      restarted,
+      busyCount: busy.length,
+      ccSwitch: store.ccSwitchPath || null,
+      ccSwitchChanged: ccs.changed,
+    };
+  }),
+);
 app.get(
   "/api/runtime/terminal-command",
   route(async (req) => ({

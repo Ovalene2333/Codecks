@@ -1,5 +1,5 @@
 <div align="center">
-  <img width="160" src="docs/logo.png" alt="Codex Deck">
+  <img width="160" src="src/assets/logo.svg" alt="Codex Deck">
   <h1>Codex Deck</h1>
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -44,6 +44,7 @@ Deck 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中�
 - 不用为了换一家而改 CC Switch 当前项
 - 多个中转站可以同时各跑各的 Session，额度分开花
 - 自动发现 CC Switch 数据库，周期性只读同步，不改写当前项
+- 供应商设置里可手动「重新加载」：立刻再读一次 CC Switch，并在任务空闲时重启共享 Runtime
 - 网页仍保留手动供应商入口，给没有安装 CC Switch 的环境用
 - Node 服务可跑在 Windows 或 WSL；Windows 上可用 `--wsl` 读取 WSL 的 `~/.codex` 并在 WSL 中启动 runtime
 
@@ -243,7 +244,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 - Linux / macOS：`~/.cc-switch/cc-switch.db`
 - WSL：扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
 
-自定义位置设置 `CC_SWITCH_DB`。Deck 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。
+自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Deck 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在供应商设置中点「重新加载」会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。若当时有任务在跑，列表会先更新，空闲后再点「应用」。
 
 CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Deck。
 
@@ -304,13 +305,13 @@ Windows 的 `CODEX_HOME` 不会被 WSL 模式复用。在 Linux 或 WSL 内启�
 
 带 Base URL 的中转供应商只使用该记录自己的 API Key。OpenAI Official 使用原生 `~/.codex/auth.json` 中的 ChatGPT 登录状态。自定义供应商通过进程启动参数和独立环境变量注入，不会改写 `config.toml`。
 
-CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Deck 点击「应用」。
+CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Deck 点「重新加载」或「应用」。
 
-中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Deck 供应商设置中点击「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
+中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Deck 供应商设置中点「重新加载」或「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
 
 ### 为什么显示「待应用」
 
-连接定义只在 app-server 启动时加载。Deck 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点击「应用」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
+连接定义只在 app-server 启动时加载。Deck 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点「应用」或「重新加载」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
 
 ## 许可证
 

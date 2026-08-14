@@ -4,6 +4,12 @@ import { api, post, remove } from "../api";
 import type { Provider, Snapshot } from "../types";
 import { Modal } from "../ui";
 
+type ReloadResult = Snapshot & {
+  restarted: boolean;
+  busyCount: number;
+  ccSwitch: string | null;
+};
+
 export function ProviderModal({
   providers,
   runtime,
@@ -29,6 +35,34 @@ export function ProviderModal({
     wireApi: "responses",
   });
   const [error, setError] = useState("");
+  const [reloading, setReloading] = useState(false);
+  const hasCcSwitch = providers.some((p) => p.kind === "cc-switch");
+  const reloadRuntime = async () => {
+    setError("");
+    setReloading(true);
+    try {
+      const result = await post<ReloadResult>("/runtime/reload");
+      onSaved(result);
+      if (result.restarted) {
+        onToast(
+          result.ccSwitch
+            ? "已重新读取 CC Switch 并重启 Runtime"
+            : "未找到 CC Switch 数据库，已重启 Runtime",
+        );
+      } else {
+        onToast(
+          result.ccSwitch
+            ? `已重新读取 CC Switch；${result.busyCount} 个会话仍在运行或等待审批，空闲后点「应用」重启`
+            : `未找到 CC Switch 数据库；${result.busyCount} 个会话仍在运行，未重启 Runtime`,
+        );
+      }
+    } catch (err: any) {
+      setError(err.message);
+      onToast(err.message);
+    } finally {
+      setReloading(false);
+    }
+  };
   const copyCommand = async (providerId?: string) => {
     const query = new URLSearchParams();
     if (providerId) query.set("providerId", providerId);
@@ -52,17 +86,31 @@ export function ProviderModal({
   };
   return (
     <Modal title="供应商与隔离" onClose={onClose}>
-      {providers.some((p) => p.kind === "cc-switch") && (
-        <div className="sync-note">
-          <RefreshCw />
-          <div>
-            <b>已连接 CC Switch · 只读同步</b>
-            <small>
-              供应商是 Session 的启动配置；已运行会话不会随 CCS 当前项变化。
-            </small>
-          </div>
+      <div
+        className={`sync-note${hasCcSwitch ? "" : " offline"}${reloading ? " reloading" : ""}`}
+      >
+        <RefreshCw />
+        <div>
+          <b>
+            {hasCcSwitch
+              ? "已连接 CC Switch · 只读同步"
+              : "未连接 CC Switch"}
+          </b>
+          <small>
+            {hasCcSwitch
+              ? "供应商是 Session 的启动配置；已运行会话不会随 CCS 当前项变化。"
+              : "安装或改完配置后，可重新读取并重启 Runtime。"}
+          </small>
         </div>
-      )}
+        <button
+          type="button"
+          disabled={reloading}
+          title="重新读取 CC Switch 并重启共享 Runtime"
+          onClick={reloadRuntime}
+        >
+          {reloading ? "加载中…" : "重新加载"}
+        </button>
+      </div>
       <div className="provider-list">
         {providers.map((p) => (
           <div className="provider-row" key={p.id}>

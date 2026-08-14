@@ -7,17 +7,34 @@ import type { Provider } from './types.js'
 type Row = { id: string; name: string; settings_config: string; icon_color: string | null; is_current: number }
 
 export async function findCcSwitchDb(explicit?: string) {
-  const candidates = [explicit, process.env.CC_SWITCH_CONFIG_DIR && path.join(process.env.CC_SWITCH_CONFIG_DIR, 'cc-switch.db'), path.join(os.homedir(), '.cc-switch', 'cc-switch.db')].filter(Boolean) as string[]
-  if (process.platform !== 'win32') {
-    // WSL: Windows CC Switch usually stores its DB under /mnt/c/Users/<name>.
-    const windowsUsers = '/mnt/c/Users'
+  if (explicit) {
     try {
-      const { readdir } = await import('node:fs/promises')
-      for (const user of await readdir(windowsUsers)) candidates.push(path.join(windowsUsers, user, '.cc-switch', 'cc-switch.db'))
+      await access(explicit);
+      return explicit;
+    } catch {
+      return undefined;
+    }
+  }
+  const candidates = [
+    process.env.CC_SWITCH_CONFIG_DIR &&
+      path.join(process.env.CC_SWITCH_CONFIG_DIR, "cc-switch.db"),
+    path.join(os.homedir(), ".cc-switch", "cc-switch.db"),
+  ].filter(Boolean) as string[];
+  if (process.platform !== "win32") {
+    // WSL: Windows CC Switch usually stores its DB under /mnt/c/Users/<name>.
+    const windowsUsers = "/mnt/c/Users";
+    try {
+      const { readdir } = await import("node:fs/promises");
+      for (const user of await readdir(windowsUsers))
+        candidates.push(path.join(windowsUsers, user, ".cc-switch", "cc-switch.db"));
     } catch {}
   }
-  for (const candidate of candidates) try { await access(candidate); return candidate } catch {}
-  return undefined
+  for (const candidate of candidates)
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {}
+  return undefined;
 }
 
 export class CcSwitchSource {
