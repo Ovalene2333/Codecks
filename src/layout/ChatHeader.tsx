@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRightLeft, MoreHorizontal } from "lucide-react";
 import type { Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { basename } from "../format";
+import { ContextBar } from "../usage/ContextBar";
 import { SessionToolbar } from "./SessionToolbar";
 import type { ApprovalPolicy, Personality, SandboxMode } from "../types";
 
@@ -53,18 +54,25 @@ export function ChatHeader({
             </span>
           </p>
         </div>
-        <button
-          className="provider-switch secondary"
-          onClick={onSwitchProvider}
-          disabled={locked}
-          title="为此 Session 切换供应商"
-        >
-          <ArrowRightLeft />
-          <span>{provider?.name || "供应商"}</span>
-        </button>
-        <button className="icon-btn overflow-menu" onClick={onMenu} title="更多">
-          <MoreHorizontal />
-        </button>
+        <div className="chat-header-actions">
+          <button
+            className="provider-switch secondary"
+            onClick={onSwitchProvider}
+            disabled={locked}
+            title="为此 Session 切换供应商"
+          >
+            <ArrowRightLeft />
+            <span>{provider?.name || "供应商"}</span>
+          </button>
+          <ContextBar
+            usage={thread.tokenUsage}
+            compacting={thread.compacting}
+            onCompact={onCompact}
+          />
+          <button className="icon-btn overflow-menu" onClick={onMenu} title="更多">
+            <MoreHorizontal />
+          </button>
+        </div>
       </div>
       <div className="chat-header-row2">
         <SessionToolbar
@@ -72,6 +80,7 @@ export function ChatHeader({
           locked={locked}
           onSettings={onSettings}
           onCompact={onCompact}
+          showContext={false}
         />
       </div>
     </header>

@@ -13,6 +13,7 @@ export function SessionToolbar({
   locked,
   onSettings,
   onCompact,
+  showContext = true,
 }: {
   thread: ThreadSummary;
   locked?: boolean;
@@ -24,6 +25,7 @@ export function SessionToolbar({
     personality?: Personality;
   }) => void;
   onCompact: () => void;
+  showContext?: boolean;
 }) {
   return (
     <div className={`session-toolbar ${locked ? "locked" : ""}`}>
@@ -37,8 +39,9 @@ export function SessionToolbar({
           onChange={(next) => onSettings(next)}
         />
         <label className="toolbar-select">
-          <span>Sandbox</span>
           <select
+            aria-label="Sandbox"
+            title="Sandbox"
             disabled={locked}
             value={
               typeof thread.sandbox === "string"
@@ -57,8 +60,9 @@ export function SessionToolbar({
           </select>
         </label>
         <label className="toolbar-select">
-          <span>Approval policy</span>
           <select
+            aria-label="Approval policy"
+            title="Approval policy"
             disabled={locked}
             value={thread.approvalPolicy || "on-request"}
             onChange={(event) =>
@@ -75,8 +79,9 @@ export function SessionToolbar({
           </select>
         </label>
         <label className="toolbar-select">
-          <span>Personality</span>
           <select
+            aria-label="Personality"
+            title="Personality"
             disabled={locked}
             value={thread.personality || ""}
             onChange={(event) =>
@@ -95,11 +100,13 @@ export function SessionToolbar({
         </label>
       </div>
       {locked && <small className="toolbar-hint">任务结束后生效</small>}
-      <ContextBar
-        usage={thread.tokenUsage}
-        compacting={thread.compacting}
-        onCompact={onCompact}
-      />
+      {showContext ? (
+        <ContextBar
+          usage={thread.tokenUsage}
+          compacting={thread.compacting}
+          onCompact={onCompact}
+        />
+      ) : null}
     </div>
   );
 }

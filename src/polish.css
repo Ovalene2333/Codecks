@@ -117,6 +117,10 @@ aside,
   line-height: 1.6;
 }
 
+.welcome-stack {
+  width: min(560px, 100%);
+}
+
 .chat-title h2,
 .modal h2 {
   font-weight: 600;
@@ -165,10 +169,8 @@ aside,
   transform: none;
 }
 
-.welcome .primary {
-  min-height: 40px;
-  padding: 0 18px;
-  font-size: var(--fs-body);
+.recent-create:hover {
+  background: var(--surface-2);
 }
 
 .primary svg,
@@ -230,11 +232,16 @@ aside,
   color: var(--accent-text);
 }
 
-.recent-projects > button > svg {
+.recent-projects > button > svg,
+.recent-create svg {
   width: 16px;
   height: 16px;
   color: var(--text-dim);
   flex: none;
+}
+
+.recent-create svg {
+  color: var(--text);
 }
 
 .send.stop {
@@ -345,7 +352,8 @@ aside,
   background: var(--surface);
 }
 
-.recent-projects > button {
+.recent-projects > button,
+.recent-create {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -362,11 +370,13 @@ aside,
   cursor: pointer;
 }
 
-.recent-projects > button:last-of-type {
+.recent-projects > button:last-of-type,
+.recent-create {
   border-bottom: 0;
 }
 
-.recent-projects > button:hover {
+.recent-projects > button:hover,
+.recent-create:hover {
   border-color: var(--line);
   background: var(--surface-2);
   transform: none;
@@ -380,15 +390,12 @@ aside,
   color: var(--text-dim);
 }
 
-.recent-projects span {
-  margin-left: auto;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-  font-weight: 500;
-}
-
-.recent-projects > button:hover span {
+.recent-create {
+  min-height: 48px;
+  border-top: 1px solid var(--line);
   color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 600;
 }
 
 .skeleton-recent {
@@ -599,6 +606,7 @@ aside,
 
   .primary,
   .new-session-btn,
+  .recent-create,
   .confirm-actions button,
   .danger-btn,
   .action-sheet button {
