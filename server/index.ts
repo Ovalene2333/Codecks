@@ -236,7 +236,10 @@ app.put(
           .optional(),
       })
       .parse(req.body);
-    const previous = input.key || input.cwd ? projects.get(input.key || input.cwd || "") : undefined;
+    const previous =
+      input.key || input.cwd
+        ? projects.get(input.key || input.cwd || "")
+        : undefined;
     await projects.upsert(input);
     let connectionApplied = false;
     let connectionPending = false;
@@ -244,7 +247,9 @@ app.put(
       input.defaults &&
       !sameConnectionOverlay(previous?.defaults, input.defaults)
     ) {
-      await projects.setConnectionOverlay(pickConnectionOverlay(input.defaults));
+      await projects.setConnectionOverlay(
+        pickConnectionOverlay(input.defaults),
+      );
       if (manager.busyThreads().length === 0) {
         await manager.applyProviderConfig();
         connectionApplied = true;
@@ -427,6 +432,7 @@ app.patch(
             sandbox: z
               .enum(["read-only", "workspace-write", "danger-full-access"])
               .optional(),
+            serviceTier: z.string().min(1).nullable().optional(),
           })
           .optional(),
       })
@@ -436,6 +442,37 @@ app.patch(
     if (input.settings)
       await manager.updateThreadSettings(providerId, threadId, input.settings);
     return fullSnapshot();
+  }),
+);
+app.get(
+  "/api/threads/:providerId/:threadId/skills",
+  route(async (req) =>
+    manager.listSkills(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      req.query.reload === "1",
+    ),
+  ),
+);
+app.get(
+  "/api/threads/:providerId/:threadId/mcp",
+  route(async (req) =>
+    manager.listMcpServers(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      req.query.verbose === "1",
+    ),
+  ),
+);
+app.get(
+  "/api/threads/:providerId/:threadId/files",
+  route(async (req) => {
+    const query = z.string().max(500).optional().default("").parse(req.query.q);
+    return manager.searchWorkspaceFiles(
+      param(req.params.providerId),
+      param(req.params.threadId),
+      query,
+    );
   }),
 );
 app.post(
@@ -563,10 +600,7 @@ app.post(
 app.post(
   "/api/threads/:providerId/:threadId/diff",
   route(async (req) =>
-    manager.showDiff(
-      param(req.params.providerId),
-      param(req.params.threadId),
-    ),
+    manager.showDiff(param(req.params.providerId), param(req.params.threadId)),
   ),
 );
 app.post(

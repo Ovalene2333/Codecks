@@ -30,7 +30,7 @@ Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，�
 - 查看运行、空闲、待审批和异常；接收增量回复；发送指令、粘贴图片、中断 turn、批准或拒绝命令与文件修改
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
-- 输入框支持 Codex 命令：`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`、`/status`，以及 `!command` 无沙箱执行
+- 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 
 ### 远程值守

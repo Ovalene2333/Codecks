@@ -5,6 +5,13 @@ export type ComposerCommand =
   | { kind: "init" }
   | { kind: "diff" }
   | { kind: "status" }
+  | { kind: "usage" }
+  | { kind: "model"; model?: string; reasoningEffort?: string }
+  | { kind: "permissions"; sandbox?: string; approvalPolicy?: string }
+  | { kind: "skills"; query: string }
+  | { kind: "mention"; query: string }
+  | { kind: "fast"; enabled?: boolean }
+  | { kind: "mcp"; verbose: boolean }
   | { kind: "plan" }
   | { kind: "goal"; objective: string }
   | { kind: "goal-clear" }
@@ -12,19 +19,24 @@ export type ComposerCommand =
   | { kind: "shell"; command: string };
 
 export const SLASH_COMMANDS = [
+  { name: "/model", hint: "选择模型与推理强度" },
+  { name: "/permissions", hint: "调整沙箱与审批策略" },
+  { name: "/skills", hint: "查看并引用可用 Skill" },
+  { name: "/status", hint: "查看完整会话状态" },
+  { name: "/usage", hint: "查看账号额度" },
+  { name: "/mention", hint: "搜索并引用工作区文件" },
+  { name: "/fast", hint: "切换 Fast 模式" },
+  { name: "/mcp", hint: "查看 MCP 服务器状态" },
   { name: "/compact", hint: "压缩上下文" },
   { name: "/review", hint: "审查未提交改动" },
   { name: "/init", hint: "生成或更新 AGENTS.md" },
   { name: "/diff", hint: "查看 git 工作区改动" },
   { name: "/plan", hint: "只规划、不改代码" },
   { name: "/goal", hint: "设置本会话目标" },
-  { name: "/status", hint: "查看会话配置" },
   { name: "!", hint: "无沙箱执行命令" },
 ] as const;
 
-export function parseComposerCommand(
-  raw: string,
-): ComposerCommand | undefined {
+export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   const text = raw.trim();
   if (text.startsWith("!")) {
     const command = text.slice(1).trim();
@@ -39,6 +51,29 @@ export function parseComposerCommand(
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
   if (key === "status") return { kind: "status" };
+  if (key === "usage") return { kind: "usage" };
+  if (key === "model") {
+    const [model, reasoningEffort] = arg.split(/\s+/).filter(Boolean);
+    return { kind: "model", model, reasoningEffort };
+  }
+  if (key === "permissions") {
+    const [sandbox, approvalPolicy] = arg.split(/\s+/).filter(Boolean);
+    return { kind: "permissions", sandbox, approvalPolicy };
+  }
+  if (key === "skills") return { kind: "skills", query: arg };
+  if (key === "mention") return { kind: "mention", query: arg };
+  if (key === "fast") {
+    if (!arg) return { kind: "fast" };
+    if (["on", "true", "1"].includes(arg.toLowerCase()))
+      return { kind: "fast", enabled: true };
+    if (["off", "false", "0"].includes(arg.toLowerCase()))
+      return { kind: "fast", enabled: false };
+    return undefined;
+  }
+  if (key === "mcp") {
+    if (arg && arg.toLowerCase() !== "verbose") return undefined;
+    return { kind: "mcp", verbose: arg.toLowerCase() === "verbose" };
+  }
   if (key === "plan") return { kind: "plan" };
   if (key === "goal") {
     if (!arg) return undefined;
@@ -70,16 +105,12 @@ export function parseComposerCommand(
 export function matchingSlashCommands(text: string) {
   const value = text.trim();
   if (!value) return [];
-  if (value === "!")
-    return SLASH_COMMANDS.filter((item) => item.name === "!");
+  if (value === "!") return SLASH_COMMANDS.filter((item) => item.name === "!");
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
   const items = SLASH_COMMANDS.filter((item) => item.name.startsWith(query));
   if (value === "/")
-    return [
-      ...items,
-      ...SLASH_COMMANDS.filter((item) => item.name === "!"),
-    ];
+    return [...items, ...SLASH_COMMANDS.filter((item) => item.name === "!")];
   return items;
 }
 
@@ -87,9 +118,14 @@ export function incompleteCommandHint(raw: string) {
   const text = raw.trim();
   if (text === "!") return "用法：!git status  在无沙箱下执行命令";
   if (/^\/goal$/i.test(text)) return "用法：/goal <目标>  或 /goal clear";
-  if (/^\/review\s+base$/i.test(text))
-    return "用法：/review base <分支>";
-  if (/^\/review\s+commit$/i.test(text))
-    return "用法：/review commit <sha>";
+  if (
+    /^\/fast\s+/i.test(text) &&
+    !/^\/fast\s+(on|off|true|false|1|0)$/i.test(text)
+  )
+    return "用法：/fast [on|off]";
+  if (/^\/mcp\s+/i.test(text) && !/^\/mcp\s+verbose$/i.test(text))
+    return "用法：/mcp [verbose]";
+  if (/^\/review\s+base$/i.test(text)) return "用法：/review base <分支>";
+  if (/^\/review\s+commit$/i.test(text)) return "用法：/review commit <sha>";
   return "";
 }

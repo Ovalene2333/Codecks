@@ -730,6 +730,107 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+.command-modal {
+  width: min(620px, 100%);
+}
+.command-form .primary {
+  justify-self: end;
+  min-width: 96px;
+}
+.command-search {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #2c3746;
+  border-radius: 8px;
+  background: #0b1017;
+  color: #e8edf5;
+  padding: 10px 12px;
+  outline: none;
+}
+.command-search:focus {
+  border-color: #c9c4b8;
+  box-shadow: 0 0 0 3px #c9c4b829;
+}
+.command-help {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  margin: 4px 0 10px;
+}
+.command-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(58dvh, 480px);
+  margin-top: 10px;
+  overflow: auto;
+}
+.command-list button {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(100px, auto) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #252e3b;
+  border-radius: 9px;
+  background: #141b24;
+  color: inherit;
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.command-list button:hover,
+.command-list button:focus-visible {
+  border-color: #586477;
+  background: #19212c;
+}
+.command-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.command-list b {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+}
+.command-list span {
+  min-width: 0;
+  color: #9aa6b7;
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.command-list small {
+  color: #667387;
+  font-size: var(--fs-meta);
+}
+.mcp-list {
+  display: grid;
+  gap: 8px;
+}
+.mcp-list details {
+  border: 1px solid #252e3b;
+  border-radius: 9px;
+  background: #141b24;
+  overflow: hidden;
+}
+.mcp-list summary {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.mcp-list summary span,
+.mcp-list p {
+  color: #8793a4;
+  font-size: var(--fs-small);
+}
+.mcp-list details > div {
+  border-top: 1px solid #252e3b;
+  padding: 2px 12px;
+}
 .review-row {
   display: flex;
   align-items: center;
@@ -900,6 +1001,18 @@
   .provider-switch.secondary {
     height: 42px;
     min-height: 42px;
+  }
+  .command-modal {
+    max-height: calc(100dvh - 24px);
+  }
+  .command-list button {
+    min-height: 64px;
+    grid-template-columns: 1fr auto;
+  }
+  .command-list button span {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
   }
 }
 @media (hover: none), (pointer: coarse) {

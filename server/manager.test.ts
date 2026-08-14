@@ -423,6 +423,106 @@ test("settings update is forwarded to a loaded thread", async () => {
   assert.equal(manager.listThreads()[0].model, "new");
 });
 
+test("fast mode is forwarded as a nullable service tier", async () => {
+  const provider = { id: "provider", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return {};
+    },
+  });
+  manager.loadedThreads.add("one");
+  manager.upsertThread(provider, { id: "one", cwd: "/tmp", model: "m" });
+
+  await manager.updateThreadSettings("provider", "one", {
+    serviceTier: "fast",
+  });
+  await manager.updateThreadSettings("provider", "one", {
+    serviceTier: null,
+  });
+
+  assert.equal(calls[0].params.serviceTier, "fast");
+  assert.equal(calls[1].params.serviceTier, null);
+  assert.equal(manager.listThreads()[0].serviceTier, undefined);
+});
+
+test("skills, MCP and fuzzy file search use app-server RPCs", async () => {
+  const provider = { id: "provider", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "skills/list")
+        return {
+          data: [
+            {
+              cwd: "/tmp/project",
+              skills: [
+                {
+                  name: "testing",
+                  description: "Run tests",
+                  path: "/tmp/skill",
+                  scope: "repo",
+                  enabled: true,
+                },
+              ],
+              errors: [],
+            },
+          ],
+        };
+      if (method === "mcpServerStatus/list")
+        return { data: [{ name: "docs", tools: {} }], nextCursor: null };
+      if (method === "fuzzyFileSearch")
+        return {
+          files: [
+            {
+              root: "/tmp/project",
+              path: "src/app.ts",
+              file_name: "app.ts",
+              score: 10,
+            },
+          ],
+        };
+      return {};
+    },
+  });
+  manager.loadedThreads.add("one");
+  manager.upsertThread(provider, {
+    id: "one",
+    cwd: "/tmp/project",
+    model: "m",
+  });
+
+  const skills = await manager.listSkills("provider", "one");
+  const mcp = await manager.listMcpServers("provider", "one", true);
+  const files = await manager.searchWorkspaceFiles("provider", "one", "app");
+
+  assert.equal(skills.skills[0].name, "testing");
+  assert.equal(mcp[0].name, "docs");
+  assert.equal(files[0].path, "src/app.ts");
+  assert.deepEqual(
+    calls.find((call) => call.method === "skills/list").params.cwds,
+    ["/tmp/project"],
+  );
+  assert.equal(
+    calls.find((call) => call.method === "mcpServerStatus/list").params.detail,
+    "full",
+  );
+  assert.deepEqual(
+    calls.find((call) => call.method === "fuzzyFileSearch").params.roots,
+    ["/tmp/project"],
+  );
+});
+
 test("sandbox settings are sent as sandboxPolicy objects, not kebab strings", async () => {
   const provider = { id: "provider", model: "m" };
   const manager = new CodexManager(
@@ -1381,8 +1481,7 @@ test("retrying the first turn creates an empty source-linked branch", async () =
   assert.equal(
     calls.some(
       (call) =>
-        call.method === "turn/start" &&
-        call.params.threadId === "empty-branch",
+        call.method === "turn/start" && call.params.threadId === "empty-branch",
     ),
     true,
   );

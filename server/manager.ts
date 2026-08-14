@@ -420,11 +420,105 @@ export class CodexManager extends EventEmitter {
           defaultReasoningEffort: item.defaultReasoningEffort,
           supportedReasoningEfforts: item.supportedReasoningEfforts,
           supportsPersonality: item.supportsPersonality,
+          serviceTiers: item.serviceTiers,
+          defaultServiceTier: item.defaultServiceTier,
         });
       }
       cursor = result.nextCursor || undefined;
     } while (cursor && models.length < 200);
     return models;
+  }
+
+  async listSkills(providerId: string, threadId: string, forceReload = false) {
+    await this.ensureLoaded(providerId, threadId);
+    const client = await this.ensure(providerId);
+    const thread = this.threads.get(threadId);
+    if (!thread?.cwd) throw new Error("当前会话没有可用的工作目录");
+    const cwd = this.useWsl ? windowsPathToWsl(thread.cwd) : thread.cwd;
+    try {
+      const result = await client.request("skills/list", {
+        cwds: [cwd],
+        forceReload,
+      });
+      const entries = Array.isArray(result?.data) ? result.data : [];
+      return {
+        skills: entries.flatMap((entry: any) =>
+          (Array.isArray(entry?.skills) ? entry.skills : []).map(
+            (skill: any) => ({
+              name: String(skill.name || ""),
+              description: String(
+                skill.description || skill.shortDescription || "",
+              ),
+              path: String(skill.path || ""),
+              scope: String(skill.scope || ""),
+              enabled: skill.enabled !== false,
+            }),
+          ),
+        ),
+        errors: entries.flatMap((entry: any) =>
+          Array.isArray(entry?.errors) ? entry.errors : [],
+        ),
+      };
+    } catch (error: any) {
+      throw new Error(
+        `当前 Codex 不支持 Skill 列表：${error.message || error}`,
+      );
+    }
+  }
+
+  async listMcpServers(providerId: string, threadId: string, verbose = false) {
+    await this.ensureLoaded(providerId, threadId);
+    const client = await this.ensure(providerId);
+    const servers: any[] = [];
+    let cursor: string | undefined;
+    try {
+      do {
+        const result = await client.request("mcpServerStatus/list", {
+          threadId,
+          cursor,
+          limit: 50,
+          detail: verbose ? "full" : "toolsAndAuthOnly",
+        });
+        servers.push(...(Array.isArray(result?.data) ? result.data : []));
+        cursor = result?.nextCursor || undefined;
+      } while (cursor && servers.length < 200);
+      return servers;
+    } catch (error: any) {
+      throw new Error(
+        `当前 Codex 不支持 MCP 状态列表：${error.message || error}`,
+      );
+    }
+  }
+
+  async searchWorkspaceFiles(
+    providerId: string,
+    threadId: string,
+    query: string,
+  ) {
+    const thread = this.threads.get(threadId);
+    if (!thread?.cwd) throw new Error("当前会话没有可用的工作目录");
+    const client = await this.ensure(providerId);
+    const root = this.useWsl ? windowsPathToWsl(thread.cwd) : thread.cwd;
+    try {
+      const result = await client.request("fuzzyFileSearch", {
+        query: query.slice(0, 500),
+        roots: [root],
+        cancellationToken: null,
+      });
+      return (Array.isArray(result?.files) ? result.files : [])
+        .slice(0, 100)
+        .map((file: any) => ({
+          root: String(file.root || root),
+          path: String(file.path || ""),
+          fileName: String(file.file_name || file.fileName || ""),
+          score: Number(file.score || 0),
+        }))
+        .filter((file: any) => file.path);
+    } catch (error: any) {
+      throw new Error(
+        `当前 Codex 不支持工作区文件搜索：${error.message || error}`,
+      );
+    }
   }
 
   async renameThread(providerId: string, threadId: string, name: string) {
@@ -448,6 +542,7 @@ export class CodexManager extends EventEmitter {
       personality?: Personality;
       approvalPolicy?: string;
       sandbox?: string;
+      serviceTier?: string | null;
     },
   ) {
     await this.ensureLoaded(providerId, threadId);
@@ -460,6 +555,8 @@ export class CodexManager extends EventEmitter {
       params.approvalPolicy = settings.approvalPolicy;
     if (settings.sandbox)
       params.sandboxPolicy = sandboxPolicyFromMode(settings.sandbox);
+    if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
+      params.serviceTier = settings.serviceTier || null;
     try {
       await client.request("thread/settings/update", params);
     } catch (error: any) {
@@ -478,6 +575,8 @@ export class CodexManager extends EventEmitter {
           settings.approvalPolicy as ThreadSummary["approvalPolicy"];
       if (settings.sandbox)
         existing.sandbox = settings.sandbox as ThreadSummary["sandbox"];
+      if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
+        existing.serviceTier = settings.serviceTier || undefined;
       existing.updatedAt = Date.now();
       this.broadcast("thread.updated", existing);
     }
@@ -549,10 +648,7 @@ export class CodexManager extends EventEmitter {
     return this.threads.get(result.thread.id) || result.thread;
   }
 
-  private async createEmptyFork(
-    providerId: string,
-    source: ThreadSummary,
-  ) {
+  private async createEmptyFork(providerId: string, source: ThreadSummary) {
     const branchName = `${source.name || "会话"} · 分支`;
     const created = await this.createThread(providerId, {
       cwd: source.cwd,
@@ -1039,6 +1135,8 @@ export class CodexManager extends EventEmitter {
       approvalPolicy:
         (pickString(thread.approvalPolicy, thread.approval_policy) as
           ThreadSummary["approvalPolicy"] | undefined) || old?.approvalPolicy,
+      serviceTier:
+        pickString(thread.serviceTier, thread.service_tier) || old?.serviceTier,
       forkedFromId:
         pickString(
           thread.forkedFromId,
@@ -1191,6 +1289,8 @@ export class CodexManager extends EventEmitter {
         if (sandbox) existing.sandbox = sandbox;
         if (settings.approvalPolicy)
           existing.approvalPolicy = settings.approvalPolicy;
+        if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
+          existing.serviceTier = settings.serviceTier || undefined;
       }
       if (
         message.method === "turn/started" ||

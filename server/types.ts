@@ -71,6 +71,8 @@ export interface ModelInfo {
     description?: string;
   }[];
   supportsPersonality?: boolean;
+  serviceTiers?: { id: string; name: string; description?: string }[];
+  defaultServiceTier?: string | null;
 }
 
 export interface TokenUsage {
@@ -123,11 +125,7 @@ export interface AccountInfo {
 }
 
 export type ApprovalKind =
-  | "command"
-  | "file"
-  | "permission"
-  | "question"
-  | "unknown";
+  "command" | "file" | "permission" | "question" | "unknown";
 
 export interface FileChange {
   path: string;
@@ -152,6 +150,7 @@ export interface ThreadSummary {
   personality?: Personality;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
+  serviceTier?: string;
   forkedFromId?: string;
   sessionId?: string;
   tokenUsage?: TokenUsage;

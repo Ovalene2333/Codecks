@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
+import { CommandModal, type CommandModalKind } from "./CommandModal";
 import { Timeline } from "./Timeline";
 import {
   incompleteCommandHint,
@@ -45,6 +46,7 @@ export function ChatWorkspace({
   onSelectThread,
   onToast,
   onUsage,
+  onAppearance,
   onOpenOrigin,
 }: {
   thread: ThreadSummary;
@@ -59,6 +61,7 @@ export function ChatWorkspace({
   onSelectThread: (providerId: string, threadId: string) => void;
   onToast: (message: string) => void;
   onUsage: () => void;
+  onAppearance: () => void;
   onOpenOrigin?: () => void;
 }) {
   const threadCacheKey = sessionKey(thread);
@@ -71,6 +74,7 @@ export function ChatWorkspace({
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const [commandModal, setCommandModal] = useState<CommandModalKind>();
   const fullRef = useRef(full);
   fullRef.current = full;
   const updateDraft = (next: typeof draft) => {
@@ -132,13 +136,81 @@ export function ChatWorkspace({
         [
           `模型 ${thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
           `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${thread.approvalPolicy || "on-request"}`,
+          `状态 ${thread.status}${thread.activeTurnId ? ` · Turn ${thread.activeTurnId}` : ""}`,
+          `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
           thread.personality ? `性格 ${thread.personality}` : "",
           `上下文 ${used}`,
           provider?.name ? `供应商 ${provider.name}` : "",
+          `目录 ${thread.cwd || "未知"}`,
+          `Thread ${thread.id}`,
         ]
           .filter(Boolean)
           .join("\n"),
       );
+      return;
+    }
+    if (command.kind === "usage") {
+      onUsage();
+      return;
+    }
+    if (command.kind === "model") {
+      if (!command.model) {
+        setCommandModal({ kind: "model" });
+        return;
+      }
+      if (locked) throw new Error("任务运行中，暂时不能修改模型");
+      await saveSettings({
+        model: command.model,
+        reasoningEffort: command.reasoningEffort,
+      });
+      return;
+    }
+    if (command.kind === "permissions") {
+      if (!command.sandbox && !command.approvalPolicy) {
+        setCommandModal({ kind: "permissions" });
+        return;
+      }
+      const sandboxes: SandboxMode[] = [
+        "read-only",
+        "workspace-write",
+        "danger-full-access",
+      ];
+      const approvals: ApprovalPolicy[] = ["untrusted", "on-request", "never"];
+      if (!sandboxes.includes(command.sandbox as SandboxMode))
+        throw new Error(
+          "Sandbox 应为 read-only、workspace-write 或 danger-full-access",
+        );
+      if (
+        command.approvalPolicy &&
+        !approvals.includes(command.approvalPolicy as ApprovalPolicy)
+      )
+        throw new Error("审批策略应为 untrusted、on-request 或 never");
+      if (locked) throw new Error("任务运行中，暂时不能修改权限");
+      await saveSettings({
+        sandbox: command.sandbox as SandboxMode,
+        approvalPolicy: command.approvalPolicy as ApprovalPolicy | undefined,
+      });
+      return;
+    }
+    if (command.kind === "skills") {
+      setCommandModal({ kind: "skills", query: command.query });
+      return;
+    }
+    if (command.kind === "mention") {
+      setCommandModal({ kind: "mention", query: command.query });
+      return;
+    }
+    if (command.kind === "mcp") {
+      setCommandModal({ kind: "mcp", verbose: command.verbose });
+      return;
+    }
+    if (command.kind === "fast") {
+      if (locked) throw new Error("任务运行中，暂时不能切换 Fast 模式");
+      const enabled = command.enabled ?? thread.serviceTier !== "fast";
+      const applied = await saveSettings({
+        serviceTier: enabled ? "fast" : null,
+      });
+      if (applied) setStatusNote(`Fast 模式已${enabled ? "开启" : "关闭"}`);
       return;
     }
     if (command.kind === "review")
@@ -272,6 +344,7 @@ export function ChatWorkspace({
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     personality?: Personality;
+    serviceTier?: string | null;
   }) => {
     try {
       await api(`/threads/${thread.providerId}/${thread.id}`, {
@@ -279,8 +352,10 @@ export function ChatWorkspace({
         body: JSON.stringify({ settings }),
       });
       onSnapshot();
+      return true;
     } catch (err: any) {
       setError(err.message);
+      return false;
     }
   };
   const forkFrom = async (lastTurnId?: string) => {
@@ -342,6 +417,7 @@ export function ChatWorkspace({
         onBack={onBack}
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
+        onAppearance={onAppearance}
         onSettings={saveSettings}
         onCompact={compact}
       />
@@ -415,6 +491,20 @@ export function ChatWorkspace({
         }
         focusRequest={composerFocusRequest}
       />
+      {commandModal && (
+        <CommandModal
+          mode={commandModal}
+          thread={thread}
+          locked={locked}
+          onSettings={saveSettings}
+          onInsert={(text) => {
+            updateDraft({ ...draft, text: `${draft.text}${text}` });
+            setCommandModal(undefined);
+            setComposerFocusRequest((current) => current + 1);
+          }}
+          onClose={() => setCommandModal(undefined)}
+        />
+      )}
     </main>
   );
 }
