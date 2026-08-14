@@ -31,6 +31,11 @@ import {
   PLAN_PROMPT,
   reviewParams,
 } from "./turn-input.js";
+import {
+  classifyThreadStoreError,
+  explainThreadStoreError,
+  isMissingRolloutError,
+} from "./thread-store-error.js";
 import type {
   AccountInfo,
   ApprovalKind,
@@ -135,6 +140,10 @@ export class CodexManager extends EventEmitter {
       client.stop();
       throw new Error("运行时配置在启动期间已更新，请重试");
     }
+    this.broadcast("runtime.process", {
+      pid: client.pid,
+      remoteUrl: this.runtimeUrl(),
+    });
     this.loadedProviderRevision = this.store.revision;
     this.loadedProviderIds = new Set(
       this.store.runtimeProviders().map((provider) => provider.id),
@@ -650,19 +659,30 @@ export class CodexManager extends EventEmitter {
 
   async readThread(providerId: string, threadId: string) {
     const client = await this.ensure(providerId);
+    const read = (includeTurns: boolean) =>
+      client
+        .request("thread/read", { threadId, includeTurns })
+        .then((result) => result.thread);
     try {
-      return (
-        await client.request("thread/read", { threadId, includeTurns: true })
-      ).thread;
-    } catch (error: any) {
-      // thread/start creates a usable in-memory thread, but Codex does not persist
-      // ("materialize") it until the first user turn. Asking for turns before that
-      // point is rejected, so return its metadata-only representation instead.
-      if (!String(error?.message).includes("is not materialized yet"))
-        throw error;
-      return (
-        await client.request("thread/read", { threadId, includeTurns: false })
-      ).thread;
+      return await read(true);
+    } catch (error: unknown) {
+      const kind = classifyThreadStoreError(error);
+      if (kind !== "unmaterialized") throw explainThreadStoreError(error, kind);
+      // thread/start is usable in memory before Codex flushes the rollout.
+      // 0.147 may also create an empty jsonl and reject includeTurns until
+      // the first bytes land. Retry briefly, then fall back to metadata.
+      if (this.loadedThreads.has(threadId)) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          try {
+            return await read(true);
+          } catch (retryError: unknown) {
+            if (classifyThreadStoreError(retryError) !== "unmaterialized")
+              throw explainThreadStoreError(retryError);
+          }
+        }
+      }
+      return await read(false);
     }
   }
 
@@ -688,9 +708,22 @@ export class CodexManager extends EventEmitter {
     text: string,
     images?: TurnImage[],
   ) {
-    const client = await this.prepareThread(providerId, threadId);
+    let client;
+    try {
+      client = await this.prepareThread(providerId, threadId);
+    } catch (error: unknown) {
+      throw explainThreadStoreError(error);
+    }
     const existing = this.threads.get(threadId);
     const input = buildTurnInput(text, images);
+    const startTurn = () => {
+      const start: Record<string, unknown> = { threadId, input };
+      if (existing?.sandbox)
+        start.sandboxPolicy = sandboxPolicyFromMode(existing.sandbox);
+      if (existing?.approvalPolicy)
+        start.approvalPolicy = existing.approvalPolicy;
+      return client.request("turn/start", start);
+    };
     if (
       existing?.status === "running" &&
       existing.activeTurnId &&
@@ -703,16 +736,54 @@ export class CodexManager extends EventEmitter {
           input,
         });
       } catch (error: any) {
-        if (!String(error?.message || "").toLowerCase().includes("no active turn"))
-          throw error;
+        if (
+          !String(error?.message || "")
+            .toLowerCase()
+            .includes("no active turn")
+        )
+          return this.retryTurnAfterMissing(
+            client,
+            providerId,
+            threadId,
+            error,
+            startTurn,
+          );
       }
     }
-    const start: Record<string, unknown> = { threadId, input };
-    if (existing?.sandbox)
-      start.sandboxPolicy = sandboxPolicyFromMode(existing.sandbox);
-    if (existing?.approvalPolicy)
-      start.approvalPolicy = existing.approvalPolicy;
-    return client.request("turn/start", start);
+    try {
+      return await startTurn();
+    } catch (error: unknown) {
+      return this.retryTurnAfterMissing(
+        client,
+        providerId,
+        threadId,
+        error,
+        startTurn,
+      );
+    }
+  }
+
+  private async retryTurnAfterMissing(
+    client: { request: (method: string, params?: unknown) => Promise<any> },
+    providerId: string,
+    threadId: string,
+    error: unknown,
+    startTurn: () => Promise<any>,
+  ) {
+    if (classifyThreadStoreError(error) !== "notInRuntime")
+      throw explainThreadStoreError(error);
+    this.loadedThreads.delete(threadId);
+    try {
+      await this.resumeThread(client, providerId, threadId);
+      this.loadedThreads.add(threadId);
+    } catch (resumeError: unknown) {
+      throw explainThreadStoreError(resumeError);
+    }
+    try {
+      return await startTurn();
+    } catch (retryError: unknown) {
+      throw explainThreadStoreError(retryError);
+    }
   }
 
   async reviewThread(
@@ -1236,8 +1307,4 @@ export class CodexManager extends EventEmitter {
   private broadcast(type: string, data: any) {
     this.emit("event", { type, data });
   }
-}
-
-function isMissingRolloutError(error: unknown) {
-  return /no rollout found/i.test(String((error as any)?.message || error));
 }

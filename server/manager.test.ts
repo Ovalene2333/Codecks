@@ -145,6 +145,44 @@ test("unmaterialized threads are read without turns until their first user messa
   ]);
 });
 
+test("empty rollout reads fall back to metadata like unmaterialized threads", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (params.includeTurns)
+        throw new Error(
+          "Failed to read thread: failed to read session metadata /tmp/rollout.jsonl: rollout at /tmp/rollout.jsonl is empty",
+        );
+      return { thread: { id: "fresh", cwd: "/tmp/project" } };
+    },
+  });
+
+  const thread = await manager.readThread("provider", "fresh");
+  assert.equal(thread.id, "fresh");
+  assert.deepEqual(
+    calls.map((call) => call.params.includeTurns),
+    [true, false],
+  );
+});
+
+test("thread not found on read is explained without resuming", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      throw new Error("thread not found: abc");
+    },
+  });
+  await assert.rejects(
+    manager.readThread("provider", "abc"),
+    /当前 Runtime 里没有这条会话/,
+  );
+  assert.deepEqual(calls, ["thread/read"]);
+});
+
 test("thread read errors unrelated to materialization are preserved", async () => {
   const manager = new CodexManager({} as any, "/tmp") as any;
   manager.ensure = async () => ({
@@ -924,6 +962,49 @@ test("unknown approval method does not respond", async () => {
   );
   assert.equal(responded, false);
   assert.equal(manager.approvals.has("u"), true);
+});
+
+test("stale loaded thread is resumed after turn/start says thread not found", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      if (method === "turn/start" && calls.filter((item) => item === "turn/start").length === 1)
+        throw new Error("thread not found: t");
+      return method === "turn/start" ? { turn: { id: "turn-2" } } : {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  const result = await manager.sendTurn("provider", "t", "继续");
+  assert.equal(result.turn.id, "turn-2");
+  assert.deepEqual(calls, ["turn/start", "thread/resume", "turn/start"]);
+});
+
+test("sendTurn maps a failed resume after thread not found", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      if (method === "turn/start" || method === "thread/resume")
+        throw new Error("thread not found: t");
+      return {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  await assert.rejects(
+    manager.sendTurn("provider", "t", "继续"),
+    /当前 Runtime 里没有这条会话/,
+  );
 });
 
 test("running thread with activeTurnId steers instead of starting", async () => {

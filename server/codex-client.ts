@@ -146,6 +146,9 @@ export class CodexClient extends EventEmitter {
   private starting?: Promise<void>;
   online = false;
   lastError?: string;
+  get pid() {
+    return this.child?.pid;
+  }
   private stderr = "";
   private processOutput = "";
   private launchSummary = "";

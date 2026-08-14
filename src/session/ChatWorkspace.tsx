@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { api, post } from "../api";
 import { dedupeThreadLoad, readThreadCache } from "../cache";
@@ -22,6 +22,7 @@ import {
   type ComposerCommand,
 } from "./commands";
 import type { ComposerImage } from "./images";
+import { shouldSurfaceThreadLoadError } from "./thread-load";
 
 export function ChatWorkspace({
   thread,
@@ -61,17 +62,26 @@ export function ChatWorkspace({
   const [error, setError] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
+  const fullRef = useRef(full);
+  fullRef.current = full;
   const load = useCallback(
     () =>
       dedupeThreadLoad(threadCacheKey, () =>
         api(`/threads/${thread.providerId}/${thread.id}`),
       )
-        .then(setFull)
-        .catch((err) => setError(err.message)),
+        .then((data) => {
+          setFull(data);
+          setError("");
+        })
+        .catch((err) => {
+          if (shouldSurfaceThreadLoadError(fullRef.current))
+            setError(err.message);
+        }),
     [threadCacheKey, thread.id, thread.providerId],
   );
   useEffect(() => {
     const cached = readThreadCache(threadCacheKey);
+    fullRef.current = cached || undefined;
     setFull(cached || undefined);
     load();
   }, [load, threadCacheKey]);
@@ -81,7 +91,13 @@ export function ChatWorkspace({
     const method = String(event?.method || "");
     if (!method || method.endsWith("/delta")) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
-    load();
+    const immediate = method === "turn/completed" || method === "error";
+    if (immediate) {
+      load();
+      return;
+    }
+    const timer = window.setTimeout(() => load(), 300);
+    return () => window.clearTimeout(timer);
   }, [events.length, load, thread.id]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;

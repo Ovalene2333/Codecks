@@ -16,6 +16,11 @@ import { lanAddresses } from "./network.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
 import { resolveRuntimeCodexHome } from "./runtime-home.js";
 import { shouldUseWslRuntime } from "./runtime-platform.js";
+import {
+  acquireRuntimeLock,
+  clearRuntimeLock,
+  updateRuntimeLock,
+} from "./runtime-lock.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -578,6 +583,13 @@ wss.on("connection", (ws) =>
   ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
 );
 manager.on("event", (event) => {
+  if (event.type === "runtime.process") {
+    updateRuntimeLock(dataDir, {
+      childPid: event.data?.pid,
+      listen: event.data?.remoteUrl,
+    });
+    return;
+  }
   const payload = JSON.stringify(
     event.type === "snapshot"
       ? { type: "snapshot", data: fullSnapshot() }
@@ -587,21 +599,55 @@ manager.on("event", (event) => {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
 });
 
-let tunnel: TunnelController | undefined;
-server.listen(port, host, () => {
-  console.log(`Codex Deck: http://${host}:${port}`);
-  if (lanListener) {
-    const urls = lanAddresses(port, token);
-    if (urls.length)
-      process.stdout.write(`\n局域网手机入口：\n${urls.join("\n")}\n\n`);
-    else
-      process.stderr.write(
-        "未检测到可用的局域网 IPv4 地址，请检查防火墙或网卡。\n",
-      );
-  }
-  if (cli.tunnel)
-    tunnel = startTunnel(cli.tunnel, port, token, cli.cloudflaredBin);
+let lock = acquireRuntimeLock(dataDir, {
+  pid: process.pid,
+  port,
+  useWsl,
 });
+for (let attempt = 0; lock.status === "blocked" && attempt < 5; attempt++) {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  lock = acquireRuntimeLock(dataDir, { pid: process.pid, port, useWsl });
+}
+if (lock.status === "blocked") {
+  process.stderr.write(
+    `Deck 已在运行 (pid ${lock.lock.pid}, 端口 ${lock.lock.port})。请先退出旧进程，不要同时开两个 --wsl / npm start / npm run dev 后端。\n`,
+  );
+  process.exit(1);
+}
+
+let tunnel: TunnelController | undefined;
+try {
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
+  });
+} catch (error: any) {
+  clearRuntimeLock(dataDir, process.pid);
+  if (error?.code === "EADDRINUSE")
+    process.stderr.write(
+      `端口 ${port} 已被占用。请先结束旧的 Deck 或占用该端口的进程，不要再拉起第二个 app-server。\n`,
+    );
+  else process.stderr.write(`${error?.message || error}\n`);
+  process.exit(1);
+}
+
+console.log(`Codex Deck: http://${host}:${port}`);
+if (lanListener) {
+  const urls = lanAddresses(port, token);
+  if (urls.length)
+    process.stdout.write(`\n局域网手机入口：\n${urls.join("\n")}\n\n`);
+  else
+    process.stderr.write(
+      "未检测到可用的局域网 IPv4 地址，请检查防火墙或网卡。\n",
+    );
+}
+if (cli.tunnel)
+  tunnel = startTunnel(cli.tunnel, port, token, cli.cloudflaredBin);
+
 manager.startAll().catch((error) => console.error("Codex 启动失败:", error));
 setInterval(async () => {
   try {
@@ -614,7 +660,9 @@ setInterval(async () => {
 }, 5_000).unref();
 
 const shutdown = () => {
+  clearRuntimeLock(dataDir, process.pid);
   tunnel?.kill();
+  manager.restart();
   server.close(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);
