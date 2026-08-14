@@ -86,6 +86,16 @@
   min-height: 36px;
   opacity: 0.82;
 }
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+}
+.chat-header-actions .context-bar {
+  margin-left: 0;
+}
 .session-toolbar {
   display: flex;
   align-items: center;
@@ -110,9 +120,6 @@
   gap: 4px;
   color: var(--text-dim);
   font-size: 12px;
-}
-.toolbar-select span {
-  white-space: nowrap;
 }
 .toolbar-select select,
 .toolbar-select input {
@@ -151,7 +158,7 @@
 .context-track i {
   display: block;
   height: 100%;
-  background: var(--purple);
+  background: var(--accent);
 }
 .context-bar span {
   font-family: var(--font-mono);
@@ -185,10 +192,10 @@
   gap: 6px;
   width: fit-content;
   margin: 0 auto 18px;
-  border: 1px solid #3c3159;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: #171325;
-  color: #c4b5fd;
+  background: var(--surface);
+  color: var(--text-dim);
   padding: 6px 10px;
   font-size: 11px;
   cursor: pointer;
@@ -223,9 +230,9 @@
 .message.user {
   max-width: 76%;
   margin-left: auto;
-  background: #1d1930;
-  border: 1px solid #3a3354;
-  border-radius: 16px 16px 4px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 4px 12px;
   padding: 10px 14px;
   font-size: 14.5px;
   line-height: 1.55;
@@ -315,7 +322,7 @@
 .markdown blockquote {
   margin: 0 0 0.9em;
   padding: 0.15em 0 0.15em 12px;
-  border-left: 2px solid #3b3358;
+  border-left: 2px solid var(--line);
   color: var(--text-dim);
 }
 .markdown hr {
@@ -429,7 +436,7 @@
 }
 .command-card.running,
 .command-row.running {
-  border-left-color: var(--purple);
+  border-left-color: var(--wait);
 }
 .command-card.ok,
 .command-row.ok {
@@ -483,7 +490,7 @@
   margin-top: 6px;
   border: 0;
   background: transparent;
-  color: #8b7aad;
+  color: var(--text-dim);
   font-size: 11px;
   cursor: pointer;
   opacity: 0.55;
@@ -491,7 +498,7 @@
 .fork-from-turn:hover,
 .fork-from-turn:focus {
   opacity: 1;
-  color: #d5c7ff;
+  color: var(--text);
 }
 .fork-from-turn svg {
   width: 13px;
@@ -581,8 +588,8 @@
   font-size: 12px;
 }
 .approval-actions .approve.session {
-  background: #5b3fa8;
-  border-color: #7c5bd0;
+  background: var(--control);
+  border-color: var(--control-border);
 }
 .composer {
   padding-bottom: max(16px, env(safe-area-inset-bottom));
@@ -597,6 +604,12 @@
   min-height: 40px;
   padding: 10px 8px;
 }
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
 .send {
   width: 38px;
   height: 38px;
@@ -609,8 +622,8 @@
   display: none;
 }
 .composer.drag-over .composer-box {
-  border-color: #7c5bd0;
-  box-shadow: 0 0 0 3px rgb(124 91 208 / 18%);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px rgb(201 196 184 / 14%);
 }
 .composer-box .attach {
   width: 36px;
@@ -700,7 +713,7 @@
 }
 .slash-menu code {
   min-width: 88px;
-  color: #c4b5fd;
+  color: var(--text);
   font-size: 12px;
 }
 .slash-menu span {
@@ -722,15 +735,20 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  color: #c4b5fd;
+  color: var(--text-dim);
   font-size: 13px;
 }
 .review-row.done {
   color: var(--text-dim);
 }
 .welcome.work-entry {
-  align-content: start;
-  padding-top: 12vh;
+  align-content: center;
+  justify-items: center;
+  padding: 8vh 24px 10vh;
+  text-align: left;
+}
+.welcome-stack {
+  width: min(560px, 100%);
 }
 .welcome.work-entry h1 {
   font-size: var(--fs-display);
@@ -738,26 +756,24 @@
   letter-spacing: 0;
 }
 .welcome-lead {
-  margin: 0 0 22px;
+  margin: 0 0 18px;
   color: var(--text-dim);
   font-size: 14px;
 }
 .recent-projects {
-  width: min(520px, 100%);
+  width: 100%;
   display: grid;
-  gap: 8px;
-  margin: 0 0 18px;
+  gap: 0;
+  margin: 0 0 14px;
 }
-.recent-projects > button {
+.recent-projects > button,
+.recent-create {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
   min-height: 56px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--card);
+  padding: 10px 14px;
   color: inherit;
   text-align: left;
   cursor: pointer;
@@ -768,10 +784,50 @@
 .recent-projects small {
   color: var(--text-dim);
 }
-.recent-projects span {
-  margin-left: auto;
-  color: #c4b5fd;
-  font-size: 11px;
+.recent-projects > button > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-dim);
+  flex: none;
+}
+.recent-empty {
+  margin: 0;
+  padding: 16px 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.recent-create {
+  min-height: 48px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.recent-create svg {
+  width: 16px;
+  height: 16px;
+}
+.welcome-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.welcome-usage {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.welcome-usage:hover {
+  color: var(--text);
 }
 .pill-btn {
   border: 1px solid var(--line);
@@ -792,9 +848,6 @@
   }
 }
 @media (max-width: 1100px) {
-  .toolbar-select span {
-    display: none;
-  }
   .toolbar-select select,
   .toolbar-select input {
     max-width: 132px;
@@ -807,6 +860,16 @@
   .chat-header-row1 {
     min-height: 56px;
     padding: 0 10px 0 8px;
+  }
+  .chat-header-actions .context-track,
+  .chat-header-actions .context-bar > span {
+    display: none;
+  }
+  .recent-create {
+    min-height: 48px;
+  }
+  .welcome.work-entry {
+    padding: 28px 16px 32px;
   }
   .chat-header > .status {
     display: inline-flex;

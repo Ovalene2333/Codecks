@@ -1,0 +1,4 @@
+Geist Sans and Geist Mono (latin woff2 subsets)
+Copyright Vercel, Inc.
+Licensed under the SIL Open Font License, Version 1.1.
+https://github.com/vercel/geist-font

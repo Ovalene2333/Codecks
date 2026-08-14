@@ -121,16 +121,6 @@ export function Composer({
         </div>
       )}
       <div className="composer-box">
-        {running && thread.activeTurnId ? (
-          <button
-            type="button"
-            className="send stop"
-            title="停止"
-            onClick={onStop}
-          >
-            <CircleStop />
-          </button>
-        ) : null}
         <button
           type="button"
           className="icon-btn attach"
@@ -194,15 +184,27 @@ export function Composer({
                 : "发送新指令… 可粘贴图片，输入 / 查看命令"
           }
         />
-        <button
-          type="button"
-          className="send"
-          title={running ? "追加到当前任务" : "发送新指令"}
-          onClick={onSend}
-          disabled={compacting || !canSend || sending}
-        >
-          <Send />
-        </button>
+        <div className="composer-actions">
+          {running && thread.activeTurnId ? (
+            <button
+              type="button"
+              className="send stop"
+              title="停止"
+              onClick={onStop}
+            >
+              <CircleStop />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="send"
+            title={running ? "追加到当前任务" : "发送新指令"}
+            onClick={onSend}
+            disabled={compacting || !canSend || sending}
+          >
+            <Send />
+          </button>
+        </div>
       </div>
       <input
         ref={picker}

@@ -63,11 +63,13 @@ export function ModelPicker({
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
-        {compact ? <span>模型</span> : "模型"}
+        {compact ? null : "模型"}
         {manual || !models.length ? (
           <input
             value={model}
             disabled={disabled}
+            aria-label="模型"
+            title="模型"
             onChange={(e) =>
               onChange({ model: e.target.value, reasoningEffort })
             }
@@ -77,6 +79,8 @@ export function ModelPicker({
           <select
             value={model}
             disabled={disabled}
+            aria-label="模型"
+            title="模型"
             onChange={(e) => {
               const next = models.find(
                 (item) => item.model === e.target.value || item.id === e.target.value,
@@ -111,10 +115,12 @@ export function ModelPicker({
       </label>
       {efforts.length > 0 && (
         <label className={compact ? "toolbar-select" : undefined}>
-          {compact ? <span>Reasoning effort</span> : "Reasoning effort"}
+          {compact ? null : "Reasoning effort"}
           <select
             value={reasoningEffort}
             disabled={disabled}
+            aria-label="Reasoning effort"
+            title="Reasoning effort"
             onChange={(e) =>
               onChange({ model, reasoningEffort: e.target.value })
             }

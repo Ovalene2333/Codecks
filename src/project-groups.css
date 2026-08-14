@@ -11,8 +11,8 @@
   border-radius: 50%;
 }
 .watch-dot.running {
-  background: #35d07f;
-  box-shadow: 0 0 7px #35d07f88;
+  background: var(--ok);
+  box-shadow: none;
 }
 .watch-dot.waiting {
   background: #f6b94b;
@@ -85,7 +85,7 @@
 .project-toggle > svg:nth-child(2) {
   width: 14px;
   height: 14px;
-  color: #8b7cc0;
+  color: var(--text-dim);
   flex: none;
 }
 .project-toggle span {
@@ -125,9 +125,9 @@
   flex: none;
 }
 .project-add:hover {
-  border-color: #5d438f;
-  background: #342653;
-  color: #c5adff;
+  border-color: var(--control-border);
+  background: var(--control-hover);
+  color: var(--text);
 }
 .project-add svg {
   width: 14px;
@@ -148,7 +148,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--provider, #8b6cff);
+  background: var(--provider, var(--text-dim));
   flex: none;
 }
 .thread-meta time,
@@ -161,10 +161,10 @@
   max-width: 42%;
   overflow: hidden;
   padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--provider) 48%, #26303d);
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--provider) 14%, #111821);
-  color: color-mix(in srgb, var(--provider) 72%, #d9e1ec);
+  background: transparent;
+  color: var(--text-dim);
   font-size: 11px;
   line-height: 16px;
   white-space: nowrap;
@@ -224,7 +224,7 @@
 }
 
 .sync-note.pending {
-  border-color: #7c5bd0;
+  border-color: var(--line);
 }
 
 .sync-note > button,
@@ -253,9 +253,9 @@
 }
 
 .sync-note.pending .primary {
-  border: 0;
-  background: linear-gradient(135deg, #8b5cf6, #6840ce);
-  color: white;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
 }
 
 .sync-note.reloading > svg {
@@ -275,7 +275,7 @@
 
 .terminal-connect > svg {
   width: 18px;
-  color: #a78bfa;
+  color: var(--text-dim);
   flex: none;
 }
 
@@ -294,10 +294,10 @@
 .terminal-connect button {
   margin-left: auto;
   flex: none;
-  border: 1px solid #4f3d78;
-  background: #271d3d;
+  border: 1px solid var(--line);
+  background: var(--surface);
   border-radius: 7px;
-  color: #d9ccff;
+  color: var(--text);
   padding: 7px 9px;
   cursor: pointer;
 }
@@ -442,8 +442,8 @@
   cursor: pointer;
 }
 .provider-switch:hover {
-  border-color: #7155ac;
-  color: #d9c9ff;
+  border-color: var(--control-border);
+  color: var(--text);
 }
 .provider-switch:disabled {
   opacity: 0.45;
@@ -560,9 +560,9 @@
   background: #1d2631;
 }
 .wsl-cwd-btn.is-wsl {
-  color: #c4b5fd;
-  border-color: #5b4a9a;
-  background: #181325;
+  color: var(--text);
+  border-color: var(--control-border);
+  background: var(--surface-2);
 }
 .wsl-cwd-btn:disabled {
   cursor: default;
@@ -572,7 +572,7 @@
   justify-self: start;
   border: 0;
   background: transparent;
-  color: #8c71cf;
+  color: var(--text-dim);
   padding: 0;
   font-size: 12px;
   cursor: pointer;
