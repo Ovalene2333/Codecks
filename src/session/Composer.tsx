@@ -2,10 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CircleStop, ImagePlus, Send, X } from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { matchingSlashCommands } from "./commands";
-import {
-  collectComposerImages,
-  type ComposerImage,
-} from "./images";
+import { collectComposerImages, type ComposerImage } from "./images";
 
 export function Composer({
   thread,
@@ -17,6 +14,7 @@ export function Composer({
   onSend,
   onStop,
   onError,
+  focusRequest = 0,
 }: {
   thread: ThreadSummary;
   text: string;
@@ -27,13 +25,16 @@ export function Composer({
   onSend: () => void;
   onStop: () => void;
   onError?: (message: string) => void;
+  focusRequest?: number;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [activeCmd, setActiveCmd] = useState(0);
   const compacting = Boolean(thread.compacting);
-  const running = thread.status === "running";
+  const running =
+    Boolean(thread.activeTurnId) &&
+    (thread.status === "running" || thread.status === "waiting");
   const suggestions = matchingSlashCommands(text);
   const canSend = Boolean(text.trim() || images.length);
   useEffect(() => {
@@ -43,6 +44,13 @@ export function Composer({
     node.style.height = `${Math.min(node.scrollHeight, 160)}px`;
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
+  useEffect(() => {
+    if (!focusRequest) return;
+    const node = area.current;
+    if (!node) return;
+    node.focus();
+    node.setSelectionRange(node.value.length, node.value.length);
+  }, [focusRequest]);
 
   const addFiles = async (files: ArrayLike<File>) => {
     try {
@@ -140,7 +148,10 @@ export function Composer({
           onChange={(event) => onChange(event.target.value)}
           onPaste={(event) => {
             const files = Array.from(event.clipboardData?.items || [])
-              .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+              .filter(
+                (item) =>
+                  item.kind === "file" && item.type.startsWith("image/"),
+              )
               .map((item) => item.getAsFile())
               .filter((file): file is File => Boolean(file));
             if (!files.length) return;
@@ -148,7 +159,10 @@ export function Composer({
             void addFiles(files);
           }}
           onKeyDown={(event) => {
-            if (suggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            if (
+              suggestions.length &&
+              (event.key === "ArrowDown" || event.key === "ArrowUp")
+            ) {
               event.preventDefault();
               setActiveCmd((current) =>
                 event.key === "ArrowDown"
@@ -157,7 +171,11 @@ export function Composer({
               );
               return;
             }
-            if (suggestions.length && (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))) {
+            if (
+              suggestions.length &&
+              (event.key === "Tab" ||
+                (event.key === "Enter" && !event.shiftKey))
+            ) {
               event.preventDefault();
               const item = suggestions[activeCmd] || suggestions[0];
               onChange(item.name === "!" ? "!" : `${item.name} `);

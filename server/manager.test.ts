@@ -82,7 +82,10 @@ test("a real Codex thread has one identity independent of provider selection", (
 });
 
 test("applyProviderConfig refuses while a session is running", async () => {
-  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
   manager.upsertThread(
     { id: "local", model: "m" },
     { id: "busy", cwd: "D:\\demo", preview: "run" },
@@ -464,7 +467,11 @@ test("turn/start re-applies the stored workspace-write policy", async () => {
       if (method === "thread/start")
         return {
           thread: { id: "fresh", cwd: "/tmp/project" },
-          sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+          sandbox: {
+            type: "workspaceWrite",
+            writableRoots: [],
+            networkAccess: false,
+          },
         };
       if (method === "turn/start") return { turn: { id: "turn-1" } };
       return {};
@@ -588,10 +595,7 @@ test("unsent thread switches provider without forking a missing rollout", async 
   });
 
   assert.equal(switched.id, "switched");
-  assert.equal(
-    calls.filter((call) => call.method === "thread/fork").length,
-    0,
-  );
+  assert.equal(calls.filter((call) => call.method === "thread/fork").length, 0);
   const started = calls.find(
     (call) => call.method === "thread/start" && call.providerId === "target",
   );
@@ -791,7 +795,9 @@ test("list refresh without timestamps keeps the previous updatedAt", async () =>
     request: async (method: string, params: any) => {
       if (method !== "thread/list") throw new Error(method);
       return {
-        data: params.archived ? [] : [{ id: "aged", cwd: "/tmp/p", preview: "later" }],
+        data: params.archived
+          ? []
+          : [{ id: "aged", cwd: "/tmp/p", preview: "later" }],
       };
     },
   });
@@ -974,7 +980,10 @@ test("stale loaded thread is resumed after turn/start says thread not found", as
   manager.ensure = async () => ({
     request: async (method: string) => {
       calls.push(method);
-      if (method === "turn/start" && calls.filter((item) => item === "turn/start").length === 1)
+      if (
+        method === "turn/start" &&
+        calls.filter((item) => item === "turn/start").length === 1
+      )
         throw new Error("thread not found: t");
       return method === "turn/start" ? { turn: { id: "turn-2" } } : {};
     },
@@ -1026,6 +1035,28 @@ test("running thread with activeTurnId steers instead of starting", async () => 
   thread.status = "running";
   thread.activeTurnId = "turn-9";
   await manager.sendTurn("provider", "t", "追加");
+  assert.deepEqual(calls, ["turn/steer"]);
+});
+
+test("waiting thread with activeTurnId also steers the current turn", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      return {};
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+  const thread = manager.threads.get("t");
+  thread.status = "waiting";
+  thread.activeTurnId = "turn-9";
+  await manager.sendTurn("provider", "t", "补充说明");
   assert.deepEqual(calls, ["turn/steer"]);
 });
 
@@ -1151,7 +1182,10 @@ test("compact issues thread/compact/start", async () => {
 });
 
 test("non-chatgpt official usage yields null rateLimits not 0%", async () => {
-  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
   manager.client = {
     online: true,
     request: async (method: string) => {
@@ -1167,7 +1201,10 @@ test("non-chatgpt official usage yields null rateLimits not 0%", async () => {
 });
 
 test("account/read type=chatgpt loads Official rate limits", async () => {
-  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
   const calls: string[] = [];
   manager.client = {
     online: true,
@@ -1175,13 +1212,21 @@ test("account/read type=chatgpt loads Official rate limits", async () => {
       calls.push(method);
       if (method === "account/read")
         return {
-          account: { type: "chatgpt", email: "user@example.com", planType: "pro" },
+          account: {
+            type: "chatgpt",
+            email: "user@example.com",
+            planType: "pro",
+          },
           requiresOpenaiAuth: true,
         };
       if (method === "account/rateLimits/read")
         return {
           rateLimits: {
-            primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_730_947_200 },
+            primary: {
+              usedPercent: 25,
+              windowDurationMins: 300,
+              resetsAt: 1_730_947_200,
+            },
             secondary: { usedPercent: 8, resetsAt: 1_731_033_600 },
           },
         };
@@ -1197,7 +1242,10 @@ test("account/read type=chatgpt loads Official rate limits", async () => {
 });
 
 test("account/rateLimits/updated updates the snapshot", () => {
-  const manager = new CodexManager({ listPublic: () => [] } as any, "/tmp") as any;
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
   manager.onNotification({
     method: "account/rateLimits/updated",
     params: {
@@ -1327,7 +1375,9 @@ test("refreshAll remembers newly seen project directories", async () => {
       connectionRevision: 0,
       overlayForProvider: () => ({}),
       rememberSeen: async () => false,
-      rememberSeenMany: async (items: { cwd?: string; updatedAt?: number }[]) => {
+      rememberSeenMany: async (
+        items: { cwd?: string; updatedAt?: number }[],
+      ) => {
         seen.push(items);
         return true;
       },
@@ -1374,4 +1424,3 @@ test("runtimeStatus reports WSL mode from the constructor", () => {
   );
   assert.equal(wsl.runtimeStatus().runtimeWsl, true);
 });
-

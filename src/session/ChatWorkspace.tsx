@@ -22,7 +22,15 @@ import {
   type ComposerCommand,
 } from "./commands";
 import type { ComposerImage } from "./images";
+import { readComposerDraft, writeComposerDraft } from "./drafts";
+import { collectStreamedAgentMessages } from "./streaming";
+import {
+  loadedUserMessages,
+  reconcilePendingUserMessages,
+  type PendingUserMessage,
+} from "./optimistic";
 import { shouldSurfaceThreadLoadError } from "./thread-load";
+import { draftFromUserMessage } from "./user-message";
 
 export function ChatWorkspace({
   thread,
@@ -57,13 +65,17 @@ export function ChatWorkspace({
   const [full, setFull] = useState<any>(
     () => readThreadCache(threadCacheKey) || undefined,
   );
-  const [text, setText] = useState("");
-  const [images, setImages] = useState<ComposerImage[]>([]);
+  const [draft, setDraft] = useState(() => readComposerDraft(threadCacheKey));
+  const [pendingUsers, setPendingUsers] = useState<PendingUserMessage[]>([]);
   const [error, setError] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const fullRef = useRef(full);
   fullRef.current = full;
+  const updateDraft = (next: typeof draft) => {
+    setDraft(writeComposerDraft(threadCacheKey, next));
+  };
   const load = useCallback(
     () =>
       dedupeThreadLoad(threadCacheKey, () =>
@@ -71,6 +83,12 @@ export function ChatWorkspace({
       )
         .then((data) => {
           setFull(data);
+          setPendingUsers((current) =>
+            reconcilePendingUserMessages(
+              Array.isArray(data?.turns) ? data.turns : [],
+              current,
+            ),
+          );
           setError("");
         })
         .catch((err) => {
@@ -90,6 +108,7 @@ export function ChatWorkspace({
     const event = events.at(-1);
     const method = String(event?.method || "");
     if (!method || method.endsWith("/delta")) return;
+    if (event?.providerId && event.providerId !== thread.providerId) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
     const immediate = method === "turn/completed" || method === "error";
     if (immediate) {
@@ -98,7 +117,7 @@ export function ChatWorkspace({
     }
     const timer = window.setTimeout(() => load(), 300);
     return () => window.clearTimeout(timer);
-  }, [events.length, load, thread.id]);
+  }, [events.length, load, thread.id, thread.providerId]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
@@ -140,8 +159,8 @@ export function ChatWorkspace({
     if (command.kind === "plan") return post(commandPath("plan"));
     if (command.kind === "diff") return post(commandPath("diff"));
   };
-  const send = async () => {
-    const value = text.trim();
+  const submit = async (candidate: typeof draft, restoreOnFailure: boolean) => {
+    const value = candidate.text.trim();
     if (sending || thread.compacting) return;
     const command = parseComposerCommand(value);
     const hint = incompleteCommandHint(value);
@@ -149,15 +168,29 @@ export function ChatWorkspace({
       setError(hint);
       return;
     }
-    if (!command && !value && !images.length) return;
+    if (!command && !value && !candidate.images.length) return;
     setSending(true);
     setError("");
     setStatusNote("");
-    const pendingImages = images;
-    if (command) setText("");
-    else {
-      setText("");
-      setImages([]);
+    const pendingImages = candidate.images;
+    const pendingId = `${threadCacheKey}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
+    const loadedUserMessageCount = loadedUserMessages(
+      Array.isArray(fullRef.current?.turns) ? fullRef.current.turns : [],
+    ).length;
+    if (restoreOnFailure) {
+      if (command) updateDraft({ text: "", images: pendingImages });
+      else updateDraft({ text: "", images: [] });
+    }
+    if (!command) {
+      setPendingUsers((current) => [
+        ...current,
+        {
+          id: pendingId,
+          text: value,
+          images: pendingImages,
+          loadedUserMessageCount,
+        },
+      ]);
     }
     try {
       if (command) await runCommand(command);
@@ -171,13 +204,30 @@ export function ChatWorkspace({
         });
     } catch (err: any) {
       if (!command) {
-        setText(value);
-        setImages(pendingImages);
-      } else setText(value);
+        setPendingUsers((current) =>
+          current.filter((message) => message.id !== pendingId),
+        );
+        if (restoreOnFailure)
+          updateDraft({ text: value, images: pendingImages });
+      } else if (restoreOnFailure)
+        updateDraft({ text: value, images: pendingImages });
       setError(err.message);
     } finally {
       setSending(false);
     }
+  };
+  const send = () => submit(draft, true);
+  const readHistoryDraft = (item: any) => {
+    const result = draftFromUserMessage(item);
+    if (result.skippedImages) onToast("历史图片来自本机路径，请重新选择后发送");
+    return result.draft;
+  };
+  const editUserMessage = (item: any) => {
+    updateDraft(readHistoryDraft(item));
+    setComposerFocusRequest((current) => current + 1);
+  };
+  const resendUserMessage = (item: any) => {
+    void submit(readHistoryDraft(item), false);
   };
   const resolve = async (id: string, body: ApprovalResolveBody) => {
     try {
@@ -225,18 +275,14 @@ export function ChatWorkspace({
     }
   };
   const streamed =
-    thread.status === "running"
-      ? events
-          .filter(
-            (event) =>
-              event.params?.threadId === thread.id &&
-              event.method === "item/agentMessage/delta" &&
-              (!thread.activeTurnId ||
-                event.params?.turnId === thread.activeTurnId),
-          )
-          .map((event) => event.params.delta)
-          .join("")
-      : "";
+    thread.status === "running" || thread.status === "waiting"
+      ? collectStreamedAgentMessages(
+          events,
+          thread.providerId,
+          thread.id,
+          thread.activeTurnId,
+        )
+      : [];
   const threadApprovals = approvals.filter(
     (approval) =>
       approval.request.params?.threadId === thread.id ||
@@ -259,8 +305,9 @@ export function ChatWorkspace({
       : rawTaskError
     : "";
   const locked = thread.status === "running" || thread.status === "waiting";
-  const usageLimit =
-    String(taskErrorCode || "").toLowerCase().includes("usagelimit");
+  const usageLimit = String(taskErrorCode || "")
+    .toLowerCase()
+    .includes("usagelimit");
   const contextExceeded = String(taskErrorCode || "")
     .toLowerCase()
     .includes("contextwindow");
@@ -281,7 +328,9 @@ export function ChatWorkspace({
         resetKey={thread.id}
         fallback={
           <div className="timeline">
-            <p className="error-banner">这个会话的内容无法显示，可返回列表重试</p>
+            <p className="error-banner">
+              这个会话的内容无法显示，可返回列表重试
+            </p>
           </div>
         }
       >
@@ -289,12 +338,16 @@ export function ChatWorkspace({
           thread={thread}
           turns={Array.isArray(full?.turns) ? full.turns : []}
           streamed={streamed}
+          pendingUsers={pendingUsers}
           approvals={threadApprovals}
           origin={origin}
           onResolve={resolve}
           onCopy={() => onToast("已复制")}
           onForkFrom={(turnId) => forkFrom(turnId)}
           onOpenOrigin={onOpenOrigin}
+          onEditUserMessage={editUserMessage}
+          onResendUserMessage={resendUserMessage}
+          messageActionsDisabled={sending || Boolean(thread.compacting)}
         />
       </RenderErrorBoundary>
       {taskError && (
@@ -325,11 +378,11 @@ export function ChatWorkspace({
       )}
       <Composer
         thread={thread}
-        text={text}
-        images={images}
+        text={draft.text}
+        images={draft.images}
         sending={sending}
-        onChange={setText}
-        onImages={setImages}
+        onChange={(text) => updateDraft({ ...draft, text })}
+        onImages={(images) => updateDraft({ ...draft, images })}
         onSend={send}
         onError={setError}
         onStop={() =>
@@ -337,6 +390,7 @@ export function ChatWorkspace({
             turnId: thread.activeTurnId,
           })
         }
+        focusRequest={composerFocusRequest}
       />
     </main>
   );

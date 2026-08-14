@@ -280,7 +280,8 @@ export class CodexManager extends EventEmitter {
         Boolean(this.client?.online) &&
         (this.loadedProviderRevision !== this.store.revision ||
           (this.projects != null &&
-            this.loadedConnectionRevision !== this.projects.connectionRevision)),
+            this.loadedConnectionRevision !==
+              this.projects.connectionRevision)),
       account: this.account,
       rateLimits: this.rateLimits,
       rateLimitsError: this.rateLimitsError,
@@ -473,7 +474,8 @@ export class CodexManager extends EventEmitter {
         existing.reasoningEffort = settings.reasoningEffort;
       if (settings.personality) existing.personality = settings.personality;
       if (settings.approvalPolicy)
-        existing.approvalPolicy = settings.approvalPolicy as ThreadSummary["approvalPolicy"];
+        existing.approvalPolicy =
+          settings.approvalPolicy as ThreadSummary["approvalPolicy"];
       if (settings.sandbox)
         existing.sandbox = settings.sandbox as ThreadSummary["sandbox"];
       existing.updatedAt = Date.now();
@@ -630,8 +632,7 @@ export class CodexManager extends EventEmitter {
       personality: source.personality,
       approvalPolicy: source.approvalPolicy,
       sandbox: source.sandbox,
-      name:
-        source.name && source.name !== "新会话" ? source.name : undefined,
+      name: source.name && source.name !== "新会话" ? source.name : undefined,
     });
     const next = this.threads.get(created.id);
     if (next) {
@@ -700,10 +701,7 @@ export class CodexManager extends EventEmitter {
     }
   }
 
-  private async prepareThread(
-    providerId: string,
-    threadId: string,
-  ) {
+  private async prepareThread(providerId: string, threadId: string) {
     const client = await this.ensure(providerId);
     // A thread returned by thread/start is already loaded, but has no rollout
     // until its first turn. Resuming it here fails with "no rollout found".
@@ -739,7 +737,7 @@ export class CodexManager extends EventEmitter {
       return client.request("turn/start", start);
     };
     if (
-      existing?.status === "running" &&
+      (existing?.status === "running" || existing?.status === "waiting") &&
       existing.activeTurnId &&
       !existing.compacting
     ) {
@@ -813,11 +811,7 @@ export class CodexManager extends EventEmitter {
     );
   }
 
-  async runShellCommand(
-    providerId: string,
-    threadId: string,
-    command: string,
-  ) {
+  async runShellCommand(providerId: string, threadId: string, command: string) {
     const trimmed = command.trim();
     if (!trimmed) throw new Error("请输入要执行的命令");
     const client = await this.prepareThread(providerId, threadId);
@@ -834,8 +828,7 @@ export class CodexManager extends EventEmitter {
   ) {
     const client = await this.prepareThread(providerId, threadId);
     const text = objective?.trim();
-    if (!text)
-      return client.request("thread/goal/clear", { threadId });
+    if (!text) return client.request("thread/goal/clear", { threadId });
     return client.request("thread/goal/set", {
       threadId,
       objective: text,
@@ -995,8 +988,7 @@ export class CodexManager extends EventEmitter {
         ) || old?.sandbox,
       approvalPolicy:
         (pickString(thread.approvalPolicy, thread.approval_policy) as
-          | ThreadSummary["approvalPolicy"]
-          | undefined) || old?.approvalPolicy,
+          ThreadSummary["approvalPolicy"] | undefined) || old?.approvalPolicy,
       forkedFromId:
         pickString(
           thread.forkedFromId,
@@ -1205,9 +1197,11 @@ export class CodexManager extends EventEmitter {
     if (existing?.sandbox) params.sandbox = existing.sandbox;
     if (existing?.approvalPolicy)
       params.approvalPolicy = existing.approvalPolicy;
-    const result = await client.request("thread/resume", params).catch((error) => {
-      if (!String(error.message).includes("already")) throw error;
-    });
+    const result = await client
+      .request("thread/resume", params)
+      .catch((error) => {
+        if (!String(error.message).includes("already")) throw error;
+      });
     this.rememberRollout(threadId);
     if (existing && result) {
       const applied = parseSandboxMode(
@@ -1217,8 +1211,7 @@ export class CodexManager extends EventEmitter {
       if (applied) existing.sandbox = applied;
       const approval = pickString(result.approvalPolicy);
       if (approval)
-        existing.approvalPolicy =
-          approval as ThreadSummary["approvalPolicy"];
+        existing.approvalPolicy = approval as ThreadSummary["approvalPolicy"];
     }
   }
 
@@ -1292,10 +1285,7 @@ export class CodexManager extends EventEmitter {
     for (const [id, approval] of this.approvals) {
       const params = approval.request.params || {};
       if (params.itemId === itemId || params.item?.id === itemId)
-        this.broadcast(
-          "approval.updated",
-          this.approvalView(id, approval),
-        );
+        this.broadcast("approval.updated", this.approvalView(id, approval));
     }
   }
 

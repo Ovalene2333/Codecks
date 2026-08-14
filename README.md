@@ -28,6 +28,8 @@ Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，�
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
 - 查看运行、空闲、待审批和异常；接收增量回复；发送指令、粘贴图片、中断 turn、批准或拒绝命令与文件修改
+- 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
+- 历史输入消息可带回输入框编辑或直接重发；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 命令：`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`、`/status`，以及 `!command` 无沙箱执行
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 
@@ -74,11 +76,11 @@ npm run dev
 
 远程访问拆成三层，互不绑定：
 
-| 层 | 做什么 | 常用参数 |
-| --- | --- | --- |
-| 监听 | Deck 听哪个网卡 | `--lan`、`--host`、`--port` |
-| 暴露 | 要不要、以及怎么把本地端口接到外面 | `--expose`、`--public-origin` |
-| 鉴权 | 谁能打开控制台 | `REMOTE_TOKEN`、`--token`、`--no-token` |
+| 层   | 做什么                             | 常用参数                                |
+| ---- | ---------------------------------- | --------------------------------------- |
+| 监听 | Deck 听哪个网卡                    | `--lan`、`--host`、`--port`             |
+| 暴露 | 要不要、以及怎么把本地端口接到外面 | `--expose`、`--public-origin`           |
+| 鉴权 | 谁能打开控制台                     | `REMOTE_TOKEN`、`--token`、`--no-token` |
 
 启动后会生成访问令牌，并把带令牌的入口打印到终端。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌。`--public-origin` 或任何 `--expose` 都会视为远程入口，即使只监听 `127.0.0.1` 也会发令牌。
 
@@ -187,12 +189,12 @@ npm start
 
 ### 兼容入口与注意
 
-| 旧参数 | 等同于 |
-| --- | --- |
-| `--cf-tunnel` / `--share-once` | `--expose cloudflare:quick` |
-| `--share` | `--expose cloudflare:share` |
-| `--named-tunnel <名称>` | `--expose cloudflare:named=<名称>` |
-| `--public-origin <url>` | `--expose announce --public-origin <url>` |
+| 旧参数                         | 等同于                                    |
+| ------------------------------ | ----------------------------------------- |
+| `--cf-tunnel` / `--share-once` | `--expose cloudflare:quick`               |
+| `--share`                      | `--expose cloudflare:share`               |
+| `--named-tunnel <名称>`        | `--expose cloudflare:named=<名称>`        |
+| `--public-origin <url>`        | `--expose announce --public-origin <url>` |
 
 `--share` 必须同时有 `CF_TUNNEL_TOKEN` 和主机名（`CF_TUNNEL_HOSTNAME` / `--share-host` / `--public-origin`）。`--expose command` 默认抓输出里第一个非回环 `https://`；扫不到就加 `--tunnel-url-pattern` 或 `--public-origin`。
 
@@ -218,27 +220,27 @@ codex --remote ws://127.0.0.1:<runtime-port>
 
 复制 [`.env.example`](.env.example) 为 `.env` 后按需填写。不要提交 `.env`。
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `HOST` | `127.0.0.1` | HTTP 监听地址 |
-| `PORT` | `4174` | HTTP 端口 |
-| `REMOTE_TOKEN` | _(空)_ | API / WebSocket Bearer 令牌；非本机监听时必填 |
-| `CODEX_BIN` | `codex` | Codex CLI 路径 |
-| `CODEX_WSL_BIN` | `codex` | Windows `--wsl` 模式下的 WSL 内 Codex CLI |
-| `CODEX_WSL_SHELL` | `bash` | 加载 WSL Codex `PATH` 的登录 shell |
-| `CODEX_WSL_HOME` | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home |
-| `DATA_DIR` | `.data` | Deck 偏好、项目缓存与自定义供应商元数据 |
-| `CODEX_DECK_RUNTIME_PORT` | _(自动)_ | 仅监听本机的 Codex control WebSocket 端口 |
-| `CC_SWITCH_DB` | _(自动发现)_ | CC Switch SQLite 数据库绝对路径 |
-| `CODEX_DECK_EXPOSE` | _(空)_ | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |
-| `CODEX_DECK_PUBLIC_ORIGIN` | _(空)_ | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN` |
-| `CODEX_DECK_TUNNEL_BIN` | _(空)_ | `command` 供应商的可执行文件 |
-| `CODEX_DECK_TUNNEL_ARGS` | _(空)_ | `command` 参数模板，支持 `{port}`、`{url}` |
-| `CODEX_DECK_TUNNEL_URL_PATTERN` | _(自动)_ | 从命令输出提取公网 URL 的正则 |
-| `CODEX_DECK_CLOUDFLARED` | _(PATH)_ | `cloudflared` 可执行文件 |
-| `CODEX_DECK_TUNNEL_PROTOCOL` | `http2` | Cloudflare Quick Tunnel 传输协议 |
-| `CF_TUNNEL_TOKEN` | _(空)_ | Named Tunnel connector token（`--share`） |
-| `CF_TUNNEL_HOSTNAME` | _(空)_ | 固定公网域名（`--share`） |
+| 变量                            | 默认值         | 说明                                                                    |
+| ------------------------------- | -------------- | ----------------------------------------------------------------------- |
+| `HOST`                          | `127.0.0.1`    | HTTP 监听地址                                                           |
+| `PORT`                          | `4174`         | HTTP 端口                                                               |
+| `REMOTE_TOKEN`                  | _(空)_         | API / WebSocket Bearer 令牌；非本机监听时必填                           |
+| `CODEX_BIN`                     | `codex`        | Codex CLI 路径                                                          |
+| `CODEX_WSL_BIN`                 | `codex`        | Windows `--wsl` 模式下的 WSL 内 Codex CLI                               |
+| `CODEX_WSL_SHELL`               | `bash`         | 加载 WSL Codex `PATH` 的登录 shell                                      |
+| `CODEX_WSL_HOME`                | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home                                     |
+| `DATA_DIR`                      | `.data`        | Deck 偏好、项目缓存与自定义供应商元数据                                 |
+| `CODEX_DECK_RUNTIME_PORT`       | _(自动)_       | 仅监听本机的 Codex control WebSocket 端口                               |
+| `CC_SWITCH_DB`                  | _(自动发现)_   | CC Switch SQLite 数据库绝对路径                                         |
+| `CODEX_DECK_EXPOSE`             | _(空)_         | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |
+| `CODEX_DECK_PUBLIC_ORIGIN`      | _(空)_         | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN`               |
+| `CODEX_DECK_TUNNEL_BIN`         | _(空)_         | `command` 供应商的可执行文件                                            |
+| `CODEX_DECK_TUNNEL_ARGS`        | _(空)_         | `command` 参数模板，支持 `{port}`、`{url}`                              |
+| `CODEX_DECK_TUNNEL_URL_PATTERN` | _(自动)_       | 从命令输出提取公网 URL 的正则                                           |
+| `CODEX_DECK_CLOUDFLARED`        | _(PATH)_       | `cloudflared` 可执行文件                                                |
+| `CODEX_DECK_TUNNEL_PROTOCOL`    | `http2`        | Cloudflare Quick Tunnel 传输协议                                        |
+| `CF_TUNNEL_TOKEN`               | _(空)_         | Named Tunnel connector token（`--share`）                               |
+| `CF_TUNNEL_HOSTNAME`            | _(空)_         | 固定公网域名（`--share`）                                               |
 
 ### CC Switch
 

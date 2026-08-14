@@ -1,10 +1,12 @@
 :root {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
-    "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-  --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text",
-    "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono",
-    monospace;
+  --font-sans:
+    "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-display:
+    "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono:
+    "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --fs-meta: 11px;
   --fs-caption: 12px;
   --fs-ui: 13px;
@@ -262,6 +264,25 @@ button:disabled {
   color: #dce3eb;
   font-size: var(--fs-ui);
   font-weight: 620;
+}
+
+.confirm-actions > button,
+.approval-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.confirm-actions > button {
+  flex: 1 1 0;
+  width: 96px;
+  max-width: 140px;
+}
+
+.approval-actions > button {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .confirm-actions button:hover:not(:disabled),

@@ -1,23 +1,20 @@
-import { Activity, Command, GitFork, ScanSearch } from "lucide-react";
+import {
+  Activity,
+  Command,
+  GitFork,
+  Pencil,
+  RotateCcw,
+  ScanSearch,
+} from "lucide-react";
 import { displayCommand, displayText, fmtTime } from "../format";
 import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown } from "./markdown";
 import { userImageParts } from "./images";
+import type { StreamedAgentMessage } from "./streaming";
+import { userMessageText } from "./user-message";
 
-export function userText(item: any) {
-  if (Array.isArray(item?.content)) {
-    const texts = item.content
-      .filter(
-        (part: any) =>
-          !part?.type || part.type === "text" || part.type === "inputText",
-      )
-      .map((part: any) => displayText(part?.text ?? part))
-      .filter(Boolean);
-    if (texts.length) return texts.join("\n");
-  }
-  return displayText(item?.text ?? item?.content);
-}
+export const userText = userMessageText;
 
 function UnknownItem({ item }: { item: any }) {
   let raw = "";
@@ -37,37 +34,72 @@ function UnknownItem({ item }: { item: any }) {
 function TurnItem({
   item,
   streamed,
-  hideAgent,
   cwd,
   onCopy,
+  onEditUserMessage,
+  onResendUserMessage,
+  messageActionsDisabled,
 }: {
   item: any;
   streamed?: string;
-  hideAgent?: boolean;
   cwd?: string;
   onCopy?: () => void;
+  onEditUserMessage?: (item: any) => void;
+  onResendUserMessage?: (item: any) => void;
+  messageActionsDisabled?: boolean;
 }) {
   if (item.type === "userMessage") {
     const images = userImageParts(item);
     const text = userText(item);
     return (
-      <div className="message user">
-        {images.length > 0 && (
-          <div className="message-images">
-            {images.map((image, index) =>
-              image.url.startsWith("data:image/") ||
-              image.url.startsWith("blob:") ||
-              /^https?:/i.test(image.url) ? (
-                <img key={`${image.url}-${index}`} src={image.url} alt={image.alt || "图片"} />
-              ) : (
-                <span key={`${image.url}-${index}`} className="local-image">
-                  {image.alt || image.url}
-                </span>
-              ),
+      <div className="user-message-wrap">
+        <div className="message user">
+          {images.length > 0 && (
+            <div className="message-images">
+              {images.map((image, index) =>
+                image.url.startsWith("data:image/") ||
+                image.url.startsWith("blob:") ||
+                /^https?:/i.test(image.url) ? (
+                  <img
+                    key={`${image.url}-${index}`}
+                    src={image.url}
+                    alt={image.alt || "图片"}
+                  />
+                ) : (
+                  <span key={`${image.url}-${index}`} className="local-image">
+                    {image.alt || image.url}
+                  </span>
+                ),
+              )}
+            </div>
+          )}
+          {text}
+        </div>
+        {(onEditUserMessage || onResendUserMessage) && (
+          <div className="message-actions" aria-label="消息操作">
+            {onEditUserMessage && (
+              <button
+                type="button"
+                title="编辑后重发"
+                onClick={() => onEditUserMessage(item)}
+              >
+                <Pencil />
+                编辑
+              </button>
+            )}
+            {onResendUserMessage && (
+              <button
+                type="button"
+                title="重新发送"
+                disabled={messageActionsDisabled}
+                onClick={() => onResendUserMessage(item)}
+              >
+                <RotateCcw />
+                重发
+              </button>
             )}
           </div>
         )}
-        {text}
       </div>
     );
   }
@@ -86,10 +118,15 @@ function TurnItem({
       </div>
     );
   if (item.type === "agentMessage") {
-    if (hideAgent) return <></>;
     return (
-      <div className="message agent">
-        <AssistantMarkdown text={displayText(item.text)} onCopy={onCopy} />
+      <div
+        className={`message agent ${streamed !== undefined ? "streaming" : ""}`}
+      >
+        <AssistantMarkdown
+          text={streamed !== undefined ? streamed : displayText(item.text)}
+          onCopy={onCopy}
+        />
+        {streamed !== undefined && <i />}
       </div>
     );
   }
@@ -132,10 +169,7 @@ function TurnItem({
   }
   if (item.type === "fileChange")
     return (
-      <FileDiff
-        changes={item.changes as FileChange[] | undefined}
-        cwd={cwd}
-      />
+      <FileDiff changes={item.changes as FileChange[] | undefined} cwd={cwd} />
     );
   return <UnknownItem item={item} />;
 }
@@ -147,17 +181,29 @@ export function TurnBlock({
   streamed,
   onCopy,
   onForkFrom,
+  onEditUserMessage,
+  onResendUserMessage,
+  messageActionsDisabled,
 }: {
   turn: any;
   index: number;
   thread: ThreadSummary;
-  streamed?: string;
+  streamed: StreamedAgentMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
+  onEditUserMessage?: (item: any) => void;
+  onResendUserMessage?: (item: any) => void;
+  messageActionsDisabled?: boolean;
 }) {
   const active =
-    turn.id === thread.activeTurnId || turn.status === "inProgress";
+    turn.id === thread.activeTurnId ||
+    turn.status === "inProgress" ||
+    turn.status === "running";
   const completed = !active && turn.status !== "running";
+  const streamedByItem = new Map(
+    active ? streamed.map((message) => [message.itemId, message.text]) : [],
+  );
+  const renderedStreamIds = new Set<string>();
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
@@ -168,22 +214,34 @@ export function TurnBlock({
         {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
         {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
       </header>
-      {(Array.isArray(turn.items) ? turn.items : []).map((item: any) => (
-        <TurnItem
-          key={item.id || `${item.type}-${item.command || ""}`}
-          item={item}
-          streamed={streamed}
-          hideAgent={Boolean(streamed && active && item.type === "agentMessage")}
-          cwd={thread.cwd}
-          onCopy={onCopy}
-        />
-      ))}
-      {streamed && active && (
-        <div className="message agent streaming">
-          <AssistantMarkdown text={streamed} onCopy={onCopy} />
-          <i />
-        </div>
-      )}
+      {(Array.isArray(turn.items) ? turn.items : []).map((item: any) => {
+        const liveText =
+          item.type === "agentMessage" && item.id
+            ? streamedByItem.get(String(item.id))
+            : undefined;
+        if (liveText !== undefined) renderedStreamIds.add(String(item.id));
+        return (
+          <TurnItem
+            key={item.id || `${item.type}-${item.command || ""}`}
+            item={item}
+            streamed={liveText}
+            cwd={thread.cwd}
+            onCopy={onCopy}
+            onEditUserMessage={onEditUserMessage}
+            onResendUserMessage={onResendUserMessage}
+            messageActionsDisabled={messageActionsDisabled}
+          />
+        );
+      })}
+      {active &&
+        streamed
+          .filter((message) => !renderedStreamIds.has(message.itemId))
+          .map((message) => (
+            <div className="message agent streaming" key={message.itemId}>
+              <AssistantMarkdown text={message.text} onCopy={onCopy} />
+              <i />
+            </div>
+          ))}
       {completed && turn.id && onForkFrom && (
         <button
           type="button"

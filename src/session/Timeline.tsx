@@ -3,28 +3,39 @@ import { Folder, GitBranch } from "lucide-react";
 import type { Approval, ApprovalResolveBody, ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { ApprovalCard } from "./ApprovalCard";
+import { AssistantMarkdown } from "./markdown";
 import { TurnBlock } from "./TurnBlock";
+import type { PendingUserMessage } from "./optimistic";
+import type { StreamedAgentMessage } from "./streaming";
 
 export function Timeline({
   thread,
   turns,
   streamed,
+  pendingUsers,
   approvals,
   origin,
   onResolve,
   onCopy,
   onForkFrom,
   onOpenOrigin,
+  onEditUserMessage,
+  onResendUserMessage,
+  messageActionsDisabled,
 }: {
   thread: ThreadSummary;
   turns: any[];
-  streamed?: string;
+  streamed: StreamedAgentMessage[];
+  pendingUsers: PendingUserMessage[];
   approvals: Approval[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
   onResolve: (id: string, body: ApprovalResolveBody) => void;
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
+  onEditUserMessage?: (item: any) => void;
+  onResendUserMessage?: (item: any) => void;
+  messageActionsDisabled?: boolean;
 }) {
   const timeline = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
@@ -56,12 +67,14 @@ export function Timeline({
       element.scrollHeight - element.scrollTop - element.clientHeight;
     followOutput.current = distanceFromBottom < 80;
   };
+  const hasActiveTurn = turns.some(
+    (turn) =>
+      turn?.id === thread.activeTurnId ||
+      turn?.status === "inProgress" ||
+      turn?.status === "running",
+  );
   return (
-    <div
-      className="timeline"
-      ref={timeline}
-      onScroll={rememberScrollPosition}
-    >
+    <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
       <div className="session-meta">
         <Folder />
         {thread.cwd}
@@ -92,9 +105,37 @@ export function Timeline({
               streamed={streamed}
               onCopy={onCopy}
               onForkFrom={onForkFrom}
+              onEditUserMessage={onEditUserMessage}
+              onResendUserMessage={onResendUserMessage}
+              messageActionsDisabled={messageActionsDisabled}
             />
           </RenderErrorBoundary>
         ))}
+        {pendingUsers.map((message) => (
+          <section className="turn-block optimistic-turn" key={message.id}>
+            <header className="turn-head">正在发送</header>
+            <div className="message user">
+              {message.images.length > 0 && (
+                <div className="message-images">
+                  {message.images.map((image) => (
+                    <img key={image.id} src={image.url} alt={image.name} />
+                  ))}
+                </div>
+              )}
+              {message.text}
+            </div>
+          </section>
+        ))}
+        {!hasActiveTurn && streamed.length > 0 && (
+          <section className="turn-block active live-turn">
+            {streamed.map((message) => (
+              <div className="message agent streaming" key={message.itemId}>
+                <AssistantMarkdown text={message.text} onCopy={onCopy} />
+                <i />
+              </div>
+            ))}
+          </section>
+        )}
       </div>
       <div className="timeline-approvals">
         {approvals.map((approval) => (

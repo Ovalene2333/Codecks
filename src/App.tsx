@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, KeyRound, Menu } from "lucide-react";
 import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
-import type {
-  ProjectRecord,
-  Snapshot,
-  ThreadSummary,
-} from "./types";
+import type { ProjectRecord, Snapshot, ThreadSummary } from "./types";
 import {
   filterProjectGroups,
   mergeProjectGroups,
@@ -20,7 +16,12 @@ import {
   writeSnapshotCache,
   writeUiCache,
 } from "./cache";
-import { ActionSheet, ConfirmDialog, RenderErrorBoundary, ToastStack } from "./ui";
+import {
+  ActionSheet,
+  ConfirmDialog,
+  RenderErrorBoundary,
+  ToastStack,
+} from "./ui";
 import { Sidebar } from "./layout/Sidebar";
 import { ChatWorkspace } from "./session/ChatWorkspace";
 import { Welcome } from "./welcome/Welcome";
@@ -32,12 +33,15 @@ import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
 import { UsageDrawer } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
+import { appendCodexEvent } from "./session/streaming";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 
 export function App() {
   const [snapshot, setSnapshot] = useState(() => readSnapshotCache() || empty);
-  const [loading, setLoading] = useState(() => !hasSidebarData(readSnapshotCache()));
+  const [loading, setLoading] = useState(
+    () => !hasSidebarData(readSnapshotCache()),
+  );
   const [selected, setSelected] = useState<string>();
   const [library, setLibrary] = useState<"active" | "archived">("active");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -137,15 +141,20 @@ export function App() {
             ...current,
             threads: next.archived
               ? current.threads.filter((thread) => !same(thread))
-              : [next, ...current.threads.filter((thread) => !same(thread))].sort(
-                  (a, b) => b.updatedAt - a.updatedAt,
-                ),
+              : [
+                  next,
+                  ...current.threads.filter((thread) => !same(thread)),
+                ].sort((a, b) => b.updatedAt - a.updatedAt),
             archivedThreads: next.archived
               ? [
                   next,
-                  ...(current.archivedThreads || []).filter((thread) => !same(thread)),
+                  ...(current.archivedThreads || []).filter(
+                    (thread) => !same(thread),
+                  ),
                 ].sort((a, b) => b.updatedAt - a.updatedAt)
-              : (current.archivedThreads || []).filter((thread) => !same(thread)),
+              : (current.archivedThreads || []).filter(
+                  (thread) => !same(thread),
+                ),
           }));
         } else if (message.type === "thread.deleted") {
           const id = message.data.threadId;
@@ -186,7 +195,9 @@ export function App() {
           setSnapshot((current) => ({
             ...current,
             approvals: [
-              ...current.approvals.filter((item) => item.id !== message.data.id),
+              ...current.approvals.filter(
+                (item) => item.id !== message.data.id,
+              ),
               message.data,
             ],
           }));
@@ -205,7 +216,7 @@ export function App() {
             ),
           }));
         else if (message.type === "codex.event")
-          setEvents((current) => [...current.slice(-150), message.data]);
+          setEvents((current) => appendCodexEvent(current, message.data));
       };
       ws.onclose = () => {
         timer = window.setTimeout(connect, 2500);
@@ -216,9 +227,7 @@ export function App() {
   }, [authError]);
 
   const libraryThreads =
-    library === "archived"
-      ? snapshot.archivedThreads || []
-      : snapshot.threads;
+    library === "archived" ? snapshot.archivedThreads || [] : snapshot.threads;
 
   const projects = useMemo(() => {
     const groups = mergeProjectGroups(snapshot.projects || [], libraryThreads);
@@ -323,7 +332,9 @@ export function App() {
     threads: ThreadSummary[],
     work: (thread: ThreadSummary) => Promise<void>,
   ) => {
-    const results = await Promise.allSettled(threads.map((thread) => work(thread)));
+    const results = await Promise.allSettled(
+      threads.map((thread) => work(thread)),
+    );
     const failed = results.filter((item) => item.status === "rejected").length;
     return { ok: results.length - failed, failed };
   };
@@ -344,8 +355,8 @@ export function App() {
       title: "归档项目",
       body: (
         <p>
-          将归档 <b>{project.name}</b> 下的 <b>{targets.length}</b> 个现有会话？可在归档箱恢复。
-          不会改动磁盘上的项目文件。
+          将归档 <b>{project.name}</b> 下的 <b>{targets.length}</b>{" "}
+          个现有会话？可在归档箱恢复。 不会改动磁盘上的项目文件。
           {running ? " 运行中或待确认的会话可能无法归档。" : ""}
         </p>
       ),
@@ -381,7 +392,8 @@ export function App() {
       title: "恢复项目",
       body: (
         <p>
-          将恢复 <b>{project.name}</b> 下的 <b>{targets.length}</b> 个归档会话到现有库？
+          将恢复 <b>{project.name}</b> 下的 <b>{targets.length}</b>{" "}
+          个归档会话到现有库？
         </p>
       ),
       confirmLabel: "恢复项目",
@@ -456,7 +468,9 @@ export function App() {
 
   const origin = current?.forkedFromId
     ? (() => {
-        const source = allThreads.find((item) => item.id === current.forkedFromId);
+        const source = allThreads.find(
+          (item) => item.id === current.forkedFromId,
+        );
         return source
           ? {
               name: source.name,
@@ -504,7 +518,9 @@ export function App() {
       <Sidebar
         show={sidebar}
         hiddenOnMobile={Boolean(current)}
-        projectCount={mergeProjectGroups(snapshot.projects || [], snapshot.threads).length}
+        projectCount={
+          mergeProjectGroups(snapshot.projects || [], snapshot.threads).length
+        }
         sessionCount={snapshot.threads.length}
         archivedCount={(snapshot.archivedThreads || []).length}
         library={library}
@@ -537,12 +553,12 @@ export function App() {
         onAddInProject={(project) =>
           setThreadModal({
             cwd: project.cwd,
-            project: snapshot.projects?.find((item) => item.key === project.key),
+            project: snapshot.projects?.find(
+              (item) => item.key === project.key,
+            ),
           })
         }
-        onPin={(project) =>
-          saveProject(project, { pinned: !project.pinned })
-        }
+        onPin={(project) => saveProject(project, { pinned: !project.pinned })}
         onHide={(project) => saveProject(project, { hidden: true })}
         onRenameProject={(project) => setRename({ kind: "project", project })}
         onDefaults={(project) =>
@@ -598,6 +614,7 @@ export function App() {
             }
           >
             <ChatWorkspace
+              key={sessionKey(current)}
               thread={current}
               provider={snapshot.providers.find(
                 (provider) => provider.id === current.providerId,
@@ -629,7 +646,9 @@ export function App() {
             onOpenProject={(project) =>
               setThreadModal({
                 cwd: project.cwd,
-                project: snapshot.projects?.find((item) => item.key === project.key),
+                project: snapshot.projects?.find(
+                  (item) => item.key === project.key,
+                ),
               })
             }
             onUsage={() => setUsageOpen(true)}
@@ -776,7 +795,8 @@ export function App() {
             },
             {
               label: "复制为整段分支",
-              disabled: sheet.status === "running" || sheet.status === "waiting",
+              disabled:
+                sheet.status === "running" || sheet.status === "waiting",
               onClick: async () => {
                 const created = await post(
                   `/threads/${sheet.providerId}/${sheet.id}/fork`,
@@ -788,7 +808,8 @@ export function App() {
             },
             {
               label: "切换供应商",
-              disabled: sheet.status === "running" || sheet.status === "waiting",
+              disabled:
+                sheet.status === "running" || sheet.status === "waiting",
               onClick: () => setSwitchThread(sheet),
             },
             {
@@ -843,7 +864,9 @@ export function App() {
         <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
           <SessionToolbar
             thread={current}
-            locked={current.status === "running" || current.status === "waiting"}
+            locked={
+              current.status === "running" || current.status === "waiting"
+            }
             onSettings={async (settings) => {
               await api(`/threads/${current.providerId}/${current.id}`, {
                 method: "PATCH",

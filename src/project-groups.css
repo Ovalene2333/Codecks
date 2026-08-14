@@ -472,6 +472,9 @@
 }
 .input-action .icon-btn {
   flex: none;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
   border: 1px solid #2c3746;
   background: #111821;
 }
@@ -625,6 +628,11 @@
   .wsl-cwd-btn {
     min-width: 44px;
     min-height: 44px;
+  }
+  .input-action .icon-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
