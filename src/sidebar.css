@@ -61,15 +61,9 @@
   flex: none;
   min-height: 36px;
   padding: 0 11px;
-  border: 0;
-  border-radius: 9px;
-  background: var(--purple);
-  color: #f6f3ff;
   font-size: 12px;
-  font-weight: 650;
   cursor: pointer;
 }
-.new-session-btn:hover { filter: brightness(1.08); }
 .new-session-btn svg { width: 14px; height: 14px; }
 
 .library-bar {
@@ -213,7 +207,7 @@
 .pin-mark {
   width: 11px !important;
   height: 11px !important;
-  color: #c4b5fd;
+  color: var(--text-dim);
 }
 
 .session-more {
@@ -248,15 +242,15 @@
 }
 .session-row:hover,
 .session-row:focus-visible {
-  background: #121922;
+  background: var(--surface);
   outline: none;
 }
 .session-row.selected {
-  border-left-color: var(--purple);
-  background: #161321;
+  border-left-color: transparent;
+  background: var(--surface-2);
 }
 .session-row--fork {
-  box-shadow: inset 10px 0 0 -8px #7c5bd055;
+  box-shadow: inset 2px 0 0 var(--line);
 }
 .session-row-top {
   display: flex;
@@ -344,10 +338,10 @@
   max-width: 48%;
   min-width: 0;
   padding: 0 7px;
-  border: 1px solid color-mix(in srgb, var(--provider, #8b6cff) 46%, #26303d);
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--provider, #8b6cff) 16%, #111821);
-  color: color-mix(in srgb, var(--provider, #8b6cff) 82%, #f3f6fb);
+  background: transparent;
+  color: var(--text-dim);
   line-height: 16px;
   overflow: hidden;
   text-overflow: ellipsis;

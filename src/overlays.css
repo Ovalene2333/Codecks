@@ -1,10 +1,5 @@
 :root {
-  --text: #e8edf5;
-  --text-dim: #8b97a8;
-  --card: #121821;
-  --danger: #fb7185;
-  --warn: #f59e0b;
-  --purple: #8b6cff;
+  --card: var(--surface);
 }
 .toast-stack {
   position: fixed;
@@ -18,10 +13,10 @@
 .toast {
   min-width: 120px;
   padding: 8px 14px;
-  border: 1px solid #3c3159;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #1a1526;
-  color: #efe7ff;
+  background: var(--surface-2);
+  color: var(--text);
   font-size: 12px;
   animation: toast-in 160ms ease;
 }

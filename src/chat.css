@@ -136,7 +136,7 @@
 .context-track i {
   display: block;
   height: 100%;
-  background: var(--purple);
+  background: var(--accent);
 }
 .context-bar span {
   font-family: var(--font-mono);
@@ -162,10 +162,10 @@
   gap: 6px;
   width: fit-content;
   margin: 0 auto 18px;
-  border: 1px solid #3c3159;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: #171325;
-  color: #c4b5fd;
+  background: var(--surface);
+  color: var(--text-dim);
   padding: 6px 10px;
   font-size: 11px;
   cursor: pointer;
@@ -193,9 +193,9 @@
 .message.user {
   max-width: 76%;
   margin-left: auto;
-  background: #1d1930;
-  border: 1px solid #3a3354;
-  border-radius: 16px 16px 4px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 4px 12px;
   padding: 10px 14px;
   font-size: 14.5px;
   line-height: 1.55;
@@ -221,7 +221,7 @@
 .markdown blockquote {
   margin: 0 0 0.9em;
   padding: 0.15em 0 0.15em 12px;
-  border-left: 2px solid #3b3358;
+  border-left: 2px solid var(--line);
   color: var(--text-dim);
 }
 .markdown hr {
@@ -329,7 +329,7 @@
 .command-card,
 .command-row { border-left-color: #4b5565; }
 .command-card.running,
-.command-row.running { border-left-color: var(--purple); }
+.command-row.running { border-left-color: var(--wait); }
 .command-card.ok,
 .command-row.ok { border-left-color: var(--green); }
 .command-card.failed,
@@ -375,13 +375,13 @@
   margin-top: 6px;
   border: 0;
   background: transparent;
-  color: #8b7aad;
+  color: var(--text-dim);
   font-size: 11px;
   cursor: pointer;
   opacity: 0.55;
 }
 .fork-from-turn:hover,
-.fork-from-turn:focus { opacity: 1; color: #d5c7ff; }
+.fork-from-turn:focus { opacity: 1; color: var(--text); }
 .fork-from-turn svg { width: 13px; }
 .file-diff-list { display: grid; gap: 3px; margin: 4px 0; }
 .file-diff-card {
@@ -452,8 +452,8 @@
   font-size: 12px;
 }
 .approval-actions .approve.session {
-  background: #5b3fa8;
-  border-color: #7c5bd0;
+  background: var(--control);
+  border-color: var(--control-border);
 }
 .composer { padding-bottom: max(16px, env(safe-area-inset-bottom)); position: relative; }
 .composer-box { align-items: flex-end; padding: 8px; }
@@ -462,8 +462,8 @@
 .composer.compacting textarea { color: var(--text-dim); }
 .composer > small { display: none; }
 .composer.drag-over .composer-box {
-  border-color: #7c5bd0;
-  box-shadow: 0 0 0 3px rgb(124 91 208 / 18%);
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px rgb(201 196 184 / 14%);
 }
 .composer-box .attach {
   width: 36px;
@@ -548,7 +548,7 @@
 .slash-menu button:hover { background: #1a2330; }
 .slash-menu code {
   min-width: 88px;
-  color: #c4b5fd;
+  color: var(--text);
   font-size: 12px;
 }
 .slash-menu span { color: var(--text-dim); font-size: 12px; }
@@ -567,7 +567,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  color: #c4b5fd;
+  color: var(--text-dim);
   font-size: 13px;
 }
 .review-row.done { color: var(--text-dim); }
@@ -579,9 +579,9 @@
   font-size: 14px;
 }
 .recent-projects {
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin: 0 0 18px;
 }
 .recent-projects > button {
@@ -591,16 +591,13 @@
   width: 100%;
   min-height: 56px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--card);
   color: inherit;
   text-align: left;
   cursor: pointer;
 }
 .recent-projects b { display: block; }
 .recent-projects small { color: var(--text-dim); }
-.recent-projects span { margin-left: auto; color: #c4b5fd; font-size: 11px; }
+.recent-projects span { margin-left: auto; color: var(--text-dim); font-size: 11px; }
 .pill-btn {
   border: 1px solid var(--line);
   border-radius: 20px;
