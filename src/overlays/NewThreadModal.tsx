@@ -15,12 +15,14 @@ import type {
 import { Modal } from "../ui";
 import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
 import { basename } from "../format";
+import { isWslCwd, toWslCwd } from "../wsl-path";
 
 export function NewThreadModal({
   providers,
   initialCwd = "",
   project,
   preferences,
+  runtimeWsl = false,
   onClose,
   onCreated,
 }: {
@@ -28,6 +30,7 @@ export function NewThreadModal({
   initialCwd?: string;
   project?: ProjectRecord;
   preferences?: Snapshot["preferences"];
+  runtimeWsl?: boolean;
   onClose: () => void;
   onCreated: (p: string, id: string) => void;
 }) {
@@ -102,8 +105,32 @@ export function NewThreadModal({
               required
               value={form.cwd}
               onChange={(e) => setForm({ ...form, cwd: e.target.value })}
-              placeholder="D:\\Code\\project 或 /mnt/d/Code/project"
+              placeholder={
+                runtimeWsl
+                  ? "/home/you/project 或 /mnt/d/Code/project"
+                  : "D:\\Code\\project 或 /mnt/d/Code/project"
+              }
             />
+            {runtimeWsl ? (
+              <button
+                type="button"
+                className={`wsl-cwd-btn${isWslCwd(form.cwd) ? " is-wsl" : ""}`}
+                title={
+                  isWslCwd(form.cwd) ? "已是 WSL 目录" : "切换为 WSL 目录"
+                }
+                disabled={
+                  !form.cwd.trim() || toWslCwd(form.cwd) === form.cwd.trim()
+                }
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    cwd: toWslCwd(current.cwd),
+                  }))
+                }
+              >
+                WSL
+              </button>
+            ) : null}
             <button
               type="button"
               className="icon-btn"

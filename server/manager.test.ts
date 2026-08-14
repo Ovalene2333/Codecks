@@ -1362,3 +1362,16 @@ test("configPending follows connection overlay revision", () => {
   assert.equal(manager.runtimeStatus().configPending, false);
 });
 
+test("runtimeStatus reports WSL mode from the constructor", () => {
+  const native = new CodexManager({ listPublic: () => [] } as any, "/tmp");
+  assert.equal(native.runtimeStatus().runtimeWsl, false);
+  const wsl = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(wsl.runtimeStatus().runtimeWsl, true);
+});
+

@@ -290,6 +290,7 @@ app.get(
   route(async (req) =>
     listDirectories(
       typeof req.query.path === "string" ? req.query.path : undefined,
+      { useWsl },
     ),
   ),
 );

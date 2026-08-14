@@ -170,6 +170,7 @@ export interface RuntimeStatus {
   rateLimits?: RateLimits | null;
   rateLimitsError?: string;
   archiveError?: string;
+  runtimeWsl?: boolean;
 }
 
 export interface RpcMessage {

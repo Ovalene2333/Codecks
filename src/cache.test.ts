@@ -147,6 +147,20 @@ test("compactSnapshot keeps only sidebar fields", () => {
   assert.equal(next.threads[0]?.tokenUsage, undefined);
 });
 
+test("compactSnapshot keeps runtimeWsl so the WSL cwd button can hydrate", () => {
+  const next = compactSnapshot(
+    snapshot({
+      runtime: {
+        online: true,
+        starting: false,
+        remoteUrl: "ws://127.0.0.1:1",
+        runtimeWsl: true,
+      },
+    }),
+  );
+  assert.equal(next.runtime?.runtimeWsl, true);
+});
+
 test("thread cache returns the last write and dedupes inflight loads", async () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());

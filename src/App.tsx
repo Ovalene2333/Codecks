@@ -665,6 +665,7 @@ export function App() {
           initialCwd={threadModal.cwd}
           project={threadModal.project}
           preferences={snapshot.preferences}
+          runtimeWsl={Boolean(snapshot.runtime?.runtimeWsl)}
           onClose={() => setThreadModal(null)}
           onCreated={(providerId, id) => {
             setSelected(`${providerId}:${id}`);

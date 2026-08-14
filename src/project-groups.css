@@ -468,11 +468,37 @@
 }
 .input-action input {
   flex: 1;
+  min-width: 0;
 }
 .input-action .icon-btn {
   flex: none;
   border: 1px solid #2c3746;
   background: #111821;
+}
+.wsl-cwd-btn {
+  flex: none;
+  min-width: 44px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #2c3746;
+  border-radius: 8px;
+  background: #111821;
+  color: #97a3b2;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wsl-cwd-btn:hover:not(:disabled) {
+  color: #eef2f7;
+  background: #1d2631;
+}
+.wsl-cwd-btn.is-wsl,
+.wsl-cwd-btn:disabled {
+  color: #c4b5fd;
+  border-color: #5b4a9a;
+}
+.wsl-cwd-btn:disabled {
+  cursor: default;
 }
 .text-btn {
   justify-self: start;
@@ -593,6 +619,10 @@
   .sync-note.pending .primary {
     width: 100%;
     margin-left: 0;
+    min-height: 44px;
+  }
+  .wsl-cwd-btn {
+    min-width: 44px;
     min-height: 44px;
   }
 }

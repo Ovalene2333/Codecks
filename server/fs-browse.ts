@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listWslDirectories } from "./fs-browse-wsl.js";
 
 const MAX_ENTRIES = 200;
 const DRIVE_LETTERS = "CDEFGHIJKLMNOPQRSTUVWXYZAB";
@@ -17,7 +18,21 @@ export interface DirListing {
   entries: DirEntry[];
 }
 
-export async function listDirectories(target?: string): Promise<DirListing> {
+export function isWslFsPath(target?: string) {
+  return Boolean(target?.startsWith("/"));
+}
+
+export async function listDirectories(
+  target?: string,
+  options: {
+    useWsl?: boolean;
+    listWsl?: (path: string) => Promise<DirListing>;
+  } = {},
+): Promise<DirListing> {
+  if (options.useWsl && isWslFsPath(target)) {
+    const listWsl = options.listWsl ?? listWslDirectories;
+    return listWsl(target!);
+  }
   const home = os.homedir();
   if (!target) {
     if (process.platform === "win32") return listWindowsRoots(home);

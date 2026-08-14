@@ -195,6 +195,7 @@ export interface RuntimeSnapshot {
   rateLimits?: RateLimits | null;
   rateLimitsError?: string;
   archiveError?: string;
+  runtimeWsl?: boolean;
 }
 
 export interface Snapshot {

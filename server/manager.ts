@@ -285,6 +285,7 @@ export class CodexManager extends EventEmitter {
       rateLimits: this.rateLimits,
       rateLimitsError: this.rateLimitsError,
       archiveError: this.archiveError,
+      runtimeWsl: this.useWsl,
     };
   }
 

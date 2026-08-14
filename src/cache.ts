@@ -131,6 +131,7 @@ export function compactSnapshot(snapshot: Snapshot): Snapshot {
           starting: snapshot.runtime.starting,
           remoteUrl: snapshot.runtime.remoteUrl,
           error: snapshot.runtime.error,
+          runtimeWsl: snapshot.runtime.runtimeWsl,
         }
       : undefined,
     approvals: [],
