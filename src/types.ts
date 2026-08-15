@@ -96,6 +96,7 @@ export interface ConnectionOverlay {
 }
 
 export interface ProjectDefaults extends ConnectionOverlay {
+  agentId?: "codex" | "claude";
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -114,6 +115,7 @@ export interface ProjectRecord {
 }
 
 export interface DeckPreferences extends ConnectionOverlay {
+  lastAgentId?: "codex" | "claude";
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;
@@ -224,6 +226,16 @@ export interface AgentDescriptor {
   starting?: boolean;
   error?: string;
   capabilities: AgentCapabilities;
+}
+
+export interface AgentProfile {
+  id: string;
+  agentId: "codex" | "claude";
+  name: string;
+  color?: string;
+  current?: boolean;
+  enabled?: boolean;
+  online?: boolean;
 }
 
 export interface Snapshot {

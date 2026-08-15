@@ -4,7 +4,7 @@ import {
   MoreHorizontal,
   Settings,
 } from "lucide-react";
-import type { Provider, ThreadSummary } from "../types";
+import type { AgentCapabilities, Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
@@ -14,6 +14,8 @@ import type { ApprovalPolicy, Personality, SandboxMode } from "../types";
 export function ChatHeader({
   thread,
   provider,
+  agentName,
+  capabilities,
   pendingCount,
   locked,
   onBack,
@@ -25,6 +27,8 @@ export function ChatHeader({
 }: {
   thread: ThreadSummary;
   provider?: Provider;
+  agentName: string;
+  capabilities: AgentCapabilities;
   pendingCount: number;
   locked?: boolean;
   onBack: () => void;
@@ -62,33 +66,43 @@ export function ChatHeader({
             <Status status={thread.status} compact />
             <span className="chat-location">
               {basename(thread.cwd)}
-              {provider?.name ? ` · ${provider.name}` : ""}
+              {thread.agentId === "claude"
+                ? ` · ${agentName}`
+                : provider?.name
+                  ? ` · ${provider.name}`
+                  : ""}
             </span>
           </p>
         </div>
         <div className="chat-header-actions">
-          <button
-            className="provider-switch secondary"
-            onClick={onSwitchProvider}
-            disabled={locked}
-            title="为此 Session 切换供应商"
-          >
-            <ArrowRightLeft />
-            <span>{provider?.name || "供应商"}</span>
-          </button>
-          <ContextBar
-            usage={thread.tokenUsage}
-            compacting={thread.compacting}
-            onCompact={onCompact}
-          />
-          <button
-            type="button"
-            className="text-btn compact-btn mobile-header-compact"
-            onClick={onCompact}
-            disabled={thread.compacting}
-          >
-            压缩
-          </button>
+          {thread.agentId !== "claude" && (
+            <button
+              className="provider-switch secondary"
+              onClick={onSwitchProvider}
+              disabled={locked}
+              title="为此 Session 切换供应商"
+            >
+              <ArrowRightLeft />
+              <span>{provider?.name || "供应商"}</span>
+            </button>
+          )}
+          {capabilities.sessionSettings && (
+            <ContextBar
+              usage={thread.tokenUsage}
+              compacting={thread.compacting}
+              onCompact={onCompact}
+            />
+          )}
+          {capabilities.sessionSettings && (
+            <button
+              type="button"
+              className="text-btn compact-btn mobile-header-compact"
+              onClick={onCompact}
+              disabled={thread.compacting}
+            >
+              压缩
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn appearance-trigger"
@@ -122,18 +136,22 @@ export function ChatHeader({
           className="mobile-provider"
           title={provider?.name || "供应商未知"}
         >
-          {provider?.name || "供应商未知"}
+          {thread.agentId === "claude"
+            ? agentName
+            : provider?.name || "供应商未知"}
         </span>
       </div>
-      <div className="chat-header-row2">
-        <SessionToolbar
-          thread={thread}
-          locked={locked}
-          onSettings={onSettings}
-          onCompact={onCompact}
-          showContext={false}
-        />
-      </div>
+      {capabilities.sessionSettings && (
+        <div className="chat-header-row2">
+          <SessionToolbar
+            thread={thread}
+            locked={locked}
+            onSettings={onSettings}
+            onCompact={onCompact}
+            showContext={false}
+          />
+        </div>
+      )}
     </header>
   );
 }

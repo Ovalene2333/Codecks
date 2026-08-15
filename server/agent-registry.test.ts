@@ -26,6 +26,7 @@ class FakeAgent extends EventEmitter implements AgentAdapter {
   starts = 0;
   refreshes = 0;
   stops = 0;
+  lastRead?: { providerId: string; threadId: string };
 
   constructor(readonly id: AgentId) {
     super();
@@ -58,6 +59,23 @@ class FakeAgent extends EventEmitter implements AgentAdapter {
           updatedAt: 1,
         },
       ],
+      archivedThreads:
+        this.id === "codex"
+          ? [
+              {
+                agentId: this.id,
+                id: "codex-archived",
+                providerId: "codex-profile",
+                name: "archived",
+                preview: "",
+                cwd: "/tmp",
+                model: "default",
+                status: "idle" as const,
+                archived: true,
+                updatedAt: 1,
+              },
+            ]
+          : [],
       approvals: [],
     };
   }
@@ -72,6 +90,11 @@ class FakeAgent extends EventEmitter implements AgentAdapter {
 
   busyThreads() {
     return [];
+  }
+
+  async readThread(providerId: string, threadId: string) {
+    this.lastRead = { providerId, threadId };
+    return { id: threadId };
   }
 
   restart() {
@@ -141,4 +164,17 @@ test("registry reports startup failure when every adapter fails", async () => {
   const registry = new AgentRegistry([codex, claude]);
 
   await assert.rejects(registry.startAll(), /所有 Agent 均启动失败/);
+});
+
+test("registry reads archived sessions through the generic Agent route", async () => {
+  const codex = new FakeAgent("codex");
+  const registry = new AgentRegistry([codex]);
+
+  assert.deepEqual(await registry.readThread("codex", "codex-archived"), {
+    id: "codex-archived",
+  });
+  assert.deepEqual(codex.lastRead, {
+    providerId: "codex-profile",
+    threadId: "codex-archived",
+  });
 });

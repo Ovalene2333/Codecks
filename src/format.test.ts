@@ -15,12 +15,19 @@ import { userText } from "./session/TurnBlock";
 import { userImageParts } from "./session/images";
 
 test("sessionKey joins provider and thread id", () => {
-  assert.equal(sessionKey({ providerId: "p", id: "t" }), "p:t");
+  assert.equal(sessionKey({ providerId: "p", id: "t" }), "codex:p:t");
+  assert.equal(
+    sessionKey({ agentId: "claude", providerId: "p", id: "t" }),
+    "claude:p:t",
+  );
 });
 
 test("threadIsUnsent is true only before the first user message", () => {
   assert.equal(threadIsUnsent({ preview: "新会话", status: "idle" }), true);
-  assert.equal(threadIsUnsent({ preview: "写一个文件", status: "idle" }), false);
+  assert.equal(
+    threadIsUnsent({ preview: "写一个文件", status: "idle" }),
+    false,
+  );
   assert.equal(
     threadIsUnsent({ preview: "新会话", tokenUsage: { used: 12 } }),
     false,
@@ -57,15 +64,24 @@ test("displayText flattens strings, arrays, and text objects", () => {
 test("distinctPreview hides titles that are just truncated last messages", () => {
   assert.equal(distinctPreview("新会话", "新会话"), "");
   assert.equal(
-    distinctPreview("根据 D:\\Code\\pcd_editor 的内容，完...", "根据 D:\\Code\\pcd_editor 的内容，完善文档"),
+    distinctPreview(
+      "根据 D:\\Code\\pcd_editor 的内容，完...",
+      "根据 D:\\Code\\pcd_editor 的内容，完善文档",
+    ),
     "",
   );
-  assert.equal(distinctPreview("文档整理", "请继续改 README"), "请继续改 README");
+  assert.equal(
+    distinctPreview("文档整理", "请继续改 README"),
+    "请继续改 README",
+  );
 });
 
 test("displayCommand unwraps zsh -lc wrappers", () => {
-  assert.equal(displayCommand("/usr/bin/zsh -lc 'npm run build'"), "npm run build");
-  assert.equal(displayCommand("zsh -lc \"rg foo\""), "rg foo");
+  assert.equal(
+    displayCommand("/usr/bin/zsh -lc 'npm run build'"),
+    "npm run build",
+  );
+  assert.equal(displayCommand('zsh -lc "rg foo"'), "rg foo");
   assert.equal(
     displayCommand("/usr/bin/zsh -lc 'sed -n '1,240p' src/image_prompt.ts'"),
     "sed -n '1,240p' src/image_prompt.ts",
@@ -90,7 +106,10 @@ test("userText does not assume content is an array of parts", () => {
     }),
     "hello",
   );
-  assert.equal(userText({ type: "userMessage", content: "legacy string" }), "legacy string");
+  assert.equal(
+    userText({ type: "userMessage", content: "legacy string" }),
+    "legacy string",
+  );
 });
 
 test("userImageParts reads data-url attachments from user messages", () => {

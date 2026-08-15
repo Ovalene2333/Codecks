@@ -3,8 +3,8 @@
 Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 必须各自实现 adapter；Deck 不把不同 CLI 的私有协议混进同一个 manager。
 
-Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入生产后端与
-通用 Agent API，网页会话入口尚未接线；OpenCode 尚未实现。
+Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入生产后端、
+通用 Agent API 和网页核心会话流程；OpenCode 尚未实现。
 
 ## 目录与职责
 

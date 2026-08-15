@@ -103,6 +103,17 @@ test("a new turn drops the previous stream for the same provider and thread", ()
   assert.deepEqual(appendCodexEvent([previous], started), [started]);
 });
 
+test("a new Claude turn does not drop a matching Codex stream", () => {
+  const previous = delta("Codex 回复", "old");
+  const started = {
+    agentId: "claude",
+    providerId: "official",
+    method: "turn/started",
+    params: { threadId: "thread-1", turn: { id: "turn-2" } },
+  };
+  assert.deepEqual(appendCodexEvent([previous], started), [previous, started]);
+});
+
 test("a completed agent item marks its accumulated stream as completed", () => {
   const events = appendCodexEvent([delta("完整回复", "msg-runtime")], {
     providerId: "official",

@@ -37,15 +37,13 @@ export function Composer({
   const running =
     Boolean(thread.activeTurnId) &&
     (thread.status === "running" || thread.status === "waiting");
-  const suggestions = matchingSlashCommands(text);
+  const suggestions = matchingSlashCommands(text, thread.agentId || "codex");
   const canSend = Boolean(text.trim() || images.length);
   useEffect(() => {
     const node = area.current;
     if (!node) return;
     node.style.height = "auto";
-    node.style.height = text
-      ? `${Math.min(node.scrollHeight, 160)}px`
-      : "";
+    node.style.height = text ? `${Math.min(node.scrollHeight, 160)}px` : "";
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
   useEffect(() => {

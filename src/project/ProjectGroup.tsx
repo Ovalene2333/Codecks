@@ -105,7 +105,10 @@ export function ProjectGroupView({
         const unseen = unseenSessions.has(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
-        const providerLabel = provider?.name || thread.providerId;
+        const providerLabel =
+          thread.agentId === "claude"
+            ? "Claude Code"
+            : provider?.name || thread.providerId;
         return (
           <div
             key={key}
@@ -153,7 +156,10 @@ export function ProjectGroupView({
                   className="provider-badge session-provider"
                   style={
                     {
-                      "--provider": provider?.color || "#8b6cff",
+                      "--provider":
+                        thread.agentId === "claude"
+                          ? "#d97757"
+                          : provider?.color || "#8b6cff",
                     } as CSSProperties
                   }
                   title={

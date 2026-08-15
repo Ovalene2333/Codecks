@@ -80,6 +80,10 @@ test("matchingSlashCommands filters as the user types", () => {
     matchingSlashCommands("/re").map((item) => item.name),
     ["/review"],
   );
+  assert.deepEqual(
+    matchingSlashCommands("/", "claude").map((item) => item.name),
+    ["/status", "/usage"],
+  );
   assert.match(incompleteCommandHint("/goal"), /目标/);
   assert.match(incompleteCommandHint("/fast turbo"), /on\|off/);
   assert.match(incompleteCommandHint("/mcp all"), /verbose/);

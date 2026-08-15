@@ -67,6 +67,7 @@ export function appendCodexEvent(events: any[], event: any) {
       ? updatedEvents.filter(
           (item) =>
             item?.method !== "item/agentMessage/delta" ||
+            (item?.agentId || "codex") !== (event?.agentId || "codex") ||
             item?.providerId !== event?.providerId ||
             item?.params?.threadId !== event?.params?.threadId,
         )

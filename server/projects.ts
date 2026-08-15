@@ -35,8 +35,7 @@ export function normalizeProjectPath(cwd: string) {
   }
   value = value.toLowerCase() || "未指定路径";
   const doubled = value.match(/^\/mnt\/([a-z])\/mnt\/\1(?:\/(.*))?$/);
-  if (doubled)
-    return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
+  if (doubled) return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
   return value;
 }
 
@@ -53,14 +52,17 @@ export function pickConnectionOverlay(
   const requestMaxRetries = source?.requestMaxRetries;
   const streamMaxRetries = source?.streamMaxRetries;
   const streamIdleTimeoutMs = source?.streamIdleTimeoutMs;
-  if (isRetryCount(requestMaxRetries)) next.requestMaxRetries = requestMaxRetries;
+  if (isRetryCount(requestMaxRetries))
+    next.requestMaxRetries = requestMaxRetries;
   if (isRetryCount(streamMaxRetries)) next.streamMaxRetries = streamMaxRetries;
   if (isIdleTimeout(streamIdleTimeoutMs))
     next.streamIdleTimeoutMs = streamIdleTimeoutMs;
   return next;
 }
 
-export function hasConnectionOverlay(source?: Partial<ConnectionOverlay> | null) {
+export function hasConnectionOverlay(
+  source?: Partial<ConnectionOverlay> | null,
+) {
   return Object.keys(pickConnectionOverlay(source)).length > 0;
 }
 
@@ -235,8 +237,7 @@ export class ProjectStore {
     this.prefs.streamIdleTimeoutMs = next.streamIdleTimeoutMs ?? undefined;
     if (next.requestMaxRetries == null) delete this.prefs.requestMaxRetries;
     if (next.streamMaxRetries == null) delete this.prefs.streamMaxRetries;
-    if (next.streamIdleTimeoutMs == null)
-      delete this.prefs.streamIdleTimeoutMs;
+    if (next.streamIdleTimeoutMs == null) delete this.prefs.streamIdleTimeoutMs;
     this.touchConnection(prev, next);
     await this.savePrefs();
     return this.prefs;
@@ -246,7 +247,8 @@ export class ProjectStore {
     input: Partial<ProjectRecord> & {
       cwd?: string;
       key?: string;
-      defaults?: ProjectDefaults & Partial<Record<keyof ConnectionOverlay, number | null>>;
+      defaults?: ProjectDefaults &
+        Partial<Record<keyof ConnectionOverlay, number | null>>;
     },
   ): Promise<ProjectRecord> {
     const cwd = (input.cwd || input.key || "").trim();
@@ -264,8 +266,7 @@ export class ProjectStore {
       defaults: defaults && Object.keys(defaults).length ? defaults : undefined,
       updatedAt: this.nextUpdatedAt(),
     };
-    if (input.defaults)
-      this.touchConnection(old?.defaults, record.defaults);
+    if (input.defaults) this.touchConnection(old?.defaults, record.defaults);
     this.projects.set(key, record);
     await this.saveProjects();
     return record;
@@ -277,6 +278,7 @@ export class ProjectStore {
   }
 
   async rememberCreate(input: {
+    agentId?: "codex" | "claude";
     cwd: string;
     providerId?: string;
     model?: string;
@@ -287,6 +289,7 @@ export class ProjectStore {
     const key = normalizeProjectPath(input.cwd);
     const old = this.projects.get(key);
     const defaults: ProjectDefaults = { ...old?.defaults };
+    if (input.agentId) defaults.agentId = input.agentId;
     if (!defaults.providerId && input.providerId)
       defaults.providerId = input.providerId;
     if (!defaults.model && input.model) defaults.model = input.model;
@@ -306,6 +309,7 @@ export class ProjectStore {
     });
     this.prefs = {
       ...this.prefs,
+      lastAgentId: input.agentId || this.prefs.lastAgentId,
       lastProviderId: input.providerId || this.prefs.lastProviderId,
       lastModel: input.model || this.prefs.lastModel,
       lastReasoningEffort:
@@ -367,14 +371,18 @@ export class ProjectStore {
 function stripUndefined<T extends object>(value?: T): Partial<T> {
   if (!value) return {};
   return Object.fromEntries(
-    Object.entries(value).filter(([, item]) => item !== undefined && item !== null),
+    Object.entries(value).filter(
+      ([, item]) => item !== undefined && item !== null,
+    ),
   ) as Partial<T>;
 }
 
 function mergeDefaults(
   old?: ProjectDefaults,
-  input?: (ProjectDefaults &
-    Partial<Record<keyof ConnectionOverlay, number | null>>) | undefined,
+  input?:
+    | (ProjectDefaults &
+        Partial<Record<keyof ConnectionOverlay, number | null>>)
+    | undefined,
 ): ProjectDefaults | undefined {
   if (!input) return old;
   const defaults: ProjectDefaults = {

@@ -41,6 +41,7 @@ import { UsageDrawer } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
+import { agentName, approvalPath, capabilitiesFor } from "./agents";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
 import {
@@ -268,7 +269,9 @@ export function App() {
         else if (message.type === "thread.updated") {
           const next = message.data as ThreadSummary;
           const same = (thread: ThreadSummary) =>
-            thread.id === next.id && thread.providerId === next.providerId;
+            thread.id === next.id &&
+            thread.providerId === next.providerId &&
+            (thread.agentId || "codex") === (next.agentId || "codex");
           setSnapshot((current) => ({
             ...current,
             threads: next.archived
@@ -328,7 +331,10 @@ export function App() {
             ...current,
             approvals: [
               ...current.approvals.filter(
-                (item) => item.id !== message.data.id,
+                (item) =>
+                  item.id !== message.data.id ||
+                  (item.agentId || "codex") !==
+                    (message.data.agentId || "codex"),
               ),
               message.data,
             ],
@@ -337,17 +343,25 @@ export function App() {
           setSnapshot((current) => ({
             ...current,
             approvals: current.approvals.map((item) =>
-              item.id === message.data.id ? { ...item, ...message.data } : item,
+              item.id === message.data.id &&
+              (item.agentId || "codex") === (message.data.agentId || "codex")
+                ? { ...item, ...message.data }
+                : item,
             ),
           }));
         else if (message.type === "approval.resolved")
           setSnapshot((current) => ({
             ...current,
             approvals: current.approvals.filter(
-              (item) => item.id !== message.data.approvalId,
+              (item) =>
+                item.id !== message.data.approvalId ||
+                (item.agentId || "codex") !== (message.data.agentId || "codex"),
             ),
           }));
-        else if (message.type === "codex.event")
+        else if (
+          message.type === "codex.event" ||
+          message.type === "agent.event"
+        )
           setEvents((current) => appendCodexEvent(current, message.data));
       };
       ws.onclose = () => {
@@ -490,6 +504,14 @@ export function App() {
       pushToast("这个项目没有可归档的现有会话");
       return;
     }
+    if (
+      targets.some(
+        (thread) => !capabilitiesFor(snapshot.agents, thread).archive,
+      )
+    ) {
+      pushToast("项目包含暂不支持归档的 Agent 会话，请逐个处理 Codex 会话");
+      return;
+    }
     const running = targets.some(
       (thread) => thread.status === "running" || thread.status === "waiting",
     );
@@ -559,6 +581,14 @@ export function App() {
 
   const deleteProject = (project: ProjectGroup) => {
     const targets = threadsForProject(allThreads, project.key);
+    if (
+      targets.some(
+        (thread) => !capabilitiesFor(snapshot.agents, thread).archive,
+      )
+    ) {
+      pushToast("项目包含暂不支持删除的 Agent 会话，不能批量删除项目");
+      return;
+    }
     setConfirm({
       title: "删除项目",
       body: (
@@ -612,7 +642,9 @@ export function App() {
 
   const resolveApproval = async (id: string, body: ApprovalResolveBody) => {
     try {
-      await post(`/approvals/${encodeURIComponent(id)}`, body);
+      const approval = snapshot.approvals.find((item) => item.id === id);
+      if (!approval) throw new Error("审批请求已不存在");
+      await post(approvalPath(approval), body);
       await refresh();
     } catch (error: any) {
       pushToast(error?.message || "审批处理失败");
@@ -794,6 +826,8 @@ export function App() {
               provider={snapshot.providers.find(
                 (provider) => provider.id === current.providerId,
               )}
+              agentName={agentName(snapshot.agents, current)}
+              capabilities={capabilitiesFor(snapshot.agents, current)}
               approvals={snapshot.approvals}
               events={events}
               origin={origin}
@@ -862,14 +896,15 @@ export function App() {
       )}
       {threadModal && (
         <NewThreadModal
+          agents={snapshot.agents || []}
           providers={snapshot.providers}
           initialCwd={threadModal.cwd}
           project={threadModal.project}
           preferences={snapshot.preferences}
           runtimeWsl={Boolean(snapshot.runtime?.runtimeWsl)}
           onClose={() => setThreadModal(null)}
-          onCreated={(providerId, id) => {
-            setSelected(sessionKey({ providerId, id }));
+          onCreated={(agentId, providerId, id) => {
+            setSelected(sessionKey({ agentId, providerId, id }));
             setLibrary("active");
             setTimeout(refresh, 400);
           }}
@@ -961,14 +996,20 @@ export function App() {
           actions={[
             {
               label: "重命名",
+              disabled: !capabilitiesFor(snapshot.agents, sheet)
+                .sessionSettings,
               onClick: () => setRename({ kind: "thread", thread: sheet }),
             },
             {
               label: "会话设置",
+              disabled: !capabilitiesFor(snapshot.agents, sheet)
+                .sessionSettings,
               onClick: () => setPhoneSettings(true),
             },
             {
               label: "压缩上下文",
+              disabled: !capabilitiesFor(snapshot.agents, sheet)
+                .sessionSettings,
               onClick: () =>
                 post(`/threads/${sheet.providerId}/${sheet.id}/compact`).then(
                   refresh,
@@ -976,6 +1017,7 @@ export function App() {
             },
             {
               label: "审查当前改动",
+              disabled: !capabilitiesFor(snapshot.agents, sheet).review,
               onClick: () =>
                 post(`/threads/${sheet.providerId}/${sheet.id}/review`).then(
                   refresh,
@@ -984,7 +1026,9 @@ export function App() {
             {
               label: "复制为整段分支",
               disabled:
-                sheet.status === "running" || sheet.status === "waiting",
+                !capabilitiesFor(snapshot.agents, sheet).fork ||
+                sheet.status === "running" ||
+                sheet.status === "waiting",
               onClick: async () => {
                 const created = await post(
                   `/threads/${sheet.providerId}/${sheet.id}/fork`,
@@ -1003,11 +1047,14 @@ export function App() {
             {
               label: "切换供应商",
               disabled:
-                sheet.status === "running" || sheet.status === "waiting",
+                sheet.agentId === "claude" ||
+                sheet.status === "running" ||
+                sheet.status === "waiting",
               onClick: () => setSwitchThread(sheet),
             },
             {
               label: sheet.archived ? "恢复会话" : "归档会话",
+              disabled: !capabilitiesFor(snapshot.agents, sheet).archive,
               onClick: () =>
                 setConfirm({
                   title: sheet.archived ? "恢复会话" : "归档会话",
@@ -1034,6 +1081,7 @@ export function App() {
             {
               label: "永久删除",
               danger: true,
+              disabled: !capabilitiesFor(snapshot.agents, sheet).archive,
               onClick: () =>
                 setConfirm({
                   title: "永久删除会话",
@@ -1054,30 +1102,32 @@ export function App() {
           ]}
         />
       )}
-      {phoneSettings && current && (
-        <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
-          <div className="phone-session-settings">
-            <SessionToolbar
-              thread={current}
-              locked={
-                current.status === "running" || current.status === "waiting"
-              }
-              onSettings={async (settings) => {
-                await api(`/threads/${current.providerId}/${current.id}`, {
-                  method: "PATCH",
-                  body: JSON.stringify({ settings }),
-                });
-                refresh();
-              }}
-              onCompact={() =>
-                post(
-                  `/threads/${current.providerId}/${current.id}/compact`,
-                ).then(refresh)
-              }
-            />
-          </div>
-        </Modal>
-      )}
+      {phoneSettings &&
+        current &&
+        capabilitiesFor(snapshot.agents, current).sessionSettings && (
+          <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
+            <div className="phone-session-settings">
+              <SessionToolbar
+                thread={current}
+                locked={
+                  current.status === "running" || current.status === "waiting"
+                }
+                onSettings={async (settings) => {
+                  await api(`/threads/${current.providerId}/${current.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ settings }),
+                  });
+                  refresh();
+                }}
+                onCompact={() =>
+                  post(
+                    `/threads/${current.providerId}/${current.id}/compact`,
+                  ).then(refresh)
+                }
+              />
+            </div>
+          </Modal>
+        )}
       {usageOpen && (
         <UsageDrawer
           runtime={snapshot.runtime}

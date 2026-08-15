@@ -100,9 +100,11 @@ npm run dev
 
 ### Claude Code 后端适配
 
-Codecks 会同时注册 Codex 与 Claude Code adapter。Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；在 WSL 中会跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。CC Switch 中 `app_type='claude'` 的配置档会被只读加载；`ANTHROPIC_AUTH_TOKEN` 等环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+Codecks 会同时注册 Codex 与 Claude Code adapter。新建 Session 时选择 Agent；同一实例和同一项目可以并存两种 Agent，会话创建后类型固定，项目会记住最近一次选择作为下次默认值。侧栏用 Agent 标签区分混合会话，不需要在启动 Codecks 时锁定类型。
 
-当前阶段只完成后端与通用 API，现有网页仍按 Codex 路由工作，尚未提供 Claude 会话入口。可用 API：
+Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；在 WSL 中会跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。CC Switch 中 `app_type='claude'` 的配置档会被只读加载；`ANTHROPIC_AUTH_TOKEN` 等环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+
+网页会按 `agentId` 使用通用 API，并根据 adapter 能力矩阵隐藏或禁用不支持的操作。可用 API：
 
 ```text
 GET  /api/agents/claude/profiles
