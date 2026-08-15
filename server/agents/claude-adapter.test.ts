@@ -4,7 +4,24 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ClaudeAdapter } from "./claude-adapter.js";
+import {
+  ClaudeAdapter,
+  findClaudeExecutable,
+  windowsClaudeLaunchSpec,
+} from "./claude-adapter.js";
+
+const relayProfile = {
+  id: "claude-cc-relay",
+  name: "Relay",
+  color: "#d97757",
+  current: true,
+  official: false,
+  supported: true,
+  env: {
+    ANTHROPIC_BASE_URL: "https://relay.example.test",
+    ANTHROPIC_AUTH_TOKEN: "relay-secret",
+  },
+};
 
 test("Claude history summaries reuse unchanged files across server instances", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "deck-claude-index-"));
@@ -83,20 +100,18 @@ test("Claude adapter creates, streams, approves, and completes a native session"
   const calls: any[] = [];
   let permissionResult: any;
   const queryFactory = mockQuery(async function* (params) {
-    const inputs = [];
-    for await (const input of params.prompt) inputs.push(input);
-    assert.equal(inputs[0].message.content[0].text, "ship it");
+    assert.equal(params.prompt, "ship it");
     yield {
       type: "system",
       subtype: "init",
       model: "claude-sonnet-test",
       cwd: "/work",
-      session_id: inputs[0].session_id,
+      session_id: params.options.extraArgs["session-id"],
     };
     yield {
       type: "stream_event",
       uuid: "message-1",
-      session_id: inputs[0].session_id,
+      session_id: params.options.extraArgs["session-id"],
       event: {
         type: "content_block_delta",
         index: 0,
@@ -130,12 +145,13 @@ test("Claude adapter creates, streams, approves, and completes a native session"
         output_tokens: 4,
       },
       modelUsage: { test: { contextWindow: 200_000 } },
-      session_id: inputs[0].session_id,
+      session_id: params.options.extraArgs["session-id"],
     };
   }, calls);
   const adapter = new ClaudeAdapter({
     queryFactory,
     historyFiles: async () => [],
+    initialProfiles: [relayProfile],
   });
   const events: any[] = [];
   adapter.on("event", (event) => events.push(event));
@@ -181,6 +197,37 @@ test("Claude adapter creates, streams, approves, and completes a native session"
   );
 });
 
+test("Claude executable discovery keeps Windows npm launchers", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "claude-launcher-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const launcher = path.join(root, "claude.cmd");
+  await writeFile(launcher, "@echo off\r\n");
+
+  assert.equal(findClaudeExecutable(launcher), launcher);
+  assert.deepEqual(
+    windowsClaudeLaunchSpec(
+      {
+        command: launcher,
+        args: ["--output-format", "stream-json"],
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe" },
+        signal: new AbortController().signal,
+      },
+      "win32",
+    ),
+    {
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        launcher,
+        "--output-format",
+        "stream-json",
+      ],
+    },
+  );
+});
+
 test("Claude adapter resumes history and keeps secrets server-side", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-adapter-"));
   const history = path.join(dir, "session-history.jsonl");
@@ -193,7 +240,12 @@ test("Claude adapter resumes history and keeps secrets server-side", async () =>
     "profile",
     "claude",
     "Private profile",
-    JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "super-secret" } }),
+    JSON.stringify({
+      env: {
+        ANTHROPIC_BASE_URL: "https://relay.example.test",
+        ANTHROPIC_AUTH_TOKEN: "super-secret",
+      },
+    }),
     null,
     1,
     0,
@@ -256,6 +308,7 @@ test("Claude adapter resumes history and keeps secrets server-side", async () =>
 test("Claude adapter records spawn errors and can be restarted repeatedly", async () => {
   const adapter = new ClaudeAdapter({
     historyFiles: async () => [],
+    initialProfiles: [relayProfile],
     queryFactory: (() => {
       throw new Error("spawn failed");
     }) as any,
@@ -276,6 +329,7 @@ test("Claude adapter coalesces concurrent startup", async () => {
   let loads = 0;
   let release!: () => void;
   const adapter = new ClaudeAdapter({
+    initialProfiles: [relayProfile],
     historyFiles: async () => {
       loads += 1;
       await new Promise<void>((resolve) => {
@@ -312,6 +366,7 @@ test("Claude adapter interrupts an active query", async () => {
   }) as any;
   const adapter = new ClaudeAdapter({
     historyFiles: async () => [],
+    initialProfiles: [relayProfile],
     queryFactory,
   });
   await adapter.startAll();
@@ -326,4 +381,29 @@ test("Claude adapter interrupts an active query", async () => {
   await adapter.interrupt(thread.providerId, thread.id, started.turn.id);
   await waitFor(() => adapter.listThreads()[0].status === "idle");
   assert.equal(interrupted, true);
+});
+
+test("Claude adapter exposes but rejects Claude Official profiles", async () => {
+  const officialProfile = {
+    ...relayProfile,
+    id: "claude-cc-official",
+    name: "Claude Official",
+    current: true,
+    official: true,
+    supported: false,
+    env: {},
+  };
+  const adapter = new ClaudeAdapter({
+    historyFiles: async () => [],
+    initialProfiles: [officialProfile],
+  });
+  await adapter.startAll();
+
+  assert.equal(adapter.descriptor().online, false);
+  assert.equal(adapter.publicProfiles()[0].enabled, false);
+  assert.equal(adapter.publicProfiles()[0].official, true);
+  await assert.rejects(
+    adapter.createThread(officialProfile.id, { cwd: "/work" }),
+    /不支持 Official/,
+  );
 });

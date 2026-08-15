@@ -131,7 +131,9 @@ export {
 - 将 assistant 文本、思考、tool use 和 tool result 归一化为通用 Turn item。
 - 将 SDK partial message 映射为带 `agentId='claude'` 的 `agent.event`。
 - 用 `canUseTool` 暂停工具执行，将批准一次、会话内批准和拒绝回送 SDK。
-- 只读加载 CC Switch `app_type='claude'` 配置；认证环境变量只传给查询进程。
+- 只读加载 CC Switch `app_type='claude'` 配置；仅允许带自定义
+  `ANTHROPIC_BASE_URL` 和 relay 凭据的中转配置，明确拒绝 Claude Official；认证
+  环境变量只传给查询进程。
 
 Claude 当前声明 `approvals`、`images` 和 `interrupt`。没有实现的 fork、archive、
 review、shell、MCP/Skills 枚举、模型枚举和动态会话设置保持关闭。网页接线时必须按

@@ -85,10 +85,15 @@ export function NewThreadModal({
       .then((result) => {
         if (cancelled) return;
         setProfiles(result.profiles);
-        const preferred = result.profiles.find((profile) => profile.current);
+        const preferred = result.profiles.find(
+          (profile) => profile.current && profile.enabled !== false,
+        );
+        const firstEnabled = result.profiles.find(
+          (profile) => profile.enabled !== false,
+        );
         setForm((current) => ({
           ...current,
-          providerId: preferred?.id || result.profiles[0]?.id || "",
+          providerId: preferred?.id || firstEnabled?.id || "",
         }));
       })
       .catch((err: any) => {
@@ -216,21 +221,42 @@ export function NewThreadModal({
             <select
               value={form.providerId}
               disabled={profilesLoading || profiles.length === 0}
-              onChange={(event) =>
-                setForm({ ...form, providerId: event.target.value })
-              }
+              onChange={(event) => {
+                const profile = profiles.find(
+                  (item) => item.id === event.target.value,
+                );
+                if (profile?.official) {
+                  event.currentTarget.value = form.providerId;
+                  window.alert(
+                    "you can't choose it because the world IS NOT Anthropic's world",
+                  );
+                  return;
+                }
+                if (profile?.enabled === false) {
+                  setError("此 Claude 中转配置缺少 API 地址或认证凭据");
+                  return;
+                }
+                setError("");
+                setForm({ ...form, providerId: event.target.value });
+              }}
             >
               {profilesLoading ? (
                 <option value="">正在读取…</option>
               ) : profiles.length ? (
-                profiles.map((profile) => (
-                  <option key={profile.id} value={profile.id}>
-                    {profile.name}
-                    {profile.current ? "（当前）" : ""}
+                <>
+                  <option value="" disabled>
+                    请选择 Claude 中转配置
                   </option>
-                ))
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                      {profile.current ? "（当前）" : ""}
+                      {profile.official ? "（不可用）" : ""}
+                    </option>
+                  ))}
+                </>
               ) : (
-                <option value="">使用 Claude Code 当前配置</option>
+                <option value="">未找到 CC Switch Claude 配置</option>
               )}
             </select>
           </label>
@@ -378,7 +404,7 @@ export function NewThreadModal({
           type="submit"
           disabled={
             submitting ||
-            (agentId === "codex" && !form.providerId) ||
+            !form.providerId ||
             profilesLoading
           }
         >

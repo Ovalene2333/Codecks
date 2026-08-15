@@ -106,7 +106,7 @@ npm run dev
 
 Codecks 会同时注册 Codex 与 Claude Code adapter。新建 Session 时选择 Agent；同一实例和同一项目可以并存两种 Agent，会话创建后类型固定，项目会记住最近一次选择作为下次默认值。侧栏用 Agent 标签区分混合会话，不需要在启动 Codecks 时锁定类型。
 
-Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；在 WSL 中会跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。CC Switch 中 `app_type='claude'` 的配置档会被只读加载；`ANTHROPIC_AUTH_TOKEN` 等环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；Windows npm `.cmd` 通过 `cmd.exe` 启动，在 WSL 中则跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。Codecks 只支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转配置，明确不支持 Claude Official；认证环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
 
 网页会按 `agentId` 使用通用 API，并根据 adapter 能力矩阵隐藏或禁用不支持的操作。可用 API：
 
@@ -119,7 +119,7 @@ POST /api/agents/claude/threads/:threadId/interrupt
 POST /api/agents/claude/approvals/:approvalId
 ```
 
-新建会话至少传入 `cwd`；`providerId` 可省略以使用 CC Switch 当前 Claude 配置或 Claude CLI 当前配置。Claude 的 fork、归档、review、独立 shell、MCP/Skills 列表和动态会话设置尚未开放，能力矩阵会将这些操作标为不可用。
+新建会话至少传入 `cwd`；`providerId` 可省略以使用 CC Switch 当前可用的 Claude 中转配置。Claude Official 配置会显示为不可用，后端也会拒绝直接调用。Claude 的 fork、归档、review、独立 shell、MCP/Skills 列表和动态会话设置尚未开放，能力矩阵会将这些操作标为不可用。
 
 ## 远程访问
 
@@ -279,7 +279,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_WSL_SHELL`               | `bash`         | 加载 WSL Codex `PATH` 的登录 shell                                      |
 | `CODEX_WSL_HOME`                | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home                                     |
 | `CLAUDE_CONFIG_DIR`             | 自动发现       | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`         |
-| `CLAUDE_BIN`                    | 自动发现       | Claude Code 原生可执行文件、启动脚本或 JavaScript 入口路径              |
+| `CLAUDE_BIN`                    | 自动发现       | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
 | `DATA_DIR`                      | `.data`        | Codecks 偏好、项目与用量缓存、自定义供应商元数据                        |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_       | 仅监听本机的 Codex control WebSocket 端口                               |
 | `CC_SWITCH_DB`                  | _(自动发现)_   | CC Switch SQLite 数据库绝对路径                                         |
