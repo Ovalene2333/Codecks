@@ -52,11 +52,34 @@ export function relativeTime(time: number) {
   }).format(time);
 }
 
+const TOKEN_NUMBER_FORMAT = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: true,
+});
+
+const TOKEN_UNITS = [
+  { divisor: 1_000, suffix: "K" },
+  { divisor: 1_000_000, suffix: "M" },
+  { divisor: 1_000_000_000, suffix: "B" },
+] as const;
+
 export function formatTokens(value?: number) {
   if (value == null || !Number.isFinite(value)) return "";
-  if (value < 1000) return String(Math.round(value));
-  if (value < 10_000) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-  return `${Math.round(value / 1000)}k`;
+  if (Math.abs(value) < 1_000)
+    return TOKEN_NUMBER_FORMAT.format(Math.round(value));
+
+  let unitIndex = 0;
+  for (let index = 1; index < TOKEN_UNITS.length; index += 1) {
+    if (Math.abs(value) < TOKEN_UNITS[index].divisor) break;
+    unitIndex = index;
+  }
+  while (unitIndex < TOKEN_UNITS.length - 1) {
+    const scaled = Math.abs(value) / TOKEN_UNITS[unitIndex].divisor;
+    if (Math.round(scaled * 100) / 100 < 1_000) break;
+    unitIndex += 1;
+  }
+  const unit = TOKEN_UNITS[unitIndex];
+  return `${TOKEN_NUMBER_FORMAT.format(value / unit.divisor)}${unit.suffix}`;
 }
 
 export function sessionKey(thread: {
