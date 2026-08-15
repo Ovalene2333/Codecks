@@ -197,12 +197,6 @@
   0% { background-position: 100% 0; }
   100% { background-position: -100% 0; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .icon-btn.refreshing svg,
-  .skeleton-project,
-  .skeleton-recent { animation: none; }
-}
-
 .project-heading { position: relative; min-height: 36px; }
 .pin-mark {
   width: 11px !important;

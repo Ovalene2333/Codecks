@@ -36,6 +36,18 @@ export const SLASH_COMMANDS = [
   { name: "!", hint: "无沙箱执行命令" },
 ] as const;
 
+const PANEL_COMMANDS = new Set([
+  "/model",
+  "/permissions",
+  "/skills",
+  "/mention",
+  "/mcp",
+]);
+
+export function opensCommandPanel(name: string) {
+  return PANEL_COMMANDS.has(name.toLowerCase());
+}
+
 export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   const text = raw.trim();
   if (text.startsWith("!")) {
@@ -52,10 +64,9 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   if (key === "diff") return { kind: "diff" };
   if (key === "status") return { kind: "status" };
   if (key === "usage") return { kind: "usage" };
-  if (key === "model") {
-    const [model, reasoningEffort] = arg.split(/\s+/).filter(Boolean);
-    return { kind: "model", model, reasoningEffort };
-  }
+  // Model changes must go through the picker. Treating arbitrary text after
+  // `/model` as a model id can poison the thread and only fail on its next turn.
+  if (key === "model") return { kind: "model" };
   if (key === "permissions") {
     const [sandbox, approvalPolicy] = arg.split(/\s+/).filter(Boolean);
     return { kind: "permissions", sandbox, approvalPolicy };

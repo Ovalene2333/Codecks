@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CircleStop, ImagePlus, Send, X } from "lucide-react";
 import type { ThreadSummary } from "../types";
-import { matchingSlashCommands } from "./commands";
+import { matchingSlashCommands, opensCommandPanel } from "./commands";
 import { collectComposerImages, type ComposerImage } from "./images";
 
 export function Composer({
@@ -12,6 +12,7 @@ export function Composer({
   onChange,
   onImages,
   onSend,
+  onCommand,
   onStop,
   onError,
   focusRequest = 0,
@@ -23,6 +24,7 @@ export function Composer({
   onChange: (value: string) => void;
   onImages: (images: ComposerImage[]) => void;
   onSend: () => void;
+  onCommand: (command: string) => void;
   onStop: () => void;
   onError?: (message: string) => void;
   focusRequest?: number;
@@ -61,6 +63,18 @@ export function Composer({
     }
   };
 
+  const selectSuggestion = (
+    item: (typeof suggestions)[number],
+    executePanelCommand: boolean,
+  ) => {
+    if (executePanelCommand && opensCommandPanel(item.name)) {
+      onCommand(item.name);
+      return;
+    }
+    onChange(item.name === "!" ? "!" : `${item.name} `);
+    area.current?.focus();
+  };
+
   return (
     <footer
       className={`composer ${running ? "running" : ""} ${compacting ? "compacting" : ""} ${dragOver ? "drag-over" : ""}`}
@@ -91,8 +105,7 @@ export function Composer({
               className={index === activeCmd ? "on" : ""}
               onMouseDown={(event) => {
                 event.preventDefault();
-                onChange(item.name === "!" ? "!" : `${item.name} `);
-                area.current?.focus();
+                selectSuggestion(item, true);
               }}
             >
               <code>{item.name}</code>
@@ -168,7 +181,7 @@ export function Composer({
             ) {
               event.preventDefault();
               const item = suggestions[activeCmd] || suggestions[0];
-              onChange(item.name === "!" ? "!" : `${item.name} `);
+              selectSuggestion(item, event.key === "Enter");
               return;
             }
             if (event.key === "Enter" && !event.shiftKey) {

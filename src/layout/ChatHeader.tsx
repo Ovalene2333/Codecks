@@ -1,4 +1,9 @@
-import { ArrowLeft, ArrowRightLeft, MoreHorizontal } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRightLeft,
+  MoreHorizontal,
+  Settings,
+} from "lucide-react";
 import type { Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { basename } from "../format";
@@ -13,6 +18,7 @@ export function ChatHeader({
   locked,
   onBack,
   onMenu,
+  onAppearance,
   onSwitchProvider,
   onSettings,
   onCompact,
@@ -23,6 +29,7 @@ export function ChatHeader({
   locked?: boolean;
   onBack: () => void;
   onMenu: () => void;
+  onAppearance: () => void;
   onSwitchProvider: () => void;
   onSettings: (settings: {
     model?: string;
@@ -69,7 +76,20 @@ export function ChatHeader({
             compacting={thread.compacting}
             onCompact={onCompact}
           />
-          <button className="icon-btn overflow-menu" onClick={onMenu} title="更多">
+          <button
+            type="button"
+            className="icon-btn appearance-trigger"
+            onClick={onAppearance}
+            title="外观设置"
+            aria-label="外观设置"
+          >
+            <Settings />
+          </button>
+          <button
+            className="icon-btn overflow-menu"
+            onClick={onMenu}
+            title="更多"
+          >
             <MoreHorizontal />
           </button>
         </div>

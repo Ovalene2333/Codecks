@@ -1,0 +1,737 @@
+/* Theme bridge for legacy component styles. Keep palette decisions in tokens.css. */
+html,
+body,
+#root,
+.app-shell,
+.workspace,
+.chat,
+.welcome,
+.auth-page {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.sidebar,
+aside {
+  background: var(--sidebar);
+  border-color: var(--line);
+}
+
+.chat-header {
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  border-color: var(--line);
+}
+
+.session-search,
+.library-segment,
+.toolbar-select select,
+.toolbar-select input,
+.form input,
+.form select,
+.auth-card input,
+.command-search,
+.wsl-cwd-btn,
+.provider-switch,
+.model-trigger {
+  border-color: var(--control-border);
+  background: var(--control);
+  color: var(--text);
+}
+
+.session-search > svg,
+.project-toggle > svg:first-child,
+.thread-meta,
+.thread-meta time,
+.thread-meta small,
+.turn-head,
+.command-help,
+.command-list span,
+.command-list small,
+.mcp-list summary span,
+.mcp-list p,
+.composer textarea::placeholder {
+  color: var(--text-faint);
+}
+
+.library-segment > button.on,
+.sidebar-meta .watch-strip button.active,
+.session-row.selected,
+.thread-list > button.selected,
+.session-row:hover,
+.recent-projects > button:hover,
+.recent-create:hover,
+.project-heading:hover,
+.command-list button:hover,
+.command-list button:focus-visible,
+.action-sheet button:hover,
+.icon-btn:hover:not(:disabled),
+.floating-menu:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.session-row-more:hover,
+.session-more:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.primary:active:not(:disabled),
+.new-session-btn:active:not(:disabled),
+.new-thread:active:not(:disabled),
+.send:active:not(:disabled) {
+  background: var(--accent-active);
+}
+
+.project-heading,
+.session-more,
+.session-row,
+.thread-list > button,
+.empty-list,
+.welcome-lead,
+.welcome-status,
+.recent-projects small,
+.composer > small,
+.chat-title p,
+.toolbar-select,
+.toolbar-hint,
+.appearance-resolution {
+  color: var(--text-dim);
+}
+
+.sync-note small,
+.sync-note.offline small,
+.task-error p,
+.task-error small {
+  color: currentColor;
+}
+
+.task-error b {
+  color: var(--danger-text);
+}
+
+.project-heading b,
+.pending-count {
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.recent-projects,
+.modal,
+.auth-card,
+.usage-drawer,
+.action-sheet,
+.provider-row,
+.command-list button,
+.mcp-list details,
+.approval-card,
+.usage-window,
+.migration-note,
+.terminal-connect,
+.slash-menu,
+.tool-row,
+.unknown-item,
+.file-diff {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.pill-btn,
+.system-pills span,
+.provider-row mark {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+
+.provider-logo {
+  background: color-mix(in srgb, var(--color) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--color) 34%, var(--line));
+}
+
+.timeline .tool-item,
+.timeline .tool-row {
+  border-left-color: var(--line-strong);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.timeline .tool-item svg,
+.timeline .tool-row svg,
+.file-diff-card summary svg {
+  color: var(--text-faint);
+}
+
+.timeline .tool-item pre,
+.timeline .tool-item > div,
+.timeline .tool-row pre,
+.timeline .tool-row > div {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--text-soft);
+}
+
+.timeline .tool-row:hover,
+.timeline .file-diff-card:hover {
+  background: var(--surface-muted);
+}
+
+.tool-command,
+.file-path,
+.copy-code {
+  color: var(--text-soft);
+}
+
+.modal,
+.usage-drawer {
+  box-shadow: 0 24px 80px var(--shadow);
+}
+
+.modal-backdrop {
+  background: var(--overlay);
+}
+
+.drawer-backdrop,
+.action-sheet-backdrop {
+  background: var(--overlay-soft);
+}
+
+.composer {
+  background: linear-gradient(transparent, var(--composer-fade) 22%);
+}
+
+.composer-box {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--shadow) 55%, transparent);
+}
+
+.composer textarea,
+.message.agent,
+.message.user,
+.approval-command-wrap,
+.tool-row pre,
+.unknown-item pre,
+.command-status {
+  color: var(--text-soft);
+}
+
+.markdown code,
+.code-block pre,
+.copy-code,
+.composer-images img,
+.message-images img,
+.composer-images button {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-soft);
+}
+
+.message-actions button {
+  color: var(--text-dim);
+}
+
+.message-actions button:hover:not(:disabled),
+.message-actions button:focus-visible,
+.slash-menu button.on,
+.slash-menu button:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.message.user {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.tool-row,
+.unknown-item,
+.file-diff {
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+}
+
+.tool-row summary,
+.unknown-item summary,
+.file-diff summary,
+.tool-row pre,
+.unknown-item pre,
+.approval-command-wrap,
+.approval-actions,
+.mcp-list details > div {
+  border-color: var(--line);
+}
+
+.tool-row pre,
+.unknown-item pre,
+.approval-command-wrap,
+.command-status {
+  background: var(--surface-muted);
+}
+
+.approval-actions {
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+}
+
+.confirm-actions button,
+.approval-actions button,
+.text-btn {
+  border-color: var(--control-border);
+  background: var(--control);
+  color: var(--text);
+}
+
+.danger-btn,
+.icon-btn.danger,
+.action-sheet button.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.file-diff .add {
+  background: var(--diff-add-bg);
+  color: var(--diff-add-text);
+}
+
+.file-diff .del {
+  background: var(--diff-del-bg);
+  color: var(--diff-del-text);
+}
+
+.file-diff .meta,
+.file-diff-card .kind {
+  color: var(--diff-meta);
+}
+
+.error-banner,
+.source-error,
+.task-error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.sync-note {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--ok);
+}
+
+.sync-note.offline,
+.sync-note.pending {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+
+.approval-icon {
+  border-color: color-mix(in srgb, var(--wait) 35%, var(--line));
+  background: color-mix(in srgb, var(--wait) 10%, var(--surface));
+}
+
+.command-list button,
+.mcp-list details,
+.provider-row {
+  background: var(--surface-raised);
+}
+
+.permission-list,
+.question-block,
+.approval-cwd,
+.form .section-label,
+.dir-toolbar code {
+  color: var(--text-dim);
+}
+
+.form input.readonly {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+
+.input-action .icon-btn,
+.dir-list,
+.dir-list > button,
+.thread-actions {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+}
+
+.dir-list > button {
+  border-bottom-color: var(--line);
+}
+
+.dir-list > button:hover,
+.thread-actions button:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.thread-actions {
+  box-shadow: 0 18px 45px var(--shadow);
+}
+
+.thread-actions button {
+  color: var(--text-soft);
+}
+
+.migration-note {
+  background: color-mix(in srgb, var(--surface-2) 60%, var(--surface));
+}
+
+.migration-note > svg,
+.migration-note b {
+  color: var(--text);
+}
+
+.migration-note p,
+.migration-origin {
+  color: var(--text-dim);
+}
+
+.project-defaults-form .form-actions button[type="button"] {
+  border-color: var(--control-border);
+  background: var(--control);
+  color: var(--text);
+}
+
+* {
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.thread-list::-webkit-scrollbar-thumb,
+.timeline::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+}
+
+.command-list button:hover,
+.command-list button:focus-visible {
+  border-color: var(--line-strong);
+}
+
+.usage-window,
+.session-meta,
+.origin-chip,
+.context-track,
+.slash-menu,
+.command-status {
+  border-color: var(--line);
+  background: var(--surface-muted);
+}
+
+.session-meta,
+.origin-chip,
+.command-status {
+  color: var(--text-dim);
+}
+
+.context-track {
+  background: var(--surface-2);
+}
+
+.skeleton-project,
+.skeleton-recent {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-from) 0%,
+    var(--skeleton-mid) 45%,
+    var(--skeleton-from) 100%
+  );
+  background-size: 200% 100%;
+}
+
+.floating-menu,
+.appearance-trigger-home {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text-dim);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 40%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.appearance-trigger-home {
+  position: absolute;
+  z-index: 8;
+  top: 16px;
+  right: 18px;
+}
+
+.appearance-trigger svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Appearance settings */
+.appearance-settings-modal {
+  width: min(560px, 100%);
+}
+
+.appearance-settings {
+  display: grid;
+  gap: 18px;
+}
+
+.appearance-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.appearance-group legend {
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+
+.appearance-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.appearance-options label {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    background-color var(--ease),
+    transform var(--ease);
+}
+
+.appearance-options label:hover {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.appearance-options label.selected {
+  border-color: var(--focus-ring);
+  background: color-mix(in srgb, var(--focus-ring) 10%, var(--surface));
+}
+
+.appearance-options input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.appearance-options label:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.appearance-option-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+}
+
+.appearance-options label.selected .appearance-option-icon {
+  border-color: var(--focus-ring);
+  color: var(--text);
+}
+
+.appearance-option-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.appearance-options b,
+.appearance-options small {
+  display: block;
+}
+
+.appearance-options b {
+  font-size: var(--fs-caption);
+  line-height: 1.3;
+}
+
+.appearance-options small {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: 1.35;
+}
+
+.appearance-resolution {
+  margin: -2px 0 0;
+  font-size: var(--fs-caption);
+}
+
+/* Waiting and transition states */
+.chat {
+  animation: view-enter 220ms ease-out both;
+}
+
+.modal-backdrop {
+  animation: backdrop-enter 140ms ease-out both;
+}
+
+.modal-backdrop > .modal {
+  animation: modal-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.turn-block.active,
+.optimistic-turn,
+.approval-card,
+.command-browser {
+  animation: content-enter 180ms ease-out both;
+}
+
+.status.starting i,
+.status.running i,
+.watch-dot.running {
+  animation: status-breathe 1.6s ease-in-out infinite;
+}
+
+.status.waiting i,
+.watch-dot.waiting {
+  animation: waiting-ring 1.4s ease-out infinite;
+}
+
+.command-row.running .tool-status,
+.context-bar.pulse span {
+  animation: text-pulse 1.2s ease-in-out infinite;
+}
+
+.command-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.loading-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.loading-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: loading-dot 1.05s ease-in-out infinite;
+}
+
+.loading-dots i:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.loading-dots i:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes backdrop-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@keyframes content-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+
+@keyframes status-breathe {
+  50% {
+    opacity: 0.48;
+    transform: scale(0.78);
+  }
+}
+
+@keyframes waiting-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--wait) 48%, transparent);
+  }
+  75%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+@keyframes text-pulse {
+  50% {
+    opacity: 0.48;
+  }
+}
+
+@keyframes loading-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+html[data-motion="off"] *,
+html[data-motion="off"] *::before,
+html[data-motion="off"] *::after {
+  scroll-behavior: auto !important;
+  animation: none !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0ms !important;
+}
+
+@media (max-width: 760px) {
+  .appearance-trigger-home {
+    top: 14px;
+    right: 12px;
+  }
+
+  .appearance-options {
+    grid-template-columns: 1fr;
+  }
+
+  .appearance-options label {
+    min-height: 60px;
+  }
+
+  .chat-header-actions {
+    gap: 4px;
+  }
+}

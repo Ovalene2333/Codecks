@@ -483,6 +483,9 @@ export function ChatWorkspace({
         onChange={(text) => updateDraft({ ...draft, text })}
         onImages={(images) => updateDraft({ ...draft, images })}
         onSend={send}
+        onCommand={(command) =>
+          void submit({ text: command, images: draft.images }, true)
+        }
         onError={setError}
         onStop={() =>
           post(`/threads/${thread.providerId}/${thread.id}/interrupt`, {

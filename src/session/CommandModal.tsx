@@ -289,7 +289,16 @@ function CommandListState({ loading, error, empty, children }: any) {
   return (
     <div className="command-browser">
       {children}
-      {loading && <p className="command-help">正在读取…</p>}
+      {loading && (
+        <div className="command-loading" role="status">
+          <span className="loading-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          正在读取
+        </div>
+      )}
       {!loading && error && <p className="error-banner">{error}</p>}
       {!loading && !error && empty && (
         <p className="command-help">没有匹配项。</p>

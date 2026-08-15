@@ -2,25 +2,148 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <meta name="theme-color" content="#0A0B0D" />
     <link rel="icon" href="/src/assets/logo.svg" type="image/svg+xml" />
     <title>Codex Deck</title>
+    <script>
+      (function () {
+        try {
+          var value = JSON.parse(
+            localStorage.getItem("codex-deck:appearance:v1") || "{}",
+          );
+          var theme =
+            value.theme === "light" || value.theme === "dark"
+              ? value.theme
+              : matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          var motion =
+            value.motion === "on" || value.motion === "off"
+              ? value.motion
+              : matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "off"
+                : "on";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.motion = motion;
+          document.documentElement.style.colorScheme = theme;
+          document.querySelector('meta[name="theme-color"]').content =
+            theme === "light" ? "#f6f7f9" : "#0a0b0d";
+        } catch (error) {}
+      })();
+    </script>
     <style>
-      html,body{margin:0;min-height:100%;background:#0A0B0D;color:#F2F4F7;font-family:"Geist","Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
-      .boot-shell{display:flex;height:100dvh}
-      .boot-aside{width:344px;min-width:344px;border-right:1px solid #23282F;background:#0C0E11;padding:18px 14px;box-sizing:border-box}
-      .boot-brand{font-weight:600;font-size:15px;margin:6px 4px 16px}
-      .boot-search{height:36px;border:1px solid #23282F;border-radius:8px;background:#12151A;margin-bottom:14px}
-      .boot-row{height:32px;margin:0 0 6px;border-radius:8px;background:linear-gradient(90deg,#12151A 0%,#181C22 45%,#12151A 100%);background-size:200% 100%;animation:boot-shimmer 1.2s ease-in-out infinite}
-      .boot-row:nth-child(2){width:92%}
-      .boot-row:nth-child(3){width:86%}
-      .boot-row:nth-child(5){width:80%}
-      .boot-name{height:32px;margin:0 0 6px;padding:0 8px;border-radius:8px;display:flex;align-items:center;color:#9aa6b6;font-size:13px;font-weight:600;overflow:hidden;white-space:nowrap}
-      .boot-main{flex:1;display:grid;place-items:center;color:#97a3b2;font-size:14px}
-      @keyframes boot-shimmer{to{background-position:-100% 0}}
-      @media (max-width:760px){.boot-aside{width:100%;min-width:0}}
-      @media (prefers-reduced-motion:reduce){.boot-row{animation:none}}
+      :root {
+        --boot-bg: #0a0b0d;
+        --boot-sidebar: #0c0e11;
+        --boot-surface: #12151a;
+        --boot-mid: #181c22;
+        --boot-text: #f2f4f7;
+        --boot-dim: #9aa6b6;
+        --boot-line: #23282f;
+      }
+      html[data-theme="light"] {
+        --boot-bg: #f6f7f9;
+        --boot-sidebar: #fff;
+        --boot-surface: #e8ebef;
+        --boot-mid: #f7f8fa;
+        --boot-text: #171a1f;
+        --boot-dim: #626b78;
+        --boot-line: #d9dee5;
+      }
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--boot-bg);
+        color: var(--boot-text);
+        font-family:
+          "Geist", "Segoe UI Variable Text", "Segoe UI", "PingFang SC",
+          "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      .boot-shell {
+        display: flex;
+        height: 100dvh;
+      }
+      .boot-aside {
+        width: 344px;
+        min-width: 344px;
+        border-right: 1px solid var(--boot-line);
+        background: var(--boot-sidebar);
+        padding: 18px 14px;
+        box-sizing: border-box;
+      }
+      .boot-brand {
+        font-weight: 600;
+        font-size: 15px;
+        margin: 6px 4px 16px;
+      }
+      .boot-search {
+        height: 36px;
+        border: 1px solid var(--boot-line);
+        border-radius: 8px;
+        background: var(--boot-surface);
+        margin-bottom: 14px;
+      }
+      .boot-row {
+        height: 32px;
+        margin: 0 0 6px;
+        border-radius: 8px;
+        background: linear-gradient(
+          90deg,
+          var(--boot-surface) 0%,
+          var(--boot-mid) 45%,
+          var(--boot-surface) 100%
+        );
+        background-size: 200% 100%;
+        animation: boot-shimmer 1.2s ease-in-out infinite;
+      }
+      .boot-row:nth-child(2) {
+        width: 92%;
+      }
+      .boot-row:nth-child(3) {
+        width: 86%;
+      }
+      .boot-row:nth-child(5) {
+        width: 80%;
+      }
+      .boot-name {
+        height: 32px;
+        margin: 0 0 6px;
+        padding: 0 8px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        color: var(--boot-dim);
+        font-size: 13px;
+        font-weight: 600;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .boot-main {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        color: var(--boot-dim);
+        font-size: 14px;
+      }
+      @keyframes boot-shimmer {
+        to {
+          background-position: -100% 0;
+        }
+      }
+      @media (max-width: 760px) {
+        .boot-aside {
+          width: 100%;
+          min-width: 0;
+        }
+      }
+      html[data-motion="off"] .boot-row {
+        animation: none;
+      }
     </style>
   </head>
   <body>
@@ -45,34 +168,50 @@
     <script>
       (function () {
         try {
-          var raw = localStorage.getItem("codex-deck:snapshot:v2")
-            || localStorage.getItem("codex-deck:snapshot:v1")
-            || sessionStorage.getItem("codex-deck:snapshot:v2")
-            || sessionStorage.getItem("codex-deck:snapshot:v1");
+          var raw =
+            localStorage.getItem("codex-deck:snapshot:v2") ||
+            localStorage.getItem("codex-deck:snapshot:v1") ||
+            sessionStorage.getItem("codex-deck:snapshot:v2") ||
+            sessionStorage.getItem("codex-deck:snapshot:v1");
           if (!raw) return;
           var data = JSON.parse(raw);
           var names = {};
           (data.projects || []).forEach(function (project) {
-            var name = project.name || String(project.cwd || "").split(/[\\/]/).pop();
+            var name =
+              project.name ||
+              String(project.cwd || "")
+                .split(/[\\/]/)
+                .pop();
             if (name) names[project.key || project.cwd || name] = name;
           });
           (data.threads || []).forEach(function (thread) {
             var key = thread.cwd || "";
-            if (key && !names[key]) names[key] = String(key).split(/[\\/]/).pop() || key;
+            if (key && !names[key])
+              names[key] = String(key).split(/[\\/]/).pop() || key;
           });
-          var list = Object.keys(names).map(function (key) { return names[key]; });
+          var list = Object.keys(names).map(function (key) {
+            return names[key];
+          });
           if (!list.length) return;
           var root = document.getElementById("boot-projects");
           var status = document.getElementById("boot-status");
           if (root) {
-            root.innerHTML = list.slice(0, 12).map(function (name) {
-              return '<div class="boot-name">📁 ' + String(name)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;") + "</div>";
-            }).join("");
+            root.innerHTML = list
+              .slice(0, 12)
+              .map(function (name) {
+                return (
+                  '<div class="boot-name">📁 ' +
+                  String(name)
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;") +
+                  "</div>"
+                );
+              })
+              .join("");
           }
-          if (status) status.textContent = "已载入 " + list.length + " 个项目，正在同步…";
+          if (status)
+            status.textContent = "已载入 " + list.length + " 个项目，正在同步…";
         } catch (error) {}
       })();
     </script>

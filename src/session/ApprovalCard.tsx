@@ -1,10 +1,6 @@
 import { useMemo, useState } from "react";
-import { Check, ShieldAlert } from "lucide-react";
-import type {
-  Approval,
-  ApprovalResolveBody,
-  FileChange,
-} from "../types";
+import { Check, FolderOpen, ShieldAlert, Terminal } from "lucide-react";
+import type { Approval, ApprovalResolveBody, FileChange } from "../types";
 import { displayText } from "../format";
 import { FileDiff } from "./FileDiff";
 
@@ -65,40 +61,52 @@ export function ApprovalCard({
       : Array.isArray(params.command)
         ? params.command.join(" ")
         : "");
+  const cwd = displayText(approval.cwd || params.cwd);
+  const reason = displayText(approval.reason || params.reason);
   return (
     <article className={`approval-card kind-${kind}`}>
-      <div className="approval-title">
-        <ShieldAlert />
+      <header className="approval-title">
+        <span className="approval-icon" aria-hidden="true">
+          <ShieldAlert />
+        </span>
         <div>
           <b>{title}</b>
-          <small>
-            {displayText(
-              approval.reason ||
-                params.reason ||
-                approval.cwd ||
-                params.cwd,
-            ) || "需要你的确认"}
-          </small>
+          <small>{reason || "请确认是否允许 Codex 继续执行"}</small>
         </div>
-      </div>
-      {displayText(approval.cwd || params.cwd) ? (
-        <p className="approval-cwd">{displayText(approval.cwd || params.cwd)}</p>
+      </header>
+      {cwd ? (
+        <p className="approval-cwd">
+          <FolderOpen aria-hidden="true" />
+          <span>{cwd}</span>
+        </p>
       ) : null}
-      {command ? <pre className="approval-command">{command}</pre> : null}
+      {command ? (
+        <div className="approval-command-wrap">
+          <Terminal aria-hidden="true" />
+          <pre className="approval-command">{command}</pre>
+        </div>
+      ) : null}
       {kind === "file" && <FileDiff changes={changes} />}
       <div className="approval-actions">
         {decisions.includes("decline") && (
-          <button onClick={() => onResolve(approval.id, { decision: "decline" })}>
+          <button
+            type="button"
+            onClick={() => onResolve(approval.id, { decision: "decline" })}
+          >
             拒绝
           </button>
         )}
         {decisions.includes("cancel") && !decisions.includes("decline") && (
-          <button onClick={() => onResolve(approval.id, { decision: "cancel" })}>
+          <button
+            type="button"
+            onClick={() => onResolve(approval.id, { decision: "cancel" })}
+          >
             取消
           </button>
         )}
         {decisions.includes("accept") && (
           <button
+            type="button"
             className="approve"
             onClick={() => onResolve(approval.id, { decision: "accept" })}
           >
@@ -108,6 +116,7 @@ export function ApprovalCard({
         )}
         {decisions.includes("acceptForSession") && (
           <button
+            type="button"
             className="approve session"
             onClick={() =>
               onResolve(approval.id, { decision: "acceptForSession" })
@@ -143,7 +152,8 @@ function permissionItemsFrom(raw: unknown): PermissionItem[] {
       name: "网络访问",
       granted: profile.network.enabled !== false,
     });
-  if (!items.length) items.push({ key: "extra", name: "额外权限", granted: true });
+  if (!items.length)
+    items.push({ key: "extra", name: "额外权限", granted: true });
   return items;
 }
 
@@ -184,13 +194,15 @@ function PermissionApproval({
   );
   return (
     <article className="approval-card kind-permission">
-      <div className="approval-title">
-        <ShieldAlert />
+      <header className="approval-title">
+        <span className="approval-icon" aria-hidden="true">
+          <ShieldAlert />
+        </span>
         <div>
           <b>Codex 请求权限</b>
           <small>选择本回合或本会话授予的权限</small>
         </div>
-      </div>
+      </header>
       <div className="permission-list">
         {items.map((item) => (
           <label key={item.key}>
@@ -210,6 +222,7 @@ function PermissionApproval({
       </div>
       <div className="approval-actions">
         <button
+          type="button"
           onClick={() =>
             onResolve(approval.id, {
               permissions: grantedPermissions(raw, items, selected),
@@ -220,6 +233,7 @@ function PermissionApproval({
           本回合
         </button>
         <button
+          type="button"
           className="approve session"
           onClick={() =>
             onResolve(approval.id, {
@@ -245,9 +259,9 @@ function QuestionApproval({
   onResolve: (id: string, body: ApprovalResolveBody) => void;
 }) {
   const items = questions.slice(0, 3);
-  const [answers, setAnswers] = useState<
-    { value: string; other: string }[]
-  >(() => items.map(() => ({ value: "", other: "" })));
+  const [answers, setAnswers] = useState<{ value: string; other: string }[]>(
+    () => items.map(() => ({ value: "", other: "" })),
+  );
   const ready = useMemo(
     () =>
       items.every((question, index) => {
@@ -255,7 +269,8 @@ function QuestionApproval({
         if (!answer?.value) return false;
         const option = (question.options || []).find(
           (item: any) =>
-            (item.value || item.label) === answer.value || item.id === answer.value,
+            (item.value || item.label) === answer.value ||
+            item.id === answer.value,
         );
         if (question.isOther || option?.isOther || answer.value === "other")
           return Boolean(answer.other.trim());
@@ -265,25 +280,31 @@ function QuestionApproval({
   );
   return (
     <article className="approval-card kind-question">
-      <div className="approval-title">
-        <ShieldAlert />
+      <header className="approval-title">
+        <span className="approval-icon" aria-hidden="true">
+          <ShieldAlert />
+        </span>
         <div>
           <b>Codex 需要你回答</b>
           <small>请完成下列问题后继续</small>
         </div>
-      </div>
+      </header>
       {items.map((question, index) => {
         const options = question.options || [];
         const answer = answers[index];
         const selected = options.find(
           (item: any) =>
-            (item.value || item.label) === answer.value || item.id === answer.value,
+            (item.value || item.label) === answer.value ||
+            item.id === answer.value,
         );
         const other =
           question.isOther || selected?.isOther || answer.value === "other";
         return (
           <label className="question-block" key={question.id || index}>
-            {question.header || question.prompt || question.question || `问题 ${index + 1}`}
+            {question.header ||
+              question.prompt ||
+              question.question ||
+              `问题 ${index + 1}`}
             {options.length ? (
               <select
                 value={answer.value}
@@ -341,6 +362,7 @@ function QuestionApproval({
       })}
       <div className="approval-actions">
         <button
+          type="button"
           className="approve"
           disabled={!ready}
           onClick={() =>

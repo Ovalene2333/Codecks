@@ -287,8 +287,8 @@ aside,
 }
 
 .approval-actions > button {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 108px;
 }
 
 .confirm-actions button:hover:not(:disabled),
@@ -586,6 +586,197 @@ aside,
   color: var(--text);
 }
 
+.approval-card {
+  margin: 18px 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+}
+
+.approval-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px 15px 11px;
+}
+
+.approval-icon {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--wait) 28%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--wait) 10%, transparent);
+  color: var(--wait);
+}
+
+.approval-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
+.approval-title > div {
+  min-width: 0;
+}
+
+.approval-title b {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.approval-title small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.approval-cwd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 15px 11px 56px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: 1.4;
+}
+
+.approval-cwd svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+}
+
+.approval-cwd span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-command-wrap {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  margin: 0 15px 14px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: #c7ced8;
+}
+
+.approval-command-wrap > svg {
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  color: #667180;
+  stroke-width: 1.8;
+}
+
+.approval-card .approval-command {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 11px 15px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 30%, transparent);
+}
+
+.approval-actions .approve:not(.session) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.approval-actions .approve:not(.session):hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+  color: var(--accent-text);
+}
+
+.approval-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.permission-list,
+.question-block {
+  padding-right: 15px;
+  padding-left: 56px;
+}
+
+@media (max-width: 760px) {
+  .approval-card {
+    margin: 10px 0 14px;
+  }
+
+  .approval-title {
+    padding: 13px 13px 10px;
+  }
+
+  .approval-cwd {
+    padding: 0 13px 10px;
+  }
+
+  .approval-command-wrap {
+    margin: 0 13px 12px;
+  }
+
+  .permission-list,
+  .question-block {
+    padding-right: 13px;
+    padding-left: 13px;
+  }
+
+  .approval-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px 13px 13px;
+  }
+
+  .approval-actions > button {
+    width: 100%;
+    min-width: 0;
+    min-height: 46px;
+  }
+
+  .approval-actions > button:only-child,
+  .approval-actions > button:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
 .toast {
   border-color: var(--line);
   background: var(--surface-2);
@@ -682,15 +873,5 @@ aside,
   .brand .usage-chip {
     max-width: none;
     font-size: var(--fs-caption);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button {
-    transition: none;
-  }
-
-  .message.streaming i {
-    animation: none;
   }
 }

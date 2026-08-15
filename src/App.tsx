@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, KeyRound, Menu } from "lucide-react";
+import { ArrowLeft, KeyRound, Menu, Settings } from "lucide-react";
 import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
+import { useAppearance } from "./appearance";
 import type { ProjectRecord, Snapshot, ThreadSummary } from "./types";
 import {
   filterProjectGroups,
@@ -34,10 +35,12 @@ import { UsageDrawer } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
+import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 
 export function App() {
+  const appearance = useAppearance();
   const [snapshot, setSnapshot] = useState(() => readSnapshotCache() || empty);
   const [loading, setLoading] = useState(
     () => !hasSidebarData(readSnapshotCache()),
@@ -78,6 +81,7 @@ export function App() {
   const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
   const [phoneSettings, setPhoneSettings] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
 
   const pushToast = useCallback((message: string) => {
     const id = Date.now() + Math.random();
@@ -126,10 +130,14 @@ export function App() {
   useEffect(() => {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     let timer: number;
+    let socket: WebSocket | undefined;
+    let stopped = false;
     const connect = () => {
+      if (stopped) return;
       const ws = new WebSocket(
         `${protocol}//${location.host}/ws?token=${encodeURIComponent(getToken())}`,
       );
+      socket = ws;
       ws.onmessage = ({ data }) => {
         const message = JSON.parse(data);
         if (message.type === "snapshot") setSnapshot(message.data);
@@ -219,11 +227,15 @@ export function App() {
           setEvents((current) => appendCodexEvent(current, message.data));
       };
       ws.onclose = () => {
-        timer = window.setTimeout(connect, 2500);
+        if (!stopped) timer = window.setTimeout(connect, 2500);
       };
     };
     connect();
-    return () => clearTimeout(timer);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      socket?.close();
+    };
   }, [authError]);
 
   const libraryThreads =
@@ -580,6 +592,17 @@ export function App() {
         providers={snapshot.providers}
       />
       <section className="workspace">
+        {!current && (
+          <button
+            type="button"
+            className="icon-btn appearance-trigger appearance-trigger-home"
+            onClick={() => setAppearanceOpen(true)}
+            title="外观设置"
+            aria-label="外观设置"
+          >
+            <Settings />
+          </button>
+        )}
         {!sidebar && !current && (
           <button className="floating-menu" onClick={() => setSidebar(true)}>
             <Menu />
@@ -634,6 +657,7 @@ export function App() {
               }
               onToast={pushToast}
               onUsage={() => setUsageOpen(true)}
+              onAppearance={() => setAppearanceOpen(true)}
               onOpenOrigin={() => openOrigin(current)}
             />
           </RenderErrorBoundary>
@@ -887,6 +911,14 @@ export function App() {
           runtime={snapshot.runtime}
           sessionUsage={current?.tokenUsage}
           onClose={() => setUsageOpen(false)}
+        />
+      )}
+      {appearanceOpen && (
+        <AppearanceSettingsModal
+          preferences={appearance.preferences}
+          resolved={appearance.resolved}
+          onChange={appearance.update}
+          onClose={() => setAppearanceOpen(false)}
         />
       )}
       {confirm && (

@@ -699,8 +699,3 @@
     min-width: 44px;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .sync-note.reloading > svg {
-    animation: none;
-  }
-}
