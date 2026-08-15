@@ -3,18 +3,21 @@
 Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 必须各自实现 adapter；Deck 不把不同 CLI 的私有协议混进同一个 manager。
 
-当前只有 Codex adapter 已接入生产入口。Claude Code 和 OpenCode 尚未实现。
+Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入生产后端与
+通用 Agent API，网页会话入口尚未接线；OpenCode 尚未实现。
 
 ## 目录与职责
 
-| 文件 | 职责 |
-| --- | --- |
-| `server/agents/types.ts` | 通用 adapter、能力和快照类型 |
-| `server/agents/registry.ts` | adapter 注册、生命周期、事件转发和快照合并 |
-| `server/agents/codex-adapter.ts` | Codex app-server 协议、会话、审批和供应商隔离 |
-| `server/manager.ts` | 旧导入路径的兼容导出，不应再加入实现 |
-| `server/codex-client.ts` | Codex app-server 子进程与 JSON-RPC 传输 |
-| `server/index.ts` | HTTP/WebSocket 边界和 adapter 组装 |
+| 文件                              | 职责                                            |
+| --------------------------------- | ----------------------------------------------- |
+| `server/agents/types.ts`          | 通用 adapter、能力和快照类型                    |
+| `server/agents/registry.ts`       | adapter 注册、生命周期、事件转发和快照合并      |
+| `server/agents/codex-adapter.ts`  | Codex app-server 协议、会话、审批和供应商隔离   |
+| `server/agents/claude-adapter.ts` | Claude Agent SDK 会话、流式事件、审批和生命周期 |
+| `server/agents/claude-history.ts` | Claude JSONL 消息树主链与通用 Turn 归一化       |
+| `server/manager.ts`               | 旧导入路径的兼容导出，不应再加入实现            |
+| `server/codex-client.ts`          | Codex app-server 子进程与 JSON-RPC 传输         |
+| `server/index.ts`                 | HTTP/WebSocket 边界和 adapter 组装              |
 
 依赖方向必须保持为：
 
@@ -22,8 +25,8 @@ Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 server/index.ts
   -> AgentRegistry
     -> AgentAdapter
-      -> CodexAdapter
-        -> CodexClient
+      -> CodexAdapter -> CodexClient
+      -> ClaudeAdapter -> Claude Agent SDK
 ```
 
 `AgentRegistry` 不应导入任何 Codex、Claude 或 OpenCode 私有类型。
@@ -59,8 +62,9 @@ server/index.ts
 5. 原生会话 ID 保持原样，不由 Deck 重新编号。
 
 `AgentRegistry.snapshot()` 会保留主 adapter 的兼容字段，同时合并所有
-adapter 的 `threads`、`archivedThreads` 和 `approvals`。在通用 API 完成前，
-Codex 仍是主 adapter，所以顶层 `providers` 和 `runtime` 保持原行为。
+adapter 的 `threads`、`archivedThreads` 和 `approvals`。Codex 仍是主 adapter，
+所以顶层 `providers` 和 `runtime` 保持原行为。通用 API 使用
+`/api/agents/:agentId/...` 路由，旧 Codex 路由继续兼容。
 
 ## 能力声明
 
@@ -106,10 +110,32 @@ Codex 协议相关逻辑应留在 `codex-adapter.ts`、`codex-client.ts` 或 Cod
 `server/manager.ts` 仅为现有测试和第三方导入提供：
 
 ```ts
-export { CodexAdapter, CodexAdapter as CodexManager } from "./agents/codex-adapter.js";
+export {
+  CodexAdapter,
+  CodexAdapter as CodexManager,
+} from "./agents/codex-adapter.js";
 ```
 
 新代码必须直接导入 `CodexAdapter`。
+
+## Claude Code Adapter
+
+`ClaudeAdapter` 通过官方 `@anthropic-ai/claude-agent-sdk` 为每个活动 turn 启动
+独立查询进程，优先复用 `PATH` / `CLAUDE_BIN` 指向的系统 Claude Code，并使用
+原生 session ID 创建或 resume 会话。adapter 负责：
+
+- 扫描 `CLAUDE_CONFIG_DIR`、当前用户 `~/.claude`，以及 WSL 可见的 Windows
+  用户 Claude 目录。
+- 按 `last-prompt.leafUuid` 和 `parentUuid` 回溯 JSONL 当前主链，避免把重试分支
+  重复合并进同一 timeline。
+- 将 assistant 文本、思考、tool use 和 tool result 归一化为通用 Turn item。
+- 将 SDK partial message 映射为带 `agentId='claude'` 的 `agent.event`。
+- 用 `canUseTool` 暂停工具执行，将批准一次、会话内批准和拒绝回送 SDK。
+- 只读加载 CC Switch `app_type='claude'` 配置；认证环境变量只传给查询进程。
+
+Claude 当前声明 `approvals`、`images` 和 `interrupt`。没有实现的 fork、archive、
+review、shell、MCP/Skills 枚举、模型枚举和动态会话设置保持关闭。网页接线时必须按
+该 capability matrix 隐藏并禁用对应操作。
 
 ## 新增 Adapter 的顺序
 

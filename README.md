@@ -1,6 +1,6 @@
 <div align="center">
-  <img width="160" src="docs/icon.svg" alt="Codex Deck">
-  <h1>Codex Deck</h1>
+  <img width="160" src="docs/icon.svg" alt="Codecks">
+  <h1>Codecks</h1>
 
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -8,11 +8,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-Codex Deck 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
+[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code adapter 后端。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
 
 ## 界面预览
 
-<img src="docs/screenshots/desktop-session.png" alt="Codex Deck 控制台：按项目分组会话，每个 Session 自选供应商" width="100%">
+<img src="docs/screenshots/desktop-session.png" alt="Codecks 控制台：按项目分组会话，每个 Session 自选供应商" width="100%">
 
 <p align="center"><sub>桌面端会话界面：按项目分组，同时管理多个 Codex Session</sub></p>
 
@@ -22,27 +22,27 @@ Codex Deck 是一个网页端的 [Codex CLI](https://github.com/openai/codex) �
     <td width="50%" align="center"><strong>供应商与模型</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/desktop-console.png" alt="Codex Deck 桌面端项目控制台" width="100%"></td>
-    <td><img src="docs/screenshots/desktop-providers.png" alt="Codex Deck 供应商与模型设置" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-console.png" alt="Codecks 桌面端项目控制台" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-providers.png" alt="Codecks 供应商与模型设置" width="100%"></td>
   </tr>
 </table>
 
 <p align="center">
   <strong>移动端远程值守</strong><br><br>
-  <img src="docs/screenshots/mobile-console.png" alt="Codex Deck 移动端控制台" width="320">
+  <img src="docs/screenshots/mobile-console.png" alt="Codecks 移动端控制台" width="320">
 </p>
 
-CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Deck 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
+CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Codecks 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
 
-名字来自 **Codex** 与 **Deck**：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
+**Codecks** 这个名字由 **Codex** 与 **deck** 组合而来：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
 
-> `app-server` 目前仍是 Codex CLI 的实验接口。请使用较新的 CLI，升级后重新构建并重启 Deck。
+> `app-server` 目前仍是 Codex CLI 的实验接口。请使用较新的 CLI，升级后重新构建并重启 Codecks。
 
 ## 特性
 
 ### 真实会话，而不是复制品
 
-Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会为每个供应商复制 `CODEX_HOME`，也不会把历史拆成孤岛。
+Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会为每个供应商复制 `CODEX_HOME`，也不会把历史拆成孤岛。
 
 - 按工作目录分组，同一路径可以并行多个独立 session
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
@@ -69,7 +69,7 @@ runtime 的 control WebSocket 只监听本机回环地址。终端用 `codex --r
 
 CC Switch 负责把供应商写进 Codex 的 live 配置，一次只能启用一个当前项。Claude Code 往往能跟着切；Codex 通常要重启进程才认新配置。真正麻烦的不是「CC Switch 不会切」，而是不能让 Session A 走这家、Session B 走那家。
 
-Deck 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中转站和模型。
+Codecks 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中转站和模型。
 
 - 不用为了换一家而改 CC Switch 当前项
 - 多个中转站可以同时各跑各的 Session，额度分开花
@@ -83,6 +83,8 @@ Deck 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中�
 需要 Node.js 22+ 和可用的 `codex` 命令。
 
 ```bash
+git clone https://github.com/Ovalene2333/Codecks.git
+cd Codecks
 npm install
 npm run build
 npm start
@@ -95,6 +97,23 @@ npm start
 ```bash
 npm run dev
 ```
+
+### Claude Code 后端适配
+
+Codecks 会同时注册 Codex 与 Claude Code adapter。Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；在 WSL 中会跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。CC Switch 中 `app_type='claude'` 的配置档会被只读加载；`ANTHROPIC_AUTH_TOKEN` 等环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+
+当前阶段只完成后端与通用 API，现有网页仍按 Codex 路由工作，尚未提供 Claude 会话入口。可用 API：
+
+```text
+GET  /api/agents/claude/profiles
+POST /api/agents/claude/threads
+GET  /api/agents/claude/threads/:threadId
+POST /api/agents/claude/threads/:threadId/turns
+POST /api/agents/claude/threads/:threadId/interrupt
+POST /api/agents/claude/approvals/:approvalId
+```
+
+新建会话至少传入 `cwd`；`providerId` 可省略以使用 CC Switch 当前 Claude 配置或 Claude CLI 当前配置。Claude 的 fork、归档、review、独立 shell、MCP/Skills 列表和动态会话设置尚未开放，能力矩阵会将这些操作标为不可用。
 
 ## 远程访问
 
@@ -253,6 +272,8 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_WSL_BIN`                 | `codex`        | Windows `--wsl` 模式下的 WSL 内 Codex CLI                               |
 | `CODEX_WSL_SHELL`               | `bash`         | 加载 WSL Codex `PATH` 的登录 shell                                      |
 | `CODEX_WSL_HOME`                | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home                                     |
+| `CLAUDE_CONFIG_DIR`             | 自动发现       | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`         |
+| `CLAUDE_BIN`                    | 自动发现       | Claude Code 原生可执行文件、启动脚本或 JavaScript 入口路径              |
 | `DATA_DIR`                      | `.data`        | Deck 偏好、项目缓存与自定义供应商元数据                                 |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_       | 仅监听本机的 Codex control WebSocket 端口                               |
 | `CC_SWITCH_DB`                  | _(自动发现)_   | CC Switch SQLite 数据库绝对路径                                         |
@@ -281,6 +302,7 @@ CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 
 ## 安全
 
 - API Key、OAuth 内容和生成的供应商配置不会通过 API 返回给浏览器
+- Claude CC Switch 配置中的认证环境变量只存在于 adapter 启动的进程环境中
 - `.data/` 可能含自定义供应商密钥，已加入 `.gitignore`
 - runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
 - 网页具备执行命令和批准文件修改的能力；公网使用时请同时启用令牌与额外访问控制
