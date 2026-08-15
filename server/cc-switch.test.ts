@@ -61,14 +61,27 @@ test("reads Claude profiles while public callers can omit secret env", async () 
     1,
     0,
   );
+  db.prepare("insert into providers values (?, ?, ?, ?, ?, ?, ?)").run(
+    "claude-official",
+    "claude",
+    "Claude Official",
+    JSON.stringify({ env: {} }),
+    null,
+    0,
+    1,
+  );
   db.close();
 
   const profiles = new CcSwitchSource(file).readClaudeProfiles();
-  assert.equal(profiles.length, 1);
+  assert.equal(profiles.length, 2);
   assert.equal(profiles[0].id, "claude-cc-claude-one");
   assert.equal(profiles[0].current, true);
   assert.equal(profiles[0].env.ANTHROPIC_AUTH_TOKEN, "super-secret");
+  assert.equal(profiles[0].supported, true);
+  assert.equal(profiles[0].official, false);
   assert.equal("IGNORED_NUMBER" in profiles[0].env, false);
+  assert.equal(profiles[1].official, true);
+  assert.equal(profiles[1].supported, false);
 });
 
 test("findCcSwitchDb uses an explicit path and does not fall through", async () => {

@@ -241,6 +241,7 @@ export interface AgentProfile {
   name: string;
   color?: string;
   current?: boolean;
+  official?: boolean;
   enabled?: boolean;
   online?: boolean;
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import {
@@ -20,6 +21,8 @@ import {
   type Query,
   type SDKMessage,
   type SDKUserMessage,
+  type SpawnOptions,
+  type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import { CcSwitchSource, type ClaudeProfile } from "../cc-switch.js";
 import { windowsPathToWsl } from "../runtime-platform.js";
@@ -49,11 +52,18 @@ type QueryFactory = typeof createQuery;
 export function findClaudeExecutable(explicit?: string) {
   const names = explicit ? [explicit] : ["claude"];
   for (const name of names) {
-    if (path.isAbsolute(name) || name.includes(path.sep))
-      return existsSync(name) || explicit ? name : undefined;
+    if (path.isAbsolute(name) || name.includes(path.sep)) {
+      const candidate = existsSync(name) || explicit ? name : undefined;
+      return candidate;
+    }
     for (const directory of (process.env.PATH || "").split(path.delimiter)) {
       if (!directory) continue;
       const candidates = [
+        path.join(directory, name),
+        ...(process.platform === "win32"
+          ? [path.join(directory, `${name}.cmd`)]
+          : []),
+        path.join(directory, `${name}.exe`),
         path.join(
           directory,
           "node_modules",
@@ -62,11 +72,6 @@ export function findClaudeExecutable(explicit?: string) {
           "bin",
           "claude.exe",
         ),
-        path.join(directory, name),
-        path.join(directory, `${name}.exe`),
-        ...(process.platform === "win32"
-          ? [path.join(directory, `${name}.cmd`)]
-          : []),
       ];
       const found = candidates.find(
         (candidate) =>
@@ -90,6 +95,7 @@ interface ClaudeAdapterOptions {
   historyIndexFile?: string;
   historyReader?: typeof readClaudeHistory;
   initialThreads?: ThreadSummary[];
+  initialProfiles?: ClaudeProfile[];
 }
 
 interface ClaudeHistoryIndexEntry {
@@ -169,6 +175,34 @@ function promptStream(
   };
 }
 
+export function windowsClaudeLaunchSpec(
+  options: SpawnOptions,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== "win32" || !/\.(?:cmd|bat)$/i.test(options.command))
+    return { command: options.command, args: options.args };
+  return {
+    command: options.env.ComSpec || options.env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", options.command, ...options.args],
+  };
+}
+
+function spawnClaudeCodeProcess(
+  options: SpawnOptions,
+  stderr: (data: string) => void,
+): SpawnedProcess {
+  const launch = windowsClaudeLaunchSpec(options);
+  const child = spawn(launch.command, launch.args, {
+    cwd: options.cwd,
+    env: options.env,
+    signal: options.signal,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stderr.on("data", (data) => stderr(String(data)));
+  return child;
+}
+
 async function existing(pathname: string) {
   try {
     await access(pathname);
@@ -200,6 +234,7 @@ export class ClaudeAdapter extends EventEmitter {
     super();
     this.options.claudeBin = findClaudeExecutable(options.claudeBin);
     this.queryFactory = options.queryFactory || createQuery;
+    this.profiles = [...(options.initialProfiles || [])];
     for (const thread of options.initialThreads || []) {
       if (thread.agentId !== "claude") continue;
       this.threads.set(thread.id, { ...thread, agentId: "claude" });
@@ -208,11 +243,12 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   descriptor(): AgentDescriptor {
+    const available = this.hasSupportedProfile();
     return {
       id: this.id,
       name: "Claude Code",
-      available: true,
-      online: this.online,
+      available,
+      online: this.online && available,
       starting: this.starting,
       error: this.error,
       historyStatus: this.historyStatus,
@@ -231,23 +267,12 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   publicProfiles() {
-    const profiles = this.profiles.map((profile) => ({
+    return this.profiles.map((profile) => ({
       ...publicProfile(profile),
-      online: this.online,
+      official: profile.official,
+      enabled: profile.supported,
+      online: this.online && profile.supported,
     }));
-    return profiles.length
-      ? profiles
-      : [
-          {
-            id: "claude-current",
-            agentId: "claude" as const,
-            name: "Claude Code 当前配置",
-            color: "#d97757",
-            current: true,
-            enabled: true,
-            online: this.online,
-          },
-        ];
   }
 
   startAll() {
@@ -264,8 +289,6 @@ export class ClaudeAdapter extends EventEmitter {
     this.broadcast("agent.status", this.descriptor());
     try {
       await this.refreshAll();
-      this.online = true;
-      this.error = undefined;
     } catch (error: any) {
       this.online = false;
       this.error = this.redact(error?.message || String(error));
@@ -325,6 +348,8 @@ export class ClaudeAdapter extends EventEmitter {
       await this.saveHistoryIndex();
       this.historyStatus = "ready";
       this.historyError = undefined;
+      this.syncAvailability();
+      this.broadcast("agent.status", this.descriptor());
       this.broadcast("snapshot", this.snapshot());
     } catch (error: any) {
       this.historyStatus = "error";
@@ -382,7 +407,7 @@ export class ClaudeAdapter extends EventEmitter {
     const thread: ThreadSummary = {
       agentId: this.id,
       id,
-      providerId: profile?.id || "claude-current",
+      providerId: profile.id,
       name: input.name || "新 Claude 会话",
       preview: "新 Claude 会话",
       cwd: input.cwd,
@@ -511,8 +536,11 @@ export class ClaudeAdapter extends EventEmitter {
       thread.approvalPolicy === "never" ? "bypassPermissions" : "default";
     let query: Query | undefined;
     try {
+      const onStderr = (line: string) => {
+        if (line.trim()) this.error = this.redact(line.trim().slice(-500));
+      };
       query = this.queryFactory({
-        prompt: promptStream(thread.id, text, images),
+        prompt: images?.length ? promptStream(thread.id, text, images) : text,
         options: {
           cwd:
             process.platform !== "win32" && /^[a-z]:[\\/]/i.test(thread.cwd)
@@ -536,9 +564,14 @@ export class ClaudeAdapter extends EventEmitter {
             ? { pathToClaudeCodeExecutable: this.options.claudeBin }
             : {}),
           env: this.runtimeEnv(profile, this.historyHomes.get(thread.id)),
-          stderr: (line) => {
-            if (line.trim()) this.error = this.redact(line.trim().slice(-500));
-          },
+          stderr: onStderr,
+          ...(process.platform === "win32" &&
+          /\.(?:cmd|bat)$/i.test(this.options.claudeBin || "")
+            ? {
+                spawnClaudeCodeProcess: (options: SpawnOptions) =>
+                  spawnClaudeCodeProcess(options, onStderr),
+              }
+            : {}),
         },
       });
       this.active.set(thread.id, { query, turnId });
@@ -769,15 +802,44 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   private resolveProfile(id?: string) {
-    if (!id || id === "claude-current")
-      return this.profiles.find((profile) => profile.current);
+    if (!id || id === "claude-current") {
+      const profile =
+        this.profiles.find((item) => item.current && item.supported) ||
+        this.profiles.find((item) => item.supported);
+      if (profile) return profile;
+      throw new Error(
+        "Claude Code 不支持 Official，请先在 CC Switch 配置可用的 Claude 中转",
+      );
+    }
     const profile = this.profiles.find((item) => item.id === id);
     if (!profile) throw new Error("Claude Code 配置档不存在");
+    if (profile.official)
+      throw new Error(
+        "Claude Code 不支持 Official，请选择 CC Switch 中的 Claude 中转",
+      );
+    if (!profile.supported)
+      throw new Error("Claude Code 中转配置缺少 API 地址或认证凭据");
     return profile;
   }
 
+  private hasSupportedProfile() {
+    return this.profiles.some((profile) => profile.supported);
+  }
+
+  private syncAvailability() {
+    this.online = this.hasSupportedProfile();
+    this.error = this.online
+      ? undefined
+      : "Claude Code 仅支持配置了自定义 API 地址和凭据的 CC Switch 中转配置";
+  }
+
   private runtimeEnv(profile?: ClaudeProfile, historyHome?: string) {
-    const env = { ...process.env, ...(profile?.env || {}) };
+    const env = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_BASE_URL;
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    Object.assign(env, profile?.env || {});
     const claudeHome = this.options.claudeHome || historyHome;
     if (claudeHome) env.CLAUDE_CONFIG_DIR = claudeHome;
     return env;

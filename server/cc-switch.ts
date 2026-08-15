@@ -17,6 +17,8 @@ export interface ClaudeProfile {
   name: string;
   color: string;
   current: boolean;
+  official: boolean;
+  supported: boolean;
   env: Record<string, string>;
 }
 
@@ -107,6 +109,23 @@ export class CcSwitchSource {
             (entry): entry is [string, string] => typeof entry[1] === "string",
           ),
         );
+        const baseUrl = env.ANTHROPIC_BASE_URL?.trim();
+        const official =
+          !baseUrl ||
+          (() => {
+            try {
+              const hostname = new URL(baseUrl).hostname.toLowerCase();
+              return (
+                hostname === "api.anthropic.com" ||
+                hostname.endsWith(".anthropic.com")
+              );
+            } catch {
+              return true;
+            }
+          })();
+        const supported =
+          !official &&
+          Boolean(env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY);
         return {
           id: `claude-cc-${row.id}`,
           name: row.name,
@@ -114,6 +133,8 @@ export class CcSwitchSource {
             row.icon_color ||
             ["#d97757", "#c084fc", "#38bdf8", "#22c55e", "#f59e0b"][index % 5],
           current: Boolean(row.is_current),
+          official,
+          supported,
           env,
         };
       });
