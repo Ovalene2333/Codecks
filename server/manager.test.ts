@@ -588,7 +588,7 @@ test("sandbox settings are sent as sandboxPolicy objects, not kebab strings", as
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
 });
 
-test("turn/start re-applies the stored workspace-write policy", async () => {
+test("later turns do not re-send sandbox policy and bust prompt cache", async () => {
   const provider = { id: "provider", kind: "local-profile", model: "m" };
   const manager = new CodexManager(
     { get: () => provider } as any,
@@ -616,9 +616,39 @@ test("turn/start re-applies the stored workspace-write policy", async () => {
     sandbox: "workspace-write",
   });
   await manager.sendTurn("provider", "fresh", "写一个文件");
+  const started = calls.find((call) => call.method === "thread/start");
   const turn = calls.find((call) => call.method === "turn/start");
-  assert.deepEqual(turn.params.sandboxPolicy, { type: "workspaceWrite" });
+  assert.equal(started.params.sandbox, "workspace-write");
+  assert.equal(turn.params.sandboxPolicy, undefined);
+  assert.equal(turn.params.approvalPolicy, undefined);
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
+});
+
+test("resume keeps the rollout provider instead of rebinding deck_*", async () => {
+  const provider = {
+    id: "cc-relay",
+    kind: "cc-switch",
+    model: "gpt-test",
+    baseUrl: "https://relay.example/v1",
+  };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return method === "turn/start" ? { turn: { id: "turn-2" } } : {};
+    },
+  });
+  await manager.sendTurn("cc-relay", "persisted", "继续");
+  const resume = calls.find((call) => call.method === "thread/resume");
+  assert.equal(resume.params.threadId, "persisted");
+  assert.equal(resume.params.model, undefined);
+  assert.equal(resume.params.modelProvider, undefined);
+  assert.equal(resume.params.sandbox, undefined);
+  assert.equal(resume.params.approvalPolicy, undefined);
 });
 
 test("provider switch forks full history with a new model provider", async () => {
