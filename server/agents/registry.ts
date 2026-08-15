@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
 import type {
   AgentAdapter,
+  AgentCreateThreadInput,
   AgentDescriptor,
   AgentId,
   AgentSnapshot,
 } from "./types.js";
+import type { TurnImage } from "../types.js";
 
 export class AgentRegistry extends EventEmitter {
   private adapters = new Map<AgentId, AgentAdapter>();
@@ -50,15 +52,82 @@ export class AgentRegistry extends EventEmitter {
   }
 
   async startAll() {
-    await Promise.all(
+    const results = await Promise.allSettled(
       [...this.adapters.values()].map((adapter) => adapter.startAll()),
     );
+    if (
+      results.length &&
+      results.every((result) => result.status === "rejected")
+    )
+      throw new AggregateError(
+        results.map((result) =>
+          result.status === "rejected" ? result.reason : undefined,
+        ),
+        "所有 Agent 均启动失败",
+      );
   }
 
   async refreshAll() {
-    await Promise.all(
+    const results = await Promise.allSettled(
       [...this.adapters.values()].map((adapter) => adapter.refreshAll()),
     );
+    if (
+      results.length &&
+      results.every((result) => result.status === "rejected")
+    )
+      throw new AggregateError(
+        results.map((result) =>
+          result.status === "rejected" ? result.reason : undefined,
+        ),
+        "所有 Agent 均刷新失败",
+      );
+  }
+
+  profiles(id: AgentId) {
+    const adapter = this.get(id);
+    return adapter.publicProfiles?.() || [];
+  }
+
+  async createThread(id: AgentId, input: AgentCreateThreadInput) {
+    const adapter = this.operation(id, "createThread");
+    return adapter.createThread!(input.providerId || "", input);
+  }
+
+  async readThread(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "readThread");
+    const thread = this.thread(id, threadId);
+    return adapter.readThread!(thread.providerId, threadId);
+  }
+
+  async sendTurn(
+    id: AgentId,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const adapter = this.operation(id, "sendTurn");
+    const thread = this.thread(id, threadId);
+    return adapter.sendTurn!(thread.providerId, threadId, text, images);
+  }
+
+  async interrupt(id: AgentId, threadId: string, turnId: string) {
+    const adapter = this.operation(id, "interrupt");
+    const thread = this.thread(id, threadId);
+    return adapter.interrupt!(thread.providerId, threadId, turnId);
+  }
+
+  async resolveApproval(
+    id: AgentId,
+    approvalId: string,
+    body: {
+      decision?: string;
+      permissions?: unknown;
+      scope?: "session" | "turn";
+      answers?: unknown;
+    },
+  ) {
+    const adapter = this.operation(id, "resolveApproval");
+    return adapter.resolveApproval!(approvalId, body);
   }
 
   busyThreads() {
@@ -69,5 +138,20 @@ export class AgentRegistry extends EventEmitter {
 
   stopAll() {
     for (const adapter of this.adapters.values()) adapter.restart();
+  }
+
+  private operation<K extends keyof AgentAdapter>(id: AgentId, key: K) {
+    const adapter = this.get(id);
+    if (typeof adapter[key] !== "function")
+      throw new Error(`Agent ${id} 不支持此操作`);
+    return adapter;
+  }
+
+  private thread(id: AgentId, threadId: string) {
+    const thread = this.get(id)
+      .snapshot()
+      .threads.find((item) => item.id === threadId);
+    if (!thread) throw new Error(`Agent ${id} 的会话不存在`);
+    return thread;
   }
 }

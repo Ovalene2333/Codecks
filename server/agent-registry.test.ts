@@ -116,3 +116,29 @@ test("registry forwards events and owns adapter lifecycle", async () => {
   );
   assert.deepEqual([codex.stops, claude.stops], [1, 1]);
 });
+
+test("one failing adapter does not prevent other adapters from starting", async () => {
+  const codex = new FakeAgent("codex");
+  const claude = new FakeAgent("claude");
+  claude.startAll = async () => {
+    claude.starts += 1;
+    throw new Error("Claude unavailable");
+  };
+  const registry = new AgentRegistry([codex, claude]);
+
+  await registry.startAll();
+
+  assert.equal(codex.starts, 1);
+  assert.equal(claude.starts, 1);
+});
+
+test("registry reports startup failure when every adapter fails", async () => {
+  const codex = new FakeAgent("codex");
+  const claude = new FakeAgent("claude");
+  codex.startAll = claude.startAll = async () => {
+    throw new Error("unavailable");
+  };
+  const registry = new AgentRegistry([codex, claude]);
+
+  await assert.rejects(registry.startAll(), /所有 Agent 均启动失败/);
+});

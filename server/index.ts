@@ -15,7 +15,9 @@ import {
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
+import { ClaudeAdapter } from "./agents/claude-adapter.js";
 import { AgentRegistry } from "./agents/registry.js";
+import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { lanAddresses } from "./network.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
@@ -105,7 +107,13 @@ const manager = new CodexAdapter(
   useWsl,
   projects,
 );
-const agents = new AgentRegistry([manager]);
+const claude = new ClaudeAdapter({
+  claudeHome:
+    process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_HOME || undefined,
+  claudeBin: process.env.CLAUDE_BIN || undefined,
+  ccSwitchPath: store.ccSwitchPath,
+});
+const agents = new AgentRegistry([manager, claude]);
 const fullSnapshot = () => ({
   ...agents.snapshot(),
   projects: projects.list(),
@@ -152,6 +160,8 @@ const route =
   };
 const param = (value: string | string[]) =>
   Array.isArray(value) ? value[0] : value;
+const agentId = (value: string | string[]) =>
+  z.enum(["codex", "claude"]).parse(param(value)) as AgentId;
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -166,6 +176,106 @@ app.get("/api/health", (_req, res) =>
 app.get(
   "/api/snapshot",
   route(async () => fullSnapshot()),
+);
+app.get(
+  "/api/agents/:agentId/profiles",
+  route(async (req) => ({
+    profiles: agents.profiles(agentId(req.params.agentId)),
+  })),
+);
+app.post(
+  "/api/agents/:agentId/threads",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = z
+      .object({
+        providerId: z.string().optional(),
+        cwd: z.string().min(1),
+        name: z.string().optional(),
+        model: z.string().optional(),
+        reasoningEffort: z.string().optional(),
+        personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
+        approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+        sandbox: z
+          .enum(["read-only", "workspace-write", "danger-full-access"])
+          .optional(),
+      })
+      .parse(req.body);
+    if (id === "codex" && !input.providerId)
+      throw new Error("Codex 会话必须指定供应商");
+    const thread = await agents.createThread(id, input);
+    await projects.rememberCreate({
+      cwd: input.cwd,
+      providerId: input.providerId || `${id}-current`,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      sandbox: input.sandbox,
+      approvalPolicy: input.approvalPolicy,
+    });
+    return thread;
+  }),
+);
+app.get(
+  "/api/agents/:agentId/threads/:threadId",
+  route(async (req) =>
+    agents.readThread(agentId(req.params.agentId), param(req.params.threadId)),
+  ),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/turns",
+  route(async (req) => {
+    const input = z
+      .object({
+        text: z.string().max(100_000).optional().default(""),
+        images: z
+          .array(
+            z.object({
+              url: z.string().min(1).max(20_000_000),
+              name: z.string().max(200).optional(),
+            }),
+          )
+          .max(8)
+          .optional(),
+      })
+      .parse(req.body || {});
+    return agents.sendTurn(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      input.text,
+      input.images,
+    );
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/interrupt",
+  route(async (req) => {
+    const { turnId } = z.object({ turnId: z.string() }).parse(req.body);
+    return agents.interrupt(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      turnId,
+    );
+  }),
+);
+app.post(
+  "/api/agents/:agentId/approvals/:approvalId",
+  route(async (req) => {
+    const input = z
+      .object({
+        decision: z
+          .enum(["accept", "acceptForSession", "decline", "cancel"])
+          .optional(),
+        permissions: z.unknown().optional(),
+        scope: z.enum(["session", "turn"]).optional(),
+        answers: z.unknown().optional(),
+      })
+      .parse(req.body);
+    return agents.resolveApproval(
+      agentId(req.params.agentId),
+      param(req.params.approvalId),
+      input,
+    );
+  }),
 );
 app.post(
   "/api/runtime/apply-provider-config",
@@ -337,7 +447,7 @@ app.delete(
 app.post(
   "/api/refresh",
   route(async () => {
-    await manager.refreshAll();
+    await agents.refreshAll();
     return fullSnapshot();
   }),
 );
@@ -768,16 +878,16 @@ if (cli.tunnel)
   tunnel = startTunnel(cli.tunnel, port, token, cli.cloudflaredBin);
 
 const runtimeStart = useWsl
-  ? startPhase("正在启动 WSL 中的 Codex app-server…", {
+  ? startPhase("正在启动 WSL 中的 Agent runtime…", {
       waitingLabel: "仍在等待 app-server",
     })
   : undefined;
 agents
   .startAll()
-  .then(() => runtimeStart?.done("Codex runtime 已就绪"))
+  .then(() => runtimeStart?.done("Agent runtime 已就绪"))
   .catch((error) => {
-    runtimeStart?.fail(`Codex 启动失败：${error?.message || error}`);
-    console.error("Codex 启动失败:", error);
+    runtimeStart?.fail(`Agent 启动失败：${error?.message || error}`);
+    console.error("Agent 启动失败:", error);
   });
 setInterval(async () => {
   try {

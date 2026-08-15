@@ -202,6 +202,13 @@ export class CodexAdapter extends EventEmitter {
     }));
   }
 
+  publicProfiles() {
+    return this.providerStatuses().map((provider) => ({
+      ...provider,
+      agentId: this.id,
+    }));
+  }
+
   listThreads() {
     return [...this.threads.values()]
       .filter((thread) => !thread.archived)

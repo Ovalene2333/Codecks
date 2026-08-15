@@ -1,5 +1,10 @@
 import type { EventEmitter } from "node:events";
-import type { ApprovalKind, ThreadSummary } from "../types.js";
+import type {
+  ApprovalKind,
+  Personality,
+  ThreadSummary,
+  TurnImage,
+} from "../types.js";
 
 export type AgentId = "codex" | "claude";
 
@@ -44,6 +49,28 @@ export interface AgentSnapshot {
   providers?: unknown[];
 }
 
+export interface AgentCreateThreadInput {
+  providerId?: string;
+  cwd: string;
+  name?: string;
+  model?: string;
+  reasoningEffort?: string;
+  personality?: Personality;
+  approvalPolicy?: string;
+  sandbox?: string;
+}
+
+export interface AgentPublicProfile {
+  id: string;
+  agentId: AgentId;
+  name: string;
+  color?: string;
+  current?: boolean;
+  enabled?: boolean;
+  online?: boolean;
+  [key: string]: unknown;
+}
+
 export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   readonly id: AgentId;
   descriptor(): AgentDescriptor;
@@ -52,4 +79,32 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   refreshAll(): Promise<void>;
   busyThreads(): ThreadSummary[];
   restart(): void;
+  publicProfiles?(): AgentPublicProfile[];
+  createThread?(
+    providerId: string,
+    input: AgentCreateThreadInput,
+  ): Promise<unknown>;
+  readThread?(providerId: string, threadId: string): Promise<unknown>;
+  sendTurn?(
+    providerId: string,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+  ): Promise<unknown>;
+  interrupt?(
+    providerId: string,
+    threadId: string,
+    turnId: string,
+  ): Promise<unknown>;
+  resolveApproval?(
+    approvalId: string,
+    body:
+      | string
+      | {
+          decision?: string;
+          permissions?: unknown;
+          scope?: "session" | "turn";
+          answers?: unknown;
+        },
+  ): Promise<unknown>;
 }
