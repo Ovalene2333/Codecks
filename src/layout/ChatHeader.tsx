@@ -83,6 +83,14 @@ export function ChatHeader({
           />
           <button
             type="button"
+            className="text-btn compact-btn mobile-header-compact"
+            onClick={onCompact}
+            disabled={thread.compacting}
+          >
+            压缩
+          </button>
+          <button
+            type="button"
             className="icon-btn appearance-trigger"
             onClick={onAppearance}
             title="外观设置"
@@ -105,7 +113,7 @@ export function ChatHeader({
           className="mobile-context"
           title={`上下文 ${contextLabel || "未知"}`}
         >
-          {contextLabel || "上下文 --"}
+          {contextLabel || "--/--"}
         </span>
         <span className="mobile-project" title={thread.cwd || "项目未知"}>
           {basename(thread.cwd) || "项目未知"}
