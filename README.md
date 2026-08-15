@@ -10,7 +10,27 @@
 
 Codex Deck 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
 
+## 界面预览
+
 <img src="docs/screenshots/desktop-session.png" alt="Codex Deck 控制台：按项目分组会话，每个 Session 自选供应商" width="100%">
+
+<p align="center"><sub>桌面端会话界面：按项目分组，同时管理多个 Codex Session</sub></p>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>项目控制台</strong></td>
+    <td width="50%" align="center"><strong>供应商与模型</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-console.png" alt="Codex Deck 桌面端项目控制台" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-providers.png" alt="Codex Deck 供应商与模型设置" width="100%"></td>
+  </tr>
+</table>
+
+<p align="center">
+  <strong>移动端远程值守</strong><br><br>
+  <img src="docs/screenshots/mobile-console.png" alt="Codex Deck 移动端控制台" width="320">
+</p>
 
 CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Deck 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
 
