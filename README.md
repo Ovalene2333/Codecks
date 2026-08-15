@@ -274,6 +274,9 @@ npm test
 npm run build
 ```
 
+Agent runtime 的目录边界、能力契约和新 adapter 接入步骤见
+[Agent Adapter 开发约定](docs/agent-adapters.md)。
+
 ## 故障排除
 
 ### Windows 上 `spawn EINVAL` 或 `connect ECONNREFUSED`

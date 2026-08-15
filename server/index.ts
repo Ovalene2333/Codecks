@@ -14,7 +14,7 @@ import {
   sameConnectionOverlay,
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
-import { CodexManager } from "./manager.js";
+import { CodexAdapter } from "./agents/codex-adapter.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { lanAddresses } from "./network.js";
@@ -97,7 +97,7 @@ const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
 await store.load();
 await projects.load();
-const manager = new CodexManager(
+const manager = new CodexAdapter(
   store,
   dataDir,
   useWsl ? process.env.CODEX_WSL_BIN : process.env.CODEX_BIN,
