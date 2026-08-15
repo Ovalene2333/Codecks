@@ -72,6 +72,7 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
   const store = new ProjectStore(dir);
   await store.load();
   await store.rememberCreate({
+    agentId: "codex",
     cwd: "/mnt/d/Code/one",
     providerId: "local",
     model: "gpt-a",
@@ -79,6 +80,7 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
     approvalPolicy: "on-request",
   });
   await store.rememberCreate({
+    agentId: "claude",
     cwd: "/mnt/d/Code/one",
     providerId: "other",
     model: "gpt-b",
@@ -86,6 +88,8 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
   const project = store.list()[0];
   assert.equal(project.defaults?.model, "gpt-a");
   assert.equal(project.defaults?.providerId, "local");
+  assert.equal(project.defaults?.agentId, "claude");
+  assert.equal(store.getPreferences().lastAgentId, "claude");
   assert.equal(store.getPreferences().lastModel, "gpt-b");
   assert.deepEqual(store.getPreferences().recentDirs, ["/mnt/d/Code/one"]);
 });
@@ -152,7 +156,11 @@ test("connection overlay prefers the latest project for a provider", async () =>
   });
   await store.upsert({
     cwd: "/tmp/b",
-    defaults: { providerId: "relay", requestMaxRetries: 3, streamMaxRetries: 9 },
+    defaults: {
+      providerId: "relay",
+      requestMaxRetries: 3,
+      streamMaxRetries: 9,
+    },
   });
   await store.upsert({
     cwd: "/tmp/c",

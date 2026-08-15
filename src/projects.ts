@@ -41,8 +41,7 @@ export function normalizeProjectPath(cwd: string) {
   }
   value = value.toLowerCase() || "未指定路径";
   const doubled = value.match(/^\/mnt\/([a-z])\/mnt\/\1(?:\/(.*))?$/);
-  if (doubled)
-    return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
+  if (doubled) return `/mnt/${doubled[1]}${doubled[2] ? `/${doubled[2]}` : ""}`;
   return value;
 }
 
@@ -128,12 +127,14 @@ export function filterProjectGroups(
         ? group.sessions
         : group.sessions.filter((thread) => {
             const provider = options?.providerName?.(thread.providerId) || "";
+            const agent = thread.agentId === "claude" ? "Claude Code" : "Codex";
             return (
               thread.name.toLowerCase().includes(needle) ||
               thread.preview.toLowerCase().includes(needle) ||
               thread.model.toLowerCase().includes(needle) ||
               thread.cwd.toLowerCase().includes(needle) ||
-              provider.toLowerCase().includes(needle)
+              provider.toLowerCase().includes(needle) ||
+              agent.toLowerCase().includes(needle)
             );
           });
       return { ...group, sessions };

@@ -205,6 +205,7 @@ app.post(
       throw new Error("Codex 会话必须指定供应商");
     const thread = await agents.createThread(id, input);
     await projects.rememberCreate({
+      agentId: id,
       cwd: input.cwd,
       providerId: input.providerId || `${id}-current`,
       model: input.model,
@@ -334,6 +335,7 @@ app.put(
         hidden: z.boolean().optional(),
         defaults: z
           .object({
+            agentId: z.enum(["codex", "claude"]).optional(),
             providerId: z.string().optional(),
             model: z.string().optional(),
             reasoningEffort: z.string().optional(),
@@ -385,6 +387,7 @@ app.put(
   route(async (req) => {
     const input = z
       .object({
+        lastAgentId: z.enum(["codex", "claude"]).optional(),
         lastProviderId: z.string().optional(),
         lastModel: z.string().optional(),
         lastReasoningEffort: z.string().optional(),
@@ -470,6 +473,7 @@ app.post(
       .parse(req.body);
     const thread = await manager.createThread(input.providerId, input);
     await projects.rememberCreate({
+      agentId: "codex",
       cwd: input.cwd,
       providerId: input.providerId,
       model: input.model,
@@ -732,6 +736,7 @@ app.post(
       input,
     );
     await projects.rememberCreate({
+      agentId: "codex",
       cwd: thread.cwd,
       providerId: input.targetProviderId,
       model: input.model,

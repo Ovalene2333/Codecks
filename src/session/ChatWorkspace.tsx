@@ -5,6 +5,7 @@ import { dedupeThreadLoad, readThreadCache } from "../cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
 import type {
+  AgentCapabilities,
   Approval,
   ApprovalPolicy,
   Personality,
@@ -12,6 +13,7 @@ import type {
   SandboxMode,
   ThreadSummary,
 } from "../types";
+import { threadActionPath, threadPath } from "../agents";
 import { approvalBelongsToThread } from "./approvals";
 import { RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
@@ -36,6 +38,8 @@ import { draftFromUserMessage } from "./user-message";
 export function ChatWorkspace({
   thread,
   provider,
+  agentName,
+  capabilities,
   approvals,
   events,
   origin,
@@ -51,6 +55,8 @@ export function ChatWorkspace({
 }: {
   thread: ThreadSummary;
   provider?: Provider;
+  agentName: string;
+  capabilities: AgentCapabilities;
   approvals: Approval[];
   events: any[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
@@ -82,9 +88,7 @@ export function ChatWorkspace({
   };
   const load = useCallback(
     () =>
-      dedupeThreadLoad(threadCacheKey, () =>
-        api(`/threads/${thread.providerId}/${thread.id}`),
-      )
+      dedupeThreadLoad(threadCacheKey, () => api(threadPath(thread)))
         .then((data) => {
           setFull(data);
           setPendingUsers((current) =>
@@ -99,7 +103,7 @@ export function ChatWorkspace({
           if (shouldSurfaceThreadLoadError(fullRef.current))
             setError(err.message);
         }),
-    [threadCacheKey, thread.id, thread.providerId],
+    [threadCacheKey, thread.id, thread.providerId, thread.agentId],
   );
   useEffect(() => {
     const cached = readThreadCache(threadCacheKey);
@@ -113,6 +117,7 @@ export function ChatWorkspace({
     const method = String(event?.method || "");
     if (!method || method.endsWith("/delta")) return;
     if (event?.providerId && event.providerId !== thread.providerId) return;
+    if ((event?.agentId || "codex") !== (thread.agentId || "codex")) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
     const immediate = method === "turn/completed" || method === "error";
     if (immediate) {
@@ -121,10 +126,30 @@ export function ChatWorkspace({
     }
     const timer = window.setTimeout(() => load(), 300);
     return () => window.clearTimeout(timer);
-  }, [events.length, load, thread.id, thread.providerId]);
+  }, [events.length, load, thread.id, thread.providerId, thread.agentId]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
+    if (
+      thread.agentId === "claude" &&
+      command.kind !== "status" &&
+      command.kind !== "usage"
+    )
+      throw new Error(`${agentName} 暂不支持这个 Codecks 命令`);
+    if (command.kind === "compact" && !capabilities.sessionSettings)
+      throw new Error(`${agentName} 暂不支持压缩上下文`);
+    if (command.kind === "model" && !capabilities.models)
+      throw new Error(`${agentName} 暂不支持从 Codecks 切换模型`);
+    if (command.kind === "permissions" && !capabilities.sessionSettings)
+      throw new Error(`${agentName} 暂不支持修改会话权限`);
+    if (command.kind === "skills" && !capabilities.skills)
+      throw new Error(`${agentName} 暂不支持 Skill 面板`);
+    if (command.kind === "mcp" && !capabilities.mcp)
+      throw new Error(`${agentName} 暂不支持 MCP 面板`);
+    if (command.kind === "review" && !capabilities.review)
+      throw new Error(`${agentName} 暂不支持代码审查命令`);
+    if (command.kind === "shell" && !capabilities.shell)
+      throw new Error(`${agentName} 暂不支持 Shell 命令`);
     if (command.kind === "compact") return compact();
     if (command.kind === "status") {
       const usage = thread.tokenUsage;
@@ -267,7 +292,7 @@ export function ChatWorkspace({
     try {
       if (command) await runCommand(command);
       else
-        await post(commandPath("turns"), {
+        await post(threadActionPath(thread, "turns"), {
           text: value,
           images: pendingImages.map((image) => ({
             url: image.url,
@@ -407,6 +432,8 @@ export function ChatWorkspace({
       <ChatHeader
         thread={headerThread}
         provider={provider}
+        agentName={agentName}
+        capabilities={capabilities}
         pendingCount={threadApprovals.length}
         locked={locked}
         onBack={onBack}
@@ -433,10 +460,12 @@ export function ChatWorkspace({
           pendingUsers={pendingUsers}
           origin={origin}
           onCopy={() => onToast("已复制")}
-          onForkFrom={(turnId) => forkFrom(turnId)}
+          onForkFrom={
+            capabilities.fork ? (turnId) => forkFrom(turnId) : undefined
+          }
           onOpenOrigin={onOpenOrigin}
           onEditUserMessage={editUserMessage}
-          onRetryUserMessage={retryUserMessage}
+          onRetryUserMessage={capabilities.fork ? retryUserMessage : undefined}
           messageActionsDisabled={
             locked || sending || Boolean(thread.compacting)
           }
@@ -446,7 +475,7 @@ export function ChatWorkspace({
         <div className="task-error" role="alert">
           <ShieldAlert />
           <div>
-            <b>Codex 执行失败</b>
+            <b>{agentName} 执行失败</b>
             <p>{taskError}</p>
             {taskErrorCode && <small>错误类型：{taskErrorCode}</small>}
             {contextExceeded && (
@@ -481,7 +510,7 @@ export function ChatWorkspace({
         }
         onError={setError}
         onStop={() =>
-          post(`/threads/${thread.providerId}/${thread.id}/interrupt`, {
+          post(threadActionPath(thread, "interrupt"), {
             turnId: thread.activeTurnId,
           })
         }

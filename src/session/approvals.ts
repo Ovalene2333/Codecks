@@ -17,7 +17,9 @@ export function threadForApproval(
   if (!threadId) return undefined;
   return threads.find(
     (thread) =>
-      thread.id === threadId && thread.providerId === approval.providerId,
+      thread.id === threadId &&
+      thread.providerId === approval.providerId &&
+      (thread.agentId || "codex") === (approval.agentId || "codex"),
   );
 }
 

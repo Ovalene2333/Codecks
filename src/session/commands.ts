@@ -113,15 +113,26 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   return undefined;
 }
 
-export function matchingSlashCommands(text: string) {
+const CLAUDE_COMMANDS = new Set(["/status", "/usage"]);
+
+export function matchingSlashCommands(
+  text: string,
+  agentId: "codex" | "claude" = "codex",
+) {
   const value = text.trim();
   if (!value) return [];
   if (value === "!") return SLASH_COMMANDS.filter((item) => item.name === "!");
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
-  const items = SLASH_COMMANDS.filter((item) => item.name.startsWith(query));
+  const items = SLASH_COMMANDS.filter(
+    (item) =>
+      item.name.startsWith(query) &&
+      (agentId === "codex" || CLAUDE_COMMANDS.has(item.name)),
+  );
   if (value === "/")
-    return [...items, ...SLASH_COMMANDS.filter((item) => item.name === "!")];
+    return agentId === "codex"
+      ? [...items, ...SLASH_COMMANDS.filter((item) => item.name === "!")]
+      : items;
   return items;
 }
 

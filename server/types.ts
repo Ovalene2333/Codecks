@@ -33,6 +33,7 @@ export interface ConnectionOverlay {
 }
 
 export interface ProjectDefaults extends ConnectionOverlay {
+  agentId?: "codex" | "claude";
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -51,6 +52,7 @@ export interface ProjectRecord {
 }
 
 export interface DeckPreferences extends ConnectionOverlay {
+  lastAgentId?: "codex" | "claude";
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;

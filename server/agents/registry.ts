@@ -148,9 +148,11 @@ export class AgentRegistry extends EventEmitter {
   }
 
   private thread(id: AgentId, threadId: string) {
-    const thread = this.get(id)
-      .snapshot()
-      .threads.find((item) => item.id === threadId);
+    const snapshot = this.get(id).snapshot();
+    const thread = [
+      ...snapshot.threads,
+      ...(snapshot.archivedThreads || []),
+    ].find((item) => item.id === threadId);
     if (!thread) throw new Error(`Agent ${id} 的会话不存在`);
     return thread;
   }
