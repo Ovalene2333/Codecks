@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import { Folder, GitBranch } from "lucide-react";
-import type { Approval, ApprovalResolveBody, ThreadSummary } from "../types";
+import type { ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
-import { ApprovalCard } from "./ApprovalCard";
 import { AssistantMarkdown } from "./markdown";
 import { TurnBlock } from "./TurnBlock";
 import type { PendingUserMessage } from "./optimistic";
@@ -14,9 +13,7 @@ export function Timeline({
   turns,
   streamed,
   pendingUsers,
-  approvals,
   origin,
-  onResolve,
   onCopy,
   onForkFrom,
   onOpenOrigin,
@@ -28,9 +25,7 @@ export function Timeline({
   turns: any[];
   streamed: StreamedAgentMessage[];
   pendingUsers: PendingUserMessage[];
-  approvals: Approval[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
-  onResolve: (id: string, body: ApprovalResolveBody) => void;
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
@@ -58,7 +53,7 @@ export function Timeline({
     if (followOutput.current) element.scrollTop = element.scrollHeight;
     else element.scrollTop = scrollTop.current;
     scrollTop.current = element.scrollTop;
-  }, [thread.id, turns, streamed, approvals.length]);
+  }, [thread.id, turns, streamed]);
 
   const rememberScrollPosition = () => {
     const element = timeline.current;
@@ -141,17 +136,6 @@ export function Timeline({
             ))}
           </section>
         )}
-      </div>
-      <div className="timeline-approvals">
-        {approvals.map((approval) => (
-          <RenderErrorBoundary
-            key={approval.id}
-            resetKey={approval.id}
-            fallback={<p className="error-banner">这条审批无法显示</p>}
-          >
-            <ApprovalCard approval={approval} onResolve={onResolve} />
-          </RenderErrorBoundary>
-        ))}
       </div>
     </div>
   );

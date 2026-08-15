@@ -18,6 +18,7 @@ export function ProjectGroupView({
   project,
   library,
   selected,
+  unseenSessions,
   collapsed,
   forkCounts,
   onToggle,
@@ -37,6 +38,7 @@ export function ProjectGroupView({
   project: ProjectGroupData;
   library: "active" | "archived";
   selected?: string;
+  unseenSessions: ReadonlySet<string>;
   collapsed: boolean;
   forkCounts: Map<string, number>;
   onToggle: () => void;
@@ -100,6 +102,7 @@ export function ProjectGroupView({
       </div>
       {visible.map((thread) => {
         const key = sessionKey(thread);
+        const unseen = unseenSessions.has(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
         const providerLabel = provider?.name || thread.providerId;
@@ -118,10 +121,10 @@ export function ProjectGroupView({
             }}
           >
             <div className="session-row-top">
-              {thread.status !== "idle" && (
-                <Status status={thread.status} compact />
-              )}
               <strong title={thread.name}>{thread.name}</strong>
+              {(thread.status !== "idle" || unseen) && (
+                <Status status={thread.status} compact unseen={unseen} />
+              )}
               <button
                 type="button"
                 className="session-row-more"
@@ -163,7 +166,11 @@ export function ProjectGroupView({
                 </small>
               ) : null}
               <small
-                className={thread.controlMode === "history" ? "history-badge" : "mode-badge"}
+                className={
+                  thread.controlMode === "history"
+                    ? "history-badge"
+                    : "mode-badge"
+                }
                 onClick={
                   thread.controlMode === "history"
                     ? (event) => {

@@ -27,7 +27,9 @@ Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，�
 - 按工作目录分组，同一路径可以并行多个独立 session
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
-- 查看运行、空闲、待审批和异常；接收增量回复；发送指令、粘贴图片、中断 turn、批准或拒绝命令与文件修改
+- 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
+- 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
+- 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)

@@ -7,12 +7,12 @@ import { ChatHeader } from "../layout/ChatHeader";
 import type {
   Approval,
   ApprovalPolicy,
-  ApprovalResolveBody,
   Personality,
   Provider,
   SandboxMode,
   ThreadSummary,
 } from "../types";
+import { approvalBelongsToThread } from "./approvals";
 import { RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
 import { CommandModal, type CommandModalKind } from "./CommandModal";
@@ -322,14 +322,6 @@ export function ChatWorkspace({
       setSending(false);
     }
   };
-  const resolve = async (id: string, body: ApprovalResolveBody) => {
-    try {
-      await post(`/approvals/${encodeURIComponent(id)}`, body);
-      onSnapshot();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
   const compact = async () => {
     try {
       await post(`/threads/${thread.providerId}/${thread.id}/compact`);
@@ -380,10 +372,8 @@ export function ChatWorkspace({
           thread.agentId || "codex",
         )
       : [];
-  const threadApprovals = approvals.filter(
-    (approval) =>
-      approval.request.params?.threadId === thread.id ||
-      approval.id.startsWith(`${thread.id}:`),
+  const threadApprovals = approvals.filter((approval) =>
+    approvalBelongsToThread(approval, thread),
   );
   const latestTurnError = full?.turns?.at?.(-1)?.error;
   const rawTaskError = displayText(
@@ -437,9 +427,7 @@ export function ChatWorkspace({
           turns={Array.isArray(full?.turns) ? full.turns : []}
           streamed={streamed}
           pendingUsers={pendingUsers}
-          approvals={threadApprovals}
           origin={origin}
-          onResolve={resolve}
           onCopy={() => onToast("已复制")}
           onForkFrom={(turnId) => forkFrom(turnId)}
           onOpenOrigin={onOpenOrigin}

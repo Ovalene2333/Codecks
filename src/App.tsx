@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, KeyRound, Menu, Settings } from "lucide-react";
 import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
 import { useAppearance } from "./appearance";
@@ -6,6 +6,7 @@ import type {
   ProjectRecord,
   RuntimeSnapshot,
   Snapshot,
+  ApprovalResolveBody,
   ThreadSummary,
 } from "./types";
 import {
@@ -41,6 +42,21 @@ import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
+import { ApprovalInbox } from "./overlays/ApprovalInbox";
+import {
+  completedThreads,
+  readUnseenSessions,
+  reconcileUnseenSessions,
+  sameSessionSet,
+  threadStatusMap,
+  writeUnseenSessions,
+} from "./session/activity";
+import { approvalPreview, threadForApproval } from "./session/approvals";
+import {
+  requestSystemNotifications,
+  sendSystemNotification,
+  systemNotificationPermission,
+} from "./notifications";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 
@@ -64,8 +80,12 @@ export function App() {
   const [switchThread, setSwitchThread] = useState<ThreadSummary | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
-    "all" | "active" | "attention"
+    "all" | "active" | "attention" | "unseen"
   >("all");
+  const [unseenSessions, setUnseenSessions] = useState(readUnseenSessions);
+  const [notificationPermission, setNotificationPermission] = useState(
+    systemNotificationPermission,
+  );
   const [sidebar, setSidebar] = useState(true);
   const [authError, setAuthError] = useState(false);
   const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
@@ -87,6 +107,8 @@ export function App() {
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
   const [phoneSettings, setPhoneSettings] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
+  const notifiedApprovals = useRef(new Set<string>());
 
   const pushToast = useCallback((message: string) => {
     const id = Date.now() + Math.random();
@@ -96,6 +118,27 @@ export function App() {
       2000,
     );
   }, []);
+
+  const markSessionSeen = useCallback((key: string) => {
+    setUnseenSessions((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      writeUnseenSessions(next);
+      return next;
+    });
+  }, []);
+
+  const openSession = useCallback(
+    (thread: ThreadSummary) => {
+      const key = sessionKey(thread);
+      markSessionSeen(key);
+      setSelected(key);
+      setLibrary(thread.archived ? "archived" : "active");
+      setSidebar(false);
+    },
+    [markSessionSeen],
+  );
 
   const refreshOfficialUsage = useCallback(async () => {
     try {
@@ -140,6 +183,73 @@ export function App() {
       query: "",
     });
   }, [expandedProjects]);
+
+  useEffect(() => {
+    if (loading) return;
+    const previous = previousThreadStatuses.current;
+    const completed = completedThreads(previous, snapshot.threads);
+    const visible = document.visibilityState === "visible";
+
+    setUnseenSessions((current) => {
+      const next = reconcileUnseenSessions({
+        current,
+        previous,
+        threads: snapshot.threads,
+        selected,
+        visible,
+      });
+      if (sameSessionSet(current, next)) return current;
+      writeUnseenSessions(next);
+      return next;
+    });
+    previousThreadStatuses.current = threadStatusMap(snapshot.threads);
+
+    for (const thread of completed) {
+      const key = sessionKey(thread);
+      if (visible && selected === key) continue;
+      sendSystemNotification({
+        title: "Codex Deck · 有新回复",
+        body: `${thread.name}\n任务已经执行完成`,
+        tag: `codex-deck-thread-${key}`,
+        onClick: () => openSession(thread),
+      });
+    }
+  }, [loading, openSession, selected, snapshot.threads]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "visible" && selected)
+        markSessionSeen(selected);
+      if (document.visibilityState === "visible")
+        setNotificationPermission(systemNotificationPermission());
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    onVisibility();
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [markSessionSeen, selected]);
+
+  useEffect(() => {
+    const threads = [...snapshot.threads, ...(snapshot.archivedThreads || [])];
+    for (const approval of snapshot.approvals) {
+      if (notifiedApprovals.current.has(approval.id)) continue;
+      notifiedApprovals.current.add(approval.id);
+      const thread = threadForApproval(approval, threads);
+      sendSystemNotification({
+        title: "Codex Deck · 需要确认",
+        body: `${thread?.name || "Codex Session"}\n${approvalPreview(approval)}`,
+        tag: `codex-deck-approval-${approval.id}`,
+        requireInteraction: true,
+        onClick: () => {
+          if (thread) openSession(thread);
+        },
+      });
+    }
+  }, [
+    openSession,
+    snapshot.approvals,
+    snapshot.archivedThreads,
+    snapshot.threads,
+  ]);
 
   useEffect(() => {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -268,7 +378,9 @@ export function App() {
               (thread) =>
                 thread.status === "waiting" || thread.status === "error",
             )
-          : threads;
+          : statusFilter === "unseen"
+            ? threads.filter((thread) => unseenSessions.has(sessionKey(thread)))
+            : threads;
     return filterProjectGroups(
       groups.map((group) => ({
         ...group,
@@ -286,6 +398,7 @@ export function App() {
     libraryThreads,
     query,
     statusFilter,
+    unseenSessions,
   ]);
 
   const counts = useMemo(
@@ -296,8 +409,11 @@ export function App() {
         .length,
       errors: snapshot.threads.filter((thread) => thread.status === "error")
         .length,
+      unseen: snapshot.threads.filter((thread) =>
+        unseenSessions.has(sessionKey(thread)),
+      ).length,
     }),
-    [snapshot.threads],
+    [snapshot.threads, unseenSessions],
   );
 
   const allThreads = useMemo(
@@ -479,9 +595,28 @@ export function App() {
   };
 
   const selectThread = (thread: ThreadSummary) => {
-    setSelected(sessionKey(thread));
-    setLibrary(thread.archived ? "archived" : "active");
-    setSidebar(false);
+    openSession(thread);
+  };
+
+  const enableSystemNotifications = async () => {
+    const permission = await requestSystemNotifications();
+    setNotificationPermission(permission);
+    pushToast(
+      permission === "granted"
+        ? "已开启系统提醒"
+        : permission === "unsupported"
+          ? "当前浏览器不支持系统提醒"
+          : "系统提醒未获授权",
+    );
+  };
+
+  const resolveApproval = async (id: string, body: ApprovalResolveBody) => {
+    try {
+      await post(`/approvals/${encodeURIComponent(id)}`, body);
+      await refresh();
+    } catch (error: any) {
+      pushToast(error?.message || "审批处理失败");
+    }
   };
 
   const openOrigin = (thread: ThreadSummary) => {
@@ -555,9 +690,11 @@ export function App() {
         counts={counts}
         projects={projects}
         selected={selected}
+        unseenSessions={unseenSessions}
         expandedProjects={expandedProjects}
         forkCounts={forkCounts}
         runtime={snapshot.runtime}
+        notificationPermission={notificationPermission}
         archiveError={snapshot.runtime?.archiveError}
         loading={loading}
         onClose={() => setSidebar(false)}
@@ -565,6 +702,7 @@ export function App() {
         onRefresh={refresh}
         onProviders={() => setProviderModal(true)}
         onUsage={() => setUsageOpen(true)}
+        onNotifications={enableSystemNotifications}
         onLibrary={setLibrary}
         onQuery={setQuery}
         onStatusFilter={setStatusFilter}
@@ -666,9 +804,15 @@ export function App() {
               onSnapshot={refresh}
               onSwitchProvider={() => setSwitchThread(current)}
               onMenu={() => setSheet(current)}
-              onSelectThread={(providerId, threadId) =>
-                setSelected(`${providerId}:${threadId}`)
-              }
+              onSelectThread={(providerId, threadId) => {
+                const key = sessionKey({
+                  agentId: current.agentId,
+                  providerId,
+                  id: threadId,
+                });
+                markSessionSeen(key);
+                setSelected(key);
+              }}
               onToast={pushToast}
               onUsage={() => setUsageOpen(true)}
               onAppearance={() => setAppearanceOpen(true)}
@@ -725,7 +869,7 @@ export function App() {
           runtimeWsl={Boolean(snapshot.runtime?.runtimeWsl)}
           onClose={() => setThreadModal(null)}
           onCreated={(providerId, id) => {
-            setSelected(`${providerId}:${id}`);
+            setSelected(sessionKey({ providerId, id }));
             setLibrary("active");
             setTimeout(refresh, 400);
           }}
@@ -737,7 +881,13 @@ export function App() {
           providers={snapshot.providers}
           onClose={() => setSwitchThread(null)}
           onCreated={(providerId, threadId) => {
-            setSelected(`${providerId}:${threadId}`);
+            setSelected(
+              sessionKey({
+                agentId: switchThread.agentId,
+                providerId,
+                id: threadId,
+              }),
+            );
             setTimeout(refresh, 300);
           }}
         />
@@ -840,7 +990,13 @@ export function App() {
                   `/threads/${sheet.providerId}/${sheet.id}/fork`,
                   {},
                 );
-                setSelected(`${sheet.providerId}:${created.id}`);
+                setSelected(
+                  sessionKey({
+                    agentId: sheet.agentId,
+                    providerId: sheet.providerId,
+                    id: created.id,
+                  }),
+                );
                 refresh();
               },
             },
@@ -955,6 +1111,14 @@ export function App() {
           }}
         />
       )}
+      <ApprovalInbox
+        approvals={snapshot.approvals}
+        threads={allThreads}
+        notificationPermission={notificationPermission}
+        onRequestNotifications={enableSystemNotifications}
+        onOpenThread={openSession}
+        onResolve={resolveApproval}
+      />
       <ToastStack toasts={toasts} />
     </div>
   );

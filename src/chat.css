@@ -183,9 +183,6 @@
 .timeline-turns {
   order: 1;
 }
-.timeline-approvals {
-  order: 2;
-}
 .origin-chip {
   display: inline-flex;
   align-items: center;
@@ -980,12 +977,6 @@
   }
   .timeline-turns {
     order: 2;
-  }
-  .timeline-approvals {
-    order: 0;
-    position: sticky;
-    top: 0;
-    z-index: 4;
   }
   .approval-actions {
     flex-direction: column;

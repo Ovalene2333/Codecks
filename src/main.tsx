@@ -6,6 +6,7 @@ import "./styles.css";
 import "./project-groups.css";
 import "./sidebar.css";
 import "./chat.css";
+import "./approval-inbox.css";
 import "./overlays.css";
 import "./tokens.css";
 import "./polish.css";

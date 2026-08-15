@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
+  BellRing,
   Bot,
   Plus,
   RefreshCw,
@@ -8,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import deckLogo from "../assets/logo.svg";
+import type { DeckNotificationPermission } from "../notifications";
 import type { ProjectGroup } from "../projects";
 import type { Provider, RuntimeSnapshot, ThreadSummary } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
@@ -25,9 +27,11 @@ export function Sidebar({
   counts,
   projects,
   selected,
+  unseenSessions,
   expandedProjects,
   forkCounts,
   runtime,
+  notificationPermission,
   archiveError,
   loading,
   onClose,
@@ -35,6 +39,7 @@ export function Sidebar({
   onRefresh,
   onProviders,
   onUsage,
+  onNotifications,
   onLibrary,
   onQuery,
   onStatusFilter,
@@ -59,13 +64,15 @@ export function Sidebar({
   archivedCount: number;
   library: "active" | "archived";
   query: string;
-  statusFilter: "all" | "active" | "attention";
-  counts: { running: number; waiting: number; errors: number };
+  statusFilter: "all" | "active" | "attention" | "unseen";
+  counts: { running: number; waiting: number; errors: number; unseen: number };
   projects: ProjectGroup[];
   selected?: string;
+  unseenSessions: ReadonlySet<string>;
   expandedProjects: Set<string>;
   forkCounts: Map<string, number>;
   runtime?: RuntimeSnapshot;
+  notificationPermission: DeckNotificationPermission;
   archiveError?: string;
   loading?: boolean;
   onClose: () => void;
@@ -73,9 +80,10 @@ export function Sidebar({
   onRefresh: () => void;
   onProviders: () => void;
   onUsage: () => void;
+  onNotifications: () => void;
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
-  onStatusFilter: (value: "all" | "active" | "attention") => void;
+  onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
   onToggleProject: (key: string) => void;
   onSelect: (thread: ThreadSummary) => void;
   onAddInProject: (project: ProjectGroup) => void;
@@ -224,6 +232,18 @@ export function Sidebar({
             <b>{counts.waiting}</b>
             {counts.errors > 0 && <em>{counts.errors}</em>}
           </button>
+          <button
+            type="button"
+            className={statusFilter === "unseen" ? "active" : ""}
+            aria-pressed={statusFilter === "unseen"}
+            onClick={() =>
+              onStatusFilter(statusFilter === "unseen" ? "all" : "unseen")
+            }
+          >
+            <span className="watch-dot unseen" />
+            新回复
+            <b>{counts.unseen}</b>
+          </button>
         </div>
       </div>
       {archiveError && library === "archived" && (
@@ -236,6 +256,7 @@ export function Sidebar({
             project={project}
             library={library}
             selected={selected}
+            unseenSessions={unseenSessions}
             collapsed={!searching && !expandedProjects.has(project.key)}
             forkCounts={forkCounts}
             onToggle={() => onToggleProject(project.key)}
@@ -254,7 +275,11 @@ export function Sidebar({
           />
         ))}
         {loading && !projects.length && (
-          <div className="sidebar-skeleton" aria-busy="true" aria-label="正在读取项目">
+          <div
+            className="sidebar-skeleton"
+            aria-busy="true"
+            aria-label="正在读取项目"
+          >
             {Array.from({ length: 7 }, (_, index) => (
               <div key={index} className="skeleton-project" />
             ))}
@@ -285,6 +310,23 @@ export function Sidebar({
           <Settings />
           供应商设置
         </button>
+        {notificationPermission !== "unsupported" ? (
+          <button
+            type="button"
+            onClick={onNotifications}
+            disabled={notificationPermission === "denied"}
+            title={
+              notificationPermission === "granted"
+                ? "系统提醒已开启"
+                : notificationPermission === "denied"
+                  ? "请在浏览器的站点设置中允许通知"
+                  : "审批和任务完成时发送系统提醒"
+            }
+          >
+            <BellRing />
+            系统提醒
+          </button>
+        ) : null}
       </div>
     </aside>
   );

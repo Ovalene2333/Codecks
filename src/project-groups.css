@@ -17,6 +17,9 @@
 .watch-dot.waiting {
   background: #f6b94b;
 }
+.watch-dot.unseen {
+  background: #8eaedb;
+}
 .session-search {
   display: flex;
   align-items: center;

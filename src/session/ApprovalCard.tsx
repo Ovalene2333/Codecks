@@ -15,9 +15,11 @@ function defaultDecisions(approval: Approval) {
 export function ApprovalCard({
   approval,
   onResolve,
+  disabled = false,
 }: {
   approval: Approval;
   onResolve: (id: string, body: ApprovalResolveBody) => void;
+  disabled?: boolean;
 }) {
   const kind =
     approval.kind ||
@@ -36,6 +38,7 @@ export function ApprovalCard({
         approval={approval}
         items={permissionItems}
         onResolve={onResolve}
+        disabled={disabled}
       />
     );
   if (kind === "question")
@@ -44,6 +47,7 @@ export function ApprovalCard({
         approval={approval}
         questions={questions}
         onResolve={onResolve}
+        disabled={disabled}
       />
     );
 
@@ -91,6 +95,7 @@ export function ApprovalCard({
         {decisions.includes("decline") && (
           <button
             type="button"
+            disabled={disabled}
             onClick={() => onResolve(approval.id, { decision: "decline" })}
           >
             拒绝
@@ -99,6 +104,7 @@ export function ApprovalCard({
         {decisions.includes("cancel") && !decisions.includes("decline") && (
           <button
             type="button"
+            disabled={disabled}
             onClick={() => onResolve(approval.id, { decision: "cancel" })}
           >
             取消
@@ -107,6 +113,7 @@ export function ApprovalCard({
         {decisions.includes("accept") && (
           <button
             type="button"
+            disabled={disabled}
             className="approve"
             onClick={() => onResolve(approval.id, { decision: "accept" })}
           >
@@ -117,6 +124,7 @@ export function ApprovalCard({
         {decisions.includes("acceptForSession") && (
           <button
             type="button"
+            disabled={disabled}
             className="approve session"
             onClick={() =>
               onResolve(approval.id, { decision: "acceptForSession" })
@@ -183,10 +191,12 @@ function PermissionApproval({
   approval,
   items,
   onResolve,
+  disabled,
 }: {
   approval: Approval;
   items: PermissionItem[];
   onResolve: (id: string, body: ApprovalResolveBody) => void;
+  disabled: boolean;
 }) {
   const raw = approval.permissions || approval.request.params?.permissions;
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
@@ -223,6 +233,7 @@ function PermissionApproval({
       <div className="approval-actions">
         <button
           type="button"
+          disabled={disabled}
           onClick={() =>
             onResolve(approval.id, {
               permissions: grantedPermissions(raw, items, selected),
@@ -234,6 +245,7 @@ function PermissionApproval({
         </button>
         <button
           type="button"
+          disabled={disabled}
           className="approve session"
           onClick={() =>
             onResolve(approval.id, {
@@ -253,10 +265,12 @@ function QuestionApproval({
   approval,
   questions,
   onResolve,
+  disabled,
 }: {
   approval: Approval;
   questions: any[];
   onResolve: (id: string, body: ApprovalResolveBody) => void;
+  disabled: boolean;
 }) {
   const items = questions.slice(0, 3);
   const [answers, setAnswers] = useState<{ value: string; other: string }[]>(
@@ -364,7 +378,7 @@ function QuestionApproval({
         <button
           type="button"
           className="approve"
-          disabled={!ready}
+          disabled={!ready || disabled}
           onClick={() =>
             onResolve(approval.id, {
               answers: items.map((question, index) => ({

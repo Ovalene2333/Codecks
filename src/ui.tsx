@@ -1,4 +1,10 @@
-import { Component, useEffect, useRef, type ErrorInfo, type ReactNode } from "react";
+import {
+  Component,
+  useEffect,
+  useRef,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import type { ThreadSummary } from "./types";
 
@@ -34,9 +40,11 @@ export class RenderErrorBoundary extends Component<
 export function Status({
   status,
   compact,
+  unseen,
 }: {
   status: ThreadSummary["status"];
   compact?: boolean;
+  unseen?: boolean;
 }) {
   const labels = {
     starting: "启动中",
@@ -46,10 +54,13 @@ export function Status({
     error: "异常",
     offline: "离线",
   };
+  const showUnseen = Boolean(unseen && status === "idle");
   return (
-    <span className={`status ${status} ${compact ? "compact" : ""}`}>
+    <span
+      className={`status ${showUnseen ? "unseen" : status} ${compact ? "compact" : ""}`}
+    >
       <i />
-      <em>{labels[status]}</em>
+      <em>{showUnseen ? "有新回复" : labels[status]}</em>
     </span>
   );
 }
@@ -172,7 +183,12 @@ export function ActionSheet({
         className={`modal action-sheet-modal ${anchor ? "anchored" : ""}`}
         style={
           anchor
-            ? { top: anchor.top, right: anchor.right, left: "auto", bottom: "auto" }
+            ? {
+                top: anchor.top,
+                right: anchor.right,
+                left: "auto",
+                bottom: "auto",
+              }
             : undefined
         }
         onMouseDown={(e) => e.stopPropagation()}
@@ -214,7 +230,10 @@ export function Drawer({
 }) {
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
-      <section className="usage-drawer" onMouseDown={(e) => e.stopPropagation()}>
+      <section
+        className="usage-drawer"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <header>
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose}>
