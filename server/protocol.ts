@@ -60,7 +60,7 @@ export function parseTimestamp(...values: unknown[]): number | undefined {
 export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const data = raw as Record<string, unknown>;
-  const nested =
+  const container =
     data.tokenUsage && typeof data.tokenUsage === "object"
       ? (data.tokenUsage as Record<string, unknown>)
       : data.token_usage && typeof data.token_usage === "object"
@@ -68,18 +68,64 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
         : data.usage && typeof data.usage === "object"
           ? (data.usage as Record<string, unknown>)
           : data;
+  const total =
+    container.total && typeof container.total === "object"
+      ? (container.total as Record<string, unknown>)
+      : container.totalTokenUsage &&
+          typeof container.totalTokenUsage === "object"
+        ? (container.totalTokenUsage as Record<string, unknown>)
+        : container.total_token_usage &&
+            typeof container.total_token_usage === "object"
+          ? (container.total_token_usage as Record<string, unknown>)
+          : undefined;
+  const nested = total || container;
+  const last =
+    container.last && typeof container.last === "object"
+      ? (container.last as Record<string, unknown>)
+      : container.lastTokenUsage && typeof container.lastTokenUsage === "object"
+        ? (container.lastTokenUsage as Record<string, unknown>)
+        : container.last_token_usage &&
+            typeof container.last_token_usage === "object"
+          ? (container.last_token_usage as Record<string, unknown>)
+          : undefined;
+  const cumulative = total
+    ? pickNumber(
+        total.used,
+        total.usedTokens,
+        total.used_tokens,
+        total.totalTokens,
+        total.total_tokens,
+        total.tokens,
+        total.tokenCount,
+        total.token_count,
+      )
+    : undefined;
   const used = pickNumber(
-    nested.used,
-    nested.usedTokens,
-    nested.used_tokens,
-    nested.totalTokens,
-    nested.total_tokens,
-    nested.lastTokensUsed,
-    nested.tokens,
-    nested.tokenCount,
-    nested.token_count,
+    container.used,
+    container.usedTokens,
+    container.used_tokens,
+    last?.used,
+    last?.usedTokens,
+    last?.used_tokens,
+    last?.totalTokens,
+    last?.total_tokens,
+    last?.lastTokensUsed,
+    last?.tokens,
+    last?.tokenCount,
+    last?.token_count,
+    total ? undefined : nested.totalTokens,
+    total ? undefined : nested.total_tokens,
+    total ? undefined : nested.lastTokensUsed,
+    total ? undefined : nested.tokens,
+    total ? undefined : nested.tokenCount,
+    total ? undefined : nested.token_count,
   );
   const limit = pickNumber(
+    container.limit,
+    container.contextWindow,
+    container.context_window,
+    container.modelContextWindow,
+    container.model_context_window,
     nested.limit,
     nested.contextWindow,
     nested.context_window,
@@ -94,24 +140,46 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
     nested.inputTokens,
     nested.input_tokens,
   );
+  const cachedInput = pickNumber(
+    nested.cachedInput,
+    nested.cachedInputTokens,
+    nested.cached_input_tokens,
+  );
   const output = pickNumber(
     nested.output,
     nested.outputTokens,
     nested.output_tokens,
   );
-  if (used == null && limit == null && input == null && output == null)
+  const reasoningOutput = pickNumber(
+    nested.reasoningOutput,
+    nested.reasoningOutputTokens,
+    nested.reasoning_output_tokens,
+  );
+  if (
+    cumulative == null &&
+    used == null &&
+    limit == null &&
+    input == null &&
+    cachedInput == null &&
+    output == null &&
+    reasoningOutput == null
+  )
     return undefined;
   const usage: TokenUsage = {};
+  if (cumulative != null) usage.total = cumulative;
   if (used != null) usage.used = used;
   if (limit != null) usage.limit = limit;
   if (input != null) usage.input = input;
+  if (cachedInput != null) usage.cachedInput = cachedInput;
   if (output != null) usage.output = output;
+  if (reasoningOutput != null) usage.reasoningOutput = reasoningOutput;
   return usage;
 }
 
-export function parseRateLimitWindow(raw: unknown): RateLimitWindow | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw))
-    return { limit: raw };
+export function parseRateLimitWindow(
+  raw: unknown,
+): RateLimitWindow | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { limit: raw };
   if (!raw || typeof raw !== "object") return undefined;
   const data = raw as Record<string, unknown>;
   const usedPercent = pickNumber(
@@ -152,9 +220,9 @@ export function parseRateLimitWindow(raw: unknown): RateLimitWindow | undefined 
   );
   const reached = Boolean(
     data.reached ||
-      data.limitReached ||
-      data.limit_reached ||
-      (usedPercent != null && usedPercent >= 100),
+    data.limitReached ||
+    data.limit_reached ||
+    (usedPercent != null && usedPercent >= 100),
   );
   if (
     usedPercent == null &&
@@ -202,7 +270,8 @@ export function parseRateLimits(raw: unknown): RateLimits | null {
       root.week,
   );
   const byLimitId: Record<string, RateLimitWindow> = {};
-  const extra = root.byLimitId || root.by_limit_id || root.limits || root.credits;
+  const extra =
+    root.byLimitId || root.by_limit_id || root.limits || root.credits;
   if (Array.isArray(extra)) {
     for (const item of extra) {
       if (!item || typeof item !== "object") continue;
@@ -380,7 +449,8 @@ export function formatCommand(command: unknown): string | undefined {
 export function parseFileChanges(raw: unknown): FileChange[] | undefined {
   if (!Array.isArray(raw) || !raw.length) return undefined;
   return raw.map((item) => {
-    const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const row =
+      item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     return {
       path: String(row.path || row.file || row.filename || ""),
       kind: pickString(row.kind, row.type, row.changeType, row.change_type),
@@ -390,9 +460,7 @@ export function parseFileChanges(raw: unknown): FileChange[] | undefined {
 }
 
 export type SandboxModeValue =
-  | "read-only"
-  | "workspace-write"
-  | "danger-full-access";
+  "read-only" | "workspace-write" | "danger-full-access";
 
 export function parseSandboxMode(
   ...values: unknown[]

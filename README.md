@@ -32,6 +32,7 @@ Deck 直接使用当前系统的 `~/.codex`。启动时读取已有 session，�
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
+- 用量面板会汇总已读取 session 的累计 token，并按项目或 session 查看输入、缓存输入和输出明细；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 
 ### 远程值守

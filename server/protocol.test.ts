@@ -92,6 +92,31 @@ test("token usage extracts common keys without inventing totals", () => {
   assert.equal(parseTokenUsage({}), undefined);
 });
 
+test("token usage reads cumulative app-server totals and context window", () => {
+  const usage = parseTokenUsage({
+    tokenUsage: {
+      total: {
+        inputTokens: 18_000,
+        cachedInputTokens: 7_500,
+        outputTokens: 2_000,
+        reasoningOutputTokens: 600,
+        totalTokens: 20_000,
+      },
+      last: { totalTokens: 800 },
+      modelContextWindow: 272_000,
+    },
+  });
+  assert.deepEqual(usage, {
+    total: 20_000,
+    used: 800,
+    limit: 272_000,
+    input: 18_000,
+    cachedInput: 7_500,
+    output: 2_000,
+    reasoningOutput: 600,
+  });
+});
+
 test("timestampFromId reads UUIDv7 milliseconds", () => {
   const id = "019ffddc-408f-7e00-b7a1-5444c1acadf8";
   const ms = timestampFromId(id);

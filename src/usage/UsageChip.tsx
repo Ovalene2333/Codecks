@@ -1,14 +1,15 @@
-import { Gauge } from "lucide-react";
-import type { RuntimeSnapshot, TokenUsage } from "../types";
+import { useMemo, useState } from "react";
+import { Folder, Gauge, MessageSquare } from "lucide-react";
+import type { ProjectRecord, RuntimeSnapshot, ThreadSummary } from "../types";
 import {
   formatResetCountdown,
   formatWindowLength,
-  OFFICIAL_USAGE_TITLE,
   usageChipMetric,
   usageTone,
 } from "./format";
 import { Drawer } from "../ui";
-import { formatTokens } from "../format";
+import { formatTokens, relativeTime } from "../format";
+import { buildUsageStats, type UsageTotals } from "./stats";
 
 export function UsageChip({
   runtime,
@@ -23,7 +24,7 @@ export function UsageChip({
     <button
       type="button"
       className={`usage-chip ${tone}`}
-      title={OFFICIAL_USAGE_TITLE}
+      title="用量统计与 Official 额度"
       onClick={onOpen}
     >
       <Gauge />
@@ -34,20 +35,198 @@ export function UsageChip({
 
 export function UsageDrawer({
   runtime,
-  sessionUsage,
+  threads,
+  projects,
+  currentSessionKey,
   onClose,
 }: {
   runtime?: RuntimeSnapshot;
-  sessionUsage?: TokenUsage;
+  threads: ThreadSummary[];
+  projects?: ProjectRecord[];
+  currentSessionKey?: string;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<"stats" | "limits">("stats");
+  return (
+    <Drawer title="用量" onClose={onClose}>
+      <div className="usage-tabs" role="tablist" aria-label="用量视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "stats"}
+          className={tab === "stats" ? "on" : ""}
+          onClick={() => setTab("stats")}
+        >
+          统计
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "limits"}
+          className={tab === "limits" ? "on" : ""}
+          onClick={() => setTab("limits")}
+        >
+          账号额度
+        </button>
+      </div>
+      {tab === "stats" ? (
+        <UsageStats
+          threads={threads}
+          projects={projects}
+          currentSessionKey={currentSessionKey}
+        />
+      ) : (
+        <OfficialLimits runtime={runtime} />
+      )}
+    </Drawer>
+  );
+}
+
+function UsageStats({
+  threads,
+  projects,
+  currentSessionKey,
+}: {
+  threads: ThreadSummary[];
+  projects?: ProjectRecord[];
+  currentSessionKey?: string;
+}) {
+  const [level, setLevel] = useState<"projects" | "sessions">("projects");
+  const stats = useMemo(
+    () => buildUsageStats(threads, projects),
+    [threads, projects],
+  );
+  const rows = level === "projects" ? stats.projects : stats.sessions;
+  const max = rows[0]?.totals.total || 0;
+
+  return (
+    <div className="usage-stats">
+      <section className="usage-summary" aria-label="累计 token 用量">
+        <span>累计 token</span>
+        <strong>{formatTokens(stats.totals.total)}</strong>
+        <div className="usage-summary-grid">
+          <UsageMetric label="输入" value={stats.totals.input} />
+          <UsageMetric label="缓存输入" value={stats.totals.cachedInput} />
+          <UsageMetric label="输出" value={stats.totals.output} />
+        </div>
+      </section>
+      <div className="usage-level" role="tablist" aria-label="统计层级">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={level === "projects"}
+          className={level === "projects" ? "on" : ""}
+          onClick={() => setLevel("projects")}
+        >
+          项目 <em>{stats.projects.length}</em>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={level === "sessions"}
+          className={level === "sessions" ? "on" : ""}
+          onClick={() => setLevel("sessions")}
+        >
+          会话 <em>{stats.sessions.length}</em>
+        </button>
+      </div>
+      {rows.length ? (
+        <div className="usage-ranking">
+          {level === "projects"
+            ? stats.projects.map((row) => (
+                <UsageRow
+                  key={row.key}
+                  icon={<Folder />}
+                  title={row.name}
+                  subtitle={`${row.sessionCount} 个会话 · ${row.cwd}`}
+                  totals={row.totals}
+                  max={max}
+                />
+              ))
+            : stats.sessions.map((row) => (
+                <UsageRow
+                  key={row.key}
+                  icon={<MessageSquare />}
+                  title={row.thread.name}
+                  subtitle={`${relativeTime(row.thread.updatedAt)} · ${row.thread.model}`}
+                  totals={row.totals}
+                  max={max}
+                  current={row.key === currentSessionKey}
+                />
+              ))}
+        </div>
+      ) : (
+        <div className="usage-empty">
+          <Gauge />
+          <b>暂无 session 用量</b>
+          <span>运行一次任务后，累计 token 会显示在这里。</span>
+        </div>
+      )}
+      {stats.totals.reasoningOutput > 0 ? (
+        <p className="usage-note">
+          推理输出 {formatTokens(stats.totals.reasoningOutput)}
+          ，已包含在输出或总量中。
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function UsageMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <small>{label}</small>
+      <b>{value ? formatTokens(value) : "—"}</b>
+    </div>
+  );
+}
+
+function UsageRow({
+  icon,
+  title,
+  subtitle,
+  totals,
+  max,
+  current,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  totals: UsageTotals;
+  max: number;
+  current?: boolean;
+}) {
+  const width = max ? Math.max(3, (totals.total / max) * 100) : 0;
+  const details = [
+    totals.input ? `输入 ${formatTokens(totals.input)}` : "",
+    totals.cachedInput ? `缓存 ${formatTokens(totals.cachedInput)}` : "",
+    totals.output ? `输出 ${formatTokens(totals.output)}` : "",
+  ].filter(Boolean);
+  return (
+    <div className={`usage-rank-row ${current ? "current" : ""}`}>
+      <div className="usage-rank-main">
+        <span className="usage-rank-icon">{icon}</span>
+        <div>
+          <b title={title}>{title}</b>
+          <small title={subtitle}>{subtitle}</small>
+        </div>
+        {current ? <em>当前</em> : null}
+        <strong>{formatTokens(totals.total)}</strong>
+      </div>
+      <div className="usage-rank-track">
+        <i style={{ width: `${width}%` }} />
+      </div>
+      {details.length ? <p>{details.join(" · ")}</p> : null}
+    </div>
+  );
+}
+
+function OfficialLimits({ runtime }: { runtime?: RuntimeSnapshot }) {
   const limits = runtime?.rateLimits;
-  const extra = limits?.byLimitId
-    ? Object.entries(limits.byLimitId)
-    : [];
+  const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
   const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
   return (
-    <Drawer title={OFFICIAL_USAGE_TITLE} onClose={onClose}>
+    <div className="usage-limits">
       <p className="usage-plan">
         {limits?.planName || runtime?.account?.planType || "Official"}
         {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
@@ -75,17 +254,11 @@ export function UsageDrawer({
           ) : null}
         </div>
       )}
-      {sessionUsage && (sessionUsage.used != null || sessionUsage.limit != null) && (
-        <p className="usage-session">
-          当前会话 token：
-          {sessionUsage.used != null ? formatTokens(sessionUsage.used) : "—"}
-          {sessionUsage.limit != null ? ` / ${formatTokens(sessionUsage.limit)}` : ""}
-        </p>
-      )}
       <p className="usage-note">
-        额度来自 Runtime 的 Official ChatGPT 登录，不是当前 Session 的中转供应商。
+        额度来自 Runtime 的 Official ChatGPT 登录，不是当前 session
+        的中转供应商。
       </p>
-    </Drawer>
+    </div>
   );
 }
 
@@ -94,13 +267,21 @@ function UsageWindow({
   window,
 }: {
   label: string;
-  window?: { usedPercent?: number; reached?: boolean; resetAfterSeconds?: number; resetsAt?: number };
+  window?: {
+    usedPercent?: number;
+    reached?: boolean;
+    resetAfterSeconds?: number;
+    resetsAt?: number;
+  };
 }) {
   if (!window) return null;
-  const pct = window.usedPercent != null ? Math.round(window.usedPercent) : null;
+  const pct =
+    window.usedPercent != null ? Math.round(window.usedPercent) : null;
   const reset = formatResetCountdown(window);
   return (
-    <div className={`usage-window ${window.reached || (pct ?? 0) >= 85 ? "hot" : ""}`}>
+    <div
+      className={`usage-window ${window.reached || (pct ?? 0) >= 85 ? "hot" : ""}`}
+    >
       <div>
         <b>{label}</b>
         <small>{reset ? `重置 ${reset}` : "重置时间未知"}</small>

@@ -20,10 +20,13 @@ export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type Personality = "friendly" | "pragmatic" | "none";
 
 export interface TokenUsage {
+  total?: number;
   used?: number;
   limit?: number;
   input?: number;
+  cachedInput?: number;
   output?: number;
+  reasoningOutput?: number;
 }
 
 export interface RateLimitWindow {

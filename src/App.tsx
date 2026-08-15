@@ -909,7 +909,9 @@ export function App() {
       {usageOpen && (
         <UsageDrawer
           runtime={snapshot.runtime}
-          sessionUsage={current?.tokenUsage}
+          threads={allThreads}
+          projects={snapshot.projects}
+          currentSessionKey={current ? sessionKey(current) : undefined}
           onClose={() => setUsageOpen(false)}
         />
       )}
