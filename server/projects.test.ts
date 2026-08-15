@@ -78,6 +78,7 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
     model: "gpt-a",
     sandbox: "workspace-write",
     approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
   });
   await store.rememberCreate({
     agentId: "claude",
@@ -89,9 +90,30 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
   assert.equal(project.defaults?.model, "gpt-a");
   assert.equal(project.defaults?.providerId, "local");
   assert.equal(project.defaults?.agentId, "claude");
+  assert.equal(project.defaults?.approvalsReviewer, "auto_review");
   assert.equal(store.getPreferences().lastAgentId, "claude");
   assert.equal(store.getPreferences().lastModel, "gpt-b");
+  assert.equal(store.getPreferences().lastApprovalsReviewer, "auto_review");
   assert.deepEqual(store.getPreferences().recentDirs, ["/mnt/d/Code/one"]);
+});
+
+test("rememberCreate preserves legacy approval defaults as one pair", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-approval-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.upsert({
+    cwd: "/tmp/legacy",
+    defaults: { approvalPolicy: "never" },
+  });
+  await store.rememberCreate({
+    cwd: "/tmp/legacy",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
+  });
+  assert.equal(store.list()[0].defaults?.approvalPolicy, "never");
+  assert.equal(store.list()[0].defaults?.approvalsReviewer, undefined);
+  assert.equal(store.getPreferences().lastApprovalPolicy, "on-request");
+  assert.equal(store.getPreferences().lastApprovalsReviewer, "auto_review");
 });
 
 test("load rematerializes aliased keys into one project", async () => {

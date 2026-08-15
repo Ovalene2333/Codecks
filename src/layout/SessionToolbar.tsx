@@ -1,10 +1,18 @@
 import type {
+  ApprovalMode,
   ApprovalPolicy,
+  ApprovalsReviewer,
   Personality,
   SandboxMode,
   ThreadSummary,
 } from "../types";
-import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
+import {
+  approvalMode,
+  APPROVAL_OPTIONS,
+  SANDBOX_OPTIONS,
+  settingsForApprovalMode,
+  settingsForSandboxMode,
+} from "../codexLabels";
 import { ModelPicker } from "../ModelPicker";
 import { ContextBar } from "../usage/ContextBar";
 
@@ -22,6 +30,7 @@ export function SessionToolbar({
     reasoningEffort?: string;
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
+    approvalsReviewer?: ApprovalsReviewer;
     personality?: Personality;
   }) => void;
   onCompact: () => void;
@@ -49,7 +58,12 @@ export function SessionToolbar({
                 : "workspace-write"
             }
             onChange={(event) =>
-              onSettings({ sandbox: event.target.value as SandboxMode })
+              onSettings(
+                settingsForSandboxMode(
+                  event.target.value as SandboxMode,
+                  approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
+                ),
+              )
             }
           >
             {SANDBOX_OPTIONS.map((option) => (
@@ -61,14 +75,20 @@ export function SessionToolbar({
         </label>
         <label className="toolbar-select">
           <select
-            aria-label="Approval policy"
-            title="Approval policy"
+            aria-label="Approvals"
+            title="Approvals"
             disabled={locked}
-            value={thread.approvalPolicy || "on-request"}
+            value={approvalMode(
+              thread.approvalPolicy,
+              thread.approvalsReviewer,
+            )}
             onChange={(event) =>
-              onSettings({
-                approvalPolicy: event.target.value as ApprovalPolicy,
-              })
+              onSettings(
+                settingsForApprovalMode(
+                  event.target.value as ApprovalMode,
+                  thread.sandbox || "workspace-write",
+                ),
+              )
             }
           >
             {APPROVAL_OPTIONS.map((option) => (
@@ -87,8 +107,7 @@ export function SessionToolbar({
             onChange={(event) =>
               onSettings({
                 personality: (event.target.value || undefined) as
-                  | Personality
-                  | undefined,
+                  Personality | undefined,
               })
             }
           >

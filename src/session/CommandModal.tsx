@@ -1,8 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
-import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
+import {
+  approvalMode,
+  APPROVAL_OPTIONS,
+  SANDBOX_OPTIONS,
+  settingsForApprovalMode,
+  settingsForSandboxMode,
+} from "../codexLabels";
 import { ModelPicker } from "../ModelPicker";
-import type { ApprovalPolicy, SandboxMode, ThreadSummary } from "../types";
+import type {
+  ApprovalMode,
+  ApprovalPolicy,
+  ApprovalsReviewer,
+  SandboxMode,
+  ThreadSummary,
+} from "../types";
 import { Modal } from "../ui";
 
 export type CommandModalKind =
@@ -36,6 +48,7 @@ export function CommandModal({
     reasoningEffort?: string;
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
+    approvalsReviewer?: ApprovalsReviewer;
   }) => Promise<boolean>;
   onInsert: (text: string) => void;
   onClose: () => void;
@@ -116,9 +129,10 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
   const [sandbox, setSandbox] = useState<SandboxMode>(
     thread.sandbox || "workspace-write",
   );
-  const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy>(
-    thread.approvalPolicy || "on-request",
-  );
+  const [selectedApprovalMode, setSelectedApprovalMode] =
+    useState<ApprovalMode>(
+      approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
+    );
   return (
     <div className="form command-form">
       <label>
@@ -126,7 +140,16 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
         <select
           value={sandbox}
           disabled={locked}
-          onChange={(event) => setSandbox(event.target.value as SandboxMode)}
+          onChange={(event) => {
+            const settings = settingsForSandboxMode(
+              event.target.value as SandboxMode,
+              selectedApprovalMode,
+            );
+            setSandbox(settings.sandbox);
+            setSelectedApprovalMode(
+              approvalMode(settings.approvalPolicy, settings.approvalsReviewer),
+            );
+          }}
         >
           {SANDBOX_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -136,13 +159,16 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
         </select>
       </label>
       <label>
-        Approval policy
+        Approvals
         <select
-          value={approvalPolicy}
+          value={selectedApprovalMode}
           disabled={locked}
-          onChange={(event) =>
-            setApprovalPolicy(event.target.value as ApprovalPolicy)
-          }
+          onChange={(event) => {
+            const mode = event.target.value as ApprovalMode;
+            const settings = settingsForApprovalMode(mode, sandbox);
+            setSelectedApprovalMode(mode);
+            setSandbox(settings.sandbox);
+          }}
         >
           {APPROVAL_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
@@ -157,7 +183,12 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
         className="primary"
         disabled={locked}
         onClick={async () => {
-          if (await onSettings({ sandbox, approvalPolicy })) onClose();
+          if (
+            await onSettings({
+              ...settingsForApprovalMode(selectedApprovalMode, sandbox),
+            })
+          )
+            onClose();
         }}
       >
         应用

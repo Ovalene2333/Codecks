@@ -557,12 +557,17 @@ test("createThread forwards model and reasoning effort", async () => {
     cwd: "/tmp/project",
     model: "gpt-custom",
     reasoningEffort: "high",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
     name: "任务",
   });
   assert.equal(calls[0].method, "thread/start");
   assert.equal(calls[0].params.model, "gpt-custom");
   assert.equal(calls[0].params.reasoningEffort, "high");
+  assert.equal(calls[0].params.approvalPolicy, "on-request");
+  assert.equal(calls[0].params.approvalsReviewer, "auto_review");
   assert.equal(manager.listThreads()[0].model, "gpt-custom");
+  assert.equal(manager.listThreads()[0].approvalsReviewer, "auto_review");
 });
 
 test("archive and delete update the snapshot buckets", async () => {
@@ -736,13 +741,18 @@ test("sandbox settings are sent as sandboxPolicy objects, not kebab strings", as
   await manager.updateThreadSettings("provider", "one", {
     sandbox: "workspace-write",
     reasoningEffort: "high",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
   });
   assert.equal(calls[0].method, "thread/settings/update");
   assert.equal(calls[0].params.sandbox, undefined);
   assert.deepEqual(calls[0].params.sandboxPolicy, { type: "workspaceWrite" });
   assert.equal(calls[0].params.effort, "high");
   assert.equal(calls[0].params.reasoningEffort, undefined);
+  assert.equal(calls[0].params.approvalPolicy, "on-request");
+  assert.equal(calls[0].params.approvalsReviewer, "auto_review");
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
+  assert.equal(manager.listThreads()[0].approvalsReviewer, "auto_review");
 });
 
 test("later turns do not re-send sandbox policy and bust prompt cache", async () => {
@@ -778,6 +788,7 @@ test("later turns do not re-send sandbox policy and bust prompt cache", async ()
   assert.equal(started.params.sandbox, "workspace-write");
   assert.equal(turn.params.sandboxPolicy, undefined);
   assert.equal(turn.params.approvalPolicy, undefined);
+  assert.equal(turn.params.approvalsReviewer, undefined);
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
 });
 
@@ -1208,6 +1219,7 @@ test("createThread omits personality when unset", async () => {
   await manager.createThread("provider", { cwd: "/tmp" });
   assert.equal("personality" in calls[0].params, false);
   assert.equal(calls[0].params.sandbox, "workspace-write");
+  assert.equal(calls[0].params.approvalsReviewer, "user");
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
 });
 
@@ -1601,15 +1613,18 @@ test("fork forwards lastTurnId and records forkedFromId", async () => {
     cwd: "/tmp",
     name: "源会话",
     sandbox: "read-only",
-    approvalPolicy: "never",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
   });
   const created = await manager.forkThread("provider", "src", {
     lastTurnId: "turn-3",
   });
   const fork = calls.find((call) => call.method === "thread/fork");
   assert.equal(fork.params.lastTurnId, "turn-3");
+  assert.equal(fork.params.approvalsReviewer, "auto_review");
   assert.equal(created.forkedFromId, "src");
   assert.equal(manager.threads.get("branch").forkedFromId, "src");
+  assert.equal(manager.threads.get("branch").approvalsReviewer, "auto_review");
   assert.equal(manager.threads.get("branch").name, "源会话 · 分支");
 });
 
@@ -1766,13 +1781,19 @@ test("migrate copies source sandbox and approval", async () => {
     cwd: "/tmp/project",
     status: "idle",
     sandbox: "read-only",
-    approvalPolicy: "never",
+    approvalPolicy: "on-request",
+    approvalsReviewer: "auto_review",
   });
   await manager.migrateThread("source", "old-thread", "target");
   assert.equal(calls[0].params.sandbox, "read-only");
-  assert.equal(calls[0].params.approvalPolicy, "never");
+  assert.equal(calls[0].params.approvalPolicy, "on-request");
+  assert.equal(calls[0].params.approvalsReviewer, "auto_review");
   assert.equal(manager.threads.get("switched").sandbox, "read-only");
-  assert.equal(manager.threads.get("switched").approvalPolicy, "never");
+  assert.equal(manager.threads.get("switched").approvalPolicy, "on-request");
+  assert.equal(
+    manager.threads.get("switched").approvalsReviewer,
+    "auto_review",
+  );
 });
 
 test("refreshAll remembers newly seen project directories", async () => {

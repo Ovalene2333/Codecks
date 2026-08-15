@@ -7,7 +7,7 @@ import { resolveNewThreadDefaults } from "../projects";
 import type {
   AgentDescriptor,
   AgentProfile,
-  ApprovalPolicy,
+  ApprovalMode,
   Personality,
   ProjectRecord,
   Provider,
@@ -15,7 +15,13 @@ import type {
   Snapshot,
 } from "../types";
 import { Modal } from "../ui";
-import { APPROVAL_OPTIONS, SANDBOX_OPTIONS } from "../codexLabels";
+import {
+  approvalMode,
+  APPROVAL_OPTIONS,
+  SANDBOX_OPTIONS,
+  settingsForApprovalMode,
+  settingsForSandboxMode,
+} from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import { defaultAgentId } from "../agents";
@@ -120,6 +126,7 @@ export function NewThreadModal({
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
+              approvalsReviewer: undefined,
             }
           : {}),
         personality: form.personality || undefined,
@@ -302,7 +309,16 @@ export function NewThreadModal({
                 <select
                   value={form.sandbox}
                   onChange={(e) =>
-                    setForm({ ...form, sandbox: e.target.value as SandboxMode })
+                    setForm({
+                      ...form,
+                      ...settingsForSandboxMode(
+                        e.target.value as SandboxMode,
+                        approvalMode(
+                          form.approvalPolicy,
+                          form.approvalsReviewer,
+                        ),
+                      ),
+                    })
                   }
                 >
                   {SANDBOX_OPTIONS.map((option) => (
@@ -313,13 +329,19 @@ export function NewThreadModal({
                 </select>
               </label>
               <label>
-                Approval policy
+                Approvals
                 <select
-                  value={form.approvalPolicy}
+                  value={approvalMode(
+                    form.approvalPolicy,
+                    form.approvalsReviewer,
+                  )}
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      approvalPolicy: e.target.value as ApprovalPolicy,
+                      ...settingsForApprovalMode(
+                        e.target.value as ApprovalMode,
+                        form.sandbox,
+                      ),
                     })
                   }
                 >
