@@ -6,6 +6,7 @@ import {
   displayText,
   distinctPreview,
   fmtTime,
+  formatTokens,
   relativeTime,
   sessionKey,
   shortenPath,
@@ -45,6 +46,16 @@ test("relativeTime treats missing timestamps as empty", () => {
 test("fmtTime does not throw on invalid timestamps", () => {
   assert.equal(fmtTime(Number.NaN), "");
   assert.equal(fmtTime(Number.POSITIVE_INFINITY), "");
+});
+
+test("formatTokens switches units and groups large values", () => {
+  assert.equal(formatTokens(999), "999");
+  assert.equal(formatTokens(1_234), "1.23K");
+  assert.equal(formatTokens(999_999), "1M");
+  assert.equal(formatTokens(261_741_000), "261.74M");
+  assert.equal(formatTokens(5_934_076_000), "5.93B");
+  assert.equal(formatTokens(1_234_567_890_123), "1,234.57B");
+  assert.equal(formatTokens(Number.NaN), "");
 });
 
 test("changeKindLabel reads Codex tagged file-change kinds", () => {
