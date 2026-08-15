@@ -139,6 +139,7 @@ export interface ModelInfo {
 }
 
 export interface ThreadSummary {
+  agentId?: "codex" | "claude";
   id: string;
   providerId: string;
   name: string;
@@ -173,6 +174,7 @@ export interface ApprovalResolveBody {
 
 export interface Approval {
   id: string;
+  agentId?: "codex" | "claude";
   providerId: string;
   request: { method: string; params: any };
   kind?: ApprovalKind;
@@ -200,7 +202,32 @@ export interface RuntimeSnapshot {
   runtimeWsl?: boolean;
 }
 
+export interface AgentCapabilities {
+  approvals: boolean;
+  archive: boolean;
+  fork: boolean;
+  images: boolean;
+  interrupt: boolean;
+  mcp: boolean;
+  models: boolean;
+  review: boolean;
+  sessionSettings: boolean;
+  shell: boolean;
+  skills: boolean;
+}
+
+export interface AgentDescriptor {
+  id: "codex" | "claude";
+  name: string;
+  available: boolean;
+  online: boolean;
+  starting?: boolean;
+  error?: string;
+  capabilities: AgentCapabilities;
+}
+
 export interface Snapshot {
+  agents?: AgentDescriptor[];
   providers: Provider[];
   threads: ThreadSummary[];
   archivedThreads?: ThreadSummary[];

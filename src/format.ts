@@ -59,8 +59,12 @@ export function formatTokens(value?: number) {
   return `${Math.round(value / 1000)}k`;
 }
 
-export function sessionKey(thread: { providerId: string; id: string }) {
-  return `${thread.providerId}:${thread.id}`;
+export function sessionKey(thread: {
+  agentId?: "codex" | "claude";
+  providerId: string;
+  id: string;
+}) {
+  return `${thread.agentId || "codex"}:${thread.providerId}:${thread.id}`;
 }
 
 export function threadIsUnsent(thread: {

@@ -90,6 +90,7 @@ function evictOldestThread() {
 
 function compactThread(thread: ThreadSummary): ThreadSummary {
   return {
+    agentId: thread.agentId,
     id: thread.id,
     providerId: thread.providerId,
     name: thread.name,

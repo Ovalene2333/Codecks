@@ -137,6 +137,7 @@ export interface FileChange {
 }
 
 export interface ThreadSummary {
+  agentId?: "codex" | "claude";
   id: string;
   providerId: string;
   name: string;

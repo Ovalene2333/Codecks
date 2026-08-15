@@ -50,8 +50,28 @@ import type {
   ThreadSummary,
   TurnImage,
 } from "./types.js";
+import type {
+  AgentCapabilities,
+  AgentDescriptor,
+  AgentId,
+} from "./agents/types.js";
+
+const CODEX_CAPABILITIES: AgentCapabilities = {
+  approvals: true,
+  archive: true,
+  fork: true,
+  images: true,
+  interrupt: true,
+  mcp: true,
+  models: true,
+  review: true,
+  sessionSettings: true,
+  shell: true,
+  skills: true,
+};
 
 export class CodexManager extends EventEmitter {
+  readonly id: AgentId = "codex";
   private client?: CodexClient;
   private startingClient?: Promise<CodexClient>;
   private threads = new Map<string, ThreadSummary>();
@@ -89,6 +109,19 @@ export class CodexManager extends EventEmitter {
   async startAll() {
     await this.ensure();
     await this.refreshAll();
+  }
+
+  descriptor(): AgentDescriptor {
+    const runtime = this.runtimeStatus();
+    return {
+      id: this.id,
+      name: "Codex",
+      available: true,
+      online: runtime.online,
+      starting: runtime.starting,
+      error: runtime.error,
+      capabilities: CODEX_CAPABILITIES,
+    };
   }
 
   async ensure(providerId?: string) {
@@ -1094,6 +1127,7 @@ export class CodexManager extends EventEmitter {
     const preview =
       thread.preview || this.extractPreview(thread) || old?.preview || "新会话";
     const item: ThreadSummary = {
+      agentId: this.id,
       id: thread.id,
       providerId: provider.id,
       name: thread.name || preview.slice(0, 42),
@@ -1210,7 +1244,7 @@ export class CodexManager extends EventEmitter {
       this.markArchived(threadId, false);
     if (threadId && message.method === "thread/deleted") {
       this.removeThread(threadId);
-      return this.broadcast("codex.event", { ...message });
+      return this.broadcast("codex.event", { agentId: this.id, ...message });
     }
     if (thread) this.upsertThread(this.providerForThread(thread), thread);
     const existing = params.threadId
@@ -1302,6 +1336,7 @@ export class CodexManager extends EventEmitter {
       this.broadcast("thread.updated", existing);
     }
     this.broadcast("codex.event", {
+      agentId: this.id,
       providerId: existing?.providerId,
       ...message,
     });
@@ -1413,6 +1448,7 @@ export class CodexManager extends EventEmitter {
       ) || (itemId ? this.pendingFileChanges.get(itemId) : undefined);
     return {
       id,
+      agentId: this.id,
       providerId: approval.providerId,
       request: approval.request,
       kind,

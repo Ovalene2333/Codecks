@@ -15,6 +15,7 @@ import {
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
 import { CodexManager } from "./manager.js";
+import { AgentRegistry } from "./agents/registry.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { lanAddresses } from "./network.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
@@ -104,8 +105,9 @@ const manager = new CodexManager(
   useWsl,
   projects,
 );
+const agents = new AgentRegistry([manager]);
 const fullSnapshot = () => ({
-  ...manager.snapshot(),
+  ...agents.snapshot(),
   projects: projects.list(),
   preferences: projects.getPreferences(),
 });
@@ -699,7 +701,7 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) =>
   ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
 );
-manager.on("event", (event) => {
+agents.on("event", (event) => {
   if (event.type === "runtime.process") {
     updateRuntimeLock(dataDir, {
       childPid: event.data?.pid,
@@ -770,7 +772,7 @@ const runtimeStart = useWsl
       waitingLabel: "仍在等待 app-server",
     })
   : undefined;
-manager
+agents
   .startAll()
   .then(() => runtimeStart?.done("Codex runtime 已就绪"))
   .catch((error) => {
@@ -790,7 +792,7 @@ setInterval(async () => {
 const shutdown = () => {
   clearRuntimeLock(dataDir, process.pid);
   tunnel?.kill();
-  manager.restart();
+  agents.stopAll();
   server.close(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);

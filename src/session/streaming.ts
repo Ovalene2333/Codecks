@@ -9,6 +9,7 @@ function sameStream(left: any, right: any) {
   return (
     left?.method === "item/agentMessage/delta" &&
     right?.method === "item/agentMessage/delta" &&
+    (left?.agentId || "codex") === (right?.agentId || "codex") &&
     left?.providerId === right?.providerId &&
     left?.params?.threadId === right?.params?.threadId &&
     left?.params?.turnId === right?.params?.turnId &&
@@ -65,11 +66,13 @@ export function collectStreamedAgentMessages(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
+  agentId: "codex" | "claude" = "codex",
 ): StreamedAgentMessage[] {
   const messages = new Map<string, StreamedAgentMessage>();
 
   for (const event of events) {
     if (event?.method !== "item/agentMessage/delta") continue;
+    if ((event?.agentId || "codex") !== agentId) continue;
     if (event?.providerId && event.providerId !== providerId) continue;
     if (event?.params?.threadId !== threadId) continue;
     if (activeTurnId && event?.params?.turnId !== activeTurnId) continue;

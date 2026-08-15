@@ -377,6 +377,7 @@ export function ChatWorkspace({
           thread.providerId,
           thread.id,
           thread.activeTurnId,
+          thread.agentId || "codex",
         )
       : [];
   const threadApprovals = approvals.filter(
