@@ -1056,24 +1056,26 @@ export function App() {
       )}
       {phoneSettings && current && (
         <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
-          <SessionToolbar
-            thread={current}
-            locked={
-              current.status === "running" || current.status === "waiting"
-            }
-            onSettings={async (settings) => {
-              await api(`/threads/${current.providerId}/${current.id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ settings }),
-              });
-              refresh();
-            }}
-            onCompact={() =>
-              post(`/threads/${current.providerId}/${current.id}/compact`).then(
-                refresh,
-              )
-            }
-          />
+          <div className="phone-session-settings">
+            <SessionToolbar
+              thread={current}
+              locked={
+                current.status === "running" || current.status === "waiting"
+              }
+              onSettings={async (settings) => {
+                await api(`/threads/${current.providerId}/${current.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ settings }),
+                });
+                refresh();
+              }}
+              onCompact={() =>
+                post(
+                  `/threads/${current.providerId}/${current.id}/compact`,
+                ).then(refresh)
+              }
+            />
+          </div>
         </Modal>
       )}
       {usageOpen && (

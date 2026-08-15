@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import type { Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
-import { basename } from "../format";
+import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
 import { SessionToolbar } from "./SessionToolbar";
 import type { ApprovalPolicy, Personality, SandboxMode } from "../types";
@@ -40,6 +40,11 @@ export function ChatHeader({
   }) => void;
   onCompact: () => void;
 }) {
+  const contextLabel =
+    thread.tokenUsage?.used != null && thread.tokenUsage.limit != null
+      ? `${formatTokens(thread.tokenUsage.used)}/${formatTokens(thread.tokenUsage.limit)}`
+      : formatTokens(thread.tokenUsage?.used ?? thread.tokenUsage?.limit);
+
   return (
     <header className="chat-header">
       <div className="chat-header-row1">
@@ -53,9 +58,9 @@ export function ChatHeader({
               <mark className="pending-count">{pendingCount}</mark>
             )}
           </div>
-          <p>
+          <p className="chat-title-meta">
             <Status status={thread.status} compact />
-            <span>
+            <span className="chat-location">
               {basename(thread.cwd)}
               {provider?.name ? ` · ${provider.name}` : ""}
             </span>
@@ -93,6 +98,24 @@ export function ChatHeader({
             <MoreHorizontal />
           </button>
         </div>
+      </div>
+      <div className="mobile-chat-meta">
+        <Status status={thread.status} compact />
+        <span
+          className="mobile-context"
+          title={`上下文 ${contextLabel || "未知"}`}
+        >
+          {contextLabel || "上下文 --"}
+        </span>
+        <span className="mobile-project" title={thread.cwd || "项目未知"}>
+          {basename(thread.cwd) || "项目未知"}
+        </span>
+        <span
+          className="mobile-provider"
+          title={provider?.name || "供应商未知"}
+        >
+          {provider?.name || "供应商未知"}
+        </span>
       </div>
       <div className="chat-header-row2">
         <SessionToolbar

@@ -50,11 +50,7 @@ import type {
   ThreadSummary,
   TurnImage,
 } from "../types.js";
-import type {
-  AgentCapabilities,
-  AgentDescriptor,
-  AgentId,
-} from "./types.js";
+import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -856,7 +852,18 @@ export class CodexAdapter extends EventEmitter {
     const read = (includeTurns: boolean) =>
       client
         .request("thread/read", { threadId, includeTurns })
-        .then((result) => result.thread);
+        .then((result) => {
+          const thread = result.thread;
+          if (!thread) return thread;
+          const tokenUsage = parseTokenUsage(thread);
+          const normalized = tokenUsage ? { ...thread, tokenUsage } : thread;
+          const existing = this.threads.get(threadId);
+          if (existing && tokenUsage) {
+            existing.tokenUsage = tokenUsage;
+            this.broadcast("thread.updated", existing);
+          }
+          return normalized;
+        });
     try {
       return await read(true);
     } catch (error: unknown) {
