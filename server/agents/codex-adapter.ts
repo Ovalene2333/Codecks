@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { ProviderStore } from "../store.js";
 import type { ProjectStore } from "../projects.js";
 import { CodexClient } from "../codex-client.js";
+import { CodexUsageStore, loadCodexRolloutUsages } from "../codex-usage.js";
 import {
   compileRuntimeProvider,
   isOfficialProvider,
@@ -48,6 +49,7 @@ import type {
   ReviewTarget,
   RpcMessage,
   ThreadSummary,
+  TokenUsage,
   TurnImage,
 } from "../types.js";
 import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
@@ -88,6 +90,8 @@ export class CodexAdapter extends EventEmitter {
   private rateLimitsError?: string;
   private archiveError?: string;
   private pendingFileChanges = new Map<string, FileChange[]>();
+  private usageStore: CodexUsageStore;
+  private rolloutUsageLoaded = false;
 
   constructor(
     private store: ProviderStore,
@@ -98,11 +102,13 @@ export class CodexAdapter extends EventEmitter {
     private projects?: ProjectStore,
   ) {
     super();
+    this.usageStore = new CodexUsageStore(dataDir);
     this.runtimePort =
       runtimePort && runtimePort > 0 ? runtimePort : configuredRuntimePort();
   }
 
   async startAll() {
+    await this.usageStore.load();
     await this.ensure();
     await this.refreshAll();
   }
@@ -249,6 +255,7 @@ export class CodexAdapter extends EventEmitter {
           updatedAt: thread.updatedAt,
         })),
       );
+      await this.restoreHistoricalUsage();
     }
     this.broadcast("snapshot", this.snapshot());
   }
@@ -277,6 +284,36 @@ export class CodexAdapter extends EventEmitter {
       loaded += result.data?.length || result.threads?.length || 0;
       cursor = result.nextCursor || result.next_cursor || undefined;
     } while (cursor && loaded < 2_000);
+  }
+
+  private async restoreHistoricalUsage() {
+    const wanted = new Set(
+      [...this.threads.values()]
+        .filter((thread) => !this.rolloutUsageLoaded || !thread.tokenUsage)
+        .map((thread) => thread.id),
+    );
+    if (!wanted.size) return;
+    const codexHome = this.store.runtimeProfile().codexHome;
+    if (!codexHome) return;
+    try {
+      const restored = await loadCodexRolloutUsages({
+        codexHome,
+        useWsl: this.useWsl,
+        wanted,
+      });
+      for (const [threadId, usage] of restored) {
+        const thread = this.threads.get(threadId);
+        if (thread) thread.tokenUsage = usage;
+      }
+      await this.usageStore.setMany(restored);
+      this.rolloutUsageLoaded = true;
+    } catch {
+      // History remains usable when a rollout is unreadable or WSL is offline.
+    }
+  }
+
+  private rememberUsage(threadId: string, usage: TokenUsage) {
+    void this.usageStore.set(threadId, usage).catch(() => undefined);
   }
 
   private threadListParams(cursor: string | undefined, archived: boolean) {
@@ -863,12 +900,17 @@ export class CodexAdapter extends EventEmitter {
           const thread = result.thread;
           if (!thread) return thread;
           const tokenUsage = parseTokenUsage(thread);
-          const normalized = tokenUsage ? { ...thread, tokenUsage } : thread;
           const existing = this.threads.get(threadId);
-          if (existing && tokenUsage) {
-            existing.tokenUsage = tokenUsage;
+          const restored =
+            tokenUsage || existing?.tokenUsage || this.usageStore.get(threadId);
+          const normalized = restored
+            ? { ...thread, tokenUsage: restored }
+            : thread;
+          if (existing && restored) {
+            existing.tokenUsage = restored;
             this.broadcast("thread.updated", existing);
           }
+          if (tokenUsage) this.rememberUsage(threadId, tokenUsage);
           return normalized;
         });
     try {
@@ -1140,6 +1182,9 @@ export class CodexAdapter extends EventEmitter {
       : undefined;
     const preview =
       thread.preview || this.extractPreview(thread) || old?.preview || "新会话";
+    const parsedUsage = parseTokenUsage(
+      thread.tokenUsage || thread.token_usage,
+    );
     const item: ThreadSummary = {
       agentId: this.id,
       id: thread.id,
@@ -1194,8 +1239,7 @@ export class CodexAdapter extends EventEmitter {
       sessionId:
         pickString(thread.sessionId, thread.session_id) || old?.sessionId,
       tokenUsage:
-        parseTokenUsage(thread.tokenUsage || thread.token_usage) ||
-        old?.tokenUsage,
+        parsedUsage || old?.tokenUsage || this.usageStore.get(thread.id),
       compacting:
         typeof thread.compacting === "boolean"
           ? thread.compacting
@@ -1207,6 +1251,7 @@ export class CodexAdapter extends EventEmitter {
           : old?.controlMode || "history",
     };
     this.threads.set(key, item);
+    if (parsedUsage) this.rememberUsage(item.id, parsedUsage);
     if (thread.turns?.length || thread.preview) this.rememberRollout(thread.id);
     if (item.cwd) void this.projects?.rememberSeen(item.cwd, item.updatedAt);
     this.broadcast("thread.updated", item);
@@ -1307,9 +1352,11 @@ export class CodexAdapter extends EventEmitter {
         message.method === "thread/tokenUsage/updated" ||
         message.method === "thread/token_usage/updated"
       ) {
-        existing.tokenUsage =
+        const usage =
           parseTokenUsage(params.tokenUsage || params.usage || params) ||
           existing.tokenUsage;
+        existing.tokenUsage = usage;
+        if (usage) this.rememberUsage(existing.id, usage);
       }
       if (
         message.method === "thread/compact/started" ||
@@ -1427,6 +1474,7 @@ export class CodexAdapter extends EventEmitter {
     this.threads.delete(key);
     this.loadedThreads.delete(key);
     this.knownRollouts.delete(key);
+    void this.usageStore.remove(key).catch(() => undefined);
     this.broadcast("thread.deleted", { threadId });
   }
 
