@@ -121,7 +121,7 @@ POST /api/agents/claude/approvals/:approvalId
 
 | 层   | 做什么                             | 常用参数                                |
 | ---- | ---------------------------------- | --------------------------------------- |
-| 监听 | Deck 听哪个网卡                    | `--lan`、`--host`、`--port`             |
+| 监听 | Codecks 听哪个网卡                 | `--lan`、`--host`、`--port`             |
 | 暴露 | 要不要、以及怎么把本地端口接到外面 | `--expose`、`--public-origin`           |
 | 鉴权 | 谁能打开控制台                     | `REMOTE_TOKEN`、`--token`、`--no-token` |
 
@@ -145,16 +145,16 @@ npm start -- --lan
 
 **2. 已经有 Caddy / nginx / 独立 cloudflared / 路由器反代**
 
-Deck 继续听本机，只负责把带令牌的 https 入口打出来。反代把 `https://deck.example.com` 转到 `127.0.0.1:4174` 即可。
+Codecks 继续听本机，只负责把带令牌的 https 入口打出来。反代把 `https://codecks.example.com` 转到 `127.0.0.1:4174` 即可。
 
 ```bash
-npm start -- --public-origin https://deck.example.com
+npm start -- --public-origin https://codecks.example.com
 ```
 
 等价写法：
 
 ```bash
-npm start -- --expose announce --public-origin https://deck.example.com
+npm start -- --expose announce --public-origin https://codecks.example.com
 ```
 
 **3. 临时公网地址（Cloudflare Quick Tunnel）**
@@ -182,20 +182,20 @@ npm start -- --share
 npm start -- --expose cloudflare:share
 
 # 或全部写在命令行
-npm start -- --share --share-host deck.example.com --tunnel-token <connector-token>
-npm start -- --expose cloudflare:share --public-origin https://deck.example.com --tunnel-token <connector-token>
+npm start -- --share --share-host codecks.example.com --tunnel-token <connector-token>
+npm start -- --expose cloudflare:share --public-origin https://codecks.example.com --tunnel-token <connector-token>
 ```
 
 本机已经 `cloudflared login`、按名称拉起已有 Tunnel 时：
 
 ```bash
-npm start -- --named-tunnel deck-home --public-origin https://deck.example.com
-npm start -- --expose cloudflare:named=deck-home --public-origin https://deck.example.com
+npm start -- --named-tunnel codecks-home --public-origin https://codecks.example.com
+npm start -- --expose cloudflare:named=codecks-home --public-origin https://codecks.example.com
 ```
 
 **5. 用 ngrok / 其它隧道命令**
 
-Deck 不内置这些工具，只负责启动你指定的命令，并从输出里抓公网 `https://` 地址。`{port}` 换成 Deck 端口，`{url}` 换成 `http://127.0.0.1:<port>`。
+Codecks 不内置这些工具，只负责启动你指定的命令，并从输出里抓公网 `https://` 地址。`{port}` 换成 Codecks 端口，`{url}` 换成 `http://127.0.0.1:<port>`。
 
 ```bash
 # ngrok：从 stdout 自动抓 https://*.ngrok-free.app
@@ -205,7 +205,7 @@ npm start -- --expose command --tunnel-bin ngrok --tunnel-args "http {port}"
 npm start -- --expose command --tunnel-bin ngrok --tunnel-args "http {port}" --tunnel-url-pattern "https://[a-z0-9-]+\\.ngrok-free\\.app"
 
 # 域名已经固定（预留域名、自建 frp 等），不必再扫输出
-npm start -- --expose command --tunnel-bin cloudflared --tunnel-args "tunnel --url {url}" --public-origin https://deck.example.com
+npm start -- --expose command --tunnel-bin cloudflared --tunnel-args "tunnel --url {url}" --public-origin https://codecks.example.com
 ```
 
 也可以全部放进 `.env`，然后直接 `npm start`：
@@ -247,7 +247,7 @@ npm start
 
 ## 日常工作流
 
-1. 启动 Deck
+1. 启动 Codecks
 2. 在「供应商设置」里复制终端接入命令
 3. 在一个或多个终端中运行：
 
@@ -274,7 +274,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_WSL_HOME`                | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home                                     |
 | `CLAUDE_CONFIG_DIR`             | 自动发现       | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`         |
 | `CLAUDE_BIN`                    | 自动发现       | Claude Code 原生可执行文件、启动脚本或 JavaScript 入口路径              |
-| `DATA_DIR`                      | `.data`        | Deck 偏好、项目缓存与自定义供应商元数据                                 |
+| `DATA_DIR`                      | `.data`        | Codecks 偏好、项目缓存与自定义供应商元数据                              |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_       | 仅监听本机的 Codex control WebSocket 端口                               |
 | `CC_SWITCH_DB`                  | _(自动发现)_   | CC Switch SQLite 数据库绝对路径                                         |
 | `CODEX_DECK_EXPOSE`             | _(空)_         | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |
@@ -295,9 +295,9 @@ codex --remote ws://127.0.0.1:<runtime-port>
 - Linux / macOS：`~/.cc-switch/cc-switch.db`
 - WSL：扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
 
-自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Deck 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在供应商设置中点「重新加载」会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。若当时有任务在跑，列表会先更新，空闲后再点「应用」。
+自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Codecks 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在供应商设置中点「重新加载」会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。若当时有任务在跑，列表会先更新，空闲后再点「应用」。
 
-CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Deck。
+CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Codecks。
 
 ## 安全
 
@@ -325,13 +325,13 @@ Agent runtime 的目录边界、能力契约和新 adapter 接入步骤见
 
 ### Windows 上 `spawn EINVAL` 或 `connect ECONNREFUSED`
 
-重新执行 `npm run build`，彻底退出旧进程后再启动。npm 全局安装的 Codex 在 Windows 上同时带有无扩展名脚本和 `codex.cmd`；Deck 会优先通过 `node` 启动官方入口（或直接启动 `codex.exe`），避免把供应商参数拼进 `cmd.exe`。
+重新执行 `npm run build`，彻底退出旧进程后再启动。npm 全局安装的 Codex 在 Windows 上同时带有无扩展名脚本和 `codex.cmd`；Codecks 会优先通过 `node` 启动官方入口（或直接启动 `codex.exe`），避免把供应商参数拼进 `cmd.exe`。
 
 如果 Codex 不在 `PATH`，用 `CODEX_BIN` 指向实际可执行文件。
 
 ### 现有 Session 列表为空
 
-Deck 通过 `thread/list` 读取当前系统 `~/.codex`。修改代码后需要重新构建并彻底重启后端：
+Codecks 通过 `thread/list` 读取当前系统 `~/.codex`。修改代码后需要重新构建并彻底重启后端：
 
 ```bash
 npm run build
@@ -348,27 +348,27 @@ Windows 上默认只读取 Windows 用户的 `~/.codex`，并启动 Windows 原�
 npm start -- --wsl
 ```
 
-该模式通过 `wsl.exe` 读取 WSL 用户的 `~/.codex`，启动前会尝试加载常见的 Node 版本管理脚本，再启动 `codex app-server`。终端会先打印 WSL 唤醒和 app-server 进度；发行版冷启动或久置后这一步可能要几秒，不是卡死。如果 `codex` 只解析到 `/mnt/...` 下的 Windows npm shim，Deck 会拒绝启动。Windows 工作目录会转换为 `/mnt/<盘符>/...`。新建会话会默认把初始工作目录切成 WSL 路径，因此工作目录旁的「WSL」按钮默认亮起；再点一次可切回 `D:\...`，`/home/...` 这类只存在于 Linux 的目录不能切回 Windows。该按钮只在 `--wsl` 时出现。侧栏会把同一块盘上的 `D:\项目` 与 `/mnt/d/项目` 收成一个项目；Windows 与 WSL 各自的 `~/.codex` 仍然隔离，两边的 Session 不能在同一个 Deck 里合并，也不能互相 resume。
+该模式通过 `wsl.exe` 读取 WSL 用户的 `~/.codex`，启动前会尝试加载常见的 Node 版本管理脚本，再启动 `codex app-server`。终端会先打印 WSL 唤醒和 app-server 进度；发行版冷启动或久置后这一步可能要几秒，不是卡死。如果 `codex` 只解析到 `/mnt/...` 下的 Windows npm shim，Codecks 会拒绝启动。Windows 工作目录会转换为 `/mnt/<盘符>/...`。新建会话会默认把初始工作目录切成 WSL 路径，因此工作目录旁的「WSL」按钮默认亮起；再点一次可切回 `D:\...`，`/home/...` 这类只存在于 Linux 的目录不能切回 Windows。该按钮只在 `--wsl` 时出现。侧栏会把同一块盘上的 `D:\项目` 与 `/mnt/d/项目` 收成一个项目；Windows 与 WSL 各自的 `~/.codex` 仍然隔离，两边的 Session 不能在同一个 Codecks 实例里合并，也不能互相 resume。
 
 - WSL 内命令不是 `codex`：设置 `CODEX_WSL_BIN`
 - 非 bash：设置 `CODEX_WSL_SHELL`
 - 非默认 Codex home：设置 WSL 路径格式的 `CODEX_WSL_HOME`
 
-Windows 的 `CODEX_HOME` 不会被 WSL 模式复用。在 Linux 或 WSL 内启动 Deck 时，`--wsl` 不改变行为。Windows 和 WSL 的 `.codex` 彼此隔离，单个 Deck 实例只加载所选平台的 Session。
+Windows 的 `CODEX_HOME` 不会被 WSL 模式复用。在 Linux 或 WSL 内启动 Codecks 时，`--wsl` 不改变行为。Windows 和 WSL 的 `.codex` 彼此隔离，单个 Codecks 实例只加载所选平台的 Session。
 
-同一份 `.data` 只能跑一个 Deck。不要同时开两个 `--wsl`、`npm start` 或 `npm run dev` 后端，否则后启动的进程会占用网页端口，却连不上前一个进程里还在跑的会话。`--wsl` 和默认 Windows 模式也不要对着同一个浏览器缓存混用。若启动时提示端口或实例已被占用，先结束旧进程再开。
+同一份 `.data` 只能跑一个 Codecks 实例。不要同时开两个 `--wsl`、`npm start` 或 `npm run dev` 后端，否则后启动的进程会占用网页端口，却连不上前一个进程里还在跑的会话。`--wsl` 和默认 Windows 模式也不要对着同一个浏览器缓存混用。若启动时提示端口或实例已被占用，先结束旧进程再开。
 
 ### 自定义供应商与 OpenAI Official
 
 带 Base URL 的中转供应商只使用该记录自己的 API Key。OpenAI Official 使用原生 `~/.codex/auth.json` 中的 ChatGPT 登录状态。自定义供应商通过进程启动参数和独立环境变量注入，不会改写 `config.toml`。
 
-CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Deck 点「重新加载」或「应用」。
+CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Codecks 点「重新加载」或「应用」。
 
-中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Deck 供应商设置中点「重新加载」或「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
+中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Codecks 供应商设置中点「重新加载」或「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
 
 ### 为什么显示「待应用」
 
-连接定义只在 app-server 启动时加载。Deck 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点「应用」或「重新加载」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
+连接定义只在 app-server 启动时加载。Codecks 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点「应用」或「重新加载」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
 
 ## 许可证
 
