@@ -964,12 +964,11 @@ export class CodexAdapter extends EventEmitter {
     const existing = this.threads.get(threadId);
     const input = buildTurnInput(text, images);
     const startTurn = () => {
-      const start: Record<string, unknown> = { threadId, input };
-      if (existing?.sandbox)
-        start.sandboxPolicy = sandboxPolicyFromMode(existing.sandbox);
-      if (existing?.approvalPolicy)
-        start.approvalPolicy = existing.approvalPolicy;
-      return client.request("turn/start", start);
+      // Do not re-send sandbox/approval here. thread/start, resume, and
+      // thread/settings/update already applied them. Repeating the policy on
+      // every turn/start makes Codex rebuild the instruction prefix and
+      // drops prompt cache to the static ~3.5k header.
+      return client.request("turn/start", { threadId, input });
     };
     if (
       (existing?.status === "running" || existing?.status === "waiting") &&
@@ -1428,21 +1427,17 @@ export class CodexAdapter extends EventEmitter {
 
   private async resumeThread(
     client: { request: (method: string, params?: unknown) => Promise<any> },
-    providerId: string,
+    _providerId: string,
     threadId: string,
   ) {
-    const provider = this.store.get(providerId)!;
-    const runtimeProvider = compileRuntimeProvider(provider);
     const existing = this.threads.get(threadId);
     const params: Record<string, unknown> = {
       threadId,
-      model: runtimeProvider.model,
-      modelProvider: runtimeProvider.modelProvider,
       excludeTurns: true,
     };
-    if (existing?.sandbox) params.sandbox = existing.sandbox;
-    if (existing?.approvalPolicy)
-      params.approvalPolicy = existing.approvalPolicy;
+    // Keep the rollout's model/provider/sandbox. Overriding them on resume
+    // rebinds the thread (often to a new deck_* provider id) and invalidates
+    // previous_response_id, so the next turn only caches the static prefix.
     const result = await client
       .request("thread/resume", params)
       .catch((error) => {
