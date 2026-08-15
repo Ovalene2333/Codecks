@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   formatWindowLength,
   OFFICIAL_USAGE_TITLE,
+  remainingPercent,
   USAGE_UNAVAILABLE,
   usageChipMetric,
   usageTone,
@@ -16,21 +17,25 @@ test("usage chip never paints a fake 0% when limits are missing", () => {
   assert.notEqual(usageChipMetric(null), "0%");
 });
 
-test("usage chip formats primary percent and reset countdown", () => {
+test("usage chip formats remaining percent and reset countdown", () => {
   assert.equal(
     usageChipMetric({
       primary: { usedPercent: 31.2, resetAfterSeconds: 5 * 3600 },
     }),
-    "31% · 5h",
+    "69% · 5h",
   );
-  assert.equal(
-    usageTone({ primary: { usedPercent: 90 } }),
-    "warn",
-  );
+  assert.equal(usageTone({ primary: { usedPercent: 90 } }), "warn");
   assert.equal(
     usageTone({ primary: { usedPercent: 40, reached: true } }),
     "danger",
   );
+});
+
+test("remaining percent is clamped to the visible quota range", () => {
+  assert.equal(remainingPercent(31.2), 69);
+  assert.equal(remainingPercent(110), 0);
+  assert.equal(remainingPercent(-5), 100);
+  assert.equal(remainingPercent(undefined), undefined);
 });
 
 test("window length uses days and hours instead of raw minutes", () => {
@@ -44,6 +49,6 @@ test("usage chip falls back to secondary when primary is missing", () => {
     usageChipMetric({
       secondary: { usedPercent: 12, resetAfterSeconds: 3600 },
     }),
-    "12% · 1h",
+    "88% · 1h",
   );
 });

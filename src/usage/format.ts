@@ -3,9 +3,7 @@ import type { RateLimitWindow, RateLimits } from "../types";
 export const OFFICIAL_USAGE_TITLE = "Official 账号额度";
 export const USAGE_UNAVAILABLE = "额度不可用";
 
-export function formatResetCountdown(
-  window?: RateLimitWindow | null,
-): string {
+export function formatResetCountdown(window?: RateLimitWindow | null): string {
   let seconds = window?.resetAfterSeconds;
   if (seconds == null && window?.resetsAt)
     seconds = Math.max(0, Math.round((window.resetsAt - Date.now()) / 1000));
@@ -31,13 +29,18 @@ export function usageWindow(limits?: RateLimits | null) {
   return extra.find((window) => window.usedPercent != null);
 }
 
+export function remainingPercent(usedPercent?: number) {
+  if (usedPercent == null || !Number.isFinite(usedPercent)) return undefined;
+  return Math.max(0, Math.min(100, Math.round(100 - usedPercent)));
+}
+
 export function usageChipMetric(
   limits?: RateLimits | null,
   error?: string,
 ): string {
   const window = usageWindow(limits);
   if (error || !window || window.usedPercent == null) return USAGE_UNAVAILABLE;
-  const pct = Math.round(window.usedPercent);
+  const pct = remainingPercent(window.usedPercent)!;
   const reset = formatResetCountdown(window);
   return reset ? `${pct}% · ${reset}` : `${pct}%`;
 }
@@ -45,7 +48,8 @@ export function usageChipMetric(
 export function usageTone(limits?: RateLimits | null) {
   const window = usageWindow(limits);
   const pct = window?.usedPercent ?? 0;
-  if (window?.reached || pct >= 100 || limits?.spendControlReached) return "danger";
+  if (window?.reached || pct >= 100 || limits?.spendControlReached)
+    return "danger";
   if (pct >= 85) return "warn";
   return "ok";
 }

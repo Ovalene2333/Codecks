@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Folder, Gauge, MessageSquare } from "lucide-react";
 import type { ProjectRecord, RuntimeSnapshot, ThreadSummary } from "../types";
 import {
   formatResetCountdown,
   formatWindowLength,
+  remainingPercent,
   usageChipMetric,
   usageTone,
 } from "./format";
@@ -38,15 +39,31 @@ export function UsageDrawer({
   threads,
   projects,
   currentSessionKey,
+  onRefreshLimits,
   onClose,
 }: {
   runtime?: RuntimeSnapshot;
   threads: ThreadSummary[];
   projects?: ProjectRecord[];
   currentSessionKey?: string;
+  onRefreshLimits: () => Promise<void>;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"stats" | "limits">("stats");
+  const [refreshingLimits, setRefreshingLimits] = useState(false);
+  const refreshLimits = useCallback(async () => {
+    setRefreshingLimits(true);
+    try {
+      await onRefreshLimits();
+    } finally {
+      setRefreshingLimits(false);
+    }
+  }, [onRefreshLimits]);
+
+  useEffect(() => {
+    if (tab === "limits") void refreshLimits();
+  }, [refreshLimits, tab]);
+
   return (
     <Drawer title="用量" onClose={onClose}>
       <div className="usage-tabs" role="tablist" aria-label="用量视图">
@@ -76,7 +93,11 @@ export function UsageDrawer({
           currentSessionKey={currentSessionKey}
         />
       ) : (
-        <OfficialLimits runtime={runtime} />
+        <OfficialLimits
+          runtime={runtime}
+          refreshing={refreshingLimits}
+          onRefresh={refreshLimits}
+        />
       )}
     </Drawer>
   );
@@ -221,7 +242,15 @@ function UsageRow({
   );
 }
 
-function OfficialLimits({ runtime }: { runtime?: RuntimeSnapshot }) {
+function OfficialLimits({
+  runtime,
+  refreshing,
+  onRefresh,
+}: {
+  runtime?: RuntimeSnapshot;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
   const limits = runtime?.rateLimits;
   const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
   const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
@@ -232,9 +261,16 @@ function OfficialLimits({ runtime }: { runtime?: RuntimeSnapshot }) {
         {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
       </p>
       {runtime?.rateLimitsError || !limits ? (
-        <p className="usage-unavailable">
-          {runtime?.rateLimitsError || "额度不可用"}
-        </p>
+        <div className="usage-unavailable" aria-live="polite">
+          <p>
+            {refreshing
+              ? "正在读取 Official 账号额度…"
+              : runtime?.rateLimitsError || "额度不可用"}
+          </p>
+          <button type="button" onClick={onRefresh} disabled={refreshing}>
+            {refreshing ? "刷新中…" : "重新读取"}
+          </button>
+        </div>
       ) : (
         <div className="usage-windows">
           <UsageWindow
@@ -275,20 +311,21 @@ function UsageWindow({
   };
 }) {
   if (!window) return null;
-  const pct =
+  const usedPct =
     window.usedPercent != null ? Math.round(window.usedPercent) : null;
+  const remainingPct = remainingPercent(window.usedPercent);
   const reset = formatResetCountdown(window);
   return (
     <div
-      className={`usage-window ${window.reached || (pct ?? 0) >= 85 ? "hot" : ""}`}
+      className={`usage-window ${window.reached || (usedPct ?? 0) >= 85 ? "hot" : ""}`}
     >
       <div>
         <b>{label}</b>
         <small>{reset ? `重置 ${reset}` : "重置时间未知"}</small>
       </div>
-      <strong>{pct == null ? "—" : `${pct}%`}</strong>
+      <strong>{remainingPct == null ? "—" : `剩余 ${remainingPct}%`}</strong>
       <div className="context-track">
-        <i style={{ width: `${pct || 0}%` }} />
+        <i style={{ width: `${remainingPct || 0}%` }} />
       </div>
     </div>
   );

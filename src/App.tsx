@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, KeyRound, Menu, Settings } from "lucide-react";
 import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
 import { useAppearance } from "./appearance";
-import type { ProjectRecord, Snapshot, ThreadSummary } from "./types";
+import type {
+  ProjectRecord,
+  RuntimeSnapshot,
+  Snapshot,
+  ThreadSummary,
+} from "./types";
 import {
   filterProjectGroups,
   mergeProjectGroups,
@@ -91,6 +96,15 @@ export function App() {
       2000,
     );
   }, []);
+
+  const refreshOfficialUsage = useCallback(async () => {
+    try {
+      const runtime = await post<RuntimeSnapshot>("/runtime/rate-limits");
+      setSnapshot((current) => ({ ...current, runtime }));
+    } catch (error: any) {
+      pushToast(error?.message || "Official 额度刷新失败");
+    }
+  }, [pushToast]);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -912,6 +926,7 @@ export function App() {
           threads={allThreads}
           projects={snapshot.projects}
           currentSessionKey={current ? sessionKey(current) : undefined}
+          onRefreshLimits={refreshOfficialUsage}
           onClose={() => setUsageOpen(false)}
         />
       )}
