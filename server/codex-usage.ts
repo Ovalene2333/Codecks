@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { parseTokenUsage } from "./protocol.js";
+import { parseTokenUsage, uncachedInputTokens } from "./protocol.js";
 import type { TokenUsage } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -23,7 +23,10 @@ type WslExec = (
   args: string[],
 ) => Promise<{ stdout: string; stderr: string }>;
 
-function normalizeUsage(raw: unknown): TokenUsage | undefined {
+function normalizeUsage(
+  raw: unknown,
+  migrateInclusiveInput = false,
+): TokenUsage | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const usage: TokenUsage = {};
   for (const field of USAGE_FIELDS) {
@@ -31,6 +34,13 @@ function normalizeUsage(raw: unknown): TokenUsage | undefined {
     if (typeof value === "number" && Number.isFinite(value) && value >= 0)
       usage[field] = value;
   }
+  if (migrateInclusiveInput && usage.input != null)
+    usage.input = uncachedInputTokens(
+      usage.input,
+      usage.cachedInput,
+      usage.total,
+      usage.output,
+    );
   return Object.keys(usage).length ? usage : undefined;
 }
 
@@ -50,9 +60,10 @@ export class CodexUsageStore {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       const threads = parsed?.threads || parsed;
+      const migrateInclusiveInput = parsed?.version !== 2;
       if (!threads || typeof threads !== "object") return;
       for (const [threadId, raw] of Object.entries(threads)) {
-        const usage = normalizeUsage(raw);
+        const usage = normalizeUsage(raw, migrateInclusiveInput);
         if (threadId && usage) this.usage.set(threadId, usage);
       }
     } catch (error: any) {
@@ -100,7 +111,7 @@ export class CodexUsageStore {
         await mkdir(this.dataDir, { recursive: true });
         await writeFile(
           this.file,
-          JSON.stringify({ version: 1, threads: snapshot }, null, 2),
+          JSON.stringify({ version: 2, threads: snapshot }, null, 2),
           { encoding: "utf8", mode: 0o600 },
         );
       });

@@ -1,9 +1,4 @@
-import type {
-  ProjectRecord,
-  Provider,
-  Snapshot,
-  ThreadSummary,
-} from "./types";
+import type { ProjectRecord, Provider, Snapshot, ThreadSummary } from "./types";
 
 export const SNAPSHOT_KEY = "codex-deck:snapshot:v2";
 const SNAPSHOT_LEGACY_KEYS = ["codex-deck:snapshot:v1"];
@@ -142,14 +137,59 @@ export function compactSnapshot(snapshot: Snapshot): Snapshot {
 export function hasSidebarData(snapshot: Snapshot | null | undefined) {
   return Boolean(
     snapshot &&
-      ((snapshot.threads && snapshot.threads.length) ||
-        (snapshot.archivedThreads && snapshot.archivedThreads.length) ||
-        (snapshot.projects && snapshot.projects.length)),
+    ((snapshot.threads && snapshot.threads.length) ||
+      (snapshot.archivedThreads && snapshot.archivedThreads.length) ||
+      (snapshot.projects && snapshot.projects.length)),
   );
 }
 
 export function sanitizeSnapshot(snapshot: Snapshot): Snapshot {
   return compactSnapshot(snapshot);
+}
+
+function cachedThreadKey(thread: ThreadSummary) {
+  return `${thread.agentId || "codex"}:${thread.id}`;
+}
+
+function retainPendingAgentThreads(
+  incoming: ThreadSummary[],
+  current: ThreadSummary[],
+  snapshot: Snapshot,
+) {
+  const statuses = new Map(
+    (snapshot.agents || []).map((agent) => [agent.id, agent.historyStatus]),
+  );
+  if (!statuses.size) return incoming;
+  const merged = new Map(
+    incoming.map((thread) => [cachedThreadKey(thread), thread]),
+  );
+  for (const thread of current) {
+    const status = statuses.get(thread.agentId || "codex");
+    if (status && status !== "ready") {
+      const key = cachedThreadKey(thread);
+      if (!merged.has(key)) merged.set(key, thread);
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export function reconcileSnapshot(
+  current: Snapshot,
+  incoming: Snapshot,
+): Snapshot {
+  return {
+    ...incoming,
+    threads: retainPendingAgentThreads(
+      incoming.threads || [],
+      current.threads || [],
+      incoming,
+    ),
+    archivedThreads: retainPendingAgentThreads(
+      incoming.archivedThreads || [],
+      current.archivedThreads || [],
+      incoming,
+    ),
+  };
 }
 
 function migrateLegacySnapshot(store: Storage): Snapshot | null {
@@ -229,7 +269,9 @@ export function writeThreadCache(key: string, data: unknown) {
   memoryThreads.set(key, data);
   const index = [
     key,
-    ...(readJson<string[]>(THREAD_INDEX_KEY) || []).filter((item) => item !== key),
+    ...(readJson<string[]>(THREAD_INDEX_KEY) || []).filter(
+      (item) => item !== key,
+    ),
   ];
   const dropped = index.slice(MAX_CACHED_THREADS);
   const kept = index.slice(0, MAX_CACHED_THREADS);

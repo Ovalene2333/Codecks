@@ -6,6 +6,7 @@ import {
   dedupeThreadLoad,
   hasSidebarData,
   readSnapshotCache,
+  reconcileSnapshot,
   readThreadCache,
   readUiCache,
   resetCacheForTests,
@@ -41,7 +42,9 @@ class MemoryStorage implements Storage {
 const snapshot = (partial: Partial<Snapshot> = {}): Snapshot => ({
   providers: [],
   threads: [],
-  approvals: [{ id: "a1", providerId: "p", request: { method: "x", params: {} } }],
+  approvals: [
+    { id: "a1", providerId: "p", request: { method: "x", params: {} } },
+  ],
   ...partial,
 });
 
@@ -70,6 +73,57 @@ test("empty snapshots are not treated as sidebar data", () => {
       }),
     ),
     true,
+  );
+});
+
+test("loading agent snapshots retain cached threads until history is ready", () => {
+  const cached = snapshot({
+    threads: [
+      {
+        agentId: "codex",
+        id: "cached",
+        providerId: "local",
+        cwd: "/work",
+        preview: "cached",
+        model: "gpt-test",
+        status: "idle",
+        updatedAt: 1,
+      },
+    ],
+  });
+  const loading = snapshot({
+    threads: [
+      {
+        ...cached.threads[0],
+        providerId: "remapped",
+        preview: "fresh",
+      },
+    ],
+    agents: [
+      {
+        id: "codex",
+        name: "Codex",
+        available: true,
+        online: false,
+        historyStatus: "loading",
+        capabilities: {} as any,
+      },
+    ],
+  });
+  const reconciled = reconcileSnapshot(cached, loading);
+  assert.equal(reconciled.threads.length, 1);
+  assert.equal(reconciled.threads[0]?.providerId, "remapped");
+
+  const ready = {
+    ...loading,
+    agents: loading.agents?.map((agent) => ({
+      ...agent,
+      historyStatus: "ready" as const,
+    })),
+  };
+  assert.equal(
+    reconcileSnapshot(cached, { ...ready, threads: [] }).threads.length,
+    0,
   );
 });
 

@@ -37,8 +37,144 @@ test("thread/list asks for every model provider so CCS default does not hide his
   assert.equal(calls[0].method, "thread/list");
   assert.deepEqual(calls[0].params.modelProviders, []);
   assert.equal(calls[0].params.archived, false);
+  assert.equal(calls[0].params.useStateDbOnly, true);
   assert.equal(manager.listThreads().length, 1);
   assert.equal(manager.listThreads()[0].id, "hist");
+});
+
+test("an unexpectedly empty state DB performs one rollout repair", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "cached",
+    cwd: "/work",
+    preview: "cached",
+  });
+  const modes: boolean[] = [];
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      modes.push(params.useStateDbOnly);
+      return {
+        data:
+          !params.useStateDbOnly && !params.archived
+            ? [{ id: "repaired", cwd: "/work", preview: "restored" }]
+            : [],
+      };
+    },
+  });
+
+  await manager.refreshAll();
+  assert.deepEqual(modes, [true, true, false, false]);
+  assert.deepEqual(
+    manager.listThreads().map((thread: any) => thread.id),
+    ["repaired"],
+  );
+  assert.equal(manager.descriptor().historyStatus, "ready");
+});
+
+test("first startup repairs an empty state DB only once", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    true,
+  ) as any;
+  const modes: boolean[] = [];
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      modes.push(params.useStateDbOnly);
+      return { data: [] };
+    },
+  });
+  manager.restoreHistoricalUsage = async () => undefined;
+
+  await manager.refreshAll();
+  await manager.refreshAll();
+  assert.deepEqual(modes, [true, true, false, false, true, true]);
+});
+
+test("explicit history repair disables the state DB fast path", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  const modes: boolean[] = [];
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      modes.push(params.useStateDbOnly);
+      return { data: [] };
+    },
+  });
+  manager.restoreHistoricalUsage = async () => undefined;
+
+  await manager.repairHistory();
+  assert.deepEqual(modes, [false, false]);
+});
+
+test("explicit history repair reports list failures", async () => {
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
+  manager.ensure = async () => ({
+    request: async () => {
+      throw new Error("repair failed");
+    },
+  });
+
+  await assert.rejects(() => manager.repairHistory(), /repair failed/);
+  assert.equal(manager.descriptor().historyStatus, "error");
+});
+
+test("older app-server falls back when useStateDbOnly is unsupported", async () => {
+  const provider = { id: "local", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  const modes: boolean[] = [];
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      modes.push(params.useStateDbOnly);
+      if (params.useStateDbOnly)
+        throw new Error("unknown field useStateDbOnly");
+      return { data: [] };
+    },
+  });
+  manager.restoreHistoricalUsage = async () => undefined;
+
+  await manager.refreshAll();
+  assert.deepEqual(modes, [true, false, false]);
+  assert.equal(manager.descriptor().historyStatus, "ready");
 });
 
 test("a failed thread/list does not wipe already loaded history", async () => {
@@ -61,6 +197,27 @@ test("a failed thread/list does not wipe already loaded history", async () => {
   await manager.refreshAll();
   assert.equal(manager.listThreads().length, 1);
   assert.equal(manager.listThreads()[0].id, "kept");
+});
+
+test("runtime startup failure marks cached history as errored", async () => {
+  const provider = { id: "local", model: "m" };
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "kept",
+    cwd: "/work",
+    preview: "cached",
+  });
+  manager.ensure = async () => {
+    throw new Error("runtime unavailable");
+  };
+
+  await assert.rejects(() => manager.startAll(), /runtime unavailable/);
+  assert.equal(manager.descriptor().historyStatus, "error");
+  assert.match(manager.descriptor().historyError, /runtime unavailable/);
+  assert.equal(manager.listThreads()[0]?.id, "kept");
 });
 
 test("a real Codex thread has one identity independent of provider selection", () => {

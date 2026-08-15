@@ -46,6 +46,9 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 
 - 按工作目录分组，同一路径可以并行多个独立 session
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
+- Server 会把最近一次成功同步的会话摘要写入 `.data/thread-summaries.json`，重启后先显示摘要，再在后台校准原生历史；摘要不包含完整对话，也不是另一套 history
+- Codex 正常启动通过 app-server 的 State DB 索引列出 session，不再扫描全部 rollout 修复元数据；供应商设置中的“历史索引 · 修复”才会显式扫描原生 rollout，并在 State DB 缺失但本地仍有缓存时自动执行一次恢复
+- Claude 会把 JSONL 的大小、修改时间和摘要写入 `.data/claude-history-index.json`，后续启动只重新解析新增或变化的历史文件
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
 - 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
 - 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
@@ -54,7 +57,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
-- 用量面板会汇总 session 的累计 token，并按项目或 session 查看输入、缓存输入和输出明细；历史用量从 Codex rollout 回填并缓存到 `.data/codex-usage.json`，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
+- 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 
 ### 远程值守

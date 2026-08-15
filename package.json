@@ -12,7 +12,7 @@
     "lan": "node dist-server/index.js --lan",
     "cf-tunnel": "node dist-server/index.js --cf-tunnel",
     "share": "node dist-server/index.js --share",
-    "test": "node --import tsx --test server/**/*.test.ts src/**/*.test.ts"
+    "test": "node --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.1.76",

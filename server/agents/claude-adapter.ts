@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { access, readdir } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -79,6 +87,15 @@ interface ClaudeAdapterOptions {
   ccSwitchPath?: string;
   queryFactory?: QueryFactory;
   historyFiles?: () => Promise<string[]>;
+  historyIndexFile?: string;
+  historyReader?: typeof readClaudeHistory;
+  initialThreads?: ThreadSummary[];
+}
+
+interface ClaudeHistoryIndexEntry {
+  size: number;
+  mtimeMs: number;
+  summary: ThreadSummary;
 }
 
 interface PendingApproval {
@@ -174,11 +191,20 @@ export class ClaudeAdapter extends EventEmitter {
   private startingTask?: Promise<void>;
   private error?: string;
   private queryFactory: QueryFactory;
+  private historyStatus: AgentDescriptor["historyStatus"];
+  private historyError?: string;
+  private historyIndex = new Map<string, ClaudeHistoryIndexEntry>();
+  private historyIndexLoaded = false;
 
   constructor(private options: ClaudeAdapterOptions = {}) {
     super();
     this.options.claudeBin = findClaudeExecutable(options.claudeBin);
     this.queryFactory = options.queryFactory || createQuery;
+    for (const thread of options.initialThreads || []) {
+      if (thread.agentId !== "claude") continue;
+      this.threads.set(thread.id, { ...thread, agentId: "claude" });
+    }
+    this.historyStatus = this.threads.size ? "cached" : "loading";
   }
 
   descriptor(): AgentDescriptor {
@@ -189,6 +215,8 @@ export class ClaudeAdapter extends EventEmitter {
       online: this.online,
       starting: this.starting,
       error: this.error,
+      historyStatus: this.historyStatus,
+      historyError: this.historyError,
       capabilities: CLAUDE_CAPABILITIES,
     };
   }
@@ -235,7 +263,6 @@ export class ClaudeAdapter extends EventEmitter {
     this.starting = true;
     this.broadcast("agent.status", this.descriptor());
     try {
-      await this.loadProfiles();
       await this.refreshAll();
       this.online = true;
       this.error = undefined;
@@ -250,39 +277,61 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   async refreshAll() {
-    await this.loadProfiles();
-    const files = this.options.historyFiles
-      ? await this.options.historyFiles()
-      : await this.discoverHistoryFiles();
-    const listed = new Set(
-      files.map((file) => path.basename(file, path.extname(file))),
-    );
-    const histories = await Promise.allSettled(
-      files.map((file) => readClaudeHistory(file)),
-    );
-    histories.forEach((result, index) => {
-      if (result.status !== "fulfilled" || !result.value) return;
-      const parsed = result.value;
-      this.history.set(parsed.summary.id, files[index]);
-      const home = historyHome(files[index]);
-      if (home) this.historyHomes.set(parsed.summary.id, home);
-      const existing = this.threads.get(parsed.summary.id);
-      const active = this.active.has(parsed.summary.id);
-      this.threads.set(parsed.summary.id, {
-        ...parsed.summary,
-        providerId: existing?.providerId || parsed.summary.providerId,
-        status: active ? existing?.status || "running" : parsed.summary.status,
-        activeTurnId: active ? existing?.activeTurnId : undefined,
-        controlMode: active ? "managed" : "history",
-      });
-    });
-    for (const [id] of this.history)
-      if (!listed.has(id) && !this.active.has(id)) {
-        this.history.delete(id);
-        this.historyHomes.delete(id);
-        this.threads.delete(id);
-      }
+    this.historyStatus = "loading";
+    this.historyError = undefined;
     this.broadcast("snapshot", this.snapshot());
+    try {
+      await this.loadProfiles();
+      await this.loadHistoryIndex();
+      const files = this.options.historyFiles
+        ? await this.options.historyFiles()
+        : await this.discoverHistoryFiles();
+      const seen = new Set<string>();
+      const histories = await Promise.allSettled(
+        files.map((file) => this.readHistorySummary(file)),
+      );
+      histories.forEach((result, index) => {
+        if (result.status !== "fulfilled" || !result.value) {
+          const cachedId = this.historyIndex.get(files[index])?.summary.id;
+          if (cachedId) seen.add(cachedId);
+          return;
+        }
+        const parsed = result.value;
+        seen.add(parsed.summary.id);
+        this.history.set(parsed.summary.id, files[index]);
+        const home = historyHome(files[index]);
+        if (home) this.historyHomes.set(parsed.summary.id, home);
+        const existing = this.threads.get(parsed.summary.id);
+        const active = this.active.has(parsed.summary.id);
+        this.threads.set(parsed.summary.id, {
+          ...parsed.summary,
+          providerId: existing?.providerId || parsed.summary.providerId,
+          status: active
+            ? existing?.status || "running"
+            : parsed.summary.status,
+          activeTurnId: active ? existing?.activeTurnId : undefined,
+          controlMode: active ? "managed" : "history",
+        });
+      });
+      for (const [id] of this.threads)
+        if (!seen.has(id) && !this.active.has(id)) {
+          this.history.delete(id);
+          this.historyHomes.delete(id);
+          this.threads.delete(id);
+        }
+      const availableFiles = new Set(files);
+      for (const file of this.historyIndex.keys())
+        if (!availableFiles.has(file)) this.historyIndex.delete(file);
+      await this.saveHistoryIndex();
+      this.historyStatus = "ready";
+      this.historyError = undefined;
+      this.broadcast("snapshot", this.snapshot());
+    } catch (error: any) {
+      this.historyStatus = "error";
+      this.historyError = this.redact(error?.message || String(error));
+      this.broadcast("snapshot", this.snapshot());
+      throw error;
+    }
   }
 
   busyThreads() {
@@ -739,6 +788,74 @@ export class ClaudeAdapter extends EventEmitter {
     this.profiles = new CcSwitchSource(
       this.options.ccSwitchPath,
     ).readClaudeProfiles();
+  }
+
+  private async loadHistoryIndex() {
+    if (this.historyIndexLoaded) return;
+    this.historyIndexLoaded = true;
+    if (!this.options.historyIndexFile) return;
+    try {
+      const parsed = JSON.parse(
+        await readFile(this.options.historyIndexFile, "utf8"),
+      );
+      if (parsed?.version !== 1 || !parsed.entries) return;
+      for (const [file, entry] of Object.entries(parsed.entries)) {
+        const value = entry as ClaudeHistoryIndexEntry;
+        if (
+          typeof value?.size === "number" &&
+          typeof value?.mtimeMs === "number" &&
+          value.summary?.id
+        )
+          this.historyIndex.set(file, value);
+      }
+    } catch (error: any) {
+      if (error?.code !== "ENOENT" && !(error instanceof SyntaxError))
+        throw error;
+    }
+  }
+
+  private async readHistorySummary(
+    file: string,
+  ): Promise<ClaudeHistoryThread | undefined> {
+    const info = await stat(file);
+    const cached = this.historyIndex.get(file);
+    if (cached?.size === info.size && cached.mtimeMs === info.mtimeMs)
+      return {
+        summary: cached.summary,
+        thread: {
+          id: cached.summary.id,
+          cwd: cached.summary.cwd || "",
+          model: cached.summary.model || "default",
+          turns: [],
+          tokenUsage: cached.summary.tokenUsage,
+        },
+      };
+    const parsed = await (this.options.historyReader || readClaudeHistory)(
+      file,
+    );
+    if (parsed)
+      this.historyIndex.set(file, {
+        size: info.size,
+        mtimeMs: info.mtimeMs,
+        summary: parsed.summary,
+      });
+    return parsed;
+  }
+
+  private async saveHistoryIndex() {
+    const file = this.options.historyIndexFile;
+    if (!file) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(
+      temporary,
+      JSON.stringify({
+        version: 1,
+        entries: Object.fromEntries(this.historyIndex),
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await rename(temporary, file);
   }
 
   private async discoverHistoryFiles() {

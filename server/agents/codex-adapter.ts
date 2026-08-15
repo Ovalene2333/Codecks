@@ -52,7 +52,12 @@ import type {
   TokenUsage,
   TurnImage,
 } from "../types.js";
-import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
+import type {
+  AgentCapabilities,
+  AgentDescriptor,
+  AgentHistoryStatus,
+  AgentId,
+} from "./types.js";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -67,6 +72,14 @@ const CODEX_CAPABILITIES: AgentCapabilities = {
   shell: true,
   skills: true,
 };
+
+function stateDbOnlyUnsupported(error: unknown) {
+  const message = String((error as any)?.message || error);
+  return (
+    /useStateDbOnly/i.test(message) &&
+    /invalid|unknown|unexpected|unsupported|deserialize/i.test(message)
+  );
+}
 
 export class CodexAdapter extends EventEmitter {
   readonly id: AgentId = "codex";
@@ -92,6 +105,8 @@ export class CodexAdapter extends EventEmitter {
   private pendingFileChanges = new Map<string, FileChange[]>();
   private usageStore: CodexUsageStore;
   private rolloutUsageLoaded = false;
+  private historyStatus: AgentHistoryStatus;
+  private historyError?: string;
 
   constructor(
     private store: ProviderStore,
@@ -100,17 +115,32 @@ export class CodexAdapter extends EventEmitter {
     runtimePort?: number,
     private useWsl = false,
     private projects?: ProjectStore,
+    initialThreads: ThreadSummary[] = [],
+    private repairEmptyStateDb = false,
   ) {
     super();
     this.usageStore = new CodexUsageStore(dataDir);
+    for (const thread of initialThreads) {
+      if ((thread.agentId || "codex") !== "codex") continue;
+      this.threads.set(thread.id, { ...thread, agentId: "codex" });
+      this.knownRollouts.add(thread.id);
+    }
+    this.historyStatus = this.threads.size ? "cached" : "loading";
     this.runtimePort =
       runtimePort && runtimePort > 0 ? runtimePort : configuredRuntimePort();
   }
 
   async startAll() {
     await this.usageStore.load();
-    await this.ensure();
-    await this.refreshAll();
+    try {
+      await this.ensure();
+      await this.refreshAll();
+    } catch (error: any) {
+      this.historyStatus = "error";
+      this.historyError = String(error?.message || "Codex Runtime 启动失败");
+      this.broadcast("snapshot", this.snapshot());
+      throw error;
+    }
   }
 
   descriptor(): AgentDescriptor {
@@ -122,6 +152,8 @@ export class CodexAdapter extends EventEmitter {
       online: runtime.online,
       starting: runtime.starting,
       error: runtime.error,
+      historyStatus: this.historyStatus,
+      historyError: this.historyError,
       capabilities: CODEX_CAPABILITIES,
     };
   }
@@ -228,25 +260,66 @@ export class CodexAdapter extends EventEmitter {
   }
 
   async refreshAll() {
+    await this.refreshHistory(true);
+  }
+
+  async repairHistory() {
+    await this.refreshHistory(false);
+    if (this.historyStatus === "error")
+      throw new Error(this.historyError || "Codex 历史索引修复失败");
+  }
+
+  private async refreshHistory(useStateDbOnly: boolean) {
+    const cachedCount = this.threads.size;
     const seen = new Set<string>();
-    let listed = false;
+    let activeListed = false;
+    let archivedListed = false;
+    this.historyStatus = "loading";
+    this.historyError = undefined;
+    this.broadcast("snapshot", this.snapshot());
     try {
       const client = await this.ensure();
-      await this.pullThreadPages(client, false, seen);
-      listed = true;
+      await this.pullThreadPages(client, false, seen, useStateDbOnly);
+      activeListed = true;
       try {
-        await this.pullThreadPages(client, true, seen);
+        await this.pullThreadPages(client, true, seen, useStateDbOnly);
+        archivedListed = true;
         this.archiveError = undefined;
       } catch (error: any) {
         this.archiveError = String(error?.message || "归档会话列表加载失败");
+        this.historyStatus = "error";
+        this.historyError = this.archiveError;
       }
-    } catch {}
+    } catch (error: any) {
+      if (useStateDbOnly && stateDbOnlyUnsupported(error)) {
+        await this.refreshHistory(false);
+        return;
+      }
+      this.historyStatus = "error";
+      this.historyError = String(error?.message || "会话索引加载失败");
+    }
+    if (
+      useStateDbOnly &&
+      activeListed &&
+      archivedListed &&
+      (cachedCount > 0 || this.repairEmptyStateDb) &&
+      seen.size === 0
+    ) {
+      this.repairEmptyStateDb = false;
+      await this.refreshHistory(false);
+      return;
+    }
     // Only drop stale rows after a successful unarchived listing. A failed
     // thread/list (timeout, current-provider filter error) must not wipe
     // history that is already on screen.
-    if (listed) {
+    if (activeListed || archivedListed) {
       for (const [key, thread] of this.threads) {
-        if (!seen.has(thread.id) && !this.loadedThreads.has(key))
+        const bucketListed = thread.archived ? archivedListed : activeListed;
+        if (
+          bucketListed &&
+          !seen.has(thread.id) &&
+          !this.loadedThreads.has(key)
+        )
           this.threads.delete(key);
       }
       await this.projects?.rememberSeenMany(
@@ -255,7 +328,11 @@ export class CodexAdapter extends EventEmitter {
           updatedAt: thread.updatedAt,
         })),
       );
-      await this.restoreHistoricalUsage();
+      if (!useStateDbOnly) await this.restoreHistoricalUsage();
+      if (activeListed && archivedListed) {
+        this.historyStatus = "ready";
+        this.historyError = undefined;
+      }
     }
     this.broadcast("snapshot", this.snapshot());
   }
@@ -264,13 +341,14 @@ export class CodexAdapter extends EventEmitter {
     client: CodexClient,
     archived: boolean,
     seen: Set<string>,
+    useStateDbOnly: boolean,
   ) {
     let cursor: string | undefined;
     let loaded = 0;
     do {
       const result = await client.request(
         "thread/list",
-        this.threadListParams(cursor, archived),
+        this.threadListParams(cursor, archived, useStateDbOnly),
         120_000,
       );
       for (const thread of result.data || result.threads || []) {
@@ -316,13 +394,18 @@ export class CodexAdapter extends EventEmitter {
     void this.usageStore.set(threadId, usage).catch(() => undefined);
   }
 
-  private threadListParams(cursor: string | undefined, archived: boolean) {
+  private threadListParams(
+    cursor: string | undefined,
+    archived: boolean,
+    useStateDbOnly = true,
+  ) {
     return {
       cursor,
       limit: 100,
       sortKey: "updated_at",
       sortDirection: "desc",
       archived,
+      useStateDbOnly,
       // Omitted/null is an implicit filter for the runtime's current
       // model_provider. Deck bootstraps a CCS relay as that default, which
       // hides ~/.codex history recorded as "custom" / "openai" / other ids.

@@ -1,7 +1,14 @@
 import { useState } from "react";
-import { Command, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import {
+  Command,
+  Database,
+  Plus,
+  RefreshCw,
+  Server,
+  Trash2,
+} from "lucide-react";
 import { api, post, remove } from "../api";
-import type { Provider, Snapshot } from "../types";
+import type { AgentDescriptor, Provider, Snapshot } from "../types";
 import { Modal } from "../ui";
 
 type ReloadResult = Snapshot & {
@@ -12,6 +19,7 @@ type ReloadResult = Snapshot & {
 
 export function ProviderModal({
   providers,
+  agents,
   runtime,
   defaultCwd,
   onClose,
@@ -20,6 +28,7 @@ export function ProviderModal({
   onConfirmDelete,
 }: {
   providers: Provider[];
+  agents: AgentDescriptor[];
   runtime?: Snapshot["runtime"];
   defaultCwd?: string;
   onClose: () => void;
@@ -36,7 +45,22 @@ export function ProviderModal({
   });
   const [error, setError] = useState("");
   const [reloading, setReloading] = useState(false);
+  const [repairingHistory, setRepairingHistory] = useState(false);
   const hasCcSwitch = providers.some((p) => p.kind === "cc-switch");
+  const codex = agents.find((agent) => agent.id === "codex");
+  const repairHistory = async () => {
+    setError("");
+    setRepairingHistory(true);
+    try {
+      onSaved(await post("/agents/codex/history/repair"));
+      onToast("Codex 历史索引修复完成");
+    } catch (err: any) {
+      setError(err.message);
+      onToast(err.message);
+    } finally {
+      setRepairingHistory(false);
+    }
+  };
   const reloadRuntime = async () => {
     setError("");
     setReloading(true);
@@ -92,9 +116,7 @@ export function ProviderModal({
         <RefreshCw />
         <div>
           <b>
-            {hasCcSwitch
-              ? "已连接 CC Switch · 只读同步"
-              : "未连接 CC Switch"}
+            {hasCcSwitch ? "已连接 CC Switch · 只读同步" : "未连接 CC Switch"}
           </b>
           <small>
             {hasCcSwitch
@@ -109,6 +131,27 @@ export function ProviderModal({
           onClick={reloadRuntime}
         >
           {reloading ? "加载中…" : "重新加载"}
+        </button>
+      </div>
+      <div className="sync-note">
+        <Database />
+        <div>
+          <b>Codex 历史索引</b>
+          <small>
+            {codex?.historyStatus === "error"
+              ? codex.historyError || "索引读取失败"
+              : codex?.historyStatus === "ready"
+                ? "State DB 已同步"
+                : "正在同步 State DB"}
+          </small>
+        </div>
+        <button
+          type="button"
+          disabled={repairingHistory || codex?.historyStatus === "loading"}
+          title="扫描原生 rollout 并修复 Codex State DB"
+          onClick={repairHistory}
+        >
+          {repairingHistory ? "修复中…" : "修复"}
         </button>
       </div>
       <div className="provider-list">
