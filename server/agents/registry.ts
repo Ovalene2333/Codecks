@@ -83,6 +83,11 @@ export class AgentRegistry extends EventEmitter {
       );
   }
 
+  async repairHistory(id: AgentId) {
+    const adapter = this.operation(id, "repairHistory");
+    await adapter.repairHistory!();
+  }
+
   profiles(id: AgentId) {
     const adapter = this.get(id);
     return adapter.publicProfiles?.() || [];

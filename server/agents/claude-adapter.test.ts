@@ -1,10 +1,60 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ClaudeAdapter } from "./claude-adapter.js";
+
+test("Claude history summaries reuse unchanged files across server instances", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deck-claude-index-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  const index = path.join(root, "history-index.json");
+  await writeFile(file, "first");
+  let reads = 0;
+  let files = [file];
+  const historyReader = async () => {
+    reads += 1;
+    const summary = {
+      agentId: "claude" as const,
+      id: "different-session-id",
+      providerId: "claude-current",
+      cwd: "/work",
+      preview: "cached",
+      model: "claude-test",
+      status: "idle" as const,
+      updatedAt: 1,
+    };
+    return {
+      summary,
+      thread: {
+        id: summary.id,
+        cwd: summary.cwd,
+        model: summary.model,
+        turns: [],
+      },
+    };
+  };
+  const options = {
+    historyFiles: async () => files,
+    historyIndexFile: index,
+    historyReader,
+  };
+
+  await new ClaudeAdapter(options).startAll();
+  await new ClaudeAdapter(options).startAll();
+  assert.equal(reads, 1);
+
+  await writeFile(file, "changed-size");
+  const third = new ClaudeAdapter(options);
+  await third.startAll();
+  assert.equal(reads, 2);
+
+  files = [];
+  await third.refreshAll();
+  assert.equal(third.listThreads().length, 0);
+});
 
 const waitFor = async (check: () => boolean) => {
   for (let attempt = 0; attempt < 100; attempt += 1) {

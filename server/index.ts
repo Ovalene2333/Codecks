@@ -29,6 +29,7 @@ import {
   updateRuntimeLock,
 } from "./runtime-lock.js";
 import { startPhase, writeLine } from "./startup-progress.js";
+import { ThreadSummaryCache } from "./thread-summary-cache.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -97,8 +98,16 @@ if (remote && cli.noToken)
 
 const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
-await store.load();
-await projects.load();
+const threadSummaries = new ThreadSummaryCache(dataDir);
+const [, , cachedThreads] = await Promise.all([
+  store.load(),
+  projects.load(),
+  threadSummaries.load(),
+]);
+const initialThreads = [
+  ...cachedThreads.threads,
+  ...cachedThreads.archivedThreads,
+];
 const manager = new CodexAdapter(
   store,
   dataDir,
@@ -106,12 +115,16 @@ const manager = new CodexAdapter(
   undefined,
   useWsl,
   projects,
+  initialThreads,
+  cachedThreads.savedAt === 0,
 );
 const claude = new ClaudeAdapter({
   claudeHome:
     process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_HOME || undefined,
   claudeBin: process.env.CLAUDE_BIN || undefined,
   ccSwitchPath: store.ccSwitchPath,
+  historyIndexFile: path.join(dataDir, "claude-history-index.json"),
+  initialThreads,
 });
 const agents = new AgentRegistry([manager, claude]);
 const fullSnapshot = () => ({
@@ -451,6 +464,13 @@ app.post(
   "/api/refresh",
   route(async () => {
     await agents.refreshAll();
+    return fullSnapshot();
+  }),
+);
+app.post(
+  "/api/agents/codex/history/repair",
+  route(async () => {
+    await agents.repairHistory("codex");
     return fullSnapshot();
   }),
 );
@@ -824,6 +844,19 @@ agents.on("event", (event) => {
     });
     return;
   }
+  if (
+    event.type === "snapshot" ||
+    event.type === "thread.updated" ||
+    event.type === "thread.deleted"
+  ) {
+    const snapshot = agents.snapshot();
+    const archived = snapshot.archivedThreads || [];
+    const historiesReady = snapshot.agents.every(
+      (agent) => agent.historyStatus === "ready",
+    );
+    if (snapshot.threads.length || archived.length || historiesReady)
+      threadSummaries.schedule(snapshot.threads, archived);
+  }
   const payload = JSON.stringify(
     event.type === "snapshot"
       ? { type: "snapshot", data: fullSnapshot() }
@@ -908,7 +941,10 @@ const shutdown = () => {
   clearRuntimeLock(dataDir, process.pid);
   tunnel?.kill();
   agents.stopAll();
-  server.close(() => process.exit(0));
+  void threadSummaries
+    .flush()
+    .catch(() => undefined)
+    .finally(() => server.close(() => process.exit(0)));
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

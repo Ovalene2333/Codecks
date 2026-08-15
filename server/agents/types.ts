@@ -7,6 +7,7 @@ import type {
 } from "../types.js";
 
 export type AgentId = "codex" | "claude";
+export type AgentHistoryStatus = "cached" | "loading" | "ready" | "error";
 
 export interface AgentCapabilities {
   approvals: boolean;
@@ -29,6 +30,8 @@ export interface AgentDescriptor {
   online: boolean;
   starting?: boolean;
   error?: string;
+  historyStatus?: AgentHistoryStatus;
+  historyError?: string;
   capabilities: AgentCapabilities;
 }
 
@@ -77,6 +80,7 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   snapshot(): AgentSnapshot;
   startAll(): Promise<void>;
   refreshAll(): Promise<void>;
+  repairHistory?(): Promise<void>;
   busyThreads(): ThreadSummary[];
   restart(): void;
   publicProfiles?(): AgentPublicProfile[];

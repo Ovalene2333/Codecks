@@ -135,7 +135,7 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
     nested.context_limit,
     nested.window,
   );
-  const input = pickNumber(
+  const reportedInput = pickNumber(
     nested.input,
     nested.inputTokens,
     nested.input_tokens,
@@ -154,6 +154,12 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
     nested.reasoningOutput,
     nested.reasoningOutputTokens,
     nested.reasoning_output_tokens,
+  );
+  const input = uncachedInputTokens(
+    reportedInput,
+    cachedInput,
+    cumulative,
+    output,
   );
   if (
     cumulative == null &&
@@ -174,6 +180,21 @@ export function parseTokenUsage(raw: unknown): TokenUsage | undefined {
   if (output != null) usage.output = output;
   if (reasoningOutput != null) usage.reasoningOutput = reasoningOutput;
   return usage;
+}
+
+export function uncachedInputTokens(
+  input?: number,
+  cachedInput?: number,
+  total?: number,
+  output?: number,
+) {
+  if (input == null || cachedInput == null) return input;
+  if (total != null && output != null) {
+    const inclusiveDelta = Math.abs(total - input - output);
+    const exclusiveDelta = Math.abs(total - input - cachedInput - output);
+    if (exclusiveDelta < inclusiveDelta) return input;
+  }
+  return Math.max(0, input - cachedInput);
 }
 
 export function parseRateLimitWindow(

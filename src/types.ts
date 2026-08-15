@@ -225,6 +225,8 @@ export interface AgentDescriptor {
   online: boolean;
   starting?: boolean;
   error?: string;
+  historyStatus?: "cached" | "loading" | "ready" | "error";
+  historyError?: string;
   capabilities: AgentCapabilities;
 }
 

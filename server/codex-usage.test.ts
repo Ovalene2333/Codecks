@@ -50,12 +50,46 @@ test("Codex rollout token_count restores cumulative and context usage", () => {
     total: 43_534,
     used: 27_294,
     limit: 258_400,
-    input: 43_034,
+    input: 39_034,
     cachedInput: 4_000,
     output: 500,
     reasoningOutput: 120,
   });
   assert.equal(parseCodexRolloutUsageLine('{"type":"event_msg"}'), undefined);
+});
+
+test("persisted Codex usage migrates inclusive input to uncached input", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deck-usage-migrate-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    path.join(root, "codex-usage.json"),
+    JSON.stringify({
+      version: 1,
+      threads: {
+        [threadId]: {
+          total: 20_000,
+          input: 18_000,
+          cachedInput: 7_500,
+          output: 2_000,
+        },
+      },
+    }),
+  );
+  const store = new CodexUsageStore(root);
+  await store.load();
+  assert.equal(store.get(threadId)?.input, 10_500);
+});
+
+test("new usage without totals is not normalized twice across restarts", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deck-usage-v2-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const first = new CodexUsageStore(root);
+  await first.load();
+  await first.set(threadId, { input: 1_000, cachedInput: 8_000 });
+
+  const second = new CodexUsageStore(root);
+  await second.load();
+  assert.equal(second.get(threadId)?.input, 1_000);
 });
 
 test("native rollout recovery reads the latest token_count from the file tail", async (t) => {
@@ -169,7 +203,7 @@ test("Codex token usage notifications are persisted", async (t) => {
   });
 });
 
-test("Codex manager backfills rollout usage then reuses the persisted value", async (t) => {
+test("explicit Codex history repair backfills usage then reuses it", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deck-usage-restart-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const codexHome = path.join(root, "codex-home");
@@ -203,7 +237,8 @@ test("Codex manager backfills rollout usage then reuses the persisted value", as
 
   const first = new CodexManager(store as any, root) as any;
   first.ensure = async () => client;
-  await first.startAll();
+  await first.usageStore.load();
+  await first.repairHistory();
   assert.equal(first.listThreads()[0].tokenUsage.total, 55_000);
   await first.usageStore.flush();
 
@@ -215,7 +250,7 @@ test("Codex manager backfills rollout usage then reuses the persisted value", as
     total: 55_000,
     used: 23_000,
     limit: 258_400,
-    input: 54_500,
+    input: 50_500,
     cachedInput: 4_000,
     output: 500,
     reasoningOutput: 120,

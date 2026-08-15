@@ -68,7 +68,11 @@ test("personal access token is treated as ChatGPT-backed Official auth", () => {
 test("official rateLimits/read fixture keeps primary percent", () => {
   const parsed = parseRateLimits({
     rateLimits: {
-      primary: { usedPercent: 25, windowDurationMins: 15, resetsAt: 1_730_947_200 },
+      primary: {
+        usedPercent: 25,
+        windowDurationMins: 15,
+        resetsAt: 1_730_947_200,
+      },
       secondary: null,
       rateLimitReachedType: null,
     },
@@ -110,11 +114,27 @@ test("token usage reads cumulative app-server totals and context window", () => 
     total: 20_000,
     used: 800,
     limit: 272_000,
-    input: 18_000,
+    input: 10_500,
     cachedInput: 7_500,
     output: 2_000,
     reasoningOutput: 600,
   });
+});
+
+test("token usage preserves providers that already report uncached input", () => {
+  const usage = parseTokenUsage({
+    tokenUsage: {
+      total: {
+        inputTokens: 1_180,
+        cachedInputTokens: 14_758,
+        outputTokens: 59,
+        totalTokens: 15_997,
+      },
+    },
+  });
+  assert.equal(usage?.input, 1_180);
+  assert.equal(usage?.cachedInput, 14_758);
+  assert.equal(usage?.total, 15_997);
 });
 
 test("timestampFromId reads UUIDv7 milliseconds", () => {
@@ -126,7 +146,10 @@ test("timestampFromId reads UUIDv7 milliseconds", () => {
 });
 
 test("parseTimestamp accepts iso, unix seconds, and milliseconds", () => {
-  assert.equal(parseTimestamp("2024-01-02T03:04:05.000Z"), Date.parse("2024-01-02T03:04:05.000Z"));
+  assert.equal(
+    parseTimestamp("2024-01-02T03:04:05.000Z"),
+    Date.parse("2024-01-02T03:04:05.000Z"),
+  );
   assert.equal(parseTimestamp(1_704_164_645), 1_704_164_645_000);
   assert.equal(parseTimestamp(1_704_164_645_000), 1_704_164_645_000);
   assert.equal(parseTimestamp("", undefined, "1704164645"), 1_704_164_645_000);

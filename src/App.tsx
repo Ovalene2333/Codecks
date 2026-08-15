@@ -20,6 +20,7 @@ import {
   hasSidebarData,
   readSnapshotCache,
   readUiCache,
+  reconcileSnapshot,
   writeSnapshotCache,
   writeUiCache,
 } from "./cache";
@@ -154,8 +155,11 @@ export function App() {
     setLoading(true);
     return getSnapshot()
       .then((next) => {
-        setSnapshot(next);
-        writeSnapshotCache(next);
+        setSnapshot((current) => {
+          const reconciled = reconcileSnapshot(current, next);
+          writeSnapshotCache(reconciled);
+          return reconciled;
+        });
         setAuthError(false);
       })
       .catch((error) => {
@@ -265,7 +269,8 @@ export function App() {
       socket = ws;
       ws.onmessage = ({ data }) => {
         const message = JSON.parse(data);
-        if (message.type === "snapshot") setSnapshot(message.data);
+        if (message.type === "snapshot")
+          setSnapshot((current) => reconcileSnapshot(current, message.data));
         else if (message.type === "thread.updated") {
           const next = message.data as ThreadSummary;
           const same = (thread: ThreadSummary) =>
@@ -378,6 +383,12 @@ export function App() {
 
   const libraryThreads =
     library === "archived" ? snapshot.archivedThreads || [] : snapshot.threads;
+  const historySyncing = Boolean(
+    snapshot.agents?.some(
+      (agent) =>
+        agent.historyStatus === "cached" || agent.historyStatus === "loading",
+    ),
+  );
 
   const projects = useMemo(() => {
     const groups = mergeProjectGroups(snapshot.projects || [], libraryThreads);
@@ -728,7 +739,7 @@ export function App() {
         runtime={snapshot.runtime}
         notificationPermission={notificationPermission}
         archiveError={snapshot.runtime?.archiveError}
-        loading={loading}
+        loading={loading || historySyncing}
         onClose={() => setSidebar(false)}
         onNew={() => setThreadModal({})}
         onRefresh={refresh}
@@ -857,7 +868,7 @@ export function App() {
           <Welcome
             recent={recentProjects}
             runtime={snapshot.runtime}
-            loading={loading}
+            loading={loading || historySyncing}
             onNew={() => setThreadModal({})}
             onOpenProject={(project) =>
               setThreadModal({
@@ -874,6 +885,7 @@ export function App() {
       {providerModal && (
         <ProviderModal
           providers={snapshot.providers}
+          agents={snapshot.agents || []}
           runtime={snapshot.runtime}
           defaultCwd={current?.cwd}
           onClose={() => setProviderModal(false)}
