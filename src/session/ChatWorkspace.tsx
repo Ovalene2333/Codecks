@@ -398,10 +398,14 @@ export function ChatWorkspace({
   const contextExceeded = String(taskErrorCode || "")
     .toLowerCase()
     .includes("contextwindow");
+  const headerThread =
+    !thread.tokenUsage && full?.tokenUsage
+      ? { ...thread, tokenUsage: full.tokenUsage }
+      : thread;
   return (
     <main className="chat">
       <ChatHeader
-        thread={thread}
+        thread={headerThread}
         provider={provider}
         pendingCount={threadApprovals.length}
         locked={locked}

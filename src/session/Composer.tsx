@@ -43,7 +43,9 @@ export function Composer({
     const node = area.current;
     if (!node) return;
     node.style.height = "auto";
-    node.style.height = `${Math.min(node.scrollHeight, 160)}px`;
+    node.style.height = text
+      ? `${Math.min(node.scrollHeight, 160)}px`
+      : "";
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
   useEffect(() => {
@@ -193,8 +195,8 @@ export function Composer({
             compacting
               ? "正在压缩上下文"
               : running
-                ? "追加到当前任务… 可粘贴图片，输入 / 查看命令"
-                : "发送新指令… 可粘贴图片，输入 / 查看命令"
+                ? "追加到当前任务…"
+                : "发送新指令…"
           }
         />
         <div className="composer-actions">

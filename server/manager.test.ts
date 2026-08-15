@@ -199,6 +199,40 @@ test("thread read errors unrelated to materialization are preserved", async () =
   );
 });
 
+test("thread read refreshes usage for an existing history session", async () => {
+  const provider = { id: "provider", model: "m", kind: "local-profile" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "history",
+    cwd: "/tmp/project",
+    preview: "old session",
+  });
+  manager.ensure = async () => ({
+    request: async () => ({
+      thread: {
+        id: "history",
+        cwd: "/tmp/project",
+        token_usage: { used_tokens: 178_000, context_window: 258_000 },
+        turns: [],
+      },
+    }),
+  });
+
+  const thread = await manager.readThread("provider", "history");
+  const summary = manager.listThreads()[0];
+
+  assert.deepEqual(thread.tokenUsage, { used: 178_000, limit: 258_000 });
+  assert.deepEqual(summary.tokenUsage, { used: 178_000, limit: 258_000 });
+  assert.equal(summary.controlMode, "history");
+});
+
 test("new thread starts its first turn without trying to resume a missing rollout", async () => {
   const provider = {
     id: "provider",
