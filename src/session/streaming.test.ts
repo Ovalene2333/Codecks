@@ -4,6 +4,7 @@ import {
   activeStreamItemId,
   appendCodexEvent,
   collectStreamedAgentMessages,
+  streamsCoveredByHistory,
 } from "./streaming.ts";
 
 const delta = (
@@ -100,6 +101,37 @@ test("a new turn drops the previous stream for the same provider and thread", ()
     params: { threadId: "thread-1", turn: { id: "turn-2" } },
   };
   assert.deepEqual(appendCodexEvent([previous], started), [started]);
+});
+
+test("a completed agent item marks its accumulated stream as completed", () => {
+  const events = appendCodexEvent([delta("完整回复", "msg-runtime")], {
+    providerId: "official",
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id: "msg-runtime", type: "agentMessage" },
+    },
+  });
+
+  assert.deepEqual(
+    collectStreamedAgentMessages(events, "official", "thread-1", "turn-1"),
+    [{ itemId: "msg-runtime", text: "完整回复", completed: true }],
+  );
+});
+
+test("completed streams reconcile with normalized history ids one-to-one", () => {
+  const history = [{ id: "item-20", type: "agentMessage", text: "相同回复" }];
+  assert.deepEqual(
+    [
+      ...streamsCoveredByHistory(history, [
+        { itemId: "msg-runtime", text: "相同回复", completed: true },
+        { itemId: "msg-other", text: "相同回复", completed: true },
+        { itemId: "msg-live", text: "相同回复" },
+      ]),
+    ],
+    ["msg-runtime"],
+  );
 });
 
 test("ordinary event limits do not evict an active accumulated stream", () => {

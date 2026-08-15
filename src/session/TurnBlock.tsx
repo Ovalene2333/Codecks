@@ -12,7 +12,7 @@ import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown } from "./markdown";
 import { userImageParts } from "./images";
 import type { StreamedAgentMessage } from "./streaming";
-import { activeStreamItemId } from "./streaming";
+import { activeStreamItemId, streamsCoveredByHistory } from "./streaming";
 import { userMessageText } from "./user-message";
 
 export const userText = userMessageText;
@@ -201,11 +201,14 @@ export function TurnBlock({
     turn.status === "inProgress" ||
     turn.status === "running";
   const completed = !active && turn.status !== "running";
+  const turnItems = Array.isArray(turn.items) ? turn.items : [];
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
   );
   const streamingItemId = active ? activeStreamItemId(streamed) : undefined;
-  const renderedStreamIds = new Set<string>();
+  const renderedStreamIds = active
+    ? streamsCoveredByHistory(turnItems, streamed)
+    : new Set<string>();
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
@@ -216,7 +219,7 @@ export function TurnBlock({
         {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
         {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
       </header>
-      {(Array.isArray(turn.items) ? turn.items : []).map((item: any) => {
+      {turnItems.map((item: any) => {
         const liveText =
           item.type === "agentMessage" && item.id
             ? streamedByItem.get(String(item.id))

@@ -3,6 +3,7 @@ import { displayText } from "../format";
 export interface StreamedAgentMessage {
   itemId: string;
   text: string;
+  completed?: boolean;
 }
 
 function sameStream(left: any, right: any) {
@@ -14,6 +15,19 @@ function sameStream(left: any, right: any) {
     left?.params?.threadId === right?.params?.threadId &&
     left?.params?.turnId === right?.params?.turnId &&
     left?.params?.itemId === right?.params?.itemId
+  );
+}
+
+function completedStream(event: any, stream: any) {
+  const item = event?.params?.item;
+  return (
+    event?.method === "item/completed" &&
+    item?.type === "agentMessage" &&
+    (event?.agentId || "codex") === (stream?.agentId || "codex") &&
+    event?.providerId === stream?.providerId &&
+    event?.params?.threadId === stream?.params?.threadId &&
+    event?.params?.turnId === stream?.params?.turnId &&
+    item?.id === stream?.params?.itemId
   );
 }
 
@@ -39,15 +53,24 @@ export function appendCodexEvent(events: any[], event: any) {
     }
   }
 
+  const updatedEvents =
+    event?.method === "item/completed"
+      ? events.map((item) =>
+          completedStream(event, item)
+            ? { ...item, streamCompleted: true }
+            : item,
+        )
+      : events;
+
   const withoutPreviousTurn =
     event?.method === "turn/started" && event?.params?.threadId
-      ? events.filter(
+      ? updatedEvents.filter(
           (item) =>
             item?.method !== "item/agentMessage/delta" ||
             item?.providerId !== event?.providerId ||
             item?.params?.threadId !== event?.params?.threadId,
         )
-      : events;
+      : updatedEvents;
   const streams = withoutPreviousTurn.filter(
     (item) => item?.method === "item/agentMessage/delta",
   );
@@ -58,7 +81,43 @@ export function appendCodexEvent(events: any[], event: any) {
 }
 
 export function activeStreamItemId(messages: StreamedAgentMessage[]) {
-  return messages.at(-1)?.itemId;
+  for (let index = messages.length - 1; index >= 0; index -= 1)
+    if (!messages[index].completed) return messages[index].itemId;
+  return undefined;
+}
+
+export function streamsCoveredByHistory(
+  items: any[],
+  messages: StreamedAgentMessage[],
+) {
+  const agentItems = items.filter((item) => item?.type === "agentMessage");
+  const availableHistory = new Set(agentItems.map((_, index) => index));
+  const covered = new Set<string>();
+
+  for (const message of messages) {
+    const index = agentItems.findIndex(
+      (item, itemIndex) =>
+        availableHistory.has(itemIndex) &&
+        String(item?.id || "") === message.itemId,
+    );
+    if (index < 0) continue;
+    availableHistory.delete(index);
+    covered.add(message.itemId);
+  }
+
+  for (const message of messages) {
+    if (!message.completed || covered.has(message.itemId)) continue;
+    const index = agentItems.findIndex(
+      (item, itemIndex) =>
+        availableHistory.has(itemIndex) &&
+        displayText(item?.text) === message.text,
+    );
+    if (index < 0) continue;
+    availableHistory.delete(index);
+    covered.add(message.itemId);
+  }
+
+  return covered;
 }
 
 export function collectStreamedAgentMessages(
@@ -83,7 +142,12 @@ export function collectStreamedAgentMessages(
 
     const current = messages.get(itemId);
     if (current) current.text += delta;
-    else messages.set(itemId, { itemId, text: delta });
+    else
+      messages.set(itemId, {
+        itemId,
+        text: delta,
+        ...(event?.streamCompleted ? { completed: true } : {}),
+      });
   }
 
   return [...messages.values()];

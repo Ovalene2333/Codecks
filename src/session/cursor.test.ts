@@ -34,6 +34,38 @@ test("an active turn renders exactly one streaming cursor", () => {
   assert.equal((html.match(/<i><\/i>/g) || []).length, 1);
 });
 
+test("normalized history ids do not duplicate completed streamed messages", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "running",
+    updatedAt: Date.now(),
+    activeTurnId: "turn-1",
+  };
+  const text = "第一轮补丁只应显示一次";
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-1",
+        status: "inProgress",
+        items: [
+          { id: "item-20", type: "agentMessage", phase: "commentary", text },
+        ],
+      },
+      index: 1,
+      thread,
+      streamed: [{ itemId: "msg-runtime-id", text, completed: true }],
+    }),
+  );
+
+  assert.equal(html.split(text).length - 1, 1);
+  assert.equal((html.match(/message agent/g) || []).length, 1);
+});
+
 test("history user messages expose retry-from-here instead of append resend", () => {
   const thread: ThreadSummary = {
     id: "thread-1",
