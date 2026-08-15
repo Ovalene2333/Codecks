@@ -7,7 +7,7 @@ export type ComposerCommand =
   | { kind: "status" }
   | { kind: "usage" }
   | { kind: "model"; model?: string; reasoningEffort?: string }
-  | { kind: "permissions"; sandbox?: string; approvalPolicy?: string }
+  | { kind: "permissions"; sandbox?: string; approvalMode?: string }
   | { kind: "skills"; query: string }
   | { kind: "mention"; query: string }
   | { kind: "fast"; enabled?: boolean }
@@ -68,8 +68,8 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   // `/model` as a model id can poison the thread and only fail on its next turn.
   if (key === "model") return { kind: "model" };
   if (key === "permissions") {
-    const [sandbox, approvalPolicy] = arg.split(/\s+/).filter(Boolean);
-    return { kind: "permissions", sandbox, approvalPolicy };
+    const [sandbox, approvalMode] = arg.split(/\s+/).filter(Boolean);
+    return { kind: "permissions", sandbox, approvalMode };
   }
   if (key === "skills") return { kind: "skills", query: arg };
   if (key === "mention") return { kind: "mention", query: arg };

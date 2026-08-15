@@ -9,7 +9,12 @@ import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
 import { SessionToolbar } from "./SessionToolbar";
-import type { ApprovalPolicy, Personality, SandboxMode } from "../types";
+import type {
+  ApprovalPolicy,
+  ApprovalsReviewer,
+  Personality,
+  SandboxMode,
+} from "../types";
 
 export function ChatHeader({
   thread,
@@ -40,6 +45,7 @@ export function ChatHeader({
     reasoningEffort?: string;
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
+    approvalsReviewer?: ApprovalsReviewer;
     personality?: Personality;
   }) => void;
   onCompact: () => void;

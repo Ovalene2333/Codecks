@@ -17,6 +17,8 @@ export interface Provider {
 export type SandboxMode =
   "read-only" | "workspace-write" | "danger-full-access";
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
+export type ApprovalsReviewer = "user" | "auto_review";
+export type ApprovalMode = ApprovalPolicy | "auto-review";
 export type Personality = "friendly" | "pragmatic" | "none";
 
 export interface TokenUsage {
@@ -102,6 +104,7 @@ export interface ProjectDefaults extends ConnectionOverlay {
   reasoningEffort?: string;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
+  approvalsReviewer?: ApprovalsReviewer;
 }
 
 export interface ProjectRecord {
@@ -121,6 +124,7 @@ export interface DeckPreferences extends ConnectionOverlay {
   lastReasoningEffort?: string;
   lastSandbox?: SandboxMode;
   lastApprovalPolicy?: ApprovalPolicy;
+  lastApprovalsReviewer?: ApprovalsReviewer;
   recentDirs: string[];
 }
 
@@ -158,6 +162,7 @@ export interface ThreadSummary {
   personality?: Personality;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
+  approvalsReviewer?: ApprovalsReviewer;
   serviceTier?: string;
   forkedFromId?: string;
   sessionId?: string;

@@ -60,6 +60,7 @@ export interface AgentCreateThreadInput {
   reasoningEffort?: string;
   personality?: Personality;
   approvalPolicy?: string;
+  approvalsReviewer?: string;
   sandbox?: string;
 }
 

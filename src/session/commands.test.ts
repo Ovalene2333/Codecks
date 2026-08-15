@@ -30,7 +30,7 @@ test("parseComposerCommand maps built-in Codex commands", () => {
   assert.deepEqual(parseComposerCommand("/permissions"), {
     kind: "permissions",
     sandbox: undefined,
-    approvalPolicy: undefined,
+    approvalMode: undefined,
   });
   assert.deepEqual(parseComposerCommand("/skills react"), {
     kind: "skills",

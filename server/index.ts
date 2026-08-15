@@ -209,6 +209,7 @@ app.post(
         reasoningEffort: z.string().optional(),
         personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
         approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+        approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
@@ -225,6 +226,7 @@ app.post(
       reasoningEffort: input.reasoningEffort,
       sandbox: input.sandbox,
       approvalPolicy: input.approvalPolicy,
+      approvalsReviewer: input.approvalsReviewer,
     });
     return thread;
   }),
@@ -358,6 +360,7 @@ app.put(
             approvalPolicy: z
               .enum(["untrusted", "on-request", "never"])
               .optional(),
+            approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
           })
           .merge(connectionOverlaySchema)
           .optional(),
@@ -410,6 +413,7 @@ app.put(
         lastApprovalPolicy: z
           .enum(["untrusted", "on-request", "never"])
           .optional(),
+        lastApprovalsReviewer: z.enum(["user", "auto_review"]).optional(),
         recentDirs: z.array(z.string()).optional(),
       })
       .merge(connectionOverlaySchema)
@@ -486,6 +490,7 @@ app.post(
         reasoningEffort: z.string().optional(),
         personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
         approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+        approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
@@ -500,6 +505,7 @@ app.post(
       reasoningEffort: input.reasoningEffort,
       sandbox: input.sandbox,
       approvalPolicy: input.approvalPolicy,
+      approvalsReviewer: input.approvalsReviewer,
     });
     return thread;
   }),
@@ -565,6 +571,7 @@ app.patch(
             approvalPolicy: z
               .enum(["untrusted", "on-request", "never"])
               .optional(),
+            approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
             sandbox: z
               .enum(["read-only", "workspace-write", "danger-full-access"])
               .optional(),

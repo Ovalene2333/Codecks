@@ -157,6 +157,9 @@ export function resolveNewThreadDefaults(input: {
   const online = input.providers.filter((provider) => provider.online);
   const defaults = input.project?.defaults;
   const prefs = input.preferences;
+  const hasProjectApprovalDefaults = Boolean(
+    defaults?.approvalPolicy || defaults?.approvalsReviewer,
+  );
   const preferredProviderId = defaults?.providerId || prefs?.lastProviderId;
   const preferredProvider = online.find(
     (provider) => provider.id === preferredProviderId,
@@ -172,7 +175,11 @@ export function resolveNewThreadDefaults(input: {
     reasoningEffort:
       defaults?.reasoningEffort || prefs?.lastReasoningEffort || "",
     sandbox: defaults?.sandbox || prefs?.lastSandbox || "workspace-write",
-    approvalPolicy:
-      defaults?.approvalPolicy || prefs?.lastApprovalPolicy || "on-request",
+    approvalPolicy: hasProjectApprovalDefaults
+      ? defaults?.approvalPolicy || "on-request"
+      : prefs?.lastApprovalPolicy || "on-request",
+    approvalsReviewer: hasProjectApprovalDefaults
+      ? defaults?.approvalsReviewer || "user"
+      : prefs?.lastApprovalsReviewer || "user",
   };
 }

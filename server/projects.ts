@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ApprovalPolicy,
+  ApprovalsReviewer,
   ConnectionOverlay,
   DeckPreferences,
   ProjectDefaults,
@@ -285,6 +286,7 @@ export class ProjectStore {
     reasoningEffort?: string;
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
+    approvalsReviewer?: ApprovalsReviewer;
   }) {
     const key = normalizeProjectPath(input.cwd);
     const old = this.projects.get(key);
@@ -296,8 +298,11 @@ export class ProjectStore {
     if (!defaults.reasoningEffort && input.reasoningEffort)
       defaults.reasoningEffort = input.reasoningEffort;
     if (!defaults.sandbox && input.sandbox) defaults.sandbox = input.sandbox;
-    if (!defaults.approvalPolicy && input.approvalPolicy)
-      defaults.approvalPolicy = input.approvalPolicy;
+    if (!defaults.approvalPolicy && !defaults.approvalsReviewer) {
+      if (input.approvalPolicy) defaults.approvalPolicy = input.approvalPolicy;
+      if (input.approvalsReviewer)
+        defaults.approvalsReviewer = input.approvalsReviewer;
+    }
     this.projects.set(key, {
       key,
       cwd: old?.cwd || input.cwd,
@@ -316,6 +321,8 @@ export class ProjectStore {
         input.reasoningEffort || this.prefs.lastReasoningEffort,
       lastSandbox: input.sandbox || this.prefs.lastSandbox,
       lastApprovalPolicy: input.approvalPolicy || this.prefs.lastApprovalPolicy,
+      lastApprovalsReviewer:
+        input.approvalsReviewer || this.prefs.lastApprovalsReviewer,
       recentDirs: [
         input.cwd,
         ...this.prefs.recentDirs.filter(

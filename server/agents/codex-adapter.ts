@@ -503,6 +503,7 @@ export class CodexAdapter extends EventEmitter {
       reasoningEffort?: string;
       personality?: Personality;
       approvalPolicy?: string;
+      approvalsReviewer?: string;
       sandbox?: string;
       name?: string;
     },
@@ -518,11 +519,13 @@ export class CodexAdapter extends EventEmitter {
     const runtimeProvider = compileRuntimeProvider(provider);
     const sandbox = input.sandbox || "workspace-write";
     const approvalPolicy = input.approvalPolicy || "on-request";
+    const approvalsReviewer = input.approvalsReviewer || "user";
     const start: Record<string, unknown> = {
       cwd: this.useWsl ? windowsPathToWsl(input.cwd) : input.cwd,
       model: input.model || runtimeProvider.model || undefined,
       modelProvider: runtimeProvider.modelProvider,
       approvalPolicy,
+      approvalsReviewer,
       sandbox,
     };
     if (input.reasoningEffort) start.reasoningEffort = input.reasoningEffort;
@@ -550,6 +553,9 @@ export class CodexAdapter extends EventEmitter {
           ) || sandbox,
         approvalPolicy:
           pickString(result.approvalPolicy, approvalPolicy) || approvalPolicy,
+        approvalsReviewer:
+          pickString(result.approvalsReviewer, approvalsReviewer) ||
+          approvalsReviewer,
       },
       "idle",
     );
@@ -697,6 +703,7 @@ export class CodexAdapter extends EventEmitter {
       reasoningEffort?: string;
       personality?: Personality;
       approvalPolicy?: string;
+      approvalsReviewer?: string;
       sandbox?: string;
       serviceTier?: string | null;
     },
@@ -709,6 +716,8 @@ export class CodexAdapter extends EventEmitter {
     if (settings.personality) params.personality = settings.personality;
     if (settings.approvalPolicy)
       params.approvalPolicy = settings.approvalPolicy;
+    if (settings.approvalsReviewer)
+      params.approvalsReviewer = settings.approvalsReviewer;
     if (settings.sandbox)
       params.sandboxPolicy = sandboxPolicyFromMode(settings.sandbox);
     if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
@@ -729,6 +738,9 @@ export class CodexAdapter extends EventEmitter {
       if (settings.approvalPolicy)
         existing.approvalPolicy =
           settings.approvalPolicy as ThreadSummary["approvalPolicy"];
+      if (settings.approvalsReviewer)
+        existing.approvalsReviewer =
+          settings.approvalsReviewer as ThreadSummary["approvalsReviewer"];
       if (settings.sandbox)
         existing.sandbox = settings.sandbox as ThreadSummary["sandbox"];
       if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
@@ -762,6 +774,8 @@ export class CodexAdapter extends EventEmitter {
     };
     if (source?.sandbox) params.sandbox = source.sandbox;
     if (source?.approvalPolicy) params.approvalPolicy = source.approvalPolicy;
+    if (source?.approvalsReviewer)
+      params.approvalsReviewer = source.approvalsReviewer;
     if (options.lastTurnId) params.lastTurnId = options.lastTurnId;
     const result = await client.request("thread/fork", params);
     this.loadedThreads.add(result.thread.id);
@@ -796,6 +810,12 @@ export class CodexAdapter extends EventEmitter {
             source?.approvalPolicy,
             result.thread.approvalPolicy,
           ) || source?.approvalPolicy,
+        approvalsReviewer:
+          pickString(
+            result.approvalsReviewer,
+            source?.approvalsReviewer,
+            result.thread.approvalsReviewer,
+          ) || source?.approvalsReviewer,
         reasoningEffort: source?.reasoningEffort,
         model: source?.model || result.thread.model,
       },
@@ -812,6 +832,7 @@ export class CodexAdapter extends EventEmitter {
       reasoningEffort: source.reasoningEffort,
       personality: source.personality,
       approvalPolicy: source.approvalPolicy,
+      approvalsReviewer: source.approvalsReviewer,
       sandbox: source.sandbox,
       name: branchName,
     });
@@ -878,6 +899,7 @@ export class CodexAdapter extends EventEmitter {
         model: options.model || runtimeProvider.model,
         modelProvider: runtimeProvider.modelProvider,
         approvalPolicy: source.approvalPolicy || "on-request",
+        approvalsReviewer: source.approvalsReviewer || "user",
         sandbox: source.sandbox || "workspace-write",
       });
     } catch (error: unknown) {
@@ -906,6 +928,9 @@ export class CodexAdapter extends EventEmitter {
       approvalPolicy:
         pickString(result.approvalPolicy, source.approvalPolicy) ||
         source.approvalPolicy,
+      approvalsReviewer:
+        pickString(result.approvalsReviewer, source.approvalsReviewer) ||
+        source.approvalsReviewer,
       forkedFromId: sourceThreadId,
       migratedFrom: { providerId: sourceProviderId, threadId: sourceThreadId },
     });
@@ -933,6 +958,7 @@ export class CodexAdapter extends EventEmitter {
       reasoningEffort: options.reasoningEffort || source.reasoningEffort,
       personality: source.personality,
       approvalPolicy: source.approvalPolicy,
+      approvalsReviewer: source.approvalsReviewer,
       sandbox: source.sandbox,
       name: source.name && source.name !== "新会话" ? source.name : undefined,
     });
@@ -1310,6 +1336,10 @@ export class CodexAdapter extends EventEmitter {
       approvalPolicy:
         (pickString(thread.approvalPolicy, thread.approval_policy) as
           ThreadSummary["approvalPolicy"] | undefined) || old?.approvalPolicy,
+      approvalsReviewer:
+        (pickString(thread.approvalsReviewer, thread.approvals_reviewer) as
+          ThreadSummary["approvalsReviewer"] | undefined) ||
+        old?.approvalsReviewer,
       serviceTier:
         pickString(thread.serviceTier, thread.service_tier) || old?.serviceTier,
       forkedFromId:
@@ -1466,6 +1496,8 @@ export class CodexAdapter extends EventEmitter {
         if (sandbox) existing.sandbox = sandbox;
         if (settings.approvalPolicy)
           existing.approvalPolicy = settings.approvalPolicy;
+        if (settings.approvalsReviewer)
+          existing.approvalsReviewer = settings.approvalsReviewer;
         if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
           existing.serviceTier = settings.serviceTier || undefined;
       }
@@ -1536,6 +1568,10 @@ export class CodexAdapter extends EventEmitter {
       const approval = pickString(result.approvalPolicy);
       if (approval)
         existing.approvalPolicy = approval as ThreadSummary["approvalPolicy"];
+      const reviewer = pickString(result.approvalsReviewer);
+      if (reviewer)
+        existing.approvalsReviewer =
+          reviewer as ThreadSummary["approvalsReviewer"];
     }
   }
 

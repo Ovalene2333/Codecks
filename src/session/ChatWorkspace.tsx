@@ -7,7 +7,9 @@ import { ChatHeader } from "../layout/ChatHeader";
 import type {
   AgentCapabilities,
   Approval,
+  ApprovalMode,
   ApprovalPolicy,
+  ApprovalsReviewer,
   Personality,
   Provider,
   SandboxMode,
@@ -15,6 +17,12 @@ import type {
 } from "../types";
 import { threadActionPath, threadPath } from "../agents";
 import { approvalBelongsToThread } from "./approvals";
+import {
+  approvalMode,
+  approvalModeLabel,
+  settingsForApprovalMode,
+  settingsForSandboxMode,
+} from "../codexLabels";
 import { RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
 import { CommandModal, type CommandModalKind } from "./CommandModal";
@@ -160,7 +168,7 @@ export function ChatWorkspace({
       setStatusNote(
         [
           `模型 ${thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
-          `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${thread.approvalPolicy || "on-request"}`,
+          `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
           `状态 ${thread.status}${thread.activeTurnId ? ` · Turn ${thread.activeTurnId}` : ""}`,
           `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
           thread.personality ? `性格 ${thread.personality}` : "",
@@ -191,7 +199,7 @@ export function ChatWorkspace({
       return;
     }
     if (command.kind === "permissions") {
-      if (!command.sandbox && !command.approvalPolicy) {
+      if (!command.sandbox && !command.approvalMode) {
         setCommandModal({ kind: "permissions" });
         return;
       }
@@ -200,21 +208,36 @@ export function ChatWorkspace({
         "workspace-write",
         "danger-full-access",
       ];
-      const approvals: ApprovalPolicy[] = ["untrusted", "on-request", "never"];
+      const approvalModes: ApprovalMode[] = [
+        "untrusted",
+        "on-request",
+        "auto-review",
+        "never",
+      ];
       if (!sandboxes.includes(command.sandbox as SandboxMode))
         throw new Error(
           "Sandbox 应为 read-only、workspace-write 或 danger-full-access",
         );
       if (
-        command.approvalPolicy &&
-        !approvals.includes(command.approvalPolicy as ApprovalPolicy)
+        command.approvalMode &&
+        !approvalModes.includes(command.approvalMode as ApprovalMode)
       )
-        throw new Error("审批策略应为 untrusted、on-request 或 never");
+        throw new Error(
+          "审批模式应为 untrusted、on-request、auto-review 或 never",
+        );
       if (locked) throw new Error("任务运行中，暂时不能修改权限");
-      await saveSettings({
-        sandbox: command.sandbox as SandboxMode,
-        approvalPolicy: command.approvalPolicy as ApprovalPolicy | undefined,
-      });
+      const sandbox = command.sandbox as SandboxMode;
+      await saveSettings(
+        command.approvalMode
+          ? settingsForApprovalMode(
+              command.approvalMode as ApprovalMode,
+              sandbox,
+            )
+          : settingsForSandboxMode(
+              sandbox,
+              approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
+            ),
+      );
       return;
     }
     if (command.kind === "skills") {
@@ -360,6 +383,7 @@ export function ChatWorkspace({
     reasoningEffort?: string;
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
+    approvalsReviewer?: ApprovalsReviewer;
     personality?: Personality;
     serviceTier?: string | null;
   }) => {

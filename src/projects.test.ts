@@ -48,7 +48,9 @@ test("hidden project without sessions is omitted", () => {
 
 test("wsl UNC share paths collapse onto the POSIX project key", () => {
   assert.equal(
-    normalizeProjectPath("\\\\wsl.localhost\\Ubuntu\\mnt\\d\\Work\\sample_project"),
+    normalizeProjectPath(
+      "\\\\wsl.localhost\\Ubuntu\\mnt\\d\\Work\\sample_project",
+    ),
     "/mnt/d/work/sample_project",
   );
   assert.equal(
@@ -85,7 +87,11 @@ test("mergeProjectGroups collapses record and thread path aliases", () => {
 });
 
 test("previewSessions keeps only the latest task until expanded", () => {
-  const sessions = [thread("/tmp/a", "a"), thread("/tmp/a", "b"), thread("/tmp/a", "c")];
+  const sessions = [
+    thread("/tmp/a", "a"),
+    thread("/tmp/a", "b"),
+    thread("/tmp/a", "c"),
+  ];
   assert.deepEqual(
     previewSessions(sessions, false).map((item) => item.id),
     ["a"],
@@ -97,8 +103,17 @@ test("filterProjectGroups matches project, session, model, and provider", () => 
   const groups = mergeProjectGroups(
     [],
     [
-      { ...thread("/tmp/slam_learning_journey", "a"), name: "新会话", model: "gpt-5.6-sol" },
-      { ...thread("/tmp/other", "b"), name: "文档", preview: "改 README", model: "gpt" },
+      {
+        ...thread("/tmp/slam_learning_journey", "a"),
+        name: "新会话",
+        model: "gpt-5.6-sol",
+      },
+      {
+        ...thread("/tmp/other", "b"),
+        name: "文档",
+        preview: "改 README",
+        model: "gpt",
+      },
     ],
   );
   const byProject = filterProjectGroups(groups, "slam");
@@ -176,4 +191,23 @@ test("new task path defaults stay unchanged outside --wsl", () => {
     }).cwd,
     "/home/tester/demo",
   );
+});
+
+test("legacy project approval defaults do not combine with reviewer preferences", () => {
+  const defaults = resolveNewThreadDefaults({
+    project: {
+      key: "/tmp/demo",
+      cwd: "/tmp/demo",
+      defaults: { approvalPolicy: "never" },
+      updatedAt: 1,
+    },
+    preferences: {
+      recentDirs: [],
+      lastApprovalPolicy: "on-request",
+      lastApprovalsReviewer: "auto_review",
+    },
+    providers: [],
+  });
+  assert.equal(defaults.approvalPolicy, "never");
+  assert.equal(defaults.approvalsReviewer, "user");
 });
