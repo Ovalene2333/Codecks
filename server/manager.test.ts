@@ -2074,3 +2074,58 @@ test("runtimeStatus reports WSL mode from the constructor", () => {
   );
   assert.equal(wsl.runtimeStatus().runtimeWsl, true);
 });
+
+test("background terminal control follows supported app-server RPCs", async () => {
+  const calls: { method: string; params: any }[] = [];
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/backgroundTerminals/list")
+        return {
+          data: [
+            {
+              itemId: "item-1",
+              processId: "42",
+              command: "npm run dev",
+              cwd: "/tmp/project",
+              osPid: 99,
+              cpuPercent: 1.25,
+              rssKb: 2048,
+            },
+          ],
+        };
+      return { terminated: true };
+    },
+  });
+
+  const listed = await manager.backgroundTerminals("provider", "thread-1");
+  assert.equal(listed.supported, true);
+  assert.equal(listed.data[0].processId, "42");
+  await manager.terminateBackgroundTerminal("provider", "thread-1", "42");
+  assert.deepEqual(calls.at(-1), {
+    method: "thread/backgroundTerminals/terminate",
+    params: { threadId: "thread-1", processId: "42" },
+  });
+});
+
+test("background terminal listing disables itself on an older runtime", async () => {
+  let calls = 0;
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  manager.ensure = async () => ({
+    request: async () => {
+      calls += 1;
+      throw new Error("Method not found");
+    },
+  });
+
+  assert.equal(
+    (await manager.backgroundTerminals("provider", "thread-1")).supported,
+    false,
+  );
+  assert.equal(
+    (await manager.backgroundTerminals("provider", "thread-1")).supported,
+    false,
+  );
+  assert.equal(calls, 1);
+});

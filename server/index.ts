@@ -31,6 +31,8 @@ import {
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
+import { ToolRegistry } from "./tools/types.js";
+import { HostTerminalTool } from "./tools/host-terminal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -135,6 +137,7 @@ const claude = new ClaudeAdapter({
   threadSettings,
 });
 const agents = new AgentRegistry([manager, claude]);
+const tools = new ToolRegistry([new HostTerminalTool({ useWsl })]);
 const fullSnapshot = () => ({
   ...agents.snapshot(),
   projects: projects.list(),
@@ -197,6 +200,33 @@ app.get("/api/health", (_req, res) =>
 app.get(
   "/api/snapshot",
   route(async () => fullSnapshot()),
+);
+app.get(
+  "/api/tasks",
+  route(async () => ({ tasks: await agents.listTasks() })),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/background-terminals/:processId/terminate",
+  route(async (req) =>
+    agents.terminateBackgroundTerminal(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      param(req.params.processId),
+    ),
+  ),
+);
+app.get(
+  "/api/tools",
+  route(async () => ({ tools: tools.list() })),
+);
+app.post(
+  "/api/tools/:toolId/run",
+  route(async (req) =>
+    tools.run(
+      param(req.params.toolId),
+      z.object({ cwd: z.string().min(1).max(4_096) }).parse(req.body),
+    ),
+  ),
 );
 app.get(
   "/api/agents/:agentId/profiles",

@@ -224,16 +224,18 @@ export function ActionSheet({
 export function Drawer({
   title,
   children,
+  className,
   onClose,
 }: {
   title: string;
   children: React.ReactNode;
+  className?: string;
   onClose: () => void;
 }) {
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
       <section
-        className="usage-drawer"
+        className={`usage-drawer${className ? ` ${className}` : ""}`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header>

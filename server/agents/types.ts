@@ -1,6 +1,7 @@
 import type { EventEmitter } from "node:events";
 import type {
   ApprovalKind,
+  BackgroundTerminal,
   ClaudePermissionMode,
   ModelInfo,
   Personality,
@@ -128,5 +129,18 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
           scope?: "session" | "turn";
           answers?: unknown;
         },
+  ): Promise<unknown>;
+  backgroundTerminals?(
+    providerId: string,
+    threadId: string,
+  ): Promise<{
+    data: BackgroundTerminal[];
+    supported: boolean;
+    error?: string;
+  }>;
+  terminateBackgroundTerminal?(
+    providerId: string,
+    threadId: string,
+    processId: string,
   ): Promise<unknown>;
 }

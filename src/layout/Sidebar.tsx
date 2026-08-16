@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
 import {
+  Activity,
   BellRing,
   Bot,
   Plus,
   RefreshCw,
   Search,
   Settings,
+  Wrench,
   X,
 } from "lucide-react";
 import deckLogo from "../assets/logo.svg";
@@ -39,6 +41,8 @@ export function Sidebar({
   onRefresh,
   onProviders,
   onUsage,
+  onTasks,
+  onTools,
   onNotifications,
   onLibrary,
   onQuery,
@@ -80,6 +84,8 @@ export function Sidebar({
   onRefresh: () => void;
   onProviders: () => void;
   onUsage: () => void;
+  onTasks: () => void;
+  onTools: () => void;
   onNotifications: () => void;
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
@@ -306,6 +312,19 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-footer">
+        <div className="sidebar-tool-row">
+          <button type="button" onClick={onTasks}>
+            <Activity />
+            任务
+            {(counts.running > 0 || counts.waiting > 0) && (
+              <b>{counts.running + counts.waiting}</b>
+            )}
+          </button>
+          <button type="button" onClick={onTools}>
+            <Wrench />
+            工具
+          </button>
+        </div>
         <button onClick={onProviders}>
           <Settings />
           供应商设置

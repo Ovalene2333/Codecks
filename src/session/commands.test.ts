@@ -52,6 +52,7 @@ test("parseComposerCommand maps built-in Codex commands", () => {
     verbose: true,
   });
   assert.deepEqual(parseComposerCommand("/usage"), { kind: "usage" });
+  assert.deepEqual(parseComposerCommand("/ps"), { kind: "ps" });
   assert.deepEqual(parseComposerCommand("!git status --short"), {
     kind: "shell",
     command: "git status --short",
@@ -82,7 +83,7 @@ test("matchingSlashCommands filters as the user types", () => {
   );
   assert.deepEqual(
     matchingSlashCommands("/", "claude").map((item) => item.name),
-    ["/status", "/usage"],
+    ["/status", "/ps", "/usage"],
   );
   assert.match(incompleteCommandHint("/goal"), /目标/);
   assert.match(incompleteCommandHint("/fast turbo"), /on\|off/);

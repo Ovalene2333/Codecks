@@ -5,6 +5,7 @@ export type ComposerCommand =
   | { kind: "init" }
   | { kind: "diff" }
   | { kind: "status" }
+  | { kind: "ps" }
   | { kind: "usage" }
   | { kind: "model"; model?: string; reasoningEffort?: string }
   | { kind: "permissions"; sandbox?: string; approvalMode?: string }
@@ -23,6 +24,7 @@ export const SLASH_COMMANDS = [
   { name: "/permissions", hint: "调整沙箱与审批策略" },
   { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/status", hint: "查看完整会话状态" },
+  { name: "/ps", hint: "查看运行任务与后台终端" },
   { name: "/usage", hint: "查看账号额度" },
   { name: "/mention", hint: "搜索并引用工作区文件" },
   { name: "/fast", hint: "切换 Fast 模式" },
@@ -63,6 +65,7 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
   if (key === "status") return { kind: "status" };
+  if (key === "ps") return { kind: "ps" };
   if (key === "usage") return { kind: "usage" };
   // Model changes must go through the picker. Treating arbitrary text after
   // `/model` as a model id can poison the thread and only fail on its next turn.
@@ -113,7 +116,7 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   return undefined;
 }
 
-const CLAUDE_COMMANDS = new Set(["/status", "/usage"]);
+const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
 
 export function matchingSlashCommands(
   text: string,

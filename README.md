@@ -84,13 +84,15 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - Claude 会把 JSONL 的大小、修改时间和摘要写入 `.data/claude-history-index.json`，后续启动只重新解析新增或变化的历史文件
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
 - 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
+- 侧栏「任务」统一汇总所有受管 Codex / Claude Session 的活动 Turn、运行命令和待确认状态；可以跳转来源或停止整个任务。较新 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，并允许单独停止；旧 Runtime 自动退化为 Turn 级中断
 - 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
 - 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
 - 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
 - 时间线会把连续或单次包含多个文件的 `update` 合并为可展开的文件变更组；`read`、`explore`、MCP 和动态工具调用可展开查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
-- 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
+- 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
+- 侧栏「工具」使用独立注册架构提供可扩展的小工具；首个「宿主机终端」可在当前 Session 或最近项目目录打开原生终端窗口。窗口出现在运行 Codecks Server 的电脑上，不会嵌入浏览器，也不会把 Shell 输入输出传到网页
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
 - 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
