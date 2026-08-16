@@ -89,6 +89,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
 - 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
+- 侧栏搜索除项目、会话名、模型和摘要外，也会检索 Codex 与 Claude 会话中的用户消息和助手正文；输入至少 3 个字符后显示正文命中摘要，点击可打开并定位到对应 Turn。正文索引保存在 `.data/session-search.sqlite`，首次启动会在没有运行中任务时按最近会话优先、单并发后台补建，不会把完整对话放进浏览器快照
 - 每个 Turn 会汇总显示 Codex 本轮读取过的文件；时间线也会把连续或单次包含多个文件的 `update` 合并为可展开的文件变更组，并将读取、检索、MCP 和动态工具调用展示为可展开的中文动作，可继续查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)

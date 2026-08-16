@@ -196,6 +196,19 @@
   gap: 6px;
   padding: 6px 4px 12px;
 }
+.search-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 42px 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.search-pending svg {
+  width: 14px;
+  animation: spin 0.8s linear infinite;
+}
 .skeleton-project,
 .skeleton-recent {
   height: 32px;
@@ -295,6 +308,38 @@
 .session-row.selected {
   border-left-color: transparent;
   background: var(--surface-2);
+}
+.session-row .session-search-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: 4px 0 0;
+  color: #8f9bad;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.session-search-hit small {
+  flex: none;
+  color: #6f7c8e;
+  font-size: 10px;
+}
+.session-search-hit span {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.session-search-hit mark {
+  border-radius: 2px;
+  background: #6f5722;
+  color: #fff1b8;
 }
 .session-row--fork {
   box-shadow: inset 2px 0 0 var(--line);

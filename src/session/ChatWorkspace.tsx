@@ -56,6 +56,7 @@ export function ChatWorkspace({
   approvals,
   events,
   origin,
+  searchTarget,
   onBack,
   onSnapshot,
   onSwitchProvider,
@@ -74,6 +75,7 @@ export function ChatWorkspace({
   approvals: Approval[];
   events: any[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
+  searchTarget?: { turnId?: string; query: string; request: number };
   onBack: () => void;
   onSnapshot: () => void;
   onSwitchProvider: () => void;
@@ -506,6 +508,8 @@ export function ChatWorkspace({
           streamed={streamed}
           pendingUsers={pendingUsers}
           origin={origin}
+          targetTurnId={searchTarget?.turnId}
+          targetRequest={searchTarget?.request}
           onCopy={() => onToast("已复制")}
           onForkFrom={
             capabilities.fork ? (turnId) => forkFrom(turnId) : undefined

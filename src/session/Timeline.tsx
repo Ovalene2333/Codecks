@@ -14,6 +14,8 @@ export function Timeline({
   streamed,
   pendingUsers,
   origin,
+  targetTurnId,
+  targetRequest,
   onCopy,
   onForkFrom,
   onOpenOrigin,
@@ -26,6 +28,8 @@ export function Timeline({
   streamed: StreamedAgentMessage[];
   pendingUsers: PendingUserMessage[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
+  targetTurnId?: string;
+  targetRequest?: number;
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
@@ -42,6 +46,19 @@ export function Timeline({
     const element = timeline.current;
     if (!element) return;
 
+    if (targetTurnId) {
+      const target = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-turn-id]"),
+      ).find((item) => item.dataset.turnId === targetTurnId);
+      if (target) {
+        activeThread.current = thread.id;
+        followOutput.current = false;
+        target.scrollIntoView({ block: "center" });
+        scrollTop.current = element.scrollTop;
+        return;
+      }
+    }
+
     if (activeThread.current !== thread.id) {
       activeThread.current = thread.id;
       followOutput.current = true;
@@ -53,7 +70,7 @@ export function Timeline({
     if (followOutput.current) element.scrollTop = element.scrollHeight;
     else element.scrollTop = scrollTop.current;
     scrollTop.current = element.scrollTop;
-  }, [thread.id, turns, streamed]);
+  }, [thread.id, turns, streamed, targetTurnId, targetRequest]);
 
   const rememberScrollPosition = () => {
     const element = timeline.current;
@@ -99,6 +116,9 @@ export function Timeline({
               turn={turn}
               index={index + 1}
               thread={thread}
+              highlighted={Boolean(
+                targetTurnId && String(turn?.id) === targetTurnId,
+              )}
               streamed={streamed}
               onCopy={onCopy}
               onForkFrom={onForkFrom}

@@ -7,6 +7,8 @@ import type {
   RuntimeSnapshot,
   Snapshot,
   ApprovalResolveBody,
+  SessionSearchMatch,
+  SessionSearchResponse,
   ThreadSummary,
 } from "./types";
 import {
@@ -83,6 +85,14 @@ export function App() {
   } | null>(null);
   const [switchThread, setSwitchThread] = useState<ThreadSummary | null>(null);
   const [query, setQuery] = useState("");
+  const [contentSearch, setContentSearch] = useState<SessionSearchResponse>();
+  const [contentSearchPending, setContentSearchPending] = useState(false);
+  const [searchTarget, setSearchTarget] = useState<{
+    session: string;
+    turnId?: string;
+    query: string;
+    request: number;
+  }>();
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "attention" | "unseen"
   >("all");
@@ -192,6 +202,36 @@ export function App() {
       query: "",
     });
   }, [expandedProjects]);
+
+  useEffect(() => {
+    const value = query.trim();
+    if ([...value].length < 3) {
+      setContentSearch(undefined);
+      setContentSearchPending(false);
+      return;
+    }
+    setContentSearch(undefined);
+    setContentSearchPending(true);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api<SessionSearchResponse>("/session-search", {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ query: value, library }),
+      })
+        .then(setContentSearch)
+        .catch((error) => {
+          if (error?.name !== "AbortError") setContentSearch(undefined);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setContentSearchPending(false);
+        });
+    }, 280);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, library]);
 
   useEffect(() => {
     if (loading) return;
@@ -404,6 +444,11 @@ export function App() {
   );
 
   const projects = useMemo(() => {
+    const contentIds = new Set(
+      (contentSearch?.results || []).map(
+        (match) => `${match.agentId}:${match.threadId}`,
+      ),
+    );
     const groups = mergeProjectGroups(snapshot.projects || [], libraryThreads);
     const statusThreads = (threads: ThreadSummary[]) =>
       statusFilter === "active"
@@ -428,6 +473,8 @@ export function App() {
       {
         providerName: (id) =>
           snapshot.providers.find((provider) => provider.id === id)?.name || "",
+        matchingThread: (thread) =>
+          contentIds.has(`${thread.agentId || "codex"}:${thread.id}`),
       },
     ).filter((group) => group.sessions.length > 0);
   }, [
@@ -437,7 +484,17 @@ export function App() {
     query,
     statusFilter,
     unseenSessions,
+    contentSearch,
   ]);
+
+  const contentMatches = useMemo(() => {
+    const matches = new Map<string, SessionSearchMatch>();
+    for (const match of contentSearch?.results || []) {
+      const key = `${match.agentId}:${match.threadId}`;
+      if (!matches.has(key)) matches.set(key, match);
+    }
+    return matches;
+  }, [contentSearch]);
 
   const counts = useMemo(
     () => ({
@@ -648,7 +705,17 @@ export function App() {
     });
   };
 
-  const selectThread = (thread: ThreadSummary) => {
+  const selectThread = (thread: ThreadSummary, match?: SessionSearchMatch) => {
+    setSearchTarget(
+      match
+        ? {
+            session: sessionKey(thread),
+            turnId: match.turnId,
+            query,
+            request: performance.now(),
+          }
+        : undefined,
+    );
     openSession(thread);
   };
 
@@ -742,6 +809,17 @@ export function App() {
         archivedCount={(snapshot.archivedThreads || []).length}
         library={library}
         query={query}
+        searchMatches={contentMatches}
+        contentSearchPending={contentSearchPending}
+        contentSearchProgress={
+          contentSearch
+            ? {
+                indexed: contentSearch.indexed,
+                total: contentSearch.total,
+                building: contentSearch.building,
+              }
+            : undefined
+        }
         statusFilter={statusFilter}
         counts={counts}
         projects={projects}
@@ -857,6 +935,11 @@ export function App() {
               approvals={snapshot.approvals}
               events={events}
               origin={origin}
+              searchTarget={
+                searchTarget?.session === sessionKey(current)
+                  ? searchTarget
+                  : undefined
+              }
               onBack={() => {
                 setSelected(undefined);
                 setSidebar(true);

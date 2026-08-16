@@ -177,6 +177,23 @@ export interface ThreadSummary {
   controlMode?: "managed" | "history";
 }
 
+export interface SessionSearchMatch {
+  agentId: "codex" | "claude";
+  threadId: string;
+  turnId?: string;
+  itemId?: string;
+  role: "user" | "assistant";
+  snippet: string;
+  score: number;
+}
+
+export interface SessionSearchResponse {
+  results: SessionSearchMatch[];
+  indexed: number;
+  total: number;
+  building: boolean;
+}
+
 export interface ActiveTaskCommand {
   itemId?: string;
   processId?: string;
