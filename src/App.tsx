@@ -65,6 +65,8 @@ import {
 } from "./notifications";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
+const isTerminalPath = (pathname: string) =>
+  pathname === "/terminal" || pathname === "/page/terminal";
 
 export function App() {
   const appearance = useAppearance();
@@ -123,7 +125,9 @@ export function App() {
   const [phoneSettings, setPhoneSettings] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [taskScope, setTaskScope] = useState<string | null>();
-  const [toolsOpen, setToolsOpen] = useState(false);
+  const [page, setPage] = useState(() =>
+    isTerminalPath(location.pathname) ? "terminal" : "workspace",
+  );
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
 
@@ -134,6 +138,20 @@ export function App() {
       () => setToasts((current) => current.filter((item) => item.id !== id)),
       2000,
     );
+  }, []);
+
+  useEffect(() => {
+    if (location.pathname === "/page/terminal")
+      history.replaceState(null, "", "/terminal");
+    const syncPage = () =>
+      setPage(isTerminalPath(location.pathname) ? "terminal" : "workspace");
+    window.addEventListener("popstate", syncPage);
+    return () => window.removeEventListener("popstate", syncPage);
+  }, []);
+
+  const openPage = useCallback((pathname: string) => {
+    history.pushState(null, "", pathname);
+    setPage(isTerminalPath(pathname) ? "terminal" : "workspace");
   }, []);
 
   const markSessionSeen = useCallback((key: string) => {
@@ -799,6 +817,27 @@ export function App() {
       </div>
     );
 
+  if (page === "terminal")
+    return (
+      <>
+        <ToolCenter
+          initialCwd={current?.cwd}
+          directories={[
+            ...(current?.cwd ? [current.cwd] : []),
+            ...(snapshot.preferences?.recentDirs || []),
+            ...(snapshot.projects || []).map((project) => project.cwd),
+            ...allThreads.map((thread) => thread.cwd),
+          ].filter(
+            (value, index, values) =>
+              Boolean(value) && values.indexOf(value) === index,
+          )}
+          onToast={pushToast}
+          onClose={() => openPage("/")}
+        />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -839,7 +878,7 @@ export function App() {
         onProviders={() => setProviderModal(true)}
         onUsage={() => setUsageOpen(true)}
         onTasks={() => setTaskScope(null)}
-        onTools={() => setToolsOpen(true)}
+        onTools={() => openPage("/terminal")}
         onNotifications={enableSystemNotifications}
         onLibrary={setLibrary}
         onQuery={setQuery}
@@ -1270,22 +1309,6 @@ export function App() {
           }}
           onToast={pushToast}
           onClose={() => setTaskScope(undefined)}
-        />
-      )}
-      {toolsOpen && (
-        <ToolCenter
-          initialCwd={current?.cwd}
-          directories={[
-            ...(current?.cwd ? [current.cwd] : []),
-            ...(snapshot.preferences?.recentDirs || []),
-            ...(snapshot.projects || []).map((project) => project.cwd),
-            ...allThreads.map((thread) => thread.cwd),
-          ].filter(
-            (value, index, values) =>
-              Boolean(value) && values.indexOf(value) === index,
-          )}
-          onToast={pushToast}
-          onClose={() => setToolsOpen(false)}
         />
       )}
       {appearanceOpen && (

@@ -1,3 +1,5 @@
+import type { WebSocket } from "ws";
+
 export interface ToolDescriptor {
   id: string;
   name: string;
@@ -5,11 +7,15 @@ export interface ToolDescriptor {
   icon: string;
   available: boolean;
   unavailableReason?: string;
+  pagePath?: string;
+  defaultCwd?: string;
 }
 
 export interface DeckTool {
   descriptor(): ToolDescriptor;
-  run(input: Record<string, unknown>): Promise<unknown>;
+  run?(input: Record<string, unknown>): Promise<unknown>;
+  connect?(socket: WebSocket): void;
+  close?(): void;
 }
 
 export class ToolRegistry {
@@ -35,6 +41,20 @@ export class ToolRegistry {
     const descriptor = tool.descriptor();
     if (!descriptor.available)
       throw new Error(descriptor.unavailableReason || "工具当前不可用");
+    if (!tool.run) throw new Error("工具不支持此操作");
     return tool.run(input);
+  }
+
+  connect(id: string, socket: WebSocket) {
+    const tool = this.tools.get(id);
+    if (!tool?.connect) throw new Error("工具不支持实时连接");
+    const descriptor = tool.descriptor();
+    if (!descriptor.available)
+      throw new Error(descriptor.unavailableReason || "工具当前不可用");
+    tool.connect(socket);
+  }
+
+  close() {
+    for (const tool of this.tools.values()) tool.close?.();
   }
 }
