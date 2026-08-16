@@ -122,6 +122,8 @@ const claude = new ClaudeAdapter({
   claudeHome:
     process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_HOME || undefined,
   claudeBin: process.env.CLAUDE_BIN || undefined,
+  claudeWslBin: process.env.CLAUDE_WSL_BIN || undefined,
+  useWsl,
   ccSwitchPath: store.ccSwitchPath,
   historyIndexFile: path.join(dataDir, "claude-history-index.json"),
   initialThreads,

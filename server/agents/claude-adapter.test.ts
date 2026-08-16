@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  claudeRuntimePreference,
   ClaudeAdapter,
+  defaultClaudeHome,
   findClaudeExecutable,
   windowsClaudeLaunchSpec,
+  wslClaudeLaunchSpec,
 } from "./claude-adapter.js";
 
 const relayProfile = {
@@ -216,15 +219,100 @@ test("Claude executable discovery keeps Windows npm launchers", async (t) => {
     ),
     {
       command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        launcher,
-        "--output-format",
-        "stream-json",
-      ],
+      args: ["/d", "/s", "/c", launcher, "--output-format", "stream-json"],
     },
+  );
+});
+
+test("Windows discovery ignores npm shims and lets the SDK use its bundled CLI", () => {
+  const npm = "C:\\Users\\tester\\AppData\\Roaming\\npm";
+  const native = `${npm}\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`;
+  const files = new Set([`${npm}\\claude`, `${npm}\\claude.cmd`, native]);
+  assert.equal(
+    findClaudeExecutable(undefined, "win32", { Path: npm }, (candidate) =>
+      files.has(candidate),
+    ),
+    undefined,
+  );
+});
+
+test("Windows discovery accepts a standalone native executable", () => {
+  const bin = "C:\\Claude";
+  const files = new Set([`${bin}\\claude.exe`]);
+  assert.equal(
+    findClaudeExecutable(undefined, "win32", { PATH: bin }, (candidate) =>
+      files.has(candidate),
+    ),
+    `${bin}\\claude.exe`,
+  );
+});
+
+test("Linux discovery skips Windows shims mounted into PATH", () => {
+  const files = new Set(["/mnt/c/npm/claude", "/usr/local/bin/claude"]);
+  assert.equal(
+    findClaudeExecutable(
+      undefined,
+      "linux",
+      { PATH: "/mnt/c/npm:/usr/local/bin" },
+      (candidate) => files.has(candidate),
+    ),
+    "/usr/local/bin/claude",
+  );
+});
+
+test("Claude runtime selection covers native Windows, Windows WSL, and Linux", () => {
+  assert.equal(
+    claudeRuntimePreference("win32", false, false, "D:\\Code\\deck"),
+    "native",
+  );
+  assert.equal(
+    claudeRuntimePreference("win32", true, true, "/home/tester/deck"),
+    "wsl",
+  );
+  assert.equal(
+    claudeRuntimePreference("win32", true, false, "/mnt/d/Code/deck"),
+    "native",
+  );
+  assert.equal(
+    claudeRuntimePreference("linux", false, false, "/home/tester/deck"),
+    "native",
+  );
+  assert.throws(
+    () => claudeRuntimePreference("win32", true, false, "/home/tester/deck"),
+    /CLAUDE_WSL_BIN/,
+  );
+});
+
+test("WSL Claude launch preserves argv and uses the WSL cwd", () => {
+  const launch = wslClaudeLaunchSpec(
+    {
+      command: "claude",
+      args: ["--output-format", "stream-json"],
+      cwd: "/mnt/d/Code/deck",
+      env: { WSL_EXE: "C:\\Windows\\System32\\wsl.exe" },
+      signal: new AbortController().signal,
+    },
+    "claude",
+  );
+  assert.equal(launch.command, "C:\\Windows\\System32\\wsl.exe");
+  assert.deepEqual(launch.args.slice(-5), [
+    "claude",
+    "/mnt/d/Code/deck",
+    "claude",
+    "--output-format",
+    "stream-json",
+  ]);
+  assert.equal(launch.args.at(-3), "claude");
+});
+
+test("Claude config home follows the host platform", () => {
+  assert.equal(
+    defaultClaudeHome("win32", "C:\\Users\\tester"),
+    "C:\\Users\\tester\\.claude",
+  );
+  assert.equal(
+    defaultClaudeHome("linux", "/home/tester"),
+    "/home/tester/.claude",
   );
 });
 

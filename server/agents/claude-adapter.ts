@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import {
@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   query as createQuery,
   type CanUseTool,
@@ -25,7 +26,12 @@ import {
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 import { CcSwitchSource, type ClaudeProfile } from "../cc-switch.js";
-import { windowsPathToWsl } from "../runtime-platform.js";
+import {
+  exposeEnvironmentToWsl,
+  windowsPathToWsl,
+  WSL_CLAUDE_SHELL_COMMAND,
+  wslPathToWindows,
+} from "../runtime-platform.js";
 import type { ApprovalKind, ThreadSummary, TurnImage } from "../types.js";
 import {
   readClaudeHistory,
@@ -48,42 +54,62 @@ const CLAUDE_CAPABILITIES: AgentCapabilities = {
 };
 
 type QueryFactory = typeof createQuery;
+const execFileAsync = promisify(execFile);
 
-export function findClaudeExecutable(explicit?: string) {
+export function findClaudeExecutable(
+  explicit?: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (candidate: string) => boolean = existsSync,
+) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   const names = explicit ? [explicit] : ["claude"];
   for (const name of names) {
-    if (path.isAbsolute(name) || name.includes(path.sep)) {
-      const candidate = existsSync(name) || explicit ? name : undefined;
+    if (pathApi.isAbsolute(name) || /[\\/]/.test(name)) {
+      const candidate = exists(name) || explicit ? name : undefined;
       return candidate;
     }
-    for (const directory of (process.env.PATH || "").split(path.delimiter)) {
+    const pathValue = env.Path || env.PATH || "";
+    for (const directory of pathValue.split(platform === "win32" ? ";" : ":")) {
       if (!directory) continue;
-      const candidates = [
-        path.join(directory, name),
-        ...(process.platform === "win32"
-          ? [path.join(directory, `${name}.cmd`)]
-          : []),
-        path.join(directory, `${name}.exe`),
-        path.join(
-          directory,
-          "node_modules",
-          "@anthropic-ai",
-          "claude-code",
-          "bin",
-          "claude.exe",
-        ),
-      ];
+      const candidates =
+        platform === "win32"
+          ? [pathApi.join(directory, `${name}.exe`)]
+          : [pathApi.join(directory, name)];
       const found = candidates.find(
         (candidate) =>
-          existsSync(candidate) &&
+          exists(candidate) &&
           (explicit != null ||
-            process.platform === "win32" ||
+            platform === "win32" ||
             !/^\/mnt\/[a-z]\//i.test(candidate)),
       );
       if (found) return found;
     }
   }
   return explicit;
+}
+
+export function defaultClaudeHome(
+  platform: NodeJS.Platform = process.platform,
+  home = os.homedir(),
+) {
+  return platform === "win32"
+    ? path.win32.join(home, ".claude")
+    : path.posix.join(home, ".claude");
+}
+
+export function claudeRuntimePreference(
+  platform: NodeJS.Platform,
+  useWsl: boolean,
+  wslAvailable: boolean,
+  cwd: string,
+): "native" | "wsl" {
+  if (platform !== "win32" || !useWsl) return "native";
+  if (wslAvailable) return "wsl";
+  if (/^\/mnt\/[a-z](?:\/|$)/i.test(windowsPathToWsl(cwd))) return "native";
+  throw new Error(
+    `WSL 工作目录 ${cwd} 需要在 WSL 中安装 Claude Code，或设置 CLAUDE_WSL_BIN`,
+  );
 }
 
 interface ClaudeAdapterOptions {
@@ -96,6 +122,9 @@ interface ClaudeAdapterOptions {
   historyReader?: typeof readClaudeHistory;
   initialThreads?: ThreadSummary[];
   initialProfiles?: ClaudeProfile[];
+  useWsl?: boolean;
+  claudeWslBin?: string;
+  wslProbe?: (bin: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
 }
 
 interface ClaudeHistoryIndexEntry {
@@ -187,6 +216,27 @@ export function windowsClaudeLaunchSpec(
   };
 }
 
+export function wslClaudeLaunchSpec(options: SpawnOptions, claudeBin: string) {
+  const shell =
+    options.env.CLAUDE_WSL_SHELL || options.env.CODEX_WSL_SHELL || "bash";
+  if ([claudeBin, shell].some((value) => /[\r\n]/.test(value)))
+    throw new Error("Claude WSL 启动命令不能包含换行符");
+  return {
+    command: options.env.WSL_EXE || "wsl.exe",
+    args: [
+      "--exec",
+      shell,
+      "-lc",
+      WSL_CLAUDE_SHELL_COMMAND,
+      "claude-deck",
+      claudeBin,
+      options.cwd || ".",
+      claudeBin,
+      ...options.args,
+    ],
+  };
+}
+
 function spawnClaudeCodeProcess(
   options: SpawnOptions,
   stderr: (data: string) => void,
@@ -201,6 +251,44 @@ function spawnClaudeCodeProcess(
   });
   child.stderr.on("data", (data) => stderr(String(data)));
   return child;
+}
+
+function spawnWslClaudeCodeProcess(
+  options: SpawnOptions,
+  claudeBin: string,
+  stderr: (data: string) => void,
+): SpawnedProcess {
+  const launch = wslClaudeLaunchSpec(options, claudeBin);
+  const child = spawn(launch.command, launch.args, {
+    env: options.env,
+    signal: options.signal,
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stderr.on("data", (data) => stderr(String(data)));
+  return child;
+}
+
+async function hasWslClaude(bin: string, env: NodeJS.ProcessEnv) {
+  const shell = env.CLAUDE_WSL_SHELL || env.CODEX_WSL_SHELL || "bash";
+  if ([bin, shell].some((value) => /[\r\n]/.test(value))) return false;
+  try {
+    await execFileAsync(
+      env.WSL_EXE || "wsl.exe",
+      [
+        "--exec",
+        shell,
+        "-lc",
+        'if [ -s "$HOME/.nvm/nvm.sh" ]; then . "$HOME/.nvm/nvm.sh"; fi; resolved=$(command -v "$1" 2>/dev/null || true); case "$resolved" in ""|/mnt/*) exit 1;; esac',
+        "claude-deck-probe",
+        bin,
+      ],
+      { env, windowsHide: true },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function existing(pathname: string) {
@@ -229,6 +317,7 @@ export class ClaudeAdapter extends EventEmitter {
   private historyError?: string;
   private historyIndex = new Map<string, ClaudeHistoryIndexEntry>();
   private historyIndexLoaded = false;
+  private wslClaudeAvailable?: boolean;
 
   constructor(private options: ClaudeAdapterOptions = {}) {
     super();
@@ -536,6 +625,7 @@ export class ClaudeAdapter extends EventEmitter {
       thread.approvalPolicy === "never" ? "bypassPermissions" : "default";
     let query: Query | undefined;
     try {
+      const runtime = await this.turnRuntime(thread.cwd);
       const onStderr = (line: string) => {
         if (line.trim()) this.error = this.redact(line.trim().slice(-500));
       };
@@ -543,9 +633,13 @@ export class ClaudeAdapter extends EventEmitter {
         prompt: images?.length ? promptStream(thread.id, text, images) : text,
         options: {
           cwd:
-            process.platform !== "win32" && /^[a-z]:[\\/]/i.test(thread.cwd)
+            runtime === "wsl"
               ? windowsPathToWsl(thread.cwd)
-              : thread.cwd,
+              : process.platform === "win32"
+                ? wslPathToWindows(thread.cwd)
+                : /^[a-z]:[\\/]/i.test(thread.cwd)
+                  ? windowsPathToWsl(thread.cwd)
+                  : thread.cwd,
           ...(materialized
             ? { resume: thread.id }
             : { extraArgs: { "session-id": thread.id } }),
@@ -560,18 +654,36 @@ export class ClaudeAdapter extends EventEmitter {
             : {}),
           systemPrompt: { type: "preset", preset: "claude_code" },
           settingSources: ["user", "project", "local"],
-          ...(this.options.claudeBin
-            ? { pathToClaudeCodeExecutable: this.options.claudeBin }
-            : {}),
-          env: this.runtimeEnv(profile, this.historyHomes.get(thread.id)),
+          ...(runtime === "wsl"
+            ? {
+                pathToClaudeCodeExecutable:
+                  this.options.claudeWslBin || "claude",
+              }
+            : this.options.claudeBin
+              ? { pathToClaudeCodeExecutable: this.options.claudeBin }
+              : {}),
+          env: this.runtimeEnv(
+            profile,
+            this.historyHomes.get(thread.id),
+            runtime,
+          ),
           stderr: onStderr,
-          ...(process.platform === "win32" &&
-          /\.(?:cmd|bat)$/i.test(this.options.claudeBin || "")
+          ...(runtime === "wsl"
             ? {
                 spawnClaudeCodeProcess: (options: SpawnOptions) =>
-                  spawnClaudeCodeProcess(options, onStderr),
+                  spawnWslClaudeCodeProcess(
+                    options,
+                    this.options.claudeWslBin || "claude",
+                    onStderr,
+                  ),
               }
-            : {}),
+            : process.platform === "win32" &&
+                /\.(?:cmd|bat)$/i.test(this.options.claudeBin || "")
+              ? {
+                  spawnClaudeCodeProcess: (options: SpawnOptions) =>
+                    spawnClaudeCodeProcess(options, onStderr),
+                }
+              : {}),
         },
       });
       this.active.set(thread.id, { query, turnId });
@@ -833,16 +945,48 @@ export class ClaudeAdapter extends EventEmitter {
       : "Claude Code 仅支持配置了自定义 API 地址和凭据的 CC Switch 中转配置";
   }
 
-  private runtimeEnv(profile?: ClaudeProfile, historyHome?: string) {
+  private runtimeEnv(
+    profile?: ClaudeProfile,
+    historyHome?: string,
+    runtime: "native" | "wsl" = "native",
+  ) {
     const env = { ...process.env };
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
     delete env.ANTHROPIC_BASE_URL;
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
     Object.assign(env, profile?.env || {});
-    const claudeHome = this.options.claudeHome || historyHome;
-    if (claudeHome) env.CLAUDE_CONFIG_DIR = claudeHome;
-    return env;
+    const claudeHome =
+      this.options.claudeHome || historyHome || defaultClaudeHome();
+    env.CLAUDE_CONFIG_DIR =
+      runtime === "wsl" ? windowsPathToWsl(claudeHome) : claudeHome;
+    return runtime === "wsl"
+      ? exposeEnvironmentToWsl(env, [
+          ...Object.keys(profile?.env || {}),
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_BASE_URL",
+          "CLAUDE_CODE_OAUTH_TOKEN",
+          "CLAUDE_CONFIG_DIR",
+        ])
+      : env;
+  }
+
+  private async turnRuntime(cwd: string): Promise<"native" | "wsl"> {
+    if (process.platform !== "win32" || !this.options.useWsl) return "native";
+    if (this.wslClaudeAvailable === undefined) {
+      const bin = this.options.claudeWslBin || "claude";
+      this.wslClaudeAvailable = await (this.options.wslProbe || hasWslClaude)(
+        bin,
+        process.env,
+      );
+    }
+    return claudeRuntimePreference(
+      process.platform,
+      Boolean(this.options.useWsl),
+      Boolean(this.wslClaudeAvailable),
+      cwd,
+    );
   }
 
   private async loadProfiles() {

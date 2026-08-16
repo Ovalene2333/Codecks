@@ -124,6 +124,13 @@ export {
 独立查询进程，优先复用 `PATH` / `CLAUDE_BIN` 指向的系统 Claude Code，并使用
 原生 session ID 创建或 resume 会话。adapter 负责：
 
+- Windows 自动模式只复用独立的 `claude.exe`，忽略 npm shim 并回退到 SDK
+  随附 CLI；显式 `CLAUDE_BIN=.cmd` 时才通过 `cmd.exe` 包装。Linux 跳过挂载盘
+  中的 Windows shim。
+- Windows `--wsl` 优先启动 WSL 内的 `CLAUDE_WSL_BIN`。若未安装，只对
+  `/mnt/<盘符>` 工作目录回退到 Windows Claude；`/home/...` 不会交给 Windows
+  进程执行。
+
 - 扫描 `CLAUDE_CONFIG_DIR`、当前用户 `~/.claude`，以及 WSL 可见的 Windows
   用户 Claude 目录。
 - 按 `last-prompt.leafUuid` 和 `parentUuid` 回溯 JSONL 当前主链，避免把重试分支

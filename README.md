@@ -106,7 +106,7 @@ npm run dev
 
 Codecks 会同时注册 Codex 与 Claude Code adapter。新建 Session 时选择 Agent；同一实例和同一项目可以并存两种 Agent，会话创建后类型固定，项目会记住最近一次选择作为下次默认值。侧栏用 Agent 标签区分混合会话，不需要在启动 Codecks 时锁定类型。
 
-Claude adapter 使用官方 Agent SDK，优先发现 `PATH` 中安装的 Claude Code，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。未发现系统安装时使用 SDK 随附的 CLI；Windows npm `.cmd` 通过 `cmd.exe` 启动，在 WSL 中则跳过 `/mnt/<盘符>` 下不可直接运行的 Windows Claude shim。Codecks 只支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转配置，明确不支持 Claude Official；认证环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+Claude adapter 使用官方 Agent SDK，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入和取消任务。Windows 自动模式只复用 `PATH` 中可直接执行的独立 `claude.exe`，不会误选 npm 生成的无扩展名、`.cmd` 或包内 shim；没有独立安装时使用 SDK 随附 CLI。显式设置 `CLAUDE_BIN` 仍可指定 `.cmd`，并通过 `cmd.exe` 启动。Linux 优先发现系统 Claude，同时跳过 `/mnt/<盘符>` 下的 Windows shim。Windows `--wsl` 模式优先使用 WSL 中安装的 Claude，并共享 Windows 用户的 Claude 配置与历史；若 WSL 未安装 Claude，`/mnt/<盘符>` 项目会自动回退到 Windows SDK CLI，`/home/...` 项目则会给出明确的安装提示。Codecks 只支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转配置，明确不支持 Claude Official；认证环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
 
 网页会按 `agentId` 使用通用 API，并根据 adapter 能力矩阵隐藏或禁用不支持的操作。可用 API：
 
@@ -269,29 +269,31 @@ codex --remote ws://127.0.0.1:<runtime-port>
 
 复制 [`.env.example`](.env.example) 为 `.env` 后按需填写。不要提交 `.env`。
 
-| 变量                            | 默认值         | 说明                                                                    |
-| ------------------------------- | -------------- | ----------------------------------------------------------------------- |
-| `HOST`                          | `127.0.0.1`    | HTTP 监听地址                                                           |
-| `PORT`                          | `4174`         | HTTP 端口                                                               |
-| `REMOTE_TOKEN`                  | _(空)_         | API / WebSocket Bearer 令牌；非本机监听时必填                           |
-| `CODEX_BIN`                     | `codex`        | Codex CLI 路径                                                          |
-| `CODEX_WSL_BIN`                 | `codex`        | Windows `--wsl` 模式下的 WSL 内 Codex CLI                               |
-| `CODEX_WSL_SHELL`               | `bash`         | 加载 WSL Codex `PATH` 的登录 shell                                      |
-| `CODEX_WSL_HOME`                | WSL `~/.codex` | Windows `--wsl` 模式下的 Codex home                                     |
-| `CLAUDE_CONFIG_DIR`             | 自动发现       | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`         |
-| `CLAUDE_BIN`                    | 自动发现       | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
-| `DATA_DIR`                      | `.data`        | Codecks 偏好、项目与用量缓存、自定义供应商元数据                        |
-| `CODEX_DECK_RUNTIME_PORT`       | _(自动)_       | 仅监听本机的 Codex control WebSocket 端口                               |
-| `CC_SWITCH_DB`                  | _(自动发现)_   | CC Switch SQLite 数据库绝对路径                                         |
-| `CODEX_DECK_EXPOSE`             | _(空)_         | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` |
-| `CODEX_DECK_PUBLIC_ORIGIN`      | _(空)_         | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN`               |
-| `CODEX_DECK_TUNNEL_BIN`         | _(空)_         | `command` 供应商的可执行文件                                            |
-| `CODEX_DECK_TUNNEL_ARGS`        | _(空)_         | `command` 参数模板，支持 `{port}`、`{url}`                              |
-| `CODEX_DECK_TUNNEL_URL_PATTERN` | _(自动)_       | 从命令输出提取公网 URL 的正则                                           |
-| `CODEX_DECK_CLOUDFLARED`        | _(PATH)_       | `cloudflared` 可执行文件                                                |
-| `CODEX_DECK_TUNNEL_PROTOCOL`    | `http2`        | Cloudflare Quick Tunnel 传输协议                                        |
-| `CF_TUNNEL_TOKEN`               | _(空)_         | Named Tunnel connector token（`--share`）                               |
-| `CF_TUNNEL_HOSTNAME`            | _(空)_         | 固定公网域名（`--share`）                                               |
+| 变量                            | 默认值                     | 说明                                                                                   |
+| ------------------------------- | -------------------------- | -------------------------------------------------------------------------------------- |
+| `HOST`                          | `127.0.0.1`                | HTTP 监听地址                                                                          |
+| `PORT`                          | `4174`                     | HTTP 端口                                                                              |
+| `REMOTE_TOKEN`                  | _(空)_                     | API / WebSocket Bearer 令牌；非本机监听时必填                                          |
+| `CODEX_BIN`                     | `codex`                    | Codex CLI 路径                                                                         |
+| `CODEX_WSL_BIN`                 | `codex`                    | Windows `--wsl` 模式下的 WSL 内 Codex CLI                                              |
+| `CODEX_WSL_SHELL`               | `bash`                     | 加载 WSL Codex `PATH` 的登录 shell                                                     |
+| `CODEX_WSL_HOME`                | WSL `~/.codex`             | Windows `--wsl` 模式下的 Codex home                                                    |
+| `CLAUDE_CONFIG_DIR`             | 自动发现                   | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`                        |
+| `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
+| `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
+| `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
+| `DATA_DIR`                      | `.data`                    | Codecks 偏好、项目与用量缓存、自定义供应商元数据                                       |
+| `CODEX_DECK_RUNTIME_PORT`       | _(自动)_                   | 仅监听本机的 Codex control WebSocket 端口                                              |
+| `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径                                                        |
+| `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command`                |
+| `CODEX_DECK_PUBLIC_ORIGIN`      | _(空)_                     | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN`                              |
+| `CODEX_DECK_TUNNEL_BIN`         | _(空)_                     | `command` 供应商的可执行文件                                                           |
+| `CODEX_DECK_TUNNEL_ARGS`        | _(空)_                     | `command` 参数模板，支持 `{port}`、`{url}`                                             |
+| `CODEX_DECK_TUNNEL_URL_PATTERN` | _(自动)_                   | 从命令输出提取公网 URL 的正则                                                          |
+| `CODEX_DECK_CLOUDFLARED`        | _(PATH)_                   | `cloudflared` 可执行文件                                                               |
+| `CODEX_DECK_TUNNEL_PROTOCOL`    | `http2`                    | Cloudflare Quick Tunnel 传输协议                                                       |
+| `CF_TUNNEL_TOKEN`               | _(空)_                     | Named Tunnel connector token（`--share`）                                              |
+| `CF_TUNNEL_HOSTNAME`            | _(空)_                     | 固定公网域名（`--share`）                                                              |
 
 ### CC Switch
 
