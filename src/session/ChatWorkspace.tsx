@@ -75,7 +75,12 @@ export function ChatWorkspace({
   approvals: Approval[];
   events: any[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
-  searchTarget?: { turnId?: string; query: string; request: number };
+  searchTarget?: {
+    turnId?: string;
+    itemId?: string;
+    query: string;
+    request: number;
+  };
   onBack: () => void;
   onSnapshot: () => void;
   onSwitchProvider: () => void;
@@ -94,6 +99,7 @@ export function ChatWorkspace({
   const [draft, setDraft] = useState(() => readComposerDraft(threadCacheKey));
   const [pendingUsers, setPendingUsers] = useState<PendingUserMessage[]>([]);
   const [error, setError] = useState("");
+  const [threadLoadSettled, setThreadLoadSettled] = useState(false);
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
@@ -122,10 +128,12 @@ export function ChatWorkspace({
         .catch((err) => {
           if (shouldSurfaceThreadLoadError(fullRef.current))
             setError(err.message);
-        }),
+        })
+        .finally(() => setThreadLoadSettled(true)),
     [threadCacheKey, thread.id, thread.providerId, thread.agentId],
   );
   useEffect(() => {
+    setThreadLoadSettled(false);
     const cached = readThreadCache(threadCacheKey);
     fullRef.current = cached || undefined;
     setFull(cached || undefined);
@@ -509,7 +517,9 @@ export function ChatWorkspace({
           pendingUsers={pendingUsers}
           origin={origin}
           targetTurnId={searchTarget?.turnId}
+          targetItemId={searchTarget?.itemId}
           targetRequest={searchTarget?.request}
+          targetFallbackReady={threadLoadSettled}
           onCopy={() => onToast("已复制")}
           onForkFrom={
             capabilities.fork ? (turnId) => forkFrom(turnId) : undefined

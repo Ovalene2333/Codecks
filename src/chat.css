@@ -221,6 +221,14 @@
 .turn-block.search-target {
   animation: search-target-flash 1.8s ease-out;
 }
+.search-item-target {
+  display: flow-root;
+  border-radius: 6px;
+}
+.search-item-target > .message,
+.search-item-target > .user-message-wrap .message {
+  animation: search-target-flash 1.8s ease-out;
+}
 @keyframes search-target-flash {
   0%,
   30% {

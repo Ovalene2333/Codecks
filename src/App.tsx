@@ -90,6 +90,7 @@ export function App() {
   const [searchTarget, setSearchTarget] = useState<{
     session: string;
     turnId?: string;
+    itemId?: string;
     query: string;
     request: number;
   }>();
@@ -711,6 +712,7 @@ export function App() {
         ? {
             session: sessionKey(thread),
             turnId: match.turnId,
+            itemId: match.itemId,
             query,
             request: performance.now(),
           }
