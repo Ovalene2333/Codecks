@@ -137,3 +137,37 @@ test("history user messages expose retry-from-here instead of append resend", ()
   assert.match(html, /从此重试/);
   assert.doesNotMatch(html, />重发</);
 });
+
+test("search targets mark the exact message instead of the whole turn", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "idle",
+    updatedAt: Date.now(),
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [
+          { id: "user-1", type: "userMessage", text: "问题" },
+          { id: "agent-1", type: "agentMessage", text: "精确答案" },
+        ],
+      },
+      index: 1,
+      thread,
+      streamed: [],
+      targetItemId: "agent-1",
+      targetRequest: 7,
+    }),
+  );
+
+  assert.match(html, /class="search-item-target" data-item-id="agent-1"/);
+  assert.doesNotMatch(html, /turn-block[^\"]*search-target/);
+  assert.equal(html.split('class="search-item-target"').length - 1, 1);
+});

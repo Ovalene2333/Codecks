@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import {
   Activity,
   BookOpenText,
@@ -287,6 +288,8 @@ export function TurnBlock({
   index,
   thread,
   highlighted,
+  targetItemId,
+  targetRequest,
   streamed,
   onCopy,
   onForkFrom,
@@ -298,6 +301,8 @@ export function TurnBlock({
   index: number;
   thread: ThreadSummary;
   highlighted?: boolean;
+  targetItemId?: string;
+  targetRequest?: number;
   streamed: StreamedAgentMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
@@ -350,9 +355,12 @@ export function TurnBlock({
             ? streamedByItem.get(String(item.id))
             : undefined;
         if (liveText !== undefined) renderedStreamIds.add(String(item.id));
-        return (
+        const itemKey = item.id || `${item.type}-${item.command || itemIndex}`;
+        const targeted = Boolean(
+          targetItemId && String(item.id) === targetItemId,
+        );
+        const content = (
           <TurnItem
-            key={item.id || `${item.type}-${item.command || itemIndex}`}
             item={item}
             streamed={liveText}
             streaming={String(item.id) === streamingItemId}
@@ -366,6 +374,17 @@ export function TurnBlock({
             }
             messageActionsDisabled={messageActionsDisabled}
           />
+        );
+        return targeted ? (
+          <div
+            key={`${itemKey}:search:${targetRequest}`}
+            className="search-item-target"
+            data-item-id={item.id ? String(item.id) : undefined}
+          >
+            {content}
+          </div>
+        ) : (
+          <Fragment key={itemKey}>{content}</Fragment>
         );
       })}
       {active &&

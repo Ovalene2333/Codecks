@@ -15,7 +15,9 @@ export function Timeline({
   pendingUsers,
   origin,
   targetTurnId,
+  targetItemId,
   targetRequest,
+  targetFallbackReady,
   onCopy,
   onForkFrom,
   onOpenOrigin,
@@ -29,7 +31,9 @@ export function Timeline({
   pendingUsers: PendingUserMessage[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
   targetTurnId?: string;
+  targetItemId?: string;
   targetRequest?: number;
+  targetFallbackReady?: boolean;
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
@@ -41,16 +45,30 @@ export function Timeline({
   const followOutput = useRef(true);
   const scrollTop = useRef(0);
   const activeThread = useRef(thread.id);
+  const appliedTargetRequest = useRef<number | undefined>(undefined);
 
   useLayoutEffect(() => {
     const element = timeline.current;
     if (!element) return;
 
-    if (targetTurnId) {
-      const target = Array.from(
-        element.querySelectorAll<HTMLElement>("[data-turn-id]"),
-      ).find((item) => item.dataset.turnId === targetTurnId);
+    if (
+      targetRequest !== undefined &&
+      appliedTargetRequest.current !== targetRequest
+    ) {
+      const itemTarget = targetItemId
+        ? Array.from(
+            element.querySelectorAll<HTMLElement>("[data-item-id]"),
+          ).find((item) => item.dataset.itemId === targetItemId)
+        : undefined;
+      const turnTarget =
+        targetTurnId && (!targetItemId || targetFallbackReady)
+          ? Array.from(
+              element.querySelectorAll<HTMLElement>("[data-turn-id]"),
+            ).find((item) => item.dataset.turnId === targetTurnId)
+          : undefined;
+      const target = itemTarget || turnTarget;
       if (target) {
+        appliedTargetRequest.current = targetRequest;
         activeThread.current = thread.id;
         followOutput.current = false;
         target.scrollIntoView({ block: "center" });
@@ -70,7 +88,15 @@ export function Timeline({
     if (followOutput.current) element.scrollTop = element.scrollHeight;
     else element.scrollTop = scrollTop.current;
     scrollTop.current = element.scrollTop;
-  }, [thread.id, turns, streamed, targetTurnId, targetRequest]);
+  }, [
+    thread.id,
+    turns,
+    streamed,
+    targetTurnId,
+    targetItemId,
+    targetRequest,
+    targetFallbackReady,
+  ]);
 
   const rememberScrollPosition = () => {
     const element = timeline.current;
@@ -117,8 +143,15 @@ export function Timeline({
               index={index + 1}
               thread={thread}
               highlighted={Boolean(
-                targetTurnId && String(turn?.id) === targetTurnId,
+                targetTurnId &&
+                (!targetItemId ||
+                  !(Array.isArray(turn?.items) ? turn.items : []).some(
+                    (item: any) => String(item?.id) === targetItemId,
+                  )) &&
+                String(turn?.id) === targetTurnId,
               )}
+              targetItemId={targetItemId}
+              targetRequest={targetRequest}
               streamed={streamed}
               onCopy={onCopy}
               onForkFrom={onForkFrom}
