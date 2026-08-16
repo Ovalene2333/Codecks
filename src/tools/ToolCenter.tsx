@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Puzzle, Terminal } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { api } from "../api";
-import type { ToolDescriptor } from "../types";
-import { WebTerminalView } from "./WebTerminalView";
-
-const icons = { terminal: Terminal } as const;
+import { toolIcon, toolPath, toolView } from "../../plugin/client-registry";
+import type { ToolDescriptor } from "../../plugin/types";
 
 export function ToolCenter({
   initialCwd,
@@ -18,7 +16,9 @@ export function ToolCenter({
   onClose: () => void;
 }) {
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
-  const [selected, setSelected] = useState("terminal");
+  const [selected, setSelected] = useState(
+    () => toolPath(location.pathname)?.slice(1) || "terminal",
+  );
   const [error, setError] = useState("");
   useEffect(() => {
     void api<{ tools: ToolDescriptor[] }>("/tools")
@@ -26,11 +26,17 @@ export function ToolCenter({
       .catch((loadError) => setError(loadError.message));
   }, []);
   const tool = tools.find((item) => item.id === selected);
+  const View = tool ? toolView(tool.id) : undefined;
 
   return (
     <main className="tool-page">
       <header className="tool-page-header">
-        <button className="icon-btn" type="button" onClick={onClose} title="返回会话">
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={onClose}
+          title="返回会话"
+        >
           <ArrowLeft />
         </button>
         <div>
@@ -41,7 +47,7 @@ export function ToolCenter({
       <div className="tool-page-body">
         <nav className="tool-list" aria-label="可用工具">
           {tools.map((item) => {
-            const Icon = icons[item.icon as keyof typeof icons] || Puzzle;
+            const Icon = toolIcon(item.id);
             return (
               <button
                 key={item.id}
@@ -62,8 +68,8 @@ export function ToolCenter({
         </nav>
         <div className="tool-view">
           {error ? <p className="error-banner">{error}</p> : null}
-          {tool?.id === "terminal" ? (
-            <WebTerminalView
+          {tool && View ? (
+            <View
               tool={tool}
               initialCwd={initialCwd || tool.defaultCwd}
               directories={[tool.defaultCwd, ...directories].filter(

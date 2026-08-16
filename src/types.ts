@@ -221,17 +221,6 @@ export interface ActiveTask {
   detailError?: string;
 }
 
-export interface ToolDescriptor {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  available: boolean;
-  unavailableReason?: string;
-  pagePath?: string;
-  defaultCwd?: string;
-}
-
 export interface ApprovalResolveBody {
   decision?: "accept" | "acceptForSession" | "decline" | "cancel";
   permissions?: unknown;

@@ -93,7 +93,8 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 每个 Turn 会汇总显示 Codex 本轮读取过的文件；运行中的命令、文件变更、MCP 和动态工具调用会随实时事件立即进入时间线，不必等待历史写盘。连续或单次包含多个文件的 `update` 会合并为可展开的文件变更组，读取和检索也会显示为可展开的中文动作，可继续查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
-- 侧栏「工具」使用独立注册架构提供可扩展的小工具；首个 Web Terminal 默认挂载在 `/terminal`，可通过 `https://你的域名/terminal` 直接访问，并进入当前 Session、最近项目或自定义绝对目录的交互式宿主机 Shell。它支持 ANSI、全屏 TUI、窗口尺寸同步和移动端快捷键；Windows `--wsl` 模式进入 WSL，其他模式进入宿主系统默认 Shell。关闭页面或连接会自动结束对应 PTY
+- 侧栏「工具」使用 `plugin/<id>/` 下的独立模块提供可扩展小工具，前端视图与服务端能力分别通过注册表接入。Web Terminal 挂载在 `/terminal`，打开后不会自动创建连接，选好当前 Session、最近项目或自定义绝对目录后点击连接才会启动宿主机 Shell；它支持 ANSI、全屏 TUI、窗口尺寸同步和移动端快捷键，Windows `--wsl` 模式进入 WSL，其他模式进入宿主系统默认 Shell，关闭页面或连接会自动结束对应 PTY
+- Git 管理工具挂载在 `/git`，可选择项目目录查看工作区与暂存区改动、批量暂存或取消暂存、创建提交、切换或新建分支，以及获取、快进拉取和推送远端；非仓库目录可直接初始化。所有文件与分支参数均以独立 Git 参数传递，不拼接 Shell 命令
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
 - 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
@@ -180,7 +181,7 @@ POST /api/agents/claude/approvals/:approvalId
 也可直接调用构建产物，或使用对应 scripts：`npm run lan`、`npm run cf-tunnel`、`npm run share`。
 
 ```bash
-node dist-server/index.js --lan
+node dist-server/server/index.js --lan
 ```
 
 ### 实例

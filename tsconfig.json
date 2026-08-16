@@ -16,6 +16,12 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src"],
+  "include": [
+    "src",
+    "plugin/**/*.client.tsx",
+    "plugin/**/*.types.ts",
+    "plugin/client-registry.tsx",
+    "plugin/types.ts"
+  ],
   "exclude": ["src/**/*.test.ts"]
 }

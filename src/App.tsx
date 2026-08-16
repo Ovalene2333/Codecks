@@ -49,6 +49,7 @@ import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { ToolCenter } from "./tools/ToolCenter";
+import { toolPath } from "../plugin/client-registry";
 import {
   completedThreads,
   readUnseenSessions,
@@ -65,8 +66,7 @@ import {
 } from "./notifications";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
-const isTerminalPath = (pathname: string) =>
-  pathname === "/terminal" || pathname === "/page/terminal";
+const isToolPath = (pathname: string) => Boolean(toolPath(pathname));
 
 export function App() {
   const appearance = useAppearance();
@@ -126,7 +126,7 @@ export function App() {
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [taskScope, setTaskScope] = useState<string | null>();
   const [page, setPage] = useState(() =>
-    isTerminalPath(location.pathname) ? "terminal" : "workspace",
+    isToolPath(location.pathname) ? "tools" : "workspace",
   );
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
@@ -144,14 +144,14 @@ export function App() {
     if (location.pathname === "/page/terminal")
       history.replaceState(null, "", "/terminal");
     const syncPage = () =>
-      setPage(isTerminalPath(location.pathname) ? "terminal" : "workspace");
+      setPage(isToolPath(location.pathname) ? "tools" : "workspace");
     window.addEventListener("popstate", syncPage);
     return () => window.removeEventListener("popstate", syncPage);
   }, []);
 
   const openPage = useCallback((pathname: string) => {
     history.pushState(null, "", pathname);
-    setPage(isTerminalPath(pathname) ? "terminal" : "workspace");
+    setPage(isToolPath(pathname) ? "tools" : "workspace");
   }, []);
 
   const markSessionSeen = useCallback((key: string) => {
@@ -817,7 +817,7 @@ export function App() {
       </div>
     );
 
-  if (page === "terminal")
+  if (page === "tools")
     return (
       <>
         <ToolCenter
@@ -878,7 +878,7 @@ export function App() {
         onProviders={() => setProviderModal(true)}
         onUsage={setUsageOpen}
         onTasks={() => setTaskScope(null)}
-        onTools={() => openPage("/terminal")}
+        onTools={(pathname) => openPage(pathname || "/terminal")}
         onNotifications={enableSystemNotifications}
         onLibrary={setLibrary}
         onQuery={setQuery}

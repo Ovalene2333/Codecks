@@ -8,11 +8,11 @@
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
     "build": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
-    "start": "node dist-server/index.js",
-    "lan": "node dist-server/index.js --lan",
-    "cf-tunnel": "node dist-server/index.js --cf-tunnel",
-    "share": "node dist-server/index.js --share",
-    "test": "node --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts"
+    "start": "node dist-server/server/index.js",
+    "lan": "node dist-server/server/index.js --lan",
+    "cf-tunnel": "node dist-server/server/index.js --cf-tunnel",
+    "share": "node dist-server/server/index.js --share",
+    "test": "node --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.1.76",

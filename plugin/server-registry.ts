@@ -1,15 +1,5 @@
 import type { WebSocket } from "ws";
-
-export interface ToolDescriptor {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  available: boolean;
-  unavailableReason?: string;
-  pagePath?: string;
-  defaultCwd?: string;
-}
+import type { ToolDescriptor } from "./types.js";
 
 export interface DeckTool {
   descriptor(): ToolDescriptor;
@@ -58,3 +48,5 @@ export class ToolRegistry {
     for (const tool of this.tools.values()) tool.close?.();
   }
 }
+
+export type { ToolDescriptor } from "./types.js";
