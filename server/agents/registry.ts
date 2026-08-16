@@ -7,6 +7,7 @@ import type {
   AgentSnapshot,
 } from "./types.js";
 import type { TurnImage } from "../types.js";
+import { activeTask } from "../tasks.js";
 
 export class AgentRegistry extends EventEmitter {
   private adapters = new Map<AgentId, AgentAdapter>();
@@ -160,6 +161,53 @@ export class AgentRegistry extends EventEmitter {
   ) {
     const adapter = this.operation(id, "resolveApproval");
     return adapter.resolveApproval!(approvalId, body);
+  }
+
+  async listTasks() {
+    const tasks = await Promise.all(
+      [...this.adapters.values()].flatMap((adapter) =>
+        adapter.busyThreads().map(async (thread) => {
+          const [detail, terminals] = await Promise.all([
+            adapter.readThread
+              ? adapter
+                  .readThread(thread.providerId, thread.id)
+                  .catch(() => undefined)
+              : undefined,
+            adapter.backgroundTerminals
+              ? adapter
+                  .backgroundTerminals(thread.providerId, thread.id)
+                  .catch((error: any) => ({
+                    data: [],
+                    supported: false,
+                    error: String(error?.message || "任务明细读取失败"),
+                  }))
+              : { data: [], supported: false },
+          ]);
+          return activeTask(
+            thread,
+            detail,
+            terminals.data,
+            terminals.supported,
+            "error" in terminals ? terminals.error : undefined,
+          );
+        }),
+      ),
+    );
+    return tasks.sort((left, right) => right.startedAt - left.startedAt);
+  }
+
+  async terminateBackgroundTerminal(
+    id: AgentId,
+    threadId: string,
+    processId: string,
+  ) {
+    const adapter = this.operation(id, "terminateBackgroundTerminal");
+    const thread = this.thread(id, threadId);
+    return adapter.terminateBackgroundTerminal!(
+      thread.providerId,
+      threadId,
+      processId,
+    );
   }
 
   busyThreads() {

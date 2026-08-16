@@ -177,6 +177,42 @@ export interface ThreadSummary {
   controlMode?: "managed" | "history";
 }
 
+export interface ActiveTaskCommand {
+  itemId?: string;
+  processId?: string;
+  command: string;
+  cwd?: string;
+  osPid?: number | null;
+  cpuPercent?: number | null;
+  rssKb?: number | null;
+  status: "running" | "background";
+}
+
+export interface ActiveTask {
+  id: string;
+  agentId: "codex" | "claude";
+  providerId: string;
+  threadId: string;
+  threadName: string;
+  turnId?: string;
+  cwd: string;
+  model: string;
+  status: "running" | "waiting";
+  startedAt: number;
+  commands: ActiveTaskCommand[];
+  processControl: boolean;
+  detailError?: string;
+}
+
+export interface ToolDescriptor {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  available: boolean;
+  unavailableReason?: string;
+}
+
 export interface ApprovalResolveBody {
   decision?: "accept" | "acceptForSession" | "decline" | "cancel";
   permissions?: unknown;

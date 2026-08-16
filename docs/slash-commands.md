@@ -10,6 +10,7 @@
 | `/permissions [sandbox] [approval]` | 无参数时打开权限选择；审批模式支持 `untrusted`、`on-request`、`auto-review` 和 `never` |
 | `/skills [query]`                   | 读取当前目录可用 Skill，搜索后将 `$skill-name` 插入输入框                              |
 | `/status`                           | 显示模型、推理强度、状态、权限、Fast、上下文、供应商、目录及线程 ID                    |
+| `/ps`                               | 打开任务中心并筛选当前 Session；支持停止 Turn，Runtime 支持时可单独停止后台终端        |
 | `/usage`                            | 打开 Official 账号额度面板                                                             |
 | `/mention [query]`                  | 通过 Runtime 搜索当前工作区文件，将 `@path` 插入输入框                                 |
 | `/fast [on\|off]`                   | 开关当前会话的 Fast service tier；省略参数时切换当前状态                               |
@@ -29,10 +30,9 @@
 1. `/new`、`/resume`、`/fork`：创建、恢复和分支会话。
 2. `/rename`：修改当前会话名称。
 3. `/copy`：复制最近一条助手回复。
-4. `/ps`：查看正在运行的任务和子进程。
-5. `/plugins`：查看插件并进入安装或连接流程。
-6. `/approve`：集中处理待审批请求。
-7. `/archive`、`/delete`：归档或删除当前会话，需二次确认。
+4. `/plugins`：查看插件并进入安装或连接流程。
+5. `/approve`：集中处理待审批请求。
+6. `/archive`、`/delete`：归档或删除当前会话，需二次确认。
 
 ## 可后续评估
 

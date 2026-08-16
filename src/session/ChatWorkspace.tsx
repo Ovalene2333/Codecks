@@ -63,6 +63,7 @@ export function ChatWorkspace({
   onSelectThread,
   onToast,
   onUsage,
+  onTasks,
   onAppearance,
   onOpenOrigin,
 }: {
@@ -80,6 +81,7 @@ export function ChatWorkspace({
   onSelectThread: (providerId: string, threadId: string) => void;
   onToast: (message: string) => void;
   onUsage: () => void;
+  onTasks: () => void;
   onAppearance: () => void;
   onOpenOrigin?: () => void;
 }) {
@@ -148,7 +150,7 @@ export function ChatWorkspace({
   const runCommand = async (command: ComposerCommand) => {
     if (
       thread.agentId === "claude" &&
-      !["status", "usage", "model", "permissions"].includes(command.kind)
+      !["status", "usage", "ps", "model", "permissions"].includes(command.kind)
     )
       throw new Error(`${agentName} 暂不支持这个 Codecks 命令`);
     if (command.kind === "compact" && !capabilities.sessionSettings)
@@ -193,6 +195,10 @@ export function ChatWorkspace({
     }
     if (command.kind === "usage") {
       onUsage();
+      return;
+    }
+    if (command.kind === "ps") {
+      onTasks();
       return;
     }
     if (command.kind === "model") {
@@ -482,6 +488,7 @@ export function ChatWorkspace({
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
         onAppearance={onAppearance}
+        onTasks={onTasks}
       />
       <RenderErrorBoundary
         resetKey={thread.id}

@@ -115,6 +115,7 @@ export class CodexAdapter extends EventEmitter {
   private rolloutUsageLoaded = false;
   private historyStatus: AgentHistoryStatus;
   private historyError?: string;
+  private backgroundTerminalApi?: boolean;
 
   constructor(
     private store: ProviderStore,
@@ -1275,6 +1276,57 @@ export class CodexAdapter extends EventEmitter {
     });
   }
 
+  async backgroundTerminals(providerId: string, threadId: string) {
+    if (this.backgroundTerminalApi === false)
+      return { data: [], supported: false };
+    try {
+      const result = await (
+        await this.ensure(providerId)
+      ).request(
+        "thread/backgroundTerminals/list",
+        { threadId, limit: 100 },
+        10_000,
+      );
+      this.backgroundTerminalApi = true;
+      const data = (result.data || []).map((item: any) => ({
+        itemId: item.itemId ? String(item.itemId) : undefined,
+        processId: item.processId ? String(item.processId) : undefined,
+        command: String(item.command || "后台终端"),
+        cwd: item.cwd ? String(item.cwd) : undefined,
+        osPid: typeof item.osPid === "number" ? item.osPid : null,
+        cpuPercent:
+          typeof item.cpuPercent === "number" ? item.cpuPercent : null,
+        rssKb: typeof item.rssKb === "number" ? item.rssKb : null,
+      }));
+      return { data, supported: true };
+    } catch (error: any) {
+      const message = String(error?.message || error);
+      if (
+        /unknown method|method not found|unsupported|invalid request/i.test(
+          message,
+        )
+      ) {
+        this.backgroundTerminalApi = false;
+        return { data: [], supported: false };
+      }
+      return { data: [], supported: true, error: message };
+    }
+  }
+
+  async terminateBackgroundTerminal(
+    providerId: string,
+    threadId: string,
+    processId: string,
+  ) {
+    if (this.backgroundTerminalApi === false)
+      throw new Error("当前 Codex Runtime 不支持单独停止后台终端");
+    const result = await (
+      await this.ensure(providerId)
+    ).request("thread/backgroundTerminals/terminate", { threadId, processId });
+    this.backgroundTerminalApi = true;
+    return result;
+  }
+
   async resolveApproval(
     approvalId: string,
     body:
@@ -1504,6 +1556,7 @@ export class CodexAdapter extends EventEmitter {
         this.rememberRollout(existing.id);
         existing.status = "running";
         existing.activeTurnId = params.turn?.id;
+        existing.updatedAt = Date.now();
         existing.lastError = undefined;
         existing.errorCode = undefined;
       }

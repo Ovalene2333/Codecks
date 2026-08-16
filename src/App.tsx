@@ -45,6 +45,8 @@ import { appendCodexEvent } from "./session/streaming";
 import { agentName, approvalPath, capabilitiesFor, threadPath } from "./agents";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
+import { TaskCenter } from "./tasks/TaskCenter";
+import { ToolCenter } from "./tools/ToolCenter";
 import {
   completedThreads,
   readUnseenSessions,
@@ -109,6 +111,8 @@ export function App() {
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
   const [phoneSettings, setPhoneSettings] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [taskScope, setTaskScope] = useState<string | null>();
+  const [toolsOpen, setToolsOpen] = useState(false);
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
 
@@ -754,6 +758,8 @@ export function App() {
         onRefresh={refresh}
         onProviders={() => setProviderModal(true)}
         onUsage={() => setUsageOpen(true)}
+        onTasks={() => setTaskScope(null)}
+        onTools={() => setToolsOpen(true)}
         onNotifications={enableSystemNotifications}
         onLibrary={setLibrary}
         onQuery={setQuery}
@@ -869,6 +875,7 @@ export function App() {
               }}
               onToast={pushToast}
               onUsage={() => setUsageOpen(true)}
+              onTasks={() => setTaskScope(current.id)}
               onAppearance={() => setAppearanceOpen(true)}
               onOpenOrigin={() => openOrigin(current)}
             />
@@ -1156,6 +1163,44 @@ export function App() {
           currentSessionKey={current ? sessionKey(current) : undefined}
           onRefreshLimits={refreshOfficialUsage}
           onClose={() => setUsageOpen(false)}
+        />
+      )}
+      {taskScope !== undefined && (
+        <TaskCenter
+          scopeThreadId={taskScope || undefined}
+          statusVersion={snapshot.threads
+            .filter((thread) => ["running", "waiting"].includes(thread.status))
+            .map(
+              (thread) =>
+                `${thread.agentId || "codex"}:${thread.id}:${thread.status}:${thread.activeTurnId || ""}`,
+            )
+            .join("|")}
+          onOpenThread={(agentId, threadId) => {
+            const thread = allThreads.find(
+              (item) =>
+                (item.agentId || "codex") === agentId && item.id === threadId,
+            );
+            if (thread) openSession(thread);
+            setTaskScope(undefined);
+          }}
+          onToast={pushToast}
+          onClose={() => setTaskScope(undefined)}
+        />
+      )}
+      {toolsOpen && (
+        <ToolCenter
+          initialCwd={current?.cwd}
+          directories={[
+            ...(current?.cwd ? [current.cwd] : []),
+            ...(snapshot.preferences?.recentDirs || []),
+            ...(snapshot.projects || []).map((project) => project.cwd),
+            ...allThreads.map((thread) => thread.cwd),
+          ].filter(
+            (value, index, values) =>
+              Boolean(value) && values.indexOf(value) === index,
+          )}
+          onToast={pushToast}
+          onClose={() => setToolsOpen(false)}
         />
       )}
       {appearanceOpen && (

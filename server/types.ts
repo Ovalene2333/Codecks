@@ -174,6 +174,36 @@ export interface ThreadSummary {
   controlMode?: "managed" | "history";
 }
 
+export interface BackgroundTerminal {
+  itemId?: string;
+  processId?: string;
+  command: string;
+  cwd?: string;
+  osPid?: number | null;
+  cpuPercent?: number | null;
+  rssKb?: number | null;
+}
+
+export interface ActiveTaskCommand extends BackgroundTerminal {
+  status: "running" | "background";
+}
+
+export interface ActiveTask {
+  id: string;
+  agentId: "codex" | "claude";
+  providerId: string;
+  threadId: string;
+  threadName: string;
+  turnId?: string;
+  cwd: string;
+  model: string;
+  status: "running" | "waiting";
+  startedAt: number;
+  commands: ActiveTaskCommand[];
+  processControl: boolean;
+  detailError?: string;
+}
+
 export interface RuntimeStatus {
   online: boolean;
   starting: boolean;
