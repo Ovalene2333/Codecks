@@ -238,6 +238,40 @@ test("a real Codex thread has one identity independent of provider selection", (
   assert.equal(manager.listThreads()[0].providerId, "windows");
 });
 
+test("saved workspace settings override the defaults returned after a runtime restart", async () => {
+  const settings = {
+    get: () => ({
+      model: "gpt-selected",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+    }),
+  };
+  const manager = new CodexManager(
+    { listPublic: () => [] } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    false,
+    settings as any,
+  ) as any;
+  manager.upsertThread(
+    { id: "local", model: "provider-default" },
+    { id: "thread-1", cwd: "/work", preview: "saved", model: "default" },
+  );
+
+  const restored = manager.listThreads()[0];
+  assert.equal(restored.model, "gpt-selected");
+  assert.equal(restored.reasoningEffort, "high");
+  assert.equal(restored.sandbox, "danger-full-access");
+  assert.equal(restored.approvalPolicy, "never");
+  assert.equal(restored.approvalsReviewer, "user");
+});
+
 test("applyProviderConfig refuses while a session is running", async () => {
   const manager = new CodexManager(
     { listPublic: () => [] } as any,
@@ -1532,10 +1566,110 @@ test("compact issues thread/compact/start", async () => {
       return { ok: true };
     },
   });
+  manager.loadedThreads.add("t");
   manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
   await manager.compactThread("provider", "t");
   assert.deepEqual(calls, ["thread/compact/start"]);
   assert.equal(manager.listThreads()[0].compacting, true);
+});
+
+test("compact resumes a history thread before starting", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      return {};
+    },
+  });
+  manager.upsertThread(provider, { id: "history", cwd: "/tmp" });
+
+  await manager.compactThread("provider", "history");
+
+  assert.deepEqual(calls, ["thread/resume", "thread/compact/start"]);
+  assert.equal(manager.loadedThreads.has("history"), true);
+  assert.equal(manager.listThreads()[0].compacting, true);
+});
+
+test("compact clears its running marker when the request fails", async () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  manager.ensure = async () => ({
+    request: async () => {
+      throw new Error("compact failed");
+    },
+  });
+  manager.loadedThreads.add("t");
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+
+  await assert.rejects(
+    manager.compactThread("provider", "t"),
+    /compact failed/,
+  );
+
+  assert.equal(manager.listThreads()[0].compacting, false);
+});
+
+test("contextCompaction item completion clears the compacting marker", () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  manager.upsertThread(provider, { id: "t", cwd: "/tmp" });
+
+  manager.onNotification({
+    method: "item/started",
+    params: {
+      threadId: "t",
+      item: { id: "compact", type: "contextCompaction" },
+    },
+  });
+  assert.equal(manager.listThreads()[0].compacting, true);
+
+  manager.onNotification({
+    method: "item/completed",
+    params: {
+      threadId: "t",
+      item: { id: "compact", type: "contextCompaction" },
+    },
+  });
+  assert.equal(manager.listThreads()[0].compacting, false);
+});
+
+test("cached compacting state is cleared when the adapter starts", () => {
+  const provider = { id: "provider", kind: "local-profile" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [
+      {
+        agentId: "codex",
+        id: "stale",
+        providerId: "provider",
+        name: "stale",
+        preview: "stale",
+        cwd: "/tmp",
+        model: "m",
+        status: "idle",
+        updatedAt: 1,
+        compacting: true,
+      },
+    ],
+  ) as any;
+
+  assert.equal(manager.listThreads()[0].compacting, false);
 });
 
 test("non-chatgpt official usage yields null rateLimits not 0%", async () => {

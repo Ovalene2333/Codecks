@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, KeyRound, Menu, Settings } from "lucide-react";
+import { ArrowLeft, KeyRound, Menu, SunMoon } from "lucide-react";
 import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
 import { useAppearance } from "./appearance";
 import type {
@@ -804,7 +804,7 @@ export function App() {
             title="外观设置"
             aria-label="外观设置"
           >
-            <Settings />
+            <SunMoon />
           </button>
         )}
         {!sidebar && !current && (

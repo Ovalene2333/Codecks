@@ -19,6 +19,15 @@ function validThread(value: unknown): value is ThreadSummary {
   );
 }
 
+function restoredThread(thread: ThreadSummary): ThreadSummary {
+  return { ...thread, compacting: false };
+}
+
+function cachedThread(thread: ThreadSummary): ThreadSummary {
+  const { compacting: _compacting, ...cached } = thread;
+  return cached as ThreadSummary;
+}
+
 export class ThreadSummaryCache {
   private file: string;
   private pending?: CachedThreadSummaries;
@@ -37,10 +46,10 @@ export class ThreadSummaryCache {
         version: 1,
         savedAt: Number(parsed.savedAt) || 0,
         threads: Array.isArray(parsed.threads)
-          ? parsed.threads.filter(validThread)
+          ? parsed.threads.filter(validThread).map(restoredThread)
           : [],
         archivedThreads: Array.isArray(parsed.archivedThreads)
-          ? parsed.archivedThreads.filter(validThread)
+          ? parsed.archivedThreads.filter(validThread).map(restoredThread)
           : [],
       };
     } catch {
@@ -52,8 +61,8 @@ export class ThreadSummaryCache {
     this.pending = {
       version: 1,
       savedAt: Date.now(),
-      threads,
-      archivedThreads,
+      threads: threads.map(cachedThread),
+      archivedThreads: archivedThreads.map(cachedThread),
     };
     if (this.timer) return;
     this.timer = setTimeout(() => void this.flush(), 150);

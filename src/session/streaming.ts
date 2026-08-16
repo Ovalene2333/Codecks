@@ -118,6 +118,21 @@ export function streamsCoveredByHistory(
     covered.add(message.itemId);
   }
 
+  // Claude's live API message id and its persisted history uuid can differ.
+  // Once history has a sufficiently specific prefix, keep the live item at
+  // that historical position instead of appending it after later tool calls.
+  for (const message of messages) {
+    if (covered.has(message.itemId) || message.text.length < 24) continue;
+    const index = agentItems.findIndex(
+      (item, itemIndex) =>
+        availableHistory.has(itemIndex) &&
+        displayText(item?.text).startsWith(message.text),
+    );
+    if (index < 0) continue;
+    availableHistory.delete(index);
+    covered.add(message.itemId);
+  }
+
   return covered;
 }
 

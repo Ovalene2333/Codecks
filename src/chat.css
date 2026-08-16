@@ -29,6 +29,9 @@
   align-items: flex-start;
   gap: 8px;
 }
+.chat-title-row .agent-badge {
+  margin-top: 1px;
+}
 .chat-title h2 {
   margin: 0;
   min-width: 0;
@@ -653,14 +656,56 @@
   padding-bottom: max(16px, env(safe-area-inset-bottom));
   position: relative;
 }
+.composer-session-controls {
+  margin: 0 0 7px;
+  min-width: 0;
+}
+.composer-session-controls .session-toolbar {
+  min-height: 32px;
+  gap: 6px;
+}
+.composer-session-controls .toolbar-fields {
+  gap: 6px;
+  scrollbar-width: none;
+}
+.composer-session-controls .toolbar-fields::-webkit-scrollbar {
+  display: none;
+}
+.composer-session-controls .toolbar-select {
+  flex: none;
+}
+.composer-session-controls .toolbar-select select,
+.composer-session-controls .toolbar-select input,
+.composer-session-controls .compact-btn {
+  height: 32px;
+  min-height: 32px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.composer-session-controls .toolbar-select select,
+.composer-session-controls .toolbar-select input {
+  max-width: 148px;
+  padding: 0 8px;
+  background: var(--surface-muted);
+}
+.composer-session-controls .compact-btn {
+  flex: none;
+  padding: 0 10px;
+}
 .composer-box {
   align-items: flex-end;
-  padding: 8px;
+  padding: 6px;
+  border-radius: 8px;
 }
 .composer textarea {
   font-size: 14px;
   min-height: 40px;
-  padding: 10px 8px;
+  padding: 10px 9px;
+  line-height: 20px;
+}
+.composer textarea:focus-visible {
+  outline: none;
+  outline-offset: 0;
 }
 .composer-actions {
   display: flex;
@@ -669,9 +714,9 @@
   flex: none;
 }
 .send {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
 }
 .composer.compacting textarea {
   color: var(--text-dim);
@@ -684,8 +729,8 @@
   box-shadow: 0 0 0 3px rgb(201 196 184 / 14%);
 }
 .composer-box .attach {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   flex: none;
   color: var(--text-dim);
 }
@@ -1021,25 +1066,13 @@
   .timeline .file-change-group > .file-change-group-content {
     padding-left: 7px;
   }
-  .chat-header-row2 {
-    display: none;
-  }
   .chat-header-row1 {
     min-height: 48px;
     gap: 4px;
     padding: 0 6px;
   }
-  .chat-header-actions .provider-switch,
-  .chat-header-actions .context-bar,
-  .chat-header-actions > .compact-btn:not(.mobile-header-compact) {
+  .chat-header-actions .provider-switch {
     display: none;
-  }
-  .mobile-header-compact {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 36px;
-    padding: 0 8px;
   }
   .chat-header-actions {
     gap: 2px;
@@ -1104,6 +1137,17 @@
     height: 40px;
     min-width: 40px;
   }
+  .composer-session-controls {
+    margin-bottom: 8px;
+  }
+  .composer-session-controls .toolbar-fields {
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .composer-session-controls .toolbar-select select,
+  .composer-session-controls .toolbar-select input {
+    max-width: 136px;
+  }
   .phone-session-settings .session-toolbar {
     display: grid;
     align-items: stretch;
@@ -1129,23 +1173,9 @@
     min-width: 0;
     min-height: 44px;
   }
-  .phone-session-settings .context-bar {
-    display: grid;
-    grid-template-columns: minmax(60px, 1fr) auto auto;
-    gap: 10px;
-    width: 100%;
-    margin-left: 0;
-  }
-  .phone-session-settings .context-track {
-    width: auto;
-  }
   .phone-session-settings .compact-btn {
     min-height: 44px;
     padding: 0 14px;
-  }
-  .chat-header-actions .context-track,
-  .chat-header-actions .context-bar > span {
-    display: none;
   }
   .recent-create {
     min-height: 48px;

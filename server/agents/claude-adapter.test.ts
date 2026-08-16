@@ -113,13 +113,38 @@ test("Claude adapter creates, streams, approves, and completes a native session"
     };
     yield {
       type: "stream_event",
-      uuid: "message-1",
+      uuid: "stream-wrapper-start",
+      session_id: params.options.extraArgs["session-id"],
+      event: {
+        type: "message_start",
+        message: { id: "assistant-response-1" },
+      },
+    };
+    yield {
+      type: "stream_event",
+      uuid: "stream-wrapper-1",
       session_id: params.options.extraArgs["session-id"],
       event: {
         type: "content_block_delta",
         index: 0,
         delta: { type: "text_delta", text: "Working" },
       },
+    };
+    yield {
+      type: "stream_event",
+      uuid: "stream-wrapper-2",
+      session_id: params.options.extraArgs["session-id"],
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: " together" },
+      },
+    };
+    yield {
+      type: "stream_event",
+      uuid: "stream-wrapper-stop",
+      session_id: params.options.extraArgs["session-id"],
+      event: { type: "content_block_stop", index: 0 },
     };
     permissionResult = await params.options.canUseTool(
       "Bash",
@@ -197,6 +222,21 @@ test("Claude adapter creates, streams, approves, and completes a native session"
         event.data.agentId === "claude" &&
         event.data.method === "item/agentMessage/delta",
     ),
+  );
+  const messageEvents = events
+    .filter(
+      (event) =>
+        event.type === "agent.event" &&
+        event.data.method === "item/agentMessage/delta",
+    )
+    .map((event) => event.data);
+  assert.deepEqual(
+    messageEvents.map((event) => event.params.itemId),
+    ["assistant-response-1:0", "assistant-response-1:0"],
+  );
+  assert.deepEqual(
+    messageEvents.map((event) => event.params.delta),
+    ["Working", " together"],
   );
 });
 

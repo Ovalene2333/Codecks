@@ -10,6 +10,39 @@
 
 [Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code adapter 后端。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
 
+会话列表和聊天标题会分别标记 Codex 与 Claude 任务；审批提示也会显示实际发起请求的 Agent。手动压缩上下文时，会话会显示“正在运行”，历史会话会先恢复后再执行压缩；压缩完成、失败、超时或服务重启后都会自动解除运行标记。
+
+## 阅读导引
+
+- **先了解项目**
+  - [界面预览](#界面预览)
+  - [特性](#特性)
+    - [真实会话，而不是复制品](#真实会话而不是复制品)
+    - [远程值守](#远程值守)
+    - [多家中转同时在线，把额度用完](#多家中转同时在线把额度用完)
+- **开始使用**
+  - [快速开始](#快速开始)
+  - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
+    - 不支持 Claude 官方登录；仅支持带 relay 凭据的 CC Switch 配置
+- **部署与日常使用**
+  - [远程访问](#远程访问)
+    - [访问实例](#实例)
+    - [兼容入口与注意](#兼容入口与注意)
+  - [日常工作流](#日常工作流)
+- **配置与安全**
+  - [配置](#配置)
+    - [CC Switch](#cc-switch)
+  - [安全](#安全)
+- **开发与支持**
+  - [开发](#开发)
+  - [故障排除](#故障排除)
+    - [Windows 启动错误](#windows-上-spawn-einval-或-connect-econnrefused)
+    - [现有 Session 列表为空](#现有-session-列表为空)
+    - [Windows 与 WSL](#windows-与-wsl)
+    - [自定义供应商与 OpenAI Official](#自定义供应商与-openai-official)
+    - [为什么显示“待应用”](#为什么显示待应用)
+  - [许可证](#许可证) · [更多资源](#更多)
+
 ## 界面预览
 
 <img src="docs/screenshots/desktop-session.png" alt="Codecks 控制台：按项目分组会话，每个 Session 自选供应商" width="100%">

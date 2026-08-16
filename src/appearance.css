@@ -204,7 +204,7 @@ aside {
 .composer-box {
   border-color: var(--line);
   background: var(--surface);
-  box-shadow: 0 14px 34px color-mix(in srgb, var(--shadow) 55%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow) 40%, transparent);
 }
 
 .composer textarea,
@@ -334,6 +334,26 @@ aside {
 .mcp-list details,
 .provider-row {
   background: var(--surface-raised);
+}
+
+.online {
+  border-color: var(--success-border, #24563c);
+  background: var(--success-bg, #10261a);
+  color: var(--ok, #56db94);
+}
+
+.offline-dot {
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+
+.provider-group-label {
+  color: var(--text-faint, #6d7b8d);
+}
+
+.provider-group-label::after {
+  background: var(--line);
 }
 
 .permission-list,

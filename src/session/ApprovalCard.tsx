@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, FolderOpen, ShieldAlert, Terminal } from "lucide-react";
 import type { Approval, ApprovalResolveBody, FileChange } from "../types";
+import { agentName } from "../agents";
 import { displayText } from "../format";
 import { FileDiff } from "./FileDiff";
 
@@ -31,11 +32,13 @@ export function ApprovalCard({
   const permissionItems = permissionItemsFrom(
     approval.permissions || params.permissions,
   );
+  const actor = agentName(undefined, approval);
 
   if (kind === "permission")
     return (
       <PermissionApproval
         approval={approval}
+        actor={actor}
         items={permissionItems}
         onResolve={onResolve}
         disabled={disabled}
@@ -45,6 +48,7 @@ export function ApprovalCard({
     return (
       <QuestionApproval
         approval={approval}
+        actor={actor}
         questions={questions}
         onResolve={onResolve}
         disabled={disabled}
@@ -54,10 +58,10 @@ export function ApprovalCard({
   const decisions = defaultDecisions(approval);
   const title =
     kind === "file"
-      ? "Codex 请求修改文件"
+      ? `${actor} 请求修改文件`
       : approval.networkApproval
-        ? "Codex 请求网络访问"
-        : "Codex 请求执行命令";
+        ? `${actor} 请求网络访问`
+        : `${actor} 请求执行命令`;
   const command =
     approval.command ||
     (typeof params.command === "string"
@@ -75,7 +79,7 @@ export function ApprovalCard({
         </span>
         <div>
           <b>{title}</b>
-          <small>{reason || "请确认是否允许 Codex 继续执行"}</small>
+          <small>{reason || `请确认是否允许 ${actor} 继续执行`}</small>
         </div>
       </header>
       {cwd ? (
@@ -189,11 +193,13 @@ type PermissionItem = { key: string; name: string; granted?: boolean };
 
 function PermissionApproval({
   approval,
+  actor,
   items,
   onResolve,
   disabled,
 }: {
   approval: Approval;
+  actor: string;
   items: PermissionItem[];
   onResolve: (id: string, body: ApprovalResolveBody) => void;
   disabled: boolean;
@@ -209,7 +215,7 @@ function PermissionApproval({
           <ShieldAlert />
         </span>
         <div>
-          <b>Codex 请求权限</b>
+          <b>{actor} 请求权限</b>
           <small>选择本回合或本会话授予的权限</small>
         </div>
       </header>
@@ -263,11 +269,13 @@ function PermissionApproval({
 
 function QuestionApproval({
   approval,
+  actor,
   questions,
   onResolve,
   disabled,
 }: {
   approval: Approval;
+  actor: string;
   questions: any[];
   onResolve: (id: string, body: ApprovalResolveBody) => void;
   disabled: boolean;
@@ -299,7 +307,7 @@ function QuestionApproval({
           <ShieldAlert />
         </span>
         <div>
-          <b>Codex 需要你回答</b>
+          <b>{actor} 需要你回答</b>
           <small>请完成下列问题后继续</small>
         </div>
       </header>

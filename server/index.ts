@@ -30,6 +30,7 @@ import {
 } from "./runtime-lock.js";
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
+import { ThreadSettingsStore } from "./thread-settings.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -99,15 +100,18 @@ if (remote && cli.noToken)
 const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
 const threadSummaries = new ThreadSummaryCache(dataDir);
+const threadSettings = new ThreadSettingsStore(dataDir);
 const [, , cachedThreads] = await Promise.all([
   store.load(),
   projects.load(),
   threadSummaries.load(),
+  threadSettings.load(),
 ]);
 const initialThreads = [
   ...cachedThreads.threads,
   ...cachedThreads.archivedThreads,
 ];
+await threadSettings.seedFromThreads(initialThreads);
 const manager = new CodexAdapter(
   store,
   dataDir,
@@ -117,6 +121,7 @@ const manager = new CodexAdapter(
   projects,
   initialThreads,
   cachedThreads.savedAt === 0,
+  threadSettings,
 );
 const claude = new ClaudeAdapter({
   claudeHome:
@@ -127,6 +132,7 @@ const claude = new ClaudeAdapter({
   ccSwitchPath: store.ccSwitchPath,
   historyIndexFile: path.join(dataDir, "claude-history-index.json"),
   initialThreads,
+  threadSettings,
 });
 const agents = new AgentRegistry([manager, claude]);
 const fullSnapshot = () => ({
@@ -295,18 +301,20 @@ app.patch(
       })
       .parse(req.body);
     if (input.name) await agents.renameThread(id, threadId, input.name);
-    if (input.settings)
+    if (input.settings) {
       await agents.updateThreadSettings(id, threadId, input.settings);
+      await threadSettings.update(id, threadId, input.settings);
+    }
     return fullSnapshot();
   }),
 );
 app.delete(
   "/api/agents/:agentId/threads/:threadId",
   route(async (req) => {
-    await agents.deleteThread(
-      agentId(req.params.agentId),
-      param(req.params.threadId),
-    );
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    await agents.deleteThread(id, threadId);
+    await threadSettings.remove(id, threadId);
     return fullSnapshot();
   }),
 );
@@ -673,8 +681,10 @@ app.patch(
       .parse(req.body);
     if (input.name)
       await manager.renameThread(providerId, threadId, input.name);
-    if (input.settings)
+    if (input.settings) {
       await manager.updateThreadSettings(providerId, threadId, input.settings);
+      await threadSettings.update("codex", threadId, input.settings);
+    }
     return fullSnapshot();
   }),
 );
@@ -886,10 +896,9 @@ app.post(
 app.delete(
   "/api/threads/:providerId/:threadId",
   route(async (req) => {
-    await manager.deleteThread(
-      param(req.params.providerId),
-      param(req.params.threadId),
-    );
+    const threadId = param(req.params.threadId);
+    await manager.deleteThread(param(req.params.providerId), threadId);
+    await threadSettings.remove("codex", threadId);
     return fullSnapshot();
   }),
 );
