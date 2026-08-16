@@ -4,6 +4,7 @@ import { reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 
 export function ModelPicker({
+  agentId = "codex",
   providerId,
   model,
   reasoningEffort,
@@ -11,6 +12,7 @@ export function ModelPicker({
   compact,
   disabled,
 }: {
+  agentId?: "codex" | "claude";
   providerId: string;
   model: string;
   reasoningEffort: string;
@@ -29,7 +31,11 @@ export function ModelPicker({
     if (!providerId) return;
     let cancelled = false;
     setLoading(true);
-    api<ModelInfo[]>(`/providers/${providerId}/models`)
+    const path =
+      agentId === "claude"
+        ? `/agents/claude/models?providerId=${encodeURIComponent(providerId)}`
+        : `/providers/${providerId}/models`;
+    api<ModelInfo[]>(path)
       .then((list) => {
         if (cancelled) return;
         const next = Array.isArray(list) ? list : [];
@@ -57,7 +63,7 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [providerId]);
+  }, [agentId, providerId]);
 
   const efforts = selected?.supportedReasoningEfforts || [];
   return (
@@ -83,7 +89,8 @@ export function ModelPicker({
             title="模型"
             onChange={(e) => {
               const next = models.find(
-                (item) => item.model === e.target.value || item.id === e.target.value,
+                (item) =>
+                  item.model === e.target.value || item.id === e.target.value,
               );
               onChange({
                 model: e.target.value,

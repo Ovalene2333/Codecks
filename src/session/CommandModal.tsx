@@ -8,10 +8,12 @@ import {
   settingsForSandboxMode,
 } from "../codexLabels";
 import { ModelPicker } from "../ModelPicker";
+import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 import type {
   ApprovalMode,
   ApprovalPolicy,
   ApprovalsReviewer,
+  ClaudePermissionMode,
   SandboxMode,
   ThreadSummary,
 } from "../types";
@@ -49,6 +51,7 @@ export function CommandModal({
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     approvalsReviewer?: ApprovalsReviewer;
+    permissionMode?: ClaudePermissionMode;
   }) => Promise<boolean>;
   onInsert: (text: string) => void;
   onClose: () => void;
@@ -104,6 +107,7 @@ function ModelCommand({ thread, locked, onSettings, onClose }: any) {
   return (
     <div className="form command-form">
       <ModelPicker
+        agentId={thread.agentId || "codex"}
         providerId={thread.providerId}
         model={next.model}
         reasoningEffort={next.reasoningEffort}
@@ -126,6 +130,15 @@ function ModelCommand({ thread, locked, onSettings, onClose }: any) {
 }
 
 function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
+  if (thread.agentId === "claude")
+    return (
+      <ClaudePermissionsCommand
+        thread={thread}
+        locked={locked}
+        onSettings={onSettings}
+        onClose={onClose}
+      />
+    );
   const [sandbox, setSandbox] = useState<SandboxMode>(
     thread.sandbox || "workspace-write",
   );
@@ -189,6 +202,48 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
             })
           )
             onClose();
+        }}
+      >
+        应用
+      </button>
+    </div>
+  );
+}
+
+function ClaudePermissionsCommand({
+  thread,
+  locked,
+  onSettings,
+  onClose,
+}: any) {
+  const [permissionMode, setPermissionMode] = useState<ClaudePermissionMode>(
+    thread.permissionMode || "default",
+  );
+  return (
+    <div className="form command-form">
+      <label>
+        Claude 权限
+        <select
+          value={permissionMode}
+          disabled={locked}
+          onChange={(event) =>
+            setPermissionMode(event.target.value as ClaudePermissionMode)
+          }
+        >
+          {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {locked && <p className="command-help">任务结束后才能修改权限。</p>}
+      <button
+        type="button"
+        className="primary"
+        disabled={locked}
+        onClick={async () => {
+          if (await onSettings({ permissionMode })) onClose();
         }}
       >
         应用

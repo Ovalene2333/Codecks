@@ -8,6 +8,7 @@ import type {
   AgentDescriptor,
   AgentProfile,
   ApprovalMode,
+  ClaudePermissionMode,
   Personality,
   ProjectRecord,
   Provider,
@@ -25,6 +26,7 @@ import {
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import { defaultAgentId } from "../agents";
+import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 
 export function NewThreadModal({
   providers,
@@ -94,6 +96,7 @@ export function NewThreadModal({
         setForm((current) => ({
           ...current,
           providerId: preferred?.id || firstEnabled?.id || "",
+          model: "default",
         }));
       })
       .catch((err: any) => {
@@ -112,7 +115,12 @@ export function NewThreadModal({
     setError("");
     if (next === "codex")
       setForm((current) => ({ ...current, providerId: defaults.providerId }));
-    else setForm((current) => ({ ...current, providerId: "" }));
+    else
+      setForm((current) => ({
+        ...current,
+        providerId: "",
+        model: "default",
+      }));
   };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,14 +134,13 @@ export function NewThreadModal({
         providerId: form.providerId || undefined,
         ...(agentId === "claude"
           ? {
-              model: undefined,
               reasoningEffort: undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
               approvalsReviewer: undefined,
             }
-          : {}),
+          : { permissionMode: undefined }),
         personality: form.personality || undefined,
       };
       const thread = await post(`/agents/${agentId}/threads`, payload);
@@ -216,50 +223,79 @@ export function NewThreadModal({
             />
           </>
         ) : (
-          <label>
-            Claude 配置档
-            <select
-              value={form.providerId}
-              disabled={profilesLoading || profiles.length === 0}
-              onChange={(event) => {
-                const profile = profiles.find(
-                  (item) => item.id === event.target.value,
-                );
-                if (profile?.official) {
-                  event.currentTarget.value = form.providerId;
-                  window.alert(
-                    "you can't choose it because the world IS NOT Anthropic's world",
+          <>
+            <label>
+              Claude 配置档
+              <select
+                value={form.providerId}
+                disabled={profilesLoading || profiles.length === 0}
+                onChange={(event) => {
+                  const profile = profiles.find(
+                    (item) => item.id === event.target.value,
                   );
-                  return;
-                }
-                if (profile?.enabled === false) {
-                  setError("此 Claude 中转配置缺少 API 地址或认证凭据");
-                  return;
-                }
-                setError("");
-                setForm({ ...form, providerId: event.target.value });
-              }}
-            >
-              {profilesLoading ? (
-                <option value="">正在读取…</option>
-              ) : profiles.length ? (
-                <>
-                  <option value="" disabled>
-                    请选择 Claude 中转配置
-                  </option>
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                      {profile.current ? "（当前）" : ""}
-                      {profile.official ? "（不可用）" : ""}
+                  if (profile?.official) {
+                    event.currentTarget.value = form.providerId;
+                    window.alert(
+                      "you can't choose it because the world IS NOT Anthropic's world",
+                    );
+                    return;
+                  }
+                  if (profile?.enabled === false) {
+                    setError("此 Claude 中转配置缺少 API 地址或认证凭据");
+                    return;
+                  }
+                  setError("");
+                  setForm({ ...form, providerId: event.target.value });
+                }}
+              >
+                {profilesLoading ? (
+                  <option value="">正在读取…</option>
+                ) : profiles.length ? (
+                  <>
+                    <option value="" disabled>
+                      请选择 Claude 中转配置
                     </option>
-                  ))}
-                </>
-              ) : (
-                <option value="">未找到 CC Switch Claude 配置</option>
-              )}
-            </select>
-          </label>
+                    {profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                        {profile.current ? "（当前）" : ""}
+                        {profile.official ? "（不可用）" : ""}
+                      </option>
+                    ))}
+                  </>
+                ) : (
+                  <option value="">未找到 CC Switch Claude 配置</option>
+                )}
+              </select>
+            </label>
+            <ModelPicker
+              agentId="claude"
+              providerId={form.providerId}
+              model={form.model}
+              reasoningEffort=""
+              onChange={({ model }) =>
+                setForm((current) => ({ ...current, model }))
+              }
+            />
+            <label>
+              Claude 权限
+              <select
+                value={form.permissionMode}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    permissionMode: event.target.value as ClaudePermissionMode,
+                  })
+                }
+              >
+                {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
         )}
         <label>
           工作目录
@@ -402,11 +438,7 @@ export function NewThreadModal({
         <button
           className="primary"
           type="submit"
-          disabled={
-            submitting ||
-            !form.providerId ||
-            profilesLoading
-          }
+          disabled={submitting || !form.providerId || profilesLoading}
         >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}

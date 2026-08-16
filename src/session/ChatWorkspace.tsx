@@ -10,6 +10,7 @@ import type {
   ApprovalMode,
   ApprovalPolicy,
   ApprovalsReviewer,
+  ClaudePermissionMode,
   Personality,
   Provider,
   SandboxMode,
@@ -140,8 +141,7 @@ export function ChatWorkspace({
   const runCommand = async (command: ComposerCommand) => {
     if (
       thread.agentId === "claude" &&
-      command.kind !== "status" &&
-      command.kind !== "usage"
+      !["status", "usage", "model", "permissions"].includes(command.kind)
     )
       throw new Error(`${agentName} 暂不支持这个 Codecks 命令`);
     if (command.kind === "compact" && !capabilities.sessionSettings)
@@ -168,7 +168,9 @@ export function ChatWorkspace({
       setStatusNote(
         [
           `模型 ${thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
-          `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
+          thread.agentId === "claude"
+            ? `权限 ${thread.permissionMode || "default"}`
+            : `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
           `状态 ${thread.status}${thread.activeTurnId ? ` · Turn ${thread.activeTurnId}` : ""}`,
           `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
           thread.personality ? `性格 ${thread.personality}` : "",
@@ -199,6 +201,12 @@ export function ChatWorkspace({
       return;
     }
     if (command.kind === "permissions") {
+      if (thread.agentId === "claude") {
+        if (command.sandbox || command.approvalMode)
+          throw new Error("Claude 权限请在权限面板中选择");
+        setCommandModal({ kind: "permissions" });
+        return;
+      }
       if (!command.sandbox && !command.approvalMode) {
         setCommandModal({ kind: "permissions" });
         return;
@@ -384,11 +392,12 @@ export function ChatWorkspace({
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     approvalsReviewer?: ApprovalsReviewer;
+    permissionMode?: ClaudePermissionMode;
     personality?: Personality;
     serviceTier?: string | null;
   }) => {
     try {
-      await api(`/threads/${thread.providerId}/${thread.id}`, {
+      await api(threadPath(thread), {
         method: "PATCH",
         body: JSON.stringify({ settings }),
       });

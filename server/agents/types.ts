@@ -1,6 +1,8 @@
 import type { EventEmitter } from "node:events";
 import type {
   ApprovalKind,
+  ClaudePermissionMode,
+  ModelInfo,
   Personality,
   ThreadSummary,
   TurnImage,
@@ -12,6 +14,7 @@ export type AgentHistoryStatus = "cached" | "loading" | "ready" | "error";
 export interface AgentCapabilities {
   approvals: boolean;
   archive: boolean;
+  delete: boolean;
   fork: boolean;
   images: boolean;
   interrupt: boolean;
@@ -58,9 +61,11 @@ export interface AgentCreateThreadInput {
   name?: string;
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string | null;
   personality?: Personality;
   approvalPolicy?: string;
   approvalsReviewer?: string;
+  permissionMode?: ClaudePermissionMode;
   sandbox?: string;
 }
 
@@ -85,11 +90,23 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   busyThreads(): ThreadSummary[];
   restart(): void;
   publicProfiles?(): AgentPublicProfile[];
+  listModels?(providerId?: string): Promise<ModelInfo[]> | ModelInfo[];
   createThread?(
     providerId: string,
     input: AgentCreateThreadInput,
   ): Promise<unknown>;
   readThread?(providerId: string, threadId: string): Promise<unknown>;
+  renameThread?(
+    providerId: string,
+    threadId: string,
+    name: string,
+  ): Promise<unknown>;
+  updateThreadSettings?(
+    providerId: string,
+    threadId: string,
+    settings: Partial<AgentCreateThreadInput>,
+  ): Promise<unknown>;
+  deleteThread?(providerId: string, threadId: string): Promise<unknown>;
   sendTurn?(
     providerId: string,
     threadId: string,

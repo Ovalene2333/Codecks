@@ -11,6 +11,7 @@ import type {
 const capabilities: AgentCapabilities = {
   approvals: true,
   archive: false,
+  delete: false,
   fork: false,
   images: false,
   interrupt: true,

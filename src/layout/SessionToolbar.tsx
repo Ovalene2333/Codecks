@@ -2,6 +2,7 @@ import type {
   ApprovalMode,
   ApprovalPolicy,
   ApprovalsReviewer,
+  ClaudePermissionMode,
   Personality,
   SandboxMode,
   ThreadSummary,
@@ -15,6 +16,17 @@ import {
 } from "../codexLabels";
 import { ModelPicker } from "../ModelPicker";
 import { ContextBar } from "../usage/ContextBar";
+
+export const CLAUDE_PERMISSION_OPTIONS: {
+  value: ClaudePermissionMode;
+  label: string;
+}[] = [
+  { value: "default", label: "Ask when needed" },
+  { value: "acceptEdits", label: "Auto-accept edits" },
+  { value: "plan", label: "Plan mode" },
+  { value: "dontAsk", label: "Deny prompts" },
+  { value: "bypassPermissions", label: "Bypass permissions" },
+];
 
 export function SessionToolbar({
   thread,
@@ -31,6 +43,7 @@ export function SessionToolbar({
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     approvalsReviewer?: ApprovalsReviewer;
+    permissionMode?: ClaudePermissionMode;
     personality?: Personality;
   }) => void;
   onCompact: () => void;
@@ -40,6 +53,7 @@ export function SessionToolbar({
     <div className={`session-toolbar ${locked ? "locked" : ""}`}>
       <div className="toolbar-fields">
         <ModelPicker
+          agentId={thread.agentId || "codex"}
           compact
           disabled={locked}
           providerId={thread.providerId}
@@ -47,83 +61,110 @@ export function SessionToolbar({
           reasoningEffort={thread.reasoningEffort || ""}
           onChange={(next) => onSettings(next)}
         />
-        <label className="toolbar-select">
-          <select
-            aria-label="Sandbox"
-            title="Sandbox"
-            disabled={locked}
-            value={
-              typeof thread.sandbox === "string"
-                ? thread.sandbox
-                : "workspace-write"
-            }
-            onChange={(event) =>
-              onSettings(
-                settingsForSandboxMode(
-                  event.target.value as SandboxMode,
-                  approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
-                ),
-              )
-            }
-          >
-            {SANDBOX_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="toolbar-select">
-          <select
-            aria-label="Approvals"
-            title="Approvals"
-            disabled={locked}
-            value={approvalMode(
-              thread.approvalPolicy,
-              thread.approvalsReviewer,
-            )}
-            onChange={(event) =>
-              onSettings(
-                settingsForApprovalMode(
-                  event.target.value as ApprovalMode,
-                  thread.sandbox || "workspace-write",
-                ),
-              )
-            }
-          >
-            {APPROVAL_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="toolbar-select">
-          <select
-            aria-label="Personality"
-            title="Personality"
-            disabled={locked}
-            value={thread.personality || ""}
-            onChange={(event) =>
-              onSettings({
-                personality: (event.target.value || undefined) as
-                  Personality | undefined,
-              })
-            }
-          >
-            <option value="">Default</option>
-            <option value="pragmatic">Pragmatic</option>
-            <option value="friendly">Friendly</option>
-            <option value="none">None</option>
-          </select>
-        </label>
+        {thread.agentId === "claude" ? (
+          <label className="toolbar-select">
+            <select
+              aria-label="Claude permissions"
+              title="Claude permissions"
+              disabled={locked}
+              value={thread.permissionMode || "default"}
+              onChange={(event) =>
+                onSettings({
+                  permissionMode: event.target.value as ClaudePermissionMode,
+                })
+              }
+            >
+              {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <>
+            <label className="toolbar-select">
+              <select
+                aria-label="Sandbox"
+                title="Sandbox"
+                disabled={locked}
+                value={
+                  typeof thread.sandbox === "string"
+                    ? thread.sandbox
+                    : "workspace-write"
+                }
+                onChange={(event) =>
+                  onSettings(
+                    settingsForSandboxMode(
+                      event.target.value as SandboxMode,
+                      approvalMode(
+                        thread.approvalPolicy,
+                        thread.approvalsReviewer,
+                      ),
+                    ),
+                  )
+                }
+              >
+                {SANDBOX_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="toolbar-select">
+              <select
+                aria-label="Approvals"
+                title="Approvals"
+                disabled={locked}
+                value={approvalMode(
+                  thread.approvalPolicy,
+                  thread.approvalsReviewer,
+                )}
+                onChange={(event) =>
+                  onSettings(
+                    settingsForApprovalMode(
+                      event.target.value as ApprovalMode,
+                      thread.sandbox || "workspace-write",
+                    ),
+                  )
+                }
+              >
+                {APPROVAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="toolbar-select">
+              <select
+                aria-label="Personality"
+                title="Personality"
+                disabled={locked}
+                value={thread.personality || ""}
+                onChange={(event) =>
+                  onSettings({
+                    personality: (event.target.value || undefined) as
+                      Personality | undefined,
+                  })
+                }
+              >
+                <option value="">Default</option>
+                <option value="pragmatic">Pragmatic</option>
+                <option value="friendly">Friendly</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+          </>
+        )}
       </div>
       {locked && <small className="toolbar-hint">任务结束后生效</small>}
       {showContext ? (
         <ContextBar
           usage={thread.tokenUsage}
           compacting={thread.compacting}
-          onCompact={onCompact}
+          onCompact={thread.agentId === "claude" ? undefined : onCompact}
         />
       ) : null}
     </div>

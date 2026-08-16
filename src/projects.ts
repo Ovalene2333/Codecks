@@ -181,5 +181,7 @@ export function resolveNewThreadDefaults(input: {
     approvalsReviewer: hasProjectApprovalDefaults
       ? defaults?.approvalsReviewer || "user"
       : prefs?.lastApprovalsReviewer || "user",
+    permissionMode:
+      defaults?.permissionMode || prefs?.lastPermissionMode || "default",
   };
 }

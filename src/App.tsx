@@ -42,7 +42,7 @@ import { UsageDrawer } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
-import { agentName, approvalPath, capabilitiesFor } from "./agents";
+import { agentName, approvalPath, capabilitiesFor, threadPath } from "./agents";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
 import {
@@ -298,15 +298,24 @@ export function App() {
           }));
         } else if (message.type === "thread.deleted") {
           const id = message.data.threadId;
+          const deletedAgentId = message.data.agentId || "codex";
+          const matchesDeleted = (thread: ThreadSummary) =>
+            thread.id === id && (thread.agentId || "codex") === deletedAgentId;
           setSnapshot((current) => ({
             ...current,
-            threads: current.threads.filter((thread) => thread.id !== id),
+            threads: current.threads.filter(
+              (thread) => !matchesDeleted(thread),
+            ),
             archivedThreads: (current.archivedThreads || []).filter(
-              (thread) => thread.id !== id,
+              (thread) => !matchesDeleted(thread),
             ),
           }));
           setSelected((current) =>
-            current?.endsWith(`:${id}`) ? undefined : current,
+            current === `${deletedAgentId}:${id}` ||
+            (current?.startsWith(`${deletedAgentId}:`) &&
+              current.endsWith(`:${id}`))
+              ? undefined
+              : current,
           );
         } else if (message.type === "provider.status")
           setSnapshot((current) => ({
@@ -945,10 +954,10 @@ export function App() {
           initial={rename.thread.name}
           onClose={() => setRename(null)}
           onSubmit={async (name) => {
-            await api(
-              `/threads/${rename.thread.providerId}/${rename.thread.id}`,
-              { method: "PATCH", body: JSON.stringify({ name }) },
-            );
+            await api(threadPath(rename.thread), {
+              method: "PATCH",
+              body: JSON.stringify({ name }),
+            });
             refresh();
           }}
         />
@@ -1020,8 +1029,7 @@ export function App() {
             },
             {
               label: "压缩上下文",
-              disabled: !capabilitiesFor(snapshot.agents, sheet)
-                .sessionSettings,
+              disabled: sheet.agentId === "claude",
               onClick: () =>
                 post(`/threads/${sheet.providerId}/${sheet.id}/compact`).then(
                   refresh,
@@ -1093,7 +1101,7 @@ export function App() {
             {
               label: "永久删除",
               danger: true,
-              disabled: !capabilitiesFor(snapshot.agents, sheet).archive,
+              disabled: !capabilitiesFor(snapshot.agents, sheet).delete,
               onClick: () =>
                 setConfirm({
                   title: "永久删除会话",
@@ -1105,7 +1113,7 @@ export function App() {
                   confirmLabel: "删除",
                   danger: true,
                   run: async () => {
-                    await remove(`/threads/${sheet.providerId}/${sheet.id}`);
+                    await remove(threadPath(sheet));
                     if (sessionKey(sheet) === selected) setSelected(undefined);
                     refresh();
                   },
@@ -1125,7 +1133,7 @@ export function App() {
                   current.status === "running" || current.status === "waiting"
                 }
                 onSettings={async (settings) => {
-                  await api(`/threads/${current.providerId}/${current.id}`, {
+                  await api(threadPath(current), {
                     method: "PATCH",
                     body: JSON.stringify({ settings }),
                   });
