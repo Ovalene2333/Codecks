@@ -8,9 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code adapter 后端。它帮你把 [CC Switch](https://github.com/farion1231/cc-switch) 里配好的多家中转站用起来：每个 Session 自己选供应商和模型，不必为了换一家、花另一份额度而去改 CC Switch 的当前项。
+[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code adapter 后端。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
 
-会话列表和聊天标题会分别标记 Codex 与 Claude 任务；审批提示也会显示实际发起请求的 Agent。手动压缩上下文时，会话会显示“正在运行”，历史会话会先恢复后再执行压缩；压缩完成、失败、超时或服务重启后都会自动解除运行标记。
+只用 OpenAI Official 时无需安装 CC Switch；如果已经在 [CC Switch](https://github.com/farion1231/cc-switch) 中配置了多家连接，Codecks 也可以让每个 Session 独立选择供应商和模型，不必反复切换当前项。会话列表、任务中心和审批入口会统一标记实际使用的 Agent。
 
 ## 阅读导引
 
@@ -19,7 +19,7 @@
   - [特性](#特性)
     - [真实会话，而不是复制品](#真实会话而不是复制品)
     - [远程值守](#远程值守)
-    - [多家中转同时在线，把额度用完](#多家中转同时在线把额度用完)
+    - [多家中转同时在线](#多家中转同时在线)
 - **开始使用**
   - [快速开始](#快速开始)
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
@@ -31,7 +31,7 @@
   - [日常工作流](#日常工作流)
 - **配置与安全**
   - [配置](#配置)
-    - [CC Switch](#cc-switch)
+    - [CC Switch（可选）](#cc-switch)
   - [安全](#安全)
 - **开发与支持**
   - [开发](#开发)
@@ -45,7 +45,7 @@
 
 ## 界面预览
 
-<img src="docs/screenshots/desktop-session.png" alt="Codecks 控制台：按项目分组会话，每个 Session 自选供应商" width="100%">
+<img src="docs/screenshots/desktop-session.png" alt="Codecks 控制台：按项目分组并管理 Codex 会话" width="100%">
 
 <p align="center"><sub>桌面端会话界面：按项目分组，同时管理多个 Codex Session</sub></p>
 
@@ -65,7 +65,7 @@
   <img src="docs/screenshots/mobile-console.png" alt="Codecks 移动端控制台" width="320">
 </p>
 
-CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、一个「当前供应商」。想同时跑多家、把不同中转站的额度用完，靠来回切换当前项不够。Codecks 只读同步 CC Switch 里的连接定义，让多个 Session 可以同时走不同中转站。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
+Codecks 不依赖 CC Switch 或中转服务，已有 OpenAI Official 登录可以直接使用。对需要多家连接的人，它会只读同步 CC Switch 的连接定义，让多个 Session 同时使用不同供应商。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
 
 **Codecks** 这个名字由 **Codex** 与 **deck** 组合而来：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
 
@@ -75,7 +75,7 @@ CC Switch 本身切供应商很快，但 Codex 一次只有一份 live 配置、
 
 ### 真实会话，而不是复制品
 
-Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会为每个供应商复制 `CODEX_HOME`，也不会把历史拆成孤岛。
+Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会复制 `CODEX_HOME`，也不会把历史拆成孤岛。
 
 - 按工作目录分组，同一路径可以并行多个独立 session
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
@@ -106,7 +106,7 @@ runtime 的 control WebSocket 只监听本机回环地址。终端用 `codex --r
 - 「切换供应商」会 `thread/fork`：完整复制历史到新分支，原分支保留以便回退
 - 普通 `codex` 创建的旧 Session 仍会出现在历史里，但不会伪装成实时受管状态
 
-### 多家中转同时在线，把额度用完
+### 多家中转同时在线
 
 CC Switch 负责把供应商写进 Codex 的 live 配置，一次只能启用一个当前项。Claude Code 往往能跟着切；Codex 通常要重启进程才认新配置。真正麻烦的不是「CC Switch 不会切」，而是不能让 Session A 走这家、Session B 走那家。
 
@@ -122,6 +122,8 @@ Codecks 把 CC Switch 里的连接只读同步进来，每个 Session 自己选�
 ## 快速开始
 
 需要 Node.js 22+ 和可用的 `codex` 命令。
+
+日常使用的 Codex CLI 如果已经登录 OpenAI Official，启动 Codecks 后即可直接新建和继续 Session，不需要先配置供应商。
 
 ```bash
 git clone https://github.com/Ovalene2333/Codecks.git
@@ -355,6 +357,7 @@ CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 
 - Claude CC Switch 配置中的认证环境变量只存在于 adapter 启动的进程环境中
 - `.data/` 可能含自定义供应商密钥，已加入 `.gitignore`
 - runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
+- Web Terminal 等同于以 Codecks Server 用户身份登录宿主机，终端 WebSocket 使用同一访问令牌鉴权；对外暴露时不要使用 `--no-token`，并建议在反向代理或隧道层再加一道访问控制
 - 网页具备执行命令和批准文件修改的能力；公网使用时请同时启用令牌与额外访问控制
 
 详见 [SECURITY.md](SECURITY.md)。

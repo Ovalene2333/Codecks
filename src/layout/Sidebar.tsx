@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   Activity,
+  BarChart3,
   BellRing,
   Bot,
   Plus,
@@ -20,7 +21,7 @@ import type {
   ThreadSummary,
 } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
-import { UsageChip } from "../usage/UsageChip";
+import { UsageChip, type UsageView } from "../usage/UsageChip";
 
 export function Sidebar({
   show,
@@ -94,7 +95,7 @@ export function Sidebar({
   onNew: () => void;
   onRefresh: () => void;
   onProviders: () => void;
-  onUsage: () => void;
+  onUsage: (view: UsageView) => void;
   onTasks: () => void;
   onTools: () => void;
   onNotifications: () => void;
@@ -158,7 +159,7 @@ export function Sidebar({
           <b>Codex Deck</b>
           <small>REMOTE WORKSPACE</small>
         </div>
-        <UsageChip runtime={runtime} onOpen={onUsage} />
+        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <button className="icon-btn" onClick={onClose}>
           <X />
         </button>
@@ -344,7 +345,15 @@ export function Sidebar({
             工具
           </button>
         </div>
-        <button onClick={onProviders}>
+        <button type="button" onClick={() => onUsage("stats")}>
+          <BarChart3 />
+          用量统计
+        </button>
+        <button type="button" onClick={() => onUsage("limits")}>
+          <Activity />
+          账号额度
+        </button>
+        <button type="button" className="provider-settings-btn" onClick={onProviders}>
           <Settings />
           供应商设置
         </button>

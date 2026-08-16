@@ -12,6 +12,8 @@ import { Drawer } from "../ui";
 import { formatTokens, relativeTime } from "../format";
 import { buildUsageStats, type UsageTotals } from "./stats";
 
+export type UsageView = "stats" | "limits";
+
 export function UsageChip({
   runtime,
   onOpen,
@@ -25,7 +27,7 @@ export function UsageChip({
     <button
       type="button"
       className={`usage-chip ${tone}`}
-      title="用量统计与 Official 额度"
+      title="账号额度"
       onClick={onOpen}
     >
       <Gauge />
@@ -39,6 +41,7 @@ export function UsageDrawer({
   threads,
   projects,
   currentSessionKey,
+  initialView = "stats",
   onRefreshLimits,
   onClose,
 }: {
@@ -46,10 +49,11 @@ export function UsageDrawer({
   threads: ThreadSummary[];
   projects?: ProjectRecord[];
   currentSessionKey?: string;
+  initialView?: UsageView;
   onRefreshLimits: () => Promise<void>;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"stats" | "limits">("stats");
+  const [tab, setTab] = useState<UsageView>(initialView);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
   const refreshLimits = useCallback(async () => {
     setRefreshingLimits(true);
