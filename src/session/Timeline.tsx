@@ -2,16 +2,15 @@ import { useLayoutEffect, useRef } from "react";
 import { Folder, GitBranch } from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
-import { AssistantMarkdown } from "./markdown";
 import { TurnBlock } from "./TurnBlock";
 import type { PendingUserMessage } from "./optimistic";
-import type { StreamedAgentMessage } from "./streaming";
-import { activeStreamItemId } from "./streaming";
+import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
 
 export function Timeline({
   thread,
   turns,
   streamed,
+  streamedItems,
   pendingUsers,
   origin,
   targetTurnId,
@@ -28,6 +27,7 @@ export function Timeline({
   thread: ThreadSummary;
   turns: any[];
   streamed: StreamedAgentMessage[];
+  streamedItems: StreamedTurnItem[];
   pendingUsers: PendingUserMessage[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
   targetTurnId?: string;
@@ -106,13 +106,13 @@ export function Timeline({
       element.scrollHeight - element.scrollTop - element.clientHeight;
     followOutput.current = distanceFromBottom < 80;
   };
-  const hasActiveTurn = turns.some(
+  const activeTurnIndex = turns.findIndex(
     (turn) =>
       turn?.id === thread.activeTurnId ||
       turn?.status === "inProgress" ||
       turn?.status === "running",
   );
-  const streamingItemId = activeStreamItemId(streamed);
+  const hasActiveTurn = activeTurnIndex >= 0;
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
       <div className="session-meta">
@@ -153,6 +153,7 @@ export function Timeline({
               targetItemId={targetItemId}
               targetRequest={targetRequest}
               streamed={streamed}
+              streamedItems={index === activeTurnIndex ? streamedItems : []}
               onCopy={onCopy}
               onForkFrom={onForkFrom}
               onEditUserMessage={onEditUserMessage}
@@ -177,24 +178,29 @@ export function Timeline({
           </section>
         ))}
         {streamed.length === 0 &&
+          streamedItems.length === 0 &&
           (thread.status === "running" || thread.status === "waiting") && (
             <div className="message agent streaming" role="status">
               正在准备响应…
               <i />
             </div>
           )}
-        {!hasActiveTurn && streamed.length > 0 && (
-          <section className="turn-block active live-turn">
-            {streamed.map((message) => (
-              <div
-                className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
-                key={message.itemId}
-              >
-                <AssistantMarkdown text={message.text} onCopy={onCopy} />
-                {message.itemId === streamingItemId && <i />}
-              </div>
-            ))}
-          </section>
+        {!hasActiveTurn && (streamed.length > 0 || streamedItems.length > 0) && (
+          <TurnBlock
+            turn={{
+              id: thread.activeTurnId,
+              status: "inProgress",
+              items: [],
+            }}
+            index={turns.length + 1}
+            thread={thread}
+            streamed={streamed}
+            streamedItems={streamedItems}
+            onCopy={onCopy}
+            onEditUserMessage={onEditUserMessage}
+            onRetryUserMessage={onRetryUserMessage}
+            messageActionsDisabled={messageActionsDisabled}
+          />
         )}
       </div>
     </div>

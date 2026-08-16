@@ -4,6 +4,8 @@ import {
   activeStreamItemId,
   appendCodexEvent,
   collectStreamedAgentMessages,
+  collectStreamedTurnItems,
+  mergeTurnItems,
   streamsCoveredByHistory,
 } from "./streaming.ts";
 
@@ -91,6 +93,44 @@ test("delta events accumulate without dropping the start of long replies", () =>
   assert.equal(events.length, 1);
   assert.equal(events[0].params.delta.length, 500);
   assert.equal(events[0].params.delta.startsWith("0123456789"), true);
+});
+
+test("long command output keeps its start event in the bounded event buffer", () => {
+  let events: any[] = [
+    {
+      providerId: "official",
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "install",
+          type: "commandExecution",
+          command: "npm install",
+        },
+      },
+    },
+  ];
+  for (let index = 0; index < 500; index += 1) {
+    events = appendCodexEvent(events, {
+      providerId: "official",
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "install",
+        delta: String(index % 10),
+      },
+    });
+  }
+
+  assert.equal(events.length, 2);
+  assert.equal(events[1].params.delta.length, 500);
+  assert.equal(
+    collectStreamedTurnItems(events, "official", "thread-1", "turn-1")[0]
+      .item.aggregatedOutput.length,
+    500,
+  );
 });
 
 test("a new turn drops the previous stream for the same provider and thread", () => {
@@ -192,4 +232,111 @@ test("the most recently updated agent item owns the streaming cursor", () => {
     { itemId: "second", text: "B" },
     { itemId: "first", text: "AC" },
   ]);
+});
+
+test("live command items appear immediately and complete in place", () => {
+  const events = [
+    {
+      providerId: "official",
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "npm install -D @playwright/test",
+        },
+      },
+    },
+    {
+      providerId: "official",
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "command-1",
+        delta: "added 3 packages",
+      },
+    },
+    {
+      providerId: "official",
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "npm install -D @playwright/test",
+          status: "completed",
+        },
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    collectStreamedTurnItems(events, "official", "thread-1", "turn-1"),
+    [
+      {
+        itemId: "command-1",
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "npm install -D @playwright/test",
+          aggregatedOutput: "added 3 packages",
+          status: "completed",
+        },
+      },
+    ],
+  );
+});
+
+test("live turn items update matching history and append missing commands", () => {
+  const history = [
+    { id: "user-1", type: "userMessage", text: "安装 Playwright" },
+    {
+      id: "command-1",
+      type: "commandExecution",
+      command: "npm install",
+      status: "inProgress",
+    },
+  ];
+  assert.deepEqual(
+    mergeTurnItems(history, [
+      {
+        itemId: "command-1",
+        item: {
+          id: "command-1",
+          type: "commandExecution",
+          command: "npm install",
+          status: "completed",
+        },
+      },
+      {
+        itemId: "command-2",
+        item: {
+          id: "command-2",
+          type: "commandExecution",
+          command: "npx playwright install chromium",
+          status: "inProgress",
+        },
+      },
+    ]),
+    [
+      { id: "user-1", type: "userMessage", text: "安装 Playwright" },
+      {
+        id: "command-1",
+        type: "commandExecution",
+        command: "npm install",
+        status: "completed",
+      },
+      {
+        id: "command-2",
+        type: "commandExecution",
+        command: "npx playwright install chromium",
+        status: "inProgress",
+      },
+    ],
+  );
 });

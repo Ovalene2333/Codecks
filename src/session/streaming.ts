@@ -6,10 +6,37 @@ export interface StreamedAgentMessage {
   completed?: boolean;
 }
 
+export interface StreamedTurnItem {
+  itemId: string;
+  item: any;
+}
+
+const LIVE_ITEM_TYPES = new Set([
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "reasoning",
+  "enteredReviewMode",
+  "exitedReviewMode",
+]);
+
 function sameStream(left: any, right: any) {
   return (
     left?.method === "item/agentMessage/delta" &&
     right?.method === "item/agentMessage/delta" &&
+    (left?.agentId || "codex") === (right?.agentId || "codex") &&
+    left?.providerId === right?.providerId &&
+    left?.params?.threadId === right?.params?.threadId &&
+    left?.params?.turnId === right?.params?.turnId &&
+    left?.params?.itemId === right?.params?.itemId
+  );
+}
+
+function sameCommandOutput(left: any, right: any) {
+  return (
+    left?.method === "item/commandExecution/outputDelta" &&
+    right?.method === "item/commandExecution/outputDelta" &&
     (left?.agentId || "codex") === (right?.agentId || "codex") &&
     left?.providerId === right?.providerId &&
     left?.params?.threadId === right?.params?.threadId &&
@@ -32,8 +59,15 @@ function completedStream(event: any, stream: any) {
 }
 
 export function appendCodexEvent(events: any[], event: any) {
-  if (event?.method === "item/agentMessage/delta") {
-    const existingIndex = events.findIndex((item) => sameStream(item, event));
+  if (
+    event?.method === "item/agentMessage/delta" ||
+    event?.method === "item/commandExecution/outputDelta"
+  ) {
+    const existingIndex = events.findIndex((item) =>
+      event.method === "item/agentMessage/delta"
+        ? sameStream(item, event)
+        : sameCommandOutput(item, event),
+    );
     if (existingIndex >= 0) {
       const current = events[existingIndex];
       const merged = {
@@ -167,4 +201,71 @@ export function collectStreamedAgentMessages(
   }
 
   return [...messages.values()];
+}
+
+export function collectStreamedTurnItems(
+  events: any[],
+  providerId: string,
+  threadId: string,
+  activeTurnId?: string,
+  agentId: "codex" | "claude" = "codex",
+): StreamedTurnItem[] {
+  const items = new Map<string, StreamedTurnItem>();
+
+  for (const event of events) {
+    if ((event?.agentId || "codex") !== agentId) continue;
+    if (event?.providerId && event.providerId !== providerId) continue;
+    if (event?.params?.threadId !== threadId) continue;
+    if (activeTurnId && event?.params?.turnId !== activeTurnId) continue;
+
+    const method = String(event?.method || "");
+    const eventItem = event?.params?.item;
+    if (
+      (method === "item/started" || method === "item/completed") &&
+      eventItem?.id &&
+      LIVE_ITEM_TYPES.has(eventItem.type)
+    ) {
+      const itemId = String(eventItem.id);
+      const current = items.get(itemId)?.item;
+      const status =
+        method === "item/started"
+          ? "inProgress"
+          : eventItem.status || "completed";
+      items.set(itemId, {
+        itemId,
+        item: { ...current, ...eventItem, status },
+      });
+      continue;
+    }
+
+    if (method === "item/commandExecution/outputDelta") {
+      const itemId = displayText(event?.params?.itemId);
+      const current = itemId ? items.get(itemId) : undefined;
+      if (!current) continue;
+      current.item = {
+        ...current.item,
+        aggregatedOutput:
+          displayText(current.item?.aggregatedOutput) +
+          displayText(event?.params?.delta),
+      };
+    }
+  }
+
+  return [...items.values()];
+}
+
+export function mergeTurnItems(
+  historyItems: any[],
+  streamedItems: StreamedTurnItem[],
+) {
+  if (streamedItems.length === 0) return historyItems;
+  const liveById = new Map(streamedItems.map((entry) => [entry.itemId, entry]));
+  const merged = historyItems.map((item) => {
+    const itemId = item?.id ? String(item.id) : "";
+    const live = itemId ? liveById.get(itemId) : undefined;
+    if (!live) return item;
+    liveById.delete(itemId);
+    return { ...item, ...live.item };
+  });
+  return [...merged, ...Array.from(liveById.values(), (entry) => entry.item)];
 }
