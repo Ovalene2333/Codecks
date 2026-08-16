@@ -69,7 +69,7 @@ export function ModelPicker({
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
-        {compact ? null : "模型"}
+        {compact ? <span className="toolbar-field-label">模型</span> : "模型"}
         {manual || !models.length ? (
           <input
             value={model}
@@ -122,7 +122,11 @@ export function ModelPicker({
       </label>
       {efforts.length > 0 && (
         <label className={compact ? "toolbar-select" : undefined}>
-          {compact ? null : "Reasoning effort"}
+          {compact ? (
+            <span className="toolbar-field-label">推理</span>
+          ) : (
+            "Reasoning effort"
+          )}
           <select
             value={reasoningEffort}
             disabled={disabled}

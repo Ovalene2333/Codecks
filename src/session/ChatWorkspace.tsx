@@ -498,7 +498,6 @@ export function ChatWorkspace({
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
         onAppearance={onAppearance}
-        onTasks={onTasks}
       />
       <RenderErrorBoundary
         resetKey={thread.id}

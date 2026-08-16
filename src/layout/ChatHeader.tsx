@@ -1,7 +1,6 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
-  Activity,
   MoreHorizontal,
   SunMoon,
 } from "lucide-react";
@@ -18,7 +17,6 @@ export function ChatHeader({
   onBack,
   onMenu,
   onAppearance,
-  onTasks,
   onSwitchProvider,
 }: {
   thread: ThreadSummary;
@@ -29,7 +27,6 @@ export function ChatHeader({
   onBack: () => void;
   onMenu: () => void;
   onAppearance: () => void;
-  onTasks: () => void;
   onSwitchProvider: () => void;
 }) {
   const contextLabel =
@@ -73,16 +70,6 @@ export function ChatHeader({
           </p>
         </div>
         <div className="chat-header-actions">
-          <button
-            type="button"
-            className={`icon-btn task-trigger ${locked ? "active" : ""}`}
-            onClick={onTasks}
-            title="查看此 Session 的任务"
-            aria-label="查看此 Session 的任务"
-          >
-            <Activity />
-            {locked && <i />}
-          </button>
           {thread.agentId !== "claude" && (
             <button
               className="provider-switch secondary"

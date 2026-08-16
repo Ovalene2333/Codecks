@@ -14,6 +14,7 @@ import {
   settingsForApprovalMode,
   settingsForSandboxMode,
 } from "../codexLabels";
+import { Minimize2 } from "lucide-react";
 import { ModelPicker } from "../ModelPicker";
 
 export const CLAUDE_PERMISSION_OPTIONS: {
@@ -60,6 +61,7 @@ export function SessionToolbar({
         />
         {thread.agentId === "claude" ? (
           <label className="toolbar-select">
+            <span className="toolbar-field-label">权限</span>
             <select
               aria-label="Claude permissions"
               title="Claude permissions"
@@ -81,6 +83,7 @@ export function SessionToolbar({
         ) : (
           <>
             <label className="toolbar-select">
+              <span className="toolbar-field-label">沙箱</span>
               <select
                 aria-label="Sandbox"
                 title="Sandbox"
@@ -110,6 +113,7 @@ export function SessionToolbar({
               </select>
             </label>
             <label className="toolbar-select">
+              <span className="toolbar-field-label">审批</span>
               <select
                 aria-label="Approvals"
                 title="Approvals"
@@ -135,6 +139,7 @@ export function SessionToolbar({
               </select>
             </label>
             <label className="toolbar-select">
+              <span className="toolbar-field-label">风格</span>
               <select
                 aria-label="Personality"
                 title="Personality"
@@ -164,6 +169,7 @@ export function SessionToolbar({
           onClick={onCompact}
           disabled={Boolean(thread.compacting)}
         >
+          <Minimize2 />
           压缩
         </button>
       )}
