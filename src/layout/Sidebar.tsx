@@ -1,13 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   BarChart3,
   BellRing,
   Bot,
+  Gauge,
   Plus,
   RefreshCw,
   Search,
   Settings,
+  Terminal,
   Wrench,
   X,
 } from "lucide-react";
@@ -117,6 +119,8 @@ export function Sidebar({
   providers: Provider[];
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const searching = Boolean(query.trim());
   const emptyKind = searching
     ? "search"
@@ -148,6 +152,25 @@ export function Sidebar({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  useEffect(() => {
+    if (!toolsOpen) return;
+    const close = (event: PointerEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent) {
+        if (event.key === "Escape") setToolsOpen(false);
+        return;
+      }
+      if (!toolsMenuRef.current?.contains(event.target as Node)) {
+        setToolsOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [toolsOpen]);
 
   return (
     <aside
@@ -332,48 +355,118 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-footer">
-        <div className="sidebar-tool-row">
-          <button type="button" onClick={onTasks}>
+        <div className="sidebar-footer-actions">
+          <button
+            type="button"
+            className="sidebar-task-entry"
+            onClick={onTasks}
+          >
             <Activity />
-            任务
+            <span>任务</span>
             {(counts.running > 0 || counts.waiting > 0) && (
               <b>{counts.running + counts.waiting}</b>
             )}
           </button>
-          <button type="button" onClick={onTools}>
-            <Wrench />
-            工具
-          </button>
+          <div className="sidebar-tools-wrap" ref={toolsMenuRef}>
+            <button
+              type="button"
+              className={toolsOpen ? "active" : ""}
+              aria-haspopup="menu"
+              aria-expanded={toolsOpen}
+              onClick={() => setToolsOpen((open) => !open)}
+            >
+              <Wrench />
+              <span>工具</span>
+            </button>
+            {toolsOpen && (
+              <div className="sidebar-tools-popover" role="menu">
+                <div className="sidebar-tools-title">
+                  <b>工具</b>
+                  <small>工作区与账号</small>
+                </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onTools();
+                  }}
+                >
+                  <Terminal />
+                  <span>
+                    <b>终端</b>
+                    <small>打开 Web Terminal</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onProviders();
+                  }}
+                >
+                  <Settings />
+                  <span>
+                    <b>供应商设置</b>
+                    <small>连接与默认配置</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onUsage("stats");
+                  }}
+                >
+                  <BarChart3 />
+                  <span>
+                    <b>用量统计</b>
+                    <small>按会话与项目查看</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onUsage("limits");
+                  }}
+                >
+                  <Gauge />
+                  <span>
+                    <b>账号额度</b>
+                    <small>Official 额度状态</small>
+                  </span>
+                </button>
+                {notificationPermission !== "unsupported" ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onNotifications();
+                    }}
+                    disabled={notificationPermission === "denied"}
+                  >
+                    <BellRing />
+                    <span>
+                      <b>系统提醒</b>
+                      <small>
+                        {notificationPermission === "granted"
+                          ? "已开启"
+                          : notificationPermission === "denied"
+                            ? "浏览器已阻止"
+                            : "审批与任务通知"}
+                      </small>
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </div>
         </div>
-        <button type="button" onClick={() => onUsage("stats")}>
-          <BarChart3 />
-          用量统计
-        </button>
-        <button type="button" onClick={() => onUsage("limits")}>
-          <Activity />
-          账号额度
-        </button>
-        <button type="button" className="provider-settings-btn" onClick={onProviders}>
-          <Settings />
-          供应商设置
-        </button>
-        {notificationPermission !== "unsupported" ? (
-          <button
-            type="button"
-            onClick={onNotifications}
-            disabled={notificationPermission === "denied"}
-            title={
-              notificationPermission === "granted"
-                ? "系统提醒已开启"
-                : notificationPermission === "denied"
-                  ? "请在浏览器的站点设置中允许通知"
-                  : "审批和任务完成时发送系统提醒"
-            }
-          >
-            <BellRing />
-            系统提醒
-          </button>
-        ) : null}
       </div>
     </aside>
   );
