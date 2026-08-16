@@ -32,6 +32,26 @@ function parseOptionalInt(value: string) {
   return Number.isInteger(parsed) ? parsed : undefined;
 }
 
+function initialProjectDefaults(project: ProjectRecord): ProjectDefaults {
+  const current = project.defaults || {};
+  const hasApprovalDefaults = Boolean(
+    current.approvalPolicy || current.approvalsReviewer,
+  );
+  const sandbox = current.sandbox || "workspace-write";
+  return {
+    ...current,
+    sandbox,
+    ...(hasApprovalDefaults
+      ? {
+          approvalPolicy: current.approvalPolicy || "on-request",
+          approvalsReviewer: current.approvalsReviewer || "user",
+        }
+      : sandbox === "danger-full-access"
+        ? { approvalPolicy: "never", approvalsReviewer: "user" }
+        : { approvalPolicy: "on-request", approvalsReviewer: "auto_review" }),
+  };
+}
+
 export function ProjectDefaultsModal({
   project,
   providers,
@@ -44,8 +64,8 @@ export function ProjectDefaultsModal({
   onSave: (defaults: ProjectDefaultsSave, name?: string) => Promise<void>;
 }) {
   const [name, setName] = useState(project.name || "");
-  const [defaults, setDefaults] = useState<ProjectDefaults>(
-    project.defaults || {},
+  const [defaults, setDefaults] = useState<ProjectDefaults>(() =>
+    initialProjectDefaults(project),
   );
   const [error, setError] = useState("");
   return (

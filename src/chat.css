@@ -460,6 +460,55 @@
   color: #8b97a8;
   font-size: 11px;
 }
+.tool-action {
+  flex: none;
+  color: #8b97a8;
+  font-size: 11px;
+}
+.tool-action.read {
+  color: #67e8f9;
+}
+.tool-action.explore {
+  color: #c4b5fd;
+}
+.tool-action.update,
+.tool-action.add,
+.tool-action.delete,
+.tool-action.changes {
+  color: #93c5fd;
+}
+.file-change-group {
+  border-left-color: #3b82f6 !important;
+}
+.file-change-group.running,
+.tool-call-row.running {
+  border-left-color: var(--wait) !important;
+}
+.file-change-group.failed,
+.tool-call-row.failed {
+  border-left-color: #fb7185 !important;
+}
+.file-change-count {
+  min-width: 0;
+  overflow: hidden;
+  color: #d5deea;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.timeline .tool-row > pre {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.timeline .file-change-group > .file-change-group-content {
+  padding: 3px 0 3px 10px;
+}
+.file-change-group-content .file-diff-list {
+  margin: 0;
+}
 .tool-command,
 .file-path {
   min-width: 0;
@@ -964,6 +1013,14 @@
   }
 }
 @media (max-width: 760px) {
+  .timeline .tool-item summary,
+  .timeline .tool-row summary,
+  .file-diff-card summary {
+    min-height: 38px;
+  }
+  .timeline .file-change-group > .file-change-group-content {
+    padding-left: 7px;
+  }
   .chat-header-row2 {
     display: none;
   }

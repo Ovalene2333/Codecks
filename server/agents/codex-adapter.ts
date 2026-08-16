@@ -520,7 +520,7 @@ export class CodexAdapter extends EventEmitter {
     const runtimeProvider = compileRuntimeProvider(provider);
     const sandbox = input.sandbox || "workspace-write";
     const approvalPolicy = input.approvalPolicy || "on-request";
-    const approvalsReviewer = input.approvalsReviewer || "user";
+    const approvalsReviewer = input.approvalsReviewer || "auto_review";
     const start: Record<string, unknown> = {
       cwd: this.useWsl ? windowsPathToWsl(input.cwd) : input.cwd,
       model: input.model || runtimeProvider.model || undefined,

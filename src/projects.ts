@@ -180,7 +180,7 @@ export function resolveNewThreadDefaults(input: {
       : prefs?.lastApprovalPolicy || "on-request",
     approvalsReviewer: hasProjectApprovalDefaults
       ? defaults?.approvalsReviewer || "user"
-      : prefs?.lastApprovalsReviewer || "user",
+      : prefs?.lastApprovalsReviewer || "auto_review",
     permissionMode:
       defaults?.permissionMode || prefs?.lastPermissionMode || "default",
   };
