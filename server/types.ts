@@ -26,6 +26,8 @@ export type SandboxMode =
 export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type ApprovalsReviewer = "user" | "auto_review";
 export type Personality = "friendly" | "pragmatic" | "none";
+export type ClaudePermissionMode =
+  "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions";
 
 export interface ConnectionOverlay {
   requestMaxRetries?: number | null;
@@ -41,6 +43,7 @@ export interface ProjectDefaults extends ConnectionOverlay {
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
   approvalsReviewer?: ApprovalsReviewer;
+  permissionMode?: ClaudePermissionMode;
 }
 
 export interface ProjectRecord {
@@ -61,6 +64,7 @@ export interface DeckPreferences extends ConnectionOverlay {
   lastSandbox?: SandboxMode;
   lastApprovalPolicy?: ApprovalPolicy;
   lastApprovalsReviewer?: ApprovalsReviewer;
+  lastPermissionMode?: ClaudePermissionMode;
   recentDirs: string[];
 }
 
@@ -160,6 +164,7 @@ export interface ThreadSummary {
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
   approvalsReviewer?: ApprovalsReviewer;
+  permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
   forkedFromId?: string;
   sessionId?: string;

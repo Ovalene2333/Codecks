@@ -93,6 +93,11 @@ export class AgentRegistry extends EventEmitter {
     return adapter.publicProfiles?.() || [];
   }
 
+  async models(id: AgentId, providerId?: string) {
+    const adapter = this.operation(id, "listModels");
+    return adapter.listModels!(providerId);
+  }
+
   async createThread(id: AgentId, input: AgentCreateThreadInput) {
     const adapter = this.operation(id, "createThread");
     return adapter.createThread!(input.providerId || "", input);
@@ -102,6 +107,28 @@ export class AgentRegistry extends EventEmitter {
     const adapter = this.operation(id, "readThread");
     const thread = this.thread(id, threadId);
     return adapter.readThread!(thread.providerId, threadId);
+  }
+
+  async renameThread(id: AgentId, threadId: string, name: string) {
+    const adapter = this.operation(id, "renameThread");
+    const thread = this.thread(id, threadId);
+    return adapter.renameThread!(thread.providerId, threadId, name);
+  }
+
+  async updateThreadSettings(
+    id: AgentId,
+    threadId: string,
+    settings: Partial<AgentCreateThreadInput>,
+  ) {
+    const adapter = this.operation(id, "updateThreadSettings");
+    const thread = this.thread(id, threadId);
+    return adapter.updateThreadSettings!(thread.providerId, threadId, settings);
+  }
+
+  async deleteThread(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "deleteThread");
+    const thread = this.thread(id, threadId);
+    return adapter.deleteThread!(thread.providerId, threadId);
   }
 
   async sendTurn(

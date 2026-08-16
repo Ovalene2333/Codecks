@@ -12,6 +12,7 @@ import { SessionToolbar } from "./SessionToolbar";
 import type {
   ApprovalPolicy,
   ApprovalsReviewer,
+  ClaudePermissionMode,
   Personality,
   SandboxMode,
 } from "../types";
@@ -46,6 +47,7 @@ export function ChatHeader({
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     approvalsReviewer?: ApprovalsReviewer;
+    permissionMode?: ClaudePermissionMode;
     personality?: Personality;
   }) => void;
   onCompact: () => void;
@@ -96,10 +98,10 @@ export function ChatHeader({
             <ContextBar
               usage={thread.tokenUsage}
               compacting={thread.compacting}
-              onCompact={onCompact}
+              onCompact={thread.agentId === "claude" ? undefined : onCompact}
             />
           )}
-          {capabilities.sessionSettings && (
+          {capabilities.sessionSettings && thread.agentId !== "claude" && (
             <button
               type="button"
               className="text-btn compact-btn mobile-header-compact"

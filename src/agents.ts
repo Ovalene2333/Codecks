@@ -10,6 +10,7 @@ export type AgentId = "codex" | "claude";
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
   archive: true,
+  delete: true,
   fork: true,
   images: true,
   interrupt: true,
@@ -53,6 +54,7 @@ export function capabilitiesFor(
       : {
           ...CODEX_CAPABILITIES,
           archive: false,
+          delete: false,
           fork: false,
           mcp: false,
           models: false,

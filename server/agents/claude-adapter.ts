@@ -4,11 +4,14 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import {
   access,
+  appendFile,
   mkdir,
+  open,
   readFile,
   readdir,
   rename,
   stat,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -18,6 +21,7 @@ import {
   query as createQuery,
   type CanUseTool,
   type PermissionResult,
+  type PermissionMode,
   type PermissionUpdate,
   type Query,
   type SDKMessage,
@@ -32,7 +36,13 @@ import {
   WSL_CLAUDE_SHELL_COMMAND,
   wslPathToWindows,
 } from "../runtime-platform.js";
-import type { ApprovalKind, ThreadSummary, TurnImage } from "../types.js";
+import type {
+  ApprovalKind,
+  ClaudePermissionMode,
+  ModelInfo,
+  ThreadSummary,
+  TurnImage,
+} from "../types.js";
 import {
   readClaudeHistory,
   type ClaudeHistoryThread,
@@ -42,16 +52,29 @@ import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
 const CLAUDE_CAPABILITIES: AgentCapabilities = {
   approvals: true,
   archive: false,
+  delete: true,
   fork: false,
   images: true,
   interrupt: true,
   mcp: false,
-  models: false,
+  models: true,
   review: false,
-  sessionSettings: false,
+  sessionSettings: true,
   shell: false,
   skills: false,
 };
+
+const CLAUDE_MODELS: ModelInfo[] = [
+  {
+    id: "default",
+    model: "default",
+    displayName: "Default",
+    isDefault: true,
+  },
+  { id: "sonnet", model: "sonnet", displayName: "Sonnet" },
+  { id: "opus", model: "opus", displayName: "Opus" },
+  { id: "haiku", model: "haiku", displayName: "Haiku" },
+];
 
 type QueryFactory = typeof createQuery;
 const execFileAsync = promisify(execFile);
@@ -364,6 +387,11 @@ export class ClaudeAdapter extends EventEmitter {
     }));
   }
 
+  listModels(providerId?: string) {
+    this.resolveProfile(providerId);
+    return CLAUDE_MODELS.map((model) => ({ ...model }));
+  }
+
   startAll() {
     if (this.startingTask) return this.startingTask;
     const task = this.startOnce();
@@ -418,6 +446,7 @@ export class ClaudeAdapter extends EventEmitter {
         this.threads.set(parsed.summary.id, {
           ...parsed.summary,
           providerId: existing?.providerId || parsed.summary.providerId,
+          permissionMode: existing?.permissionMode || "default",
           status: active
             ? existing?.status || "running"
             : parsed.summary.status,
@@ -489,6 +518,7 @@ export class ClaudeAdapter extends EventEmitter {
       model?: string;
       approvalPolicy?: string;
       sandbox?: string;
+      permissionMode?: ClaudePermissionMode;
     },
   ) {
     const profile = this.resolveProfile(providerId);
@@ -506,6 +536,7 @@ export class ClaudeAdapter extends EventEmitter {
       sessionId: id,
       sandbox: input.sandbox as ThreadSummary["sandbox"],
       approvalPolicy: input.approvalPolicy as ThreadSummary["approvalPolicy"],
+      permissionMode: input.permissionMode || "default",
       controlMode: "managed",
     };
     this.threads.set(id, thread);
@@ -529,6 +560,76 @@ export class ClaudeAdapter extends EventEmitter {
       agentId: this.id,
       providerId: summary.providerId,
     };
+  }
+
+  async renameThread(_providerId: string, threadId: string, name: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    const nextName = name.trim();
+    if (!nextName) throw new Error("会话名称不能为空");
+    const file = this.history.get(threadId);
+    if (file) {
+      const handle = await open(file, "r");
+      try {
+        const info = await handle.stat();
+        const tail = Buffer.alloc(1);
+        if (info.size > 0) await handle.read(tail, 0, 1, info.size - 1);
+        const prefix = info.size > 0 && tail[0] !== 10 ? "\n" : "";
+        await appendFile(
+          file,
+          `${prefix}${JSON.stringify({
+            type: "custom-title",
+            customTitle: nextName,
+            sessionId: threadId,
+            timestamp: new Date().toISOString(),
+            uuid: randomUUID(),
+          })}\n`,
+        );
+      } finally {
+        await handle.close();
+      }
+      this.historyIndex.delete(file);
+      await this.saveHistoryIndex();
+    }
+    thread.name = nextName;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    return thread;
+  }
+
+  async updateThreadSettings(
+    _providerId: string,
+    threadId: string,
+    settings: { model?: string; permissionMode?: ClaudePermissionMode },
+  ) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    if (this.active.has(threadId))
+      throw new Error("任务结束后才能修改 Claude 会话设置");
+    if (settings.model) thread.model = settings.model;
+    if (settings.permissionMode)
+      thread.permissionMode = settings.permissionMode;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    return thread;
+  }
+
+  async deleteThread(_providerId: string, threadId: string) {
+    if (this.active.has(threadId))
+      throw new Error("运行中的 Claude 会话不能删除");
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    const file = this.history.get(threadId);
+    if (file) {
+      await unlink(file);
+      this.historyIndex.delete(file);
+      await this.saveHistoryIndex();
+    }
+    this.history.delete(threadId);
+    this.historyHomes.delete(threadId);
+    this.threads.delete(threadId);
+    this.broadcast("thread.deleted", { agentId: this.id, threadId });
+    return { ok: true };
   }
 
   async sendTurn(
@@ -621,8 +722,10 @@ export class ClaudeAdapter extends EventEmitter {
         options.suggestions,
         options.signal,
       );
-    const permissionMode =
-      thread.approvalPolicy === "never" ? "bypassPermissions" : "default";
+    const permissionMode = (thread.permissionMode ||
+      (thread.approvalPolicy === "never"
+        ? "bypassPermissions"
+        : "default")) as PermissionMode;
     let query: Query | undefined;
     try {
       const runtime = await this.turnRuntime(thread.cwd);
@@ -1137,6 +1240,7 @@ export class ClaudeAdapter extends EventEmitter {
       providerId: current?.providerId || parsed.summary.providerId,
       status: current?.status || parsed.summary.status,
       lastError: current?.lastError,
+      permissionMode: current?.permissionMode || "default",
       controlMode: "managed",
     });
     this.broadcast("thread.updated", this.threads.get(threadId));

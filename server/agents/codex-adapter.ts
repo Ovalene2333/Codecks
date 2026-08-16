@@ -62,6 +62,7 @@ import type {
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
   archive: true,
+  delete: true,
   fork: true,
   images: true,
   interrupt: true,

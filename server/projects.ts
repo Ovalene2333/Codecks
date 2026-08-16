@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  ClaudePermissionMode,
   ApprovalPolicy,
   ApprovalsReviewer,
   ConnectionOverlay,
@@ -287,6 +288,7 @@ export class ProjectStore {
     sandbox?: SandboxMode;
     approvalPolicy?: ApprovalPolicy;
     approvalsReviewer?: ApprovalsReviewer;
+    permissionMode?: ClaudePermissionMode;
   }) {
     const key = normalizeProjectPath(input.cwd);
     const old = this.projects.get(key);
@@ -303,6 +305,8 @@ export class ProjectStore {
       if (input.approvalsReviewer)
         defaults.approvalsReviewer = input.approvalsReviewer;
     }
+    if (!defaults.permissionMode && input.permissionMode)
+      defaults.permissionMode = input.permissionMode;
     this.projects.set(key, {
       key,
       cwd: old?.cwd || input.cwd,
@@ -323,6 +327,7 @@ export class ProjectStore {
       lastApprovalPolicy: input.approvalPolicy || this.prefs.lastApprovalPolicy,
       lastApprovalsReviewer:
         input.approvalsReviewer || this.prefs.lastApprovalsReviewer,
+      lastPermissionMode: input.permissionMode || this.prefs.lastPermissionMode,
       recentDirs: [
         input.cwd,
         ...this.prefs.recentDirs.filter(

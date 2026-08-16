@@ -138,13 +138,17 @@ export {
 - 将 assistant 文本、思考、tool use 和 tool result 归一化为通用 Turn item。
 - 将 SDK partial message 映射为带 `agentId='claude'` 的 `agent.event`。
 - 用 `canUseTool` 暂停工具执行，将批准一次、会话内批准和拒绝回送 SDK。
+- 提供 Default、Sonnet、Opus、Haiku 模型目录和手动模型 ID，并把会话模型传给每个 query。
+- 暴露 SDK 原生 `default`、`acceptEdits`、`plan`、`dontAsk`、`bypassPermissions`
+  权限模式；空闲时修改，从下一个 turn 生效。
+- 将重命名写成 Claude JSONL `custom-title` 记录；永久删除同时移除 JSONL 和历史索引。
 - 只读加载 CC Switch `app_type='claude'` 配置；仅允许带自定义
   `ANTHROPIC_BASE_URL` 和 relay 凭据的中转配置，明确拒绝 Claude Official；认证
   环境变量只传给查询进程。
 
-Claude 当前声明 `approvals`、`images` 和 `interrupt`。没有实现的 fork、archive、
-review、shell、MCP/Skills 枚举、模型枚举和动态会话设置保持关闭。网页接线时必须按
-该 capability matrix 隐藏并禁用对应操作。
+Claude 当前声明 `approvals`、`images`、`interrupt`、`models`、`sessionSettings`
+和 `delete`。没有实现的 fork、archive、compact、review、shell 和 MCP/Skills 枚举
+保持关闭。网页接线时必须按该 capability matrix 隐藏并禁用对应操作。
 
 ## 新增 Adapter 的顺序
 

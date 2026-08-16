@@ -198,6 +198,17 @@ app.get(
     profiles: agents.profiles(agentId(req.params.agentId)),
   })),
 );
+app.get(
+  "/api/agents/:agentId/models",
+  route(async (req) =>
+    agents.models(
+      agentId(req.params.agentId),
+      typeof req.query.providerId === "string"
+        ? req.query.providerId
+        : undefined,
+    ),
+  ),
+);
 app.post(
   "/api/agents/:agentId/threads",
   route(async (req) => {
@@ -212,6 +223,15 @@ app.post(
         personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
         approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
         approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
+        permissionMode: z
+          .enum([
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk",
+            "bypassPermissions",
+          ])
+          .optional(),
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
@@ -229,6 +249,7 @@ app.post(
       sandbox: input.sandbox,
       approvalPolicy: input.approvalPolicy,
       approvalsReviewer: input.approvalsReviewer,
+      permissionMode: input.permissionMode,
     });
     return thread;
   }),
@@ -238,6 +259,56 @@ app.get(
   route(async (req) =>
     agents.readThread(agentId(req.params.agentId), param(req.params.threadId)),
   ),
+);
+app.patch(
+  "/api/agents/:agentId/threads/:threadId",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    const input = z
+      .object({
+        name: z.string().min(1).optional(),
+        settings: z
+          .object({
+            model: z.string().min(1).optional(),
+            reasoningEffort: z.string().optional(),
+            personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
+            approvalPolicy: z
+              .enum(["untrusted", "on-request", "never"])
+              .optional(),
+            approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
+            sandbox: z
+              .enum(["read-only", "workspace-write", "danger-full-access"])
+              .optional(),
+            serviceTier: z.string().min(1).nullable().optional(),
+            permissionMode: z
+              .enum([
+                "default",
+                "acceptEdits",
+                "plan",
+                "dontAsk",
+                "bypassPermissions",
+              ])
+              .optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+    if (input.name) await agents.renameThread(id, threadId, input.name);
+    if (input.settings)
+      await agents.updateThreadSettings(id, threadId, input.settings);
+    return fullSnapshot();
+  }),
+);
+app.delete(
+  "/api/agents/:agentId/threads/:threadId",
+  route(async (req) => {
+    await agents.deleteThread(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    );
+    return fullSnapshot();
+  }),
 );
 app.post(
   "/api/agents/:agentId/threads/:threadId/turns",
@@ -363,6 +434,15 @@ app.put(
               .enum(["untrusted", "on-request", "never"])
               .optional(),
             approvalsReviewer: z.enum(["user", "auto_review"]).optional(),
+            permissionMode: z
+              .enum([
+                "default",
+                "acceptEdits",
+                "plan",
+                "dontAsk",
+                "bypassPermissions",
+              ])
+              .optional(),
           })
           .merge(connectionOverlaySchema)
           .optional(),
@@ -416,6 +496,15 @@ app.put(
           .enum(["untrusted", "on-request", "never"])
           .optional(),
         lastApprovalsReviewer: z.enum(["user", "auto_review"]).optional(),
+        lastPermissionMode: z
+          .enum([
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk",
+            "bypassPermissions",
+          ])
+          .optional(),
         recentDirs: z.array(z.string()).optional(),
       })
       .merge(connectionOverlaySchema)

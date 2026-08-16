@@ -206,12 +206,12 @@
 
 @media (max-width: 760px) {
   .approval-inbox {
-    top: auto;
+    top: 82px;
     right: 10px;
-    bottom: max(10px, env(safe-area-inset-bottom));
+    bottom: calc(92px + env(safe-area-inset-bottom));
     left: 10px;
     width: auto;
-    max-height: calc(100dvh - 20px - env(safe-area-inset-bottom));
+    max-height: none;
     border-radius: 14px;
   }
 
@@ -244,7 +244,7 @@
   .approval-inbox-trigger {
     top: auto;
     right: 12px;
-    bottom: max(12px, env(safe-area-inset-bottom));
+    bottom: calc(92px + env(safe-area-inset-bottom));
     min-height: 46px;
   }
 

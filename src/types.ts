@@ -20,6 +20,8 @@ export type ApprovalPolicy = "untrusted" | "on-request" | "never";
 export type ApprovalsReviewer = "user" | "auto_review";
 export type ApprovalMode = ApprovalPolicy | "auto-review";
 export type Personality = "friendly" | "pragmatic" | "none";
+export type ClaudePermissionMode =
+  "default" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions";
 
 export interface TokenUsage {
   total?: number;
@@ -105,6 +107,7 @@ export interface ProjectDefaults extends ConnectionOverlay {
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
   approvalsReviewer?: ApprovalsReviewer;
+  permissionMode?: ClaudePermissionMode;
 }
 
 export interface ProjectRecord {
@@ -125,6 +128,7 @@ export interface DeckPreferences extends ConnectionOverlay {
   lastSandbox?: SandboxMode;
   lastApprovalPolicy?: ApprovalPolicy;
   lastApprovalsReviewer?: ApprovalsReviewer;
+  lastPermissionMode?: ClaudePermissionMode;
   recentDirs: string[];
 }
 
@@ -163,6 +167,7 @@ export interface ThreadSummary {
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
   approvalsReviewer?: ApprovalsReviewer;
+  permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
   forkedFromId?: string;
   sessionId?: string;
@@ -212,6 +217,7 @@ export interface RuntimeSnapshot {
 export interface AgentCapabilities {
   approvals: boolean;
   archive: boolean;
+  delete: boolean;
   fork: boolean;
   images: boolean;
   interrupt: boolean;

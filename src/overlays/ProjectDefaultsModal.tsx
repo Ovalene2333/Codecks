@@ -61,12 +61,14 @@ export function ProjectDefaultsModal({
           try {
             await onSave(
               {
+                agentId: defaults.agentId,
                 providerId: defaults.providerId,
                 model: defaults.model,
                 reasoningEffort: defaults.reasoningEffort,
                 sandbox: defaults.sandbox,
                 approvalPolicy: defaults.approvalPolicy,
                 approvalsReviewer: defaults.approvalsReviewer,
+                permissionMode: defaults.permissionMode,
                 requestMaxRetries: defaults.requestMaxRetries ?? null,
                 streamMaxRetries: defaults.streamMaxRetries ?? null,
                 streamIdleTimeoutMs: defaults.streamIdleTimeoutMs ?? null,

@@ -8,10 +8,10 @@ export function ContextBar({
 }: {
   usage?: TokenUsage;
   compacting?: boolean;
-  onCompact: () => void;
+  onCompact?: () => void;
 }) {
   const hasData = usage?.used != null || usage?.limit != null;
-  if (!hasData)
+  if (!hasData && onCompact)
     return (
       <button
         type="button"
@@ -32,20 +32,23 @@ export function ContextBar({
       : pct != null
         ? `${pct}%`
         : "";
+  if (!hasData) return null;
   return (
     <div className={`context-bar ${compacting ? "pulse" : ""}`}>
       <div className="context-track">
         <i style={{ width: `${pct || 0}%` }} />
       </div>
       <span>{label}</span>
-      <button
-        type="button"
-        className="text-btn compact-btn"
-        onClick={onCompact}
-        disabled={compacting}
-      >
-        压缩
-      </button>
+      {onCompact ? (
+        <button
+          type="button"
+          className="text-btn compact-btn"
+          onClick={onCompact}
+          disabled={compacting}
+        >
+          压缩
+        </button>
+      ) : null}
     </div>
   );
 }

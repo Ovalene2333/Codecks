@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -198,6 +198,79 @@ test("Claude adapter creates, streams, approves, and completes a native session"
         event.data.method === "item/agentMessage/delta",
     ),
   );
+});
+
+test("Claude adapter exposes models and persists session model and permissions", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deck-claude-settings-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const history = path.join(root, "session-settings.jsonl");
+  await writeFile(
+    history,
+    [
+      {
+        type: "user",
+        uuid: "u1",
+        sessionId: "session-settings",
+        cwd: "/work",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "configure me" },
+      },
+      {
+        type: "last-prompt",
+        leafUuid: "u1",
+        sessionId: "session-settings",
+      },
+    ]
+      .map(JSON.stringify)
+      .join("\n"),
+  );
+  const calls: any[] = [];
+  const adapter = new ClaudeAdapter({
+    initialProfiles: [relayProfile],
+    historyFiles: async () => [history],
+    queryFactory: mockQuery(async function* () {
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        usage: {
+          input_tokens: 1,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          output_tokens: 1,
+        },
+        modelUsage: {},
+        session_id: "session-settings",
+      };
+    }, calls),
+  });
+  await adapter.startAll();
+
+  assert.deepEqual(
+    adapter.listModels("claude-cc-relay").map((model) => model.model),
+    ["default", "sonnet", "opus", "haiku"],
+  );
+  await adapter.updateThreadSettings("claude-cc-relay", "session-settings", {
+    model: "opus",
+    permissionMode: "acceptEdits",
+  });
+  await adapter.sendTurn("claude-cc-relay", "session-settings", "use settings");
+  await waitFor(() => adapter.listThreads()[0].status === "idle");
+  assert.equal(calls[0].options.model, "opus");
+  assert.equal(calls[0].options.permissionMode, "acceptEdits");
+
+  await adapter.renameThread(
+    "claude-cc-relay",
+    "session-settings",
+    "Renamed Claude session",
+  );
+  assert.match(await readFile(history, "utf8"), /Renamed Claude session/);
+  await adapter.refreshAll();
+  assert.equal(adapter.listThreads()[0].name, "Renamed Claude session");
+
+  await adapter.deleteThread("claude-cc-relay", "session-settings");
+  assert.equal(adapter.listThreads().length, 0);
+  await assert.rejects(readFile(history, "utf8"), /ENOENT/);
 });
 
 test("Claude executable discovery keeps Windows npm launchers", async (t) => {
