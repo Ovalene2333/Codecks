@@ -42,6 +42,8 @@ import {
 import type {
   AccountInfo,
   ApprovalKind,
+  ApprovalPolicy,
+  ApprovalsReviewer,
   FileChange,
   ModelInfo,
   Personality,
@@ -49,6 +51,7 @@ import type {
   RateLimits,
   ReviewTarget,
   RpcMessage,
+  SandboxMode,
   ThreadSummary,
   TokenUsage,
   TurnImage,
@@ -530,9 +533,11 @@ export class CodexAdapter extends EventEmitter {
     const client = await this.ensure(providerId);
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
-    const sandbox = input.sandbox || "workspace-write";
-    const approvalPolicy = input.approvalPolicy || "on-request";
-    const approvalsReviewer = input.approvalsReviewer || "auto_review";
+    const sandbox = (input.sandbox || "workspace-write") as SandboxMode;
+    const approvalPolicy = (input.approvalPolicy ||
+      "on-request") as ApprovalPolicy;
+    const approvalsReviewer = (input.approvalsReviewer ||
+      "auto_review") as ApprovalsReviewer;
     const start: Record<string, unknown> = {
       cwd: this.useWsl ? windowsPathToWsl(input.cwd) : input.cwd,
       model: input.model || runtimeProvider.model || undefined,
@@ -549,6 +554,16 @@ export class CodexAdapter extends EventEmitter {
         threadId: result.thread.id,
         name: input.name,
       });
+    // The runtime history can report its provider default after creation.
+    // Preserve Deck's explicit thread choices before the next list refresh.
+    await this.threadSettings?.update(this.id, result.thread.id, {
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      personality: input.personality,
+      sandbox,
+      approvalPolicy,
+      approvalsReviewer,
+    });
     this.loadedThreads.add(result.thread.id);
     this.upsertThread(
       provider,
@@ -572,7 +587,7 @@ export class CodexAdapter extends EventEmitter {
       },
       "idle",
     );
-    return result.thread;
+    return this.threads.get(result.thread.id) || result.thread;
   }
 
   async listModels(providerId: string): Promise<ModelInfo[]> {

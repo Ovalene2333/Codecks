@@ -604,6 +604,59 @@ test("createThread forwards model and reasoning effort", async () => {
   assert.equal(manager.listThreads()[0].approvalsReviewer, "auto_review");
 });
 
+test("createThread saves its model choice against a later runtime default", async () => {
+  const provider = {
+    id: "provider",
+    name: "OpenAI",
+    kind: "local-profile",
+    model: "gpt-5.6-sol",
+  };
+  const saved: any[] = [];
+  const settings = {
+    get: () => undefined,
+    update: async (...args: any[]) => saved.push(args),
+  };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    false,
+    settings as any,
+  ) as any;
+  manager.ensure = async () => ({
+    request: async () => ({
+      thread: {
+        id: "fresh",
+        cwd: "/tmp/project",
+        model: "gpt-5.6-sol",
+      },
+    }),
+  });
+
+  const thread = await manager.createThread("provider", {
+    cwd: "/tmp/project",
+    model: "gpt-5.6-terra",
+  });
+
+  assert.equal(thread.model, "gpt-5.6-terra");
+  assert.deepEqual(saved[0], [
+    "codex",
+    "fresh",
+    {
+      model: "gpt-5.6-terra",
+      reasoningEffort: undefined,
+      personality: undefined,
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    },
+  ]);
+});
+
 test("createThread defaults to Workspace Write with auto review", async () => {
   const provider = {
     id: "provider",
