@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   exposeEnvironmentToWsl,
   shouldUseWslRuntime,
+  WSL_CLAUDE_SHELL_COMMAND,
   WSL_CODEX_SHELL_COMMAND,
   windowsPathToWsl,
+  wslPathToWindows,
 } from "./runtime-platform.js";
 
 test("--wsl only selects a WSL runtime from a Windows host", () => {
@@ -20,6 +22,13 @@ test("WSL Codex startup loads nvm and rejects Windows path shims", () => {
   assert.match(WSL_CODEX_SHELL_COMMAND, /exec "\$@"/);
 });
 
+test("WSL Claude startup loads nvm, changes cwd, and rejects Windows shims", () => {
+  assert.match(WSL_CLAUDE_SHELL_COMMAND, /\.nvm\/nvm\.sh/);
+  assert.match(WSL_CLAUDE_SHELL_COMMAND, /\/mnt\/\*/);
+  assert.match(WSL_CLAUDE_SHELL_COMMAND, /cd -- "\$2"/);
+  assert.match(WSL_CLAUDE_SHELL_COMMAND, /exec "\$@"/);
+});
+
 test("Windows paths are translated for a WSL runtime", () => {
   assert.equal(windowsPathToWsl("D:\\Code\\deck"), "/mnt/d/Code/deck");
   assert.equal(windowsPathToWsl("C:\\"), "/mnt/c");
@@ -30,9 +39,19 @@ test("Windows paths are translated for a WSL runtime", () => {
   );
 });
 
+test("mounted WSL paths are translated back for Windows fallbacks", () => {
+  assert.equal(wslPathToWindows("/mnt/d/Code/deck"), "D:\\Code\\deck");
+  assert.equal(wslPathToWindows("/mnt/c"), "C:\\");
+  assert.equal(wslPathToWindows("/home/tester/repo"), "/home/tester/repo");
+});
+
 test("WSLENV forwards runtime variables without discarding existing entries", () => {
   const env = exposeEnvironmentToWsl(
-    { WSLENV: "KEEP/u:CODEX_HOME", CODEX_HOME: "/home/tester/.codex", API_KEY: "secret" },
+    {
+      WSLENV: "KEEP/u:CODEX_HOME",
+      CODEX_HOME: "/home/tester/.codex",
+      API_KEY: "secret",
+    },
     ["CODEX_HOME", "API_KEY"],
   );
   assert.equal(env.WSLENV, "KEEP/u:CODEX_HOME:API_KEY");
