@@ -3,10 +3,11 @@ import { FolderOpen, Keyboard, Power, RefreshCw } from "lucide-react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { getToken } from "../api";
-import type { ToolDescriptor } from "../types";
+import { getToken } from "../../src/api";
+import type { ToolViewProps } from "../client-registry";
 
-type ConnectionState = "loading" | "connecting" | "connected" | "exited" | "error";
+type ConnectionState =
+  "idle" | "loading" | "connecting" | "connected" | "exited" | "error";
 
 function terminalTheme() {
   const style = getComputedStyle(document.documentElement);
@@ -37,23 +38,17 @@ function terminalTheme() {
   };
 }
 
-export function WebTerminalView({
+export function TerminalView({
   tool,
   initialCwd,
   directories,
   onToast,
-}: {
-  tool: ToolDescriptor;
-  initialCwd?: string;
-  directories: string[];
-  onToast: (message: string) => void;
-}) {
+}: ToolViewProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const generationRef = useRef(0);
-  const autoStarted = useRef(false);
   const [cwd, setCwd] = useState(
     initialCwd || directories[0] || tool.defaultCwd || "",
   );
@@ -88,7 +83,9 @@ export function WebTerminalView({
         terminalRef.current = terminal;
         fitRef.current = fitAddon;
         fitAddon.fit();
-        terminal.writeln("\x1b[2m正在连接宿主机终端…\x1b[0m");
+        terminal.writeln(
+          "\x1b[2m终端已就绪，点击连接后启动宿主机 Shell。\x1b[0m",
+        );
         terminal.onData((data) => {
           const socket = socketRef.current;
           if (socket?.readyState === WebSocket.OPEN)
@@ -108,6 +105,7 @@ export function WebTerminalView({
         });
         resizeObserver.observe(mountRef.current);
         setReady(true);
+        setState("idle");
       })
       .catch((error) => {
         if (disposed) return;
@@ -191,12 +189,6 @@ export function WebTerminalView({
     };
   }, [cwd, onToast, tool.available, tool.id]);
 
-  useEffect(() => {
-    if (!ready || autoStarted.current || !cwd) return;
-    autoStarted.current = true;
-    connect();
-  }, [connect, cwd, ready]);
-
   const send = (data: string) => {
     const socket = socketRef.current;
     if (socket?.readyState !== WebSocket.OPEN) return;
@@ -235,14 +227,16 @@ export function WebTerminalView({
           <i />
           {connected
             ? `已连接${pid ? ` · PID ${pid}` : ""}`
-            : state === "connecting" || state === "loading"
+            : state === "connecting"
               ? "连接中"
-              : "已断开"}
+              : state === "loading"
+                ? "加载中"
+                : "已断开"}
         </span>
         <button
           type="button"
           className="icon-btn"
-          title={connected ? "重新启动终端" : "连接终端"}
+          title={connected ? "重新连接终端" : "连接终端"}
           disabled={!ready || !cwd.trim()}
           onClick={connect}
         >
@@ -260,11 +254,21 @@ export function WebTerminalView({
       </header>
       <div className="terminal-screen" ref={mountRef} />
       <div className="terminal-mobile-keys" aria-label="终端快捷键">
-        <button type="button" onClick={() => send("\u001b")}>Esc</button>
-        <button type="button" onClick={() => send("\u0003")}>Ctrl C</button>
-        <button type="button" onClick={() => send("\t")}>Tab</button>
-        <button type="button" onClick={() => send("\u001b[D")}>←</button>
-        <button type="button" onClick={() => send("\u001b[C")}>→</button>
+        <button type="button" onClick={() => send("\u001b")}>
+          Esc
+        </button>
+        <button type="button" onClick={() => send("\u0003")}>
+          Ctrl C
+        </button>
+        <button type="button" onClick={() => send("\t")}>
+          Tab
+        </button>
+        <button type="button" onClick={() => send("\u001b[D")}>
+          ←
+        </button>
+        <button type="button" onClick={() => send("\u001b[C")}>
+          →
+        </button>
         <button
           type="button"
           title="打开键盘"

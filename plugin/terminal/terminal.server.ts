@@ -3,8 +3,8 @@ import path from "node:path";
 import * as pty from "node-pty";
 import { z } from "zod";
 import { WebSocket } from "ws";
-import { windowsPathToWsl } from "../runtime-platform.js";
-import type { DeckTool, ToolDescriptor } from "./types.js";
+import { windowsPathToWsl } from "../../server/runtime-platform.js";
+import type { DeckTool, ToolDescriptor } from "../server-registry.js";
 
 const messageSchema = z.discriminatedUnion("type", [
   z.object({
@@ -55,7 +55,8 @@ export function terminalShellSpec(
     };
   }
   return {
-    file: env.SHELL?.trim() || (platform === "darwin" ? "/bin/zsh" : "/bin/bash"),
+    file:
+      env.SHELL?.trim() || (platform === "darwin" ? "/bin/zsh" : "/bin/bash"),
     args: ["-l"],
     cwd,
   };

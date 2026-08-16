@@ -33,14 +33,14 @@ import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
-import { ToolRegistry } from "./tools/types.js";
-import { WebTerminalTool } from "./tools/web-terminal.js";
+import { ToolRegistry } from "../plugin/server-registry.js";
+import { GitTool } from "../plugin/git/git.server.js";
+import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
   here,
-  "..",
-  ...(here.endsWith("dist-server") ? [] : [".."]),
+  path.basename(path.dirname(here)) === "dist-server" ? "../.." : "..",
 );
 for (const file of [
   path.join(process.cwd(), ".env"),
@@ -145,6 +145,7 @@ const sessionSearch = new SessionSearchIndexer(
 );
 const tools = new ToolRegistry([
   new WebTerminalTool({ useWsl, processCwd: projectRoot }),
+  new GitTool({ useWsl, processCwd: projectRoot }),
 ]);
 const fullSnapshot = () => ({
   ...agents.snapshot(),
@@ -250,6 +251,10 @@ app.post(
 app.get(
   "/api/tools",
   route(async () => ({ tools: tools.list() })),
+);
+app.post(
+  "/api/tools/:toolId/run",
+  route(async (req) => tools.run(param(req.params.toolId), req.body || {})),
 );
 app.get(
   "/api/agents/:agentId/profiles",

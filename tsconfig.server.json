@@ -7,10 +7,16 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist-server",
-    "rootDir": "server",
+    "rootDir": ".",
     "types": ["node"],
     "noEmit": false
   },
-  "include": ["server/**/*.ts"],
-  "exclude": ["server/**/*.test.ts"]
+  "include": [
+    "server/**/*.ts",
+    "plugin/**/*.server.ts",
+    "plugin/**/*.types.ts",
+    "plugin/server-registry.ts",
+    "plugin/types.ts"
+  ],
+  "exclude": ["server/**/*.test.ts", "plugin/**/*.test.ts"]
 }

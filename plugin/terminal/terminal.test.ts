@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import { WebSocket } from "ws";
-import { WebTerminalTool, terminalShellSpec } from "./web-terminal.js";
+import { WebTerminalTool, terminalShellSpec } from "./terminal.server.js";
 
 test("Windows WSL terminal enters the requested Linux cwd", () => {
   assert.deepEqual(
@@ -101,7 +101,11 @@ test("web terminal bridges PTY output, input, resize and close", async () => {
     ),
   );
   for (let attempt = 0; attempt < 50; attempt++) {
-    if (sent.some((message) => message.type === "ready" || message.type === "error"))
+    if (
+      sent.some(
+        (message) => message.type === "ready" || message.type === "error",
+      )
+    )
       break;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -111,7 +115,10 @@ test("web terminal bridges PTY output, input, resize and close", async () => {
     4321,
     sent.find((message) => message.type === "error")?.message,
   );
-  socket.emit("message", Buffer.from(JSON.stringify({ type: "input", data: "pwd\r" })));
+  socket.emit(
+    "message",
+    Buffer.from(JSON.stringify({ type: "input", data: "pwd\r" })),
+  );
   socket.emit(
     "message",
     Buffer.from(JSON.stringify({ type: "resize", cols: 120, rows: 40 })),

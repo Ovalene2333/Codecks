@@ -1,0 +1,130 @@
+.web-terminal-tool {
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--terminal-bg);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 9px 0 12px;
+  border-bottom: 1px solid #2a3237;
+  background: #151a1e;
+}
+.terminal-toolbar label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+}
+.terminal-toolbar label > svg {
+  width: 14px;
+  flex: none;
+  color: #7f8b92;
+}
+.terminal-toolbar input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid #313a40;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: #0e1316;
+  color: #d9e0e3;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+.terminal-toolbar input:disabled {
+  opacity: 0.72;
+}
+.terminal-toolbar .icon-btn {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  color: #aeb8bd;
+}
+.terminal-toolbar .terminal-power:not(:disabled) {
+  color: #f28b94;
+}
+.terminal-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: #849198;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.terminal-connection i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.terminal-connection.online {
+  color: #59d98e;
+}
+.terminal-screen {
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 10px 7px;
+  overflow: hidden;
+}
+.terminal-screen .xterm {
+  height: 100%;
+}
+.terminal-screen .xterm-viewport {
+  scrollbar-color: #3a454b transparent;
+  scrollbar-width: thin;
+}
+.terminal-mobile-keys {
+  display: none;
+}
+@media (max-width: 720px) {
+  .web-terminal-tool {
+    grid-template-rows: 48px minmax(0, 1fr) 48px;
+    border-radius: var(--radius-sm);
+  }
+  .terminal-toolbar {
+    padding: 0 6px 0 9px;
+  }
+  .terminal-connection {
+    display: none;
+  }
+  .terminal-toolbar .icon-btn {
+    width: 38px;
+    height: 38px;
+  }
+  .terminal-screen {
+    padding: 8px 6px 5px;
+  }
+  .terminal-mobile-keys {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid #2a3237;
+    background: #2a3237;
+  }
+  .terminal-mobile-keys button {
+    min-width: 0;
+    border: 0;
+    border-radius: 0;
+    background: #171d21;
+    color: #c4cdd1;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .terminal-mobile-keys svg {
+    width: 16px;
+  }
+}

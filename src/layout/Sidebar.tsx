@@ -5,6 +5,7 @@ import {
   BellRing,
   Bot,
   Gauge,
+  GitBranch,
   Plus,
   RefreshCw,
   Search,
@@ -99,7 +100,7 @@ export function Sidebar({
   onProviders: () => void;
   onUsage: (view: UsageView) => void;
   onTasks: () => void;
-  onTools: () => void;
+  onTools: (pathname?: string) => void;
   onNotifications: () => void;
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
@@ -396,6 +397,20 @@ export function Sidebar({
                   <span>
                     <b>终端</b>
                     <small>打开 Web Terminal</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onTools("/git");
+                  }}
+                >
+                  <GitBranch />
+                  <span>
+                    <b>Git 管理</b>
+                    <small>改动、提交与分支</small>
                   </span>
                 </button>
                 <button
