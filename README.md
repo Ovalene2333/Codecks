@@ -105,6 +105,8 @@ npm run dev
 
 ### Claude Code 后端适配
 
+> **实验性支持。** Claude Code adapter 尚未经过完整的环境与工作流测试，请先在非关键任务中验证。它不支持 Claude 官方登录（包括 Claude.ai / Anthropic 账号登录或订阅认证）；仅支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转服务。
+
 Codecks 会同时注册 Codex 与 Claude Code adapter。新建 Session 时选择 Agent；同一实例和同一项目可以并存两种 Agent，会话创建后类型固定，项目会记住最近一次选择作为下次默认值。侧栏用 Agent 标签区分混合会话，不需要在启动 Codecks 时锁定类型。
 
 Claude adapter 使用官方 Agent SDK，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入、取消任务、模型选择、权限模式、重命名和永久删除。模型可选 Default、Sonnet、Opus、Haiku，也可手动输入完整模型 ID；权限可选按需询问、自动接受编辑、Plan、拒绝权限询问和跳过权限检查。模型与权限在任务空闲时修改，从下一个 turn 生效。Windows 自动模式只复用 `PATH` 中可直接执行的独立 `claude.exe`，不会误选 npm 生成的无扩展名、`.cmd` 或包内 shim；没有独立安装时使用 SDK 随附 CLI。显式设置 `CLAUDE_BIN` 仍可指定 `.cmd`，并通过 `cmd.exe` 启动。Linux 优先发现系统 Claude，同时跳过 `/mnt/<盘符>` 下的 Windows shim。Windows `--wsl` 模式优先使用 WSL 中安装的 Claude，并共享 Windows 用户的 Claude 配置与历史；若 WSL 未安装 Claude，`/mnt/<盘符>` 项目会自动回退到 Windows SDK CLI，`/home/...` 项目则会给出明确的安装提示。Codecks 只支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转配置，明确不支持 Claude Official；认证环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
