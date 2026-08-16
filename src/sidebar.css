@@ -402,6 +402,28 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.thread-list .thread-meta .agent-badge,
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 17px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  white-space: nowrap;
+}
+.agent-badge.agent-codex {
+  color: #68b89a;
+  background: color-mix(in srgb, #68b89a 9%, transparent);
+}
+.agent-badge.agent-claude {
+  color: #d98b70;
+  background: color-mix(in srgb, #d98b70 9%, transparent);
+}
 
 .sidebar-footer {
   display: grid;

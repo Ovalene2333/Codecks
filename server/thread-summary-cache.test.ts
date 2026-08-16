@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -40,4 +40,23 @@ test("thread summary cache ignores malformed rows", async () => {
     (await new ThreadSummaryCache(dir).load()).threads.map((item) => item.id),
     ["thread-1"],
   );
+});
+
+test("thread summary cache never restores or persists compacting state", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-cache-compact-"));
+  const cache = new ThreadSummaryCache(dir);
+  cache.schedule([{ ...thread, compacting: true }]);
+  await cache.flush();
+
+  const raw = await readFile(path.join(dir, "thread-summaries.json"), "utf8");
+  assert.doesNotMatch(raw, /compacting/);
+
+  const legacy = JSON.parse(raw);
+  legacy.threads[0].compacting = true;
+  await writeFile(
+    path.join(dir, "thread-summaries.json"),
+    JSON.stringify(legacy),
+  );
+  const loaded = await new ThreadSummaryCache(dir).load();
+  assert.equal(loaded.threads[0]?.compacting, false);
 });

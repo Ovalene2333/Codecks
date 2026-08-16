@@ -48,6 +48,11 @@ export function ProviderModal({
   const [repairingHistory, setRepairingHistory] = useState(false);
   const hasCcSwitch = providers.some((p) => p.kind === "cc-switch");
   const codex = agents.find((agent) => agent.id === "codex");
+  const isClaudeProvider = (p: Provider) => {
+    const model = (p.model || "").toLowerCase();
+    const url = (p.baseUrl || "").toLowerCase();
+    return model.includes("claude") || url.includes("anthropic");
+  };
   const repairHistory = async () => {
     setError("");
     setRepairingHistory(true);
@@ -155,63 +160,86 @@ export function ProviderModal({
         </button>
       </div>
       <div className="provider-list">
-        {providers.map((p) => (
-          <div className="provider-row" key={p.id}>
-            <span
-              className="provider-logo"
-              style={{ "--color": p.color } as any}
-            >
-              <Server />
-            </span>
-            <div>
-              <b>
-                {p.name}
-                {p.current && <mark>当前</mark>}
-              </b>
-              <small>
-                {p.kind === "cc-switch"
-                  ? `CC Switch · ${p.baseUrl || "官方登录"}${
-                      p.baseUrl && !p.hasApiKey ? " · 无独立 Key" : ""
-                    }`
-                  : p.kind === "custom"
-                    ? `${p.baseUrl} · ${p.wireApi || "responses"}`
-                    : "使用当前 Codex 登录"}
-              </small>
+        {(() => {
+          const ccProviders = providers.filter((p) => p.kind === "cc-switch");
+          const otherProviders = providers.filter((p) => p.kind !== "cc-switch");
+          const codexCc = ccProviders.filter((p) => !isClaudeProvider(p));
+          const claudeCc = ccProviders.filter((p) => isClaudeProvider(p));
+          const renderRow = (p: Provider) => (
+            <div className="provider-row" key={p.id}>
+              <span
+                className="provider-logo"
+                style={{ "--color": p.color } as any}
+              >
+                <Server />
+              </span>
+              <div>
+                <b>
+                  {p.name}
+                  {p.current && <mark>当前</mark>}
+                </b>
+                <small>
+                  {p.kind === "cc-switch"
+                    ? `${p.baseUrl || "官方登录"}${
+                        p.baseUrl && !p.hasApiKey ? " · 无独立 Key" : ""
+                      }`
+                    : p.kind === "custom"
+                      ? `${p.baseUrl} · ${p.wireApi || "responses"}`
+                      : "使用当前 Codex 登录"}
+                </small>
+              </div>
+              <span className={runtime?.online ? "online" : "offline-dot"}>
+                {runtime?.configPending
+                  ? "待应用"
+                  : runtime?.online
+                    ? "已装入"
+                    : runtime?.starting
+                      ? "启动中"
+                      : "未装入"}
+              </span>
+              {runtime?.online && (
+                <button
+                  className="icon-btn"
+                  type="button"
+                  title={`复制 ${p.name} 的终端接入命令`}
+                  onClick={() => copyCommand(p.id)}
+                >
+                  <Command />
+                </button>
+              )}
+              {p.kind === "custom" && (
+                <button
+                  className="icon-btn danger"
+                  title="删除"
+                  onClick={() =>
+                    onConfirmDelete(p, async () => {
+                      onSaved(await remove(`/providers/${p.id}`));
+                    })
+                  }
+                >
+                  <Trash2 />
+                </button>
+              )}
             </div>
-            <span className={runtime?.online ? "online" : "offline-dot"}>
-              {runtime?.configPending
-                ? "待应用"
-                : runtime?.online
-                  ? "已装入"
-                  : runtime?.starting
-                    ? "启动中"
-                    : "未装入"}
-            </span>
-            {runtime?.online && (
-              <button
-                className="icon-btn"
-                type="button"
-                title={`复制 ${p.name} 的终端接入命令`}
-                onClick={() => copyCommand(p.id)}
-              >
-                <Command />
-              </button>
-            )}
-            {p.kind === "custom" && (
-              <button
-                className="icon-btn danger"
-                title="删除"
-                onClick={() =>
-                  onConfirmDelete(p, async () => {
-                    onSaved(await remove(`/providers/${p.id}`));
-                  })
-                }
-              >
-                <Trash2 />
-              </button>
-            )}
-          </div>
-        ))}
+          );
+          return (
+            <>
+              {otherProviders.map(renderRow)}
+              {codexCc.length > 0 && (
+                <>
+                  <p className="provider-group-label">Codex 供应商</p>
+                  {codexCc.map(renderRow)}
+                </>
+              )}
+              {claudeCc.length > 0 && (
+                <>
+                  <p className="provider-group-label">Claude 供应商</p>
+                  {claudeCc.map(renderRow)}
+                </>
+              )}
+            </>
+          );
+        })()}
       </div>
       {runtime?.configPending && (
         <div className="sync-note pending">

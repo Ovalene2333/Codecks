@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ProviderStore } from "../store.js";
 import type { ProjectStore } from "../projects.js";
+import type { ThreadSettingsStore } from "../thread-settings.js";
 import { CodexClient } from "../codex-client.js";
 import { CodexUsageStore, loadCodexRolloutUsages } from "../codex-usage.js";
 import {
@@ -74,6 +75,8 @@ const CODEX_CAPABILITIES: AgentCapabilities = {
   skills: true,
 };
 
+const COMPACTION_TIMEOUT_MS = 10 * 60_000;
+
 function stateDbOnlyUnsupported(error: unknown) {
   const message = String((error as any)?.message || error);
   return (
@@ -104,6 +107,7 @@ export class CodexAdapter extends EventEmitter {
   private rateLimitsError?: string;
   private archiveError?: string;
   private pendingFileChanges = new Map<string, FileChange[]>();
+  private compactionTimers = new Map<string, NodeJS.Timeout>();
   private usageStore: CodexUsageStore;
   private rolloutUsageLoaded = false;
   private historyStatus: AgentHistoryStatus;
@@ -118,12 +122,18 @@ export class CodexAdapter extends EventEmitter {
     private projects?: ProjectStore,
     initialThreads: ThreadSummary[] = [],
     private repairEmptyStateDb = false,
+    private threadSettings?: ThreadSettingsStore,
   ) {
     super();
     this.usageStore = new CodexUsageStore(dataDir);
     for (const thread of initialThreads) {
       if ((thread.agentId || "codex") !== "codex") continue;
-      this.threads.set(thread.id, { ...thread, agentId: "codex" });
+      this.threads.set(thread.id, {
+        ...thread,
+        ...this.threadSettings?.get(this.id, thread.id),
+        agentId: "codex",
+        compacting: false,
+      });
       this.knownRollouts.add(thread.id);
     }
     this.historyStatus = this.threads.size ? "cached" : "loading";
@@ -204,9 +214,10 @@ export class CodexAdapter extends EventEmitter {
       this.broadcast("runtime.status", { online: true });
       void this.loadOfficialUsage();
     });
-    client.on("offline", (error) =>
-      this.broadcast("runtime.status", { online: false, error }),
-    );
+    client.on("offline", (error) => {
+      this.clearCompactions();
+      this.broadcast("runtime.status", { online: false, error });
+    });
     await client.start();
     if (this.client !== client) {
       client.stop();
@@ -225,6 +236,7 @@ export class CodexAdapter extends EventEmitter {
   }
 
   restart(_providerId?: string) {
+    this.clearCompactions();
     this.client?.stop();
     this.client = undefined;
     this.startingClient = undefined;
@@ -1192,14 +1204,53 @@ export class CodexAdapter extends EventEmitter {
   }
 
   async compactThread(providerId: string, threadId: string) {
-    const client = await this.ensure(providerId);
     const existing = this.threads.get(threadId);
-    if (existing) {
-      existing.compacting = true;
-      existing.updatedAt = Date.now();
-      this.broadcast("thread.updated", existing);
+    if (existing) this.setCompacting(existing, true, true);
+    try {
+      const client = await this.prepareThread(providerId, threadId);
+      return await client.request("thread/compact/start", { threadId });
+    } catch (error) {
+      if (existing) this.setCompacting(existing, false, true);
+      throw error;
     }
-    return client.request("thread/compact/start", { threadId });
+  }
+
+  private setCompacting(
+    thread: ThreadSummary,
+    compacting: boolean,
+    notify = false,
+  ) {
+    const timer = this.compactionTimers.get(thread.id);
+    if (timer) clearTimeout(timer);
+    this.compactionTimers.delete(thread.id);
+    thread.compacting = compacting;
+    if (compacting) {
+      const next = setTimeout(() => {
+        this.compactionTimers.delete(thread.id);
+        const current = this.threads.get(thread.id);
+        if (!current?.compacting) return;
+        current.compacting = false;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+      }, COMPACTION_TIMEOUT_MS);
+      next.unref();
+      this.compactionTimers.set(thread.id, next);
+    }
+    if (notify) {
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+    }
+  }
+
+  private clearCompactions() {
+    for (const timer of this.compactionTimers.values()) clearTimeout(timer);
+    this.compactionTimers.clear();
+    for (const thread of this.threads.values()) {
+      if (!thread.compacting) continue;
+      thread.compacting = false;
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+    }
   }
 
   async interrupt(providerId: string, threadId: string, turnId: string) {
@@ -1362,6 +1413,7 @@ export class CodexAdapter extends EventEmitter {
         status || this.loadedThreads.has(thread.id)
           ? "managed"
           : old?.controlMode || "history",
+      ...this.threadSettings?.get(this.id, key),
     };
     this.threads.set(key, item);
     if (parsedUsage) this.rememberUsage(item.id, parsedUsage);
@@ -1419,9 +1471,7 @@ export class CodexAdapter extends EventEmitter {
       return this.broadcast("codex.event", { agentId: this.id, ...message });
     }
     if (thread) this.upsertThread(this.providerForThread(thread), thread);
-    const existing = params.threadId
-      ? this.threads.get(params.threadId)
-      : undefined;
+    const existing = threadId ? this.threads.get(threadId) : undefined;
     if (existing) {
       existing.controlMode = "managed";
       if (message.method === "thread/status/changed") {
@@ -1445,7 +1495,7 @@ export class CodexAdapter extends EventEmitter {
       if (message.method === "turn/completed") {
         existing.status = params.turn?.status === "failed" ? "error" : "idle";
         existing.activeTurnId = undefined;
-        existing.compacting = false;
+        this.setCompacting(existing, false);
         const error = this.turnError(params.turn?.error);
         existing.lastError = error?.message;
         existing.errorCode = error?.code;
@@ -1455,6 +1505,7 @@ export class CodexAdapter extends EventEmitter {
         const error = this.turnError(params.error);
         existing.status = "error";
         existing.activeTurnId = undefined;
+        this.setCompacting(existing, false);
         existing.lastError = error?.message || "Codex 任务失败";
         existing.errorCode = error?.code;
         if (this.isUsageLimitError(error?.code)) void this.loadOfficialUsage();
@@ -1475,12 +1526,21 @@ export class CodexAdapter extends EventEmitter {
         message.method === "thread/compact/started" ||
         message.method === "thread/compact/start"
       )
-        existing.compacting = true;
+        this.setCompacting(existing, true);
       if (
         message.method === "thread/compact/completed" ||
         message.method === "thread/compacted"
       )
-        existing.compacting = false;
+        this.setCompacting(existing, false);
+      if (
+        item?.type === "contextCompaction" ||
+        item?.type === "context_compaction"
+      ) {
+        if (message.method === "item/started")
+          this.setCompacting(existing, true);
+        if (message.method === "item/completed")
+          this.setCompacting(existing, false);
+      }
       if (message.method === "thread/settings/updated") {
         const settings = params.threadSettings || params.settings || {};
         if (settings.model) existing.model = settings.model;

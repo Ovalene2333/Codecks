@@ -66,6 +66,49 @@ test("normalized history ids do not duplicate completed streamed messages", () =
   assert.equal((html.match(/message agent/g) || []).length, 1);
 });
 
+test("a persisted Claude message stays before its following tool while streaming", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "claude-current",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "sonnet",
+    status: "running",
+    updatedAt: Date.now(),
+    activeTurnId: "turn-1",
+    agentId: "claude",
+  };
+  const text = "Let me search the project styles for the provider row.";
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-1",
+        status: "inProgress",
+        items: [
+          {
+            id: "history-message",
+            type: "agentMessage",
+            text: `${text} Done.`,
+          },
+          {
+            id: "tool-1",
+            type: "commandExecution",
+            command: "rg provider-row",
+            status: "completed",
+          },
+        ],
+      },
+      index: 1,
+      thread,
+      streamed: [{ itemId: "live-api-id", text }],
+    }),
+  );
+
+  assert.equal(html.split(text).length - 1, 1);
+  assert.ok(html.indexOf(text) < html.indexOf("rg provider-row"));
+});
+
 test("history user messages expose retry-from-here instead of append resend", () => {
   const thread: ThreadSummary = {
     id: "thread-1",

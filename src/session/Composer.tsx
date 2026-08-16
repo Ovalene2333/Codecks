@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CircleStop, ImagePlus, Send, X } from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { matchingSlashCommands, opensCommandPanel } from "./commands";
@@ -16,6 +16,7 @@ export function Composer({
   onStop,
   onError,
   focusRequest = 0,
+  sessionControls,
 }: {
   thread: ThreadSummary;
   text: string;
@@ -28,6 +29,7 @@ export function Composer({
   onStop: () => void;
   onError?: (message: string) => void;
   focusRequest?: number;
+  sessionControls?: ReactNode;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -132,6 +134,9 @@ export function Composer({
             </figure>
           ))}
         </div>
+      )}
+      {sessionControls && (
+        <div className="composer-session-controls">{sessionControls}</div>
       )}
       <div className="composer-box">
         <button

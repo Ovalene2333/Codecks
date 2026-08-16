@@ -41,10 +41,12 @@ export function Status({
   status,
   compact,
   unseen,
+  label,
 }: {
   status: ThreadSummary["status"];
   compact?: boolean;
   unseen?: boolean;
+  label?: string;
 }) {
   const labels = {
     starting: "启动中",
@@ -60,7 +62,7 @@ export function Status({
       className={`status ${showUnseen ? "unseen" : status} ${compact ? "compact" : ""}`}
     >
       <i />
-      <em>{showUnseen ? "有新回复" : labels[status]}</em>
+      <em>{showUnseen ? "有新回复" : label || labels[status]}</em>
     </span>
   );
 }

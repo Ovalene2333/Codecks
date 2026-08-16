@@ -123,6 +123,13 @@ export function Timeline({
             </div>
           </section>
         ))}
+        {streamed.length === 0 &&
+          (thread.status === "running" || thread.status === "waiting") && (
+            <div className="message agent streaming" role="status">
+              正在准备响应…
+              <i />
+            </div>
+          )}
         {!hasActiveTurn && streamed.length > 0 && (
           <section className="turn-block active live-turn">
             {streamed.map((message) => (

@@ -15,7 +15,6 @@ import {
   settingsForSandboxMode,
 } from "../codexLabels";
 import { ModelPicker } from "../ModelPicker";
-import { ContextBar } from "../usage/ContextBar";
 
 export const CLAUDE_PERMISSION_OPTIONS: {
   value: ClaudePermissionMode;
@@ -33,7 +32,6 @@ export function SessionToolbar({
   locked,
   onSettings,
   onCompact,
-  showContext = true,
 }: {
   thread: ThreadSummary;
   locked?: boolean;
@@ -47,7 +45,6 @@ export function SessionToolbar({
     personality?: Personality;
   }) => void;
   onCompact: () => void;
-  showContext?: boolean;
 }) {
   return (
     <div className={`session-toolbar ${locked ? "locked" : ""}`}>
@@ -160,13 +157,16 @@ export function SessionToolbar({
         )}
       </div>
       {locked && <small className="toolbar-hint">任务结束后生效</small>}
-      {showContext ? (
-        <ContextBar
-          usage={thread.tokenUsage}
-          compacting={thread.compacting}
-          onCompact={thread.agentId === "claude" ? undefined : onCompact}
-        />
-      ) : null}
+      {thread.agentId !== "claude" && (
+        <button
+          type="button"
+          className="text-btn compact-btn"
+          onClick={onCompact}
+          disabled={Boolean(thread.compacting)}
+        >
+          压缩
+        </button>
+      )}
     </div>
   );
 }

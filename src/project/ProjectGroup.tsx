@@ -105,10 +105,10 @@ export function ProjectGroupView({
         const unseen = unseenSessions.has(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
+        const agentLabel = thread.agentId === "claude" ? "Claude" : "Codex";
         const providerLabel =
-          thread.agentId === "claude"
-            ? "Claude Code"
-            : provider?.name || thread.providerId;
+          provider?.name ||
+          (thread.agentId === "claude" ? "" : thread.providerId);
         return (
           <div
             key={key}
@@ -125,8 +125,13 @@ export function ProjectGroupView({
           >
             <div className="session-row-top">
               <strong title={thread.name}>{thread.name}</strong>
-              {(thread.status !== "idle" || unseen) && (
-                <Status status={thread.status} compact unseen={unseen} />
+              {(thread.status !== "idle" || thread.compacting || unseen) && (
+                <Status
+                  status={thread.compacting ? "running" : thread.status}
+                  compact
+                  unseen={unseen}
+                  label={thread.compacting ? "正在运行" : undefined}
+                />
               )}
               <button
                 type="button"
@@ -151,15 +156,18 @@ export function ProjectGroupView({
               >
                 {relativeTime(thread.updatedAt)}
               </time>
+              <small
+                className={`agent-badge agent-${thread.agentId || "codex"}`}
+                title={`${agentLabel} 任务`}
+              >
+                {agentLabel}
+              </small>
               {providerLabel ? (
                 <small
                   className="provider-badge session-provider"
                   style={
                     {
-                      "--provider":
-                        thread.agentId === "claude"
-                          ? "#d97757"
-                          : provider?.color || "#8b6cff",
+                      "--provider": provider?.color || "#8b6cff",
                     } as CSSProperties
                   }
                   title={

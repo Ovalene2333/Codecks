@@ -4,6 +4,7 @@ import { api, post } from "../api";
 import { dedupeThreadLoad, readThreadCache } from "../cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
+import { SessionToolbar } from "../layout/SessionToolbar";
 import type {
   AgentCapabilities,
   Approval,
@@ -41,7 +42,10 @@ import {
   reconcilePendingUserMessages,
   type PendingUserMessage,
 } from "./optimistic";
-import { shouldSurfaceThreadLoadError } from "./thread-load";
+import {
+  shouldKeepLoadedThread,
+  shouldSurfaceThreadLoadError,
+} from "./thread-load";
 import { draftFromUserMessage } from "./user-message";
 
 export function ChatWorkspace({
@@ -99,10 +103,13 @@ export function ChatWorkspace({
     () =>
       dedupeThreadLoad(threadCacheKey, () => api(threadPath(thread)))
         .then((data) => {
-          setFull(data);
+          const next = shouldKeepLoadedThread(fullRef.current, data)
+            ? fullRef.current
+            : data;
+          setFull(next);
           setPendingUsers((current) =>
             reconcilePendingUserMessages(
-              Array.isArray(data?.turns) ? data.turns : [],
+              Array.isArray(next?.turns) ? next.turns : [],
               current,
             ),
           );
@@ -449,7 +456,10 @@ export function ChatWorkspace({
       ? `登录状态已失效：${rawTaskError}`
       : rawTaskError
     : "";
-  const locked = thread.status === "running" || thread.status === "waiting";
+  const locked =
+    thread.status === "running" ||
+    thread.status === "waiting" ||
+    Boolean(thread.compacting);
   const usageLimit = String(taskErrorCode || "")
     .toLowerCase()
     .includes("usagelimit");
@@ -466,15 +476,12 @@ export function ChatWorkspace({
         thread={headerThread}
         provider={provider}
         agentName={agentName}
-        capabilities={capabilities}
         pendingCount={threadApprovals.length}
         locked={locked}
         onBack={onBack}
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
         onAppearance={onAppearance}
-        onSettings={saveSettings}
-        onCompact={compact}
       />
       <RenderErrorBoundary
         resetKey={thread.id}
@@ -548,6 +555,16 @@ export function ChatWorkspace({
           })
         }
         focusRequest={composerFocusRequest}
+        sessionControls={
+          capabilities.sessionSettings ? (
+            <SessionToolbar
+              thread={headerThread}
+              locked={locked}
+              onSettings={saveSettings}
+              onCompact={compact}
+            />
+          ) : undefined
+        }
       />
       {commandModal && (
         <CommandModal

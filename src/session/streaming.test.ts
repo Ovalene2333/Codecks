@@ -145,6 +145,22 @@ test("completed streams reconcile with normalized history ids one-to-one", () =>
   );
 });
 
+test("an active Claude stream follows its persisted text position", () => {
+  const liveText = "Let me search the project styles for the provider row.";
+  const history = [
+    { id: "history-message", type: "agentMessage", text: `${liveText} Done.` },
+    { id: "tool-1", type: "commandExecution", command: "rg provider-row" },
+  ];
+  assert.deepEqual(
+    [
+      ...streamsCoveredByHistory(history, [
+        { itemId: "live-api-id", text: liveText },
+      ]),
+    ],
+    ["live-api-id"],
+  );
+});
+
 test("ordinary event limits do not evict an active accumulated stream", () => {
   let events: any[] = [delta("完整回复", "active")];
   for (let index = 0; index < 300; index += 1) {

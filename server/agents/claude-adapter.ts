@@ -43,6 +43,7 @@ import type {
   ThreadSummary,
   TurnImage,
 } from "../types.js";
+import type { ThreadSettingsStore } from "../thread-settings.js";
 import {
   readClaudeHistory,
   type ClaudeHistoryThread,
@@ -144,6 +145,7 @@ interface ClaudeAdapterOptions {
   historyIndexFile?: string;
   historyReader?: typeof readClaudeHistory;
   initialThreads?: ThreadSummary[];
+  threadSettings?: ThreadSettingsStore;
   initialProfiles?: ClaudeProfile[];
   useWsl?: boolean;
   claudeWslBin?: string;
@@ -169,6 +171,8 @@ interface PendingApproval {
 interface ActiveQuery {
   query: Query;
   turnId: string;
+  /** Claude gives each stream wrapper a new UUID; retain the raw response ID. */
+  streamMessageId?: string;
 }
 
 function approvalKind(toolName: string): ApprovalKind {
@@ -349,7 +353,11 @@ export class ClaudeAdapter extends EventEmitter {
     this.profiles = [...(options.initialProfiles || [])];
     for (const thread of options.initialThreads || []) {
       if (thread.agentId !== "claude") continue;
-      this.threads.set(thread.id, { ...thread, agentId: "claude" });
+      this.threads.set(thread.id, {
+        ...thread,
+        ...options.threadSettings?.get(this.id, thread.id),
+        agentId: "claude",
+      });
     }
     this.historyStatus = this.threads.size ? "cached" : "loading";
   }
@@ -452,6 +460,7 @@ export class ClaudeAdapter extends EventEmitter {
             : parsed.summary.status,
           activeTurnId: active ? existing?.activeTurnId : undefined,
           controlMode: active ? "managed" : "history",
+          ...this.options.threadSettings?.get(this.id, parsed.summary.id),
         });
       });
       for (const [id] of this.threads)
@@ -830,6 +839,18 @@ export class ClaudeAdapter extends EventEmitter {
     }
     if (message.type === "stream_event") {
       const event: any = message.event;
+      if (event.type === "message_start") {
+        const current = this.active.get(thread.id);
+        if (current?.turnId === turnId)
+          current.streamMessageId = event.message?.id || message.uuid;
+        return;
+      }
+      const current = this.active.get(thread.id);
+      const itemId = `${
+        current?.turnId === turnId && current.streamMessageId
+          ? current.streamMessageId
+          : message.uuid
+      }:${event.index}`;
       if (event.type === "content_block_delta") {
         const delta = event.delta?.text || event.delta?.thinking || "";
         if (delta)
@@ -838,7 +859,7 @@ export class ClaudeAdapter extends EventEmitter {
             params: {
               threadId: thread.id,
               turnId,
-              itemId: `${message.uuid}:${event.index}`,
+              itemId,
               delta,
             },
           });
@@ -850,7 +871,7 @@ export class ClaudeAdapter extends EventEmitter {
             threadId: thread.id,
             turnId,
             item: {
-              id: `${message.uuid}:${event.index}`,
+              id: itemId,
               type: "agentMessage",
             },
           },
@@ -1242,6 +1263,7 @@ export class ClaudeAdapter extends EventEmitter {
       lastError: current?.lastError,
       permissionMode: current?.permissionMode || "default",
       controlMode: "managed",
+      ...this.options.threadSettings?.get(this.id, threadId),
     });
     this.broadcast("thread.updated", this.threads.get(threadId));
   }
