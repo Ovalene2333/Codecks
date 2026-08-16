@@ -570,6 +570,30 @@ test("createThread forwards model and reasoning effort", async () => {
   assert.equal(manager.listThreads()[0].approvalsReviewer, "auto_review");
 });
 
+test("createThread defaults to Workspace Write with auto review", async () => {
+  const provider = {
+    id: "provider",
+    name: "OpenAI",
+    kind: "local-profile",
+    model: "fallback",
+  };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return { thread: { id: "fresh", cwd: "/tmp/project" } };
+    },
+  });
+  await manager.createThread("provider", { cwd: "/tmp/project" });
+  assert.equal(calls[0].params.sandbox, "workspace-write");
+  assert.equal(calls[0].params.approvalPolicy, "on-request");
+  assert.equal(calls[0].params.approvalsReviewer, "auto_review");
+});
+
 test("archive and delete update the snapshot buckets", async () => {
   const provider = { id: "provider", model: "m" };
   const manager = new CodexManager(
@@ -1219,7 +1243,7 @@ test("createThread omits personality when unset", async () => {
   await manager.createThread("provider", { cwd: "/tmp" });
   assert.equal("personality" in calls[0].params, false);
   assert.equal(calls[0].params.sandbox, "workspace-write");
-  assert.equal(calls[0].params.approvalsReviewer, "user");
+  assert.equal(calls[0].params.approvalsReviewer, "auto_review");
   assert.equal(manager.listThreads()[0].sandbox, "workspace-write");
 });
 

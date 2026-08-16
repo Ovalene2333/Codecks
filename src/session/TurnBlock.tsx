@@ -1,10 +1,14 @@
 import {
   Activity,
+  BookOpenText,
   Command,
+  Files,
+  FolderSearch,
   GitFork,
   Pencil,
   RotateCcw,
   ScanSearch,
+  Wrench,
 } from "lucide-react";
 import { displayCommand, displayText, fmtTime } from "../format";
 import type { FileChange, ThreadSummary } from "../types";
@@ -14,6 +18,12 @@ import { userImageParts } from "./images";
 import type { StreamedAgentMessage } from "./streaming";
 import { activeStreamItemId, streamsCoveredByHistory } from "./streaming";
 import { userMessageText } from "./user-message";
+import {
+  commandPresentation,
+  fileChangeGroupLabel,
+  groupTurnItems,
+  toolCallPresentation,
+} from "./turn-items";
 
 export const userText = userMessageText;
 
@@ -151,20 +161,35 @@ function TurnItem({
           ? "failed"
           : "ok";
     const command = displayCommand(displayText(item.command));
+    const presentation = commandPresentation(item, cwd);
+    const semantic = presentation.kind !== "command";
+    const detail = [
+      semantic && command ? `$ ${command}` : "",
+      displayText(item.aggregatedOutput),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     return (
-      <details className={`tool-row command-row ${state}`}>
+      <details
+        className={`tool-row command-row ${presentation.kind}-row ${state}`}
+      >
         <summary>
-          <Command />
-          <span className="tool-status">
-            {item.status === "inProgress" ? "正在执行" : "已执行"}
+          {presentation.kind === "read" ? (
+            <BookOpenText />
+          ) : presentation.kind === "explore" ? (
+            <FolderSearch />
+          ) : (
+            <Command />
+          )}
+          <span className={`tool-action ${presentation.kind}`}>
+            {presentation.label ||
+              (item.status === "inProgress" ? "正在执行" : "已执行")}
           </span>
-          <code className="tool-command" title={command}>
-            {command}
+          <code className="tool-command" title={presentation.target || command}>
+            {presentation.target || command}
           </code>
         </summary>
-        {displayText(item.aggregatedOutput) ? (
-          <pre>{displayText(item.aggregatedOutput)}</pre>
-        ) : null}
+        {detail ? <pre>{detail}</pre> : null}
       </details>
     );
   }
@@ -172,7 +197,65 @@ function TurnItem({
     return (
       <FileDiff changes={item.changes as FileChange[] | undefined} cwd={cwd} />
     );
+  if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
+    const { tool, scope, input, output } = toolCallPresentation(item);
+    const state =
+      item.status === "inProgress"
+        ? "running"
+        : item.status === "failed" || item.error || item.success === false
+          ? "failed"
+          : "ok";
+    const detail = [
+      input ? `Input\n${input}` : "",
+      output ? `Output\n${output}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return (
+      <details className={`tool-row tool-call-row ${state}`}>
+        <summary>
+          <Wrench />
+          <span className="tool-action">{tool}</span>
+          {scope ? (
+            <code className="tool-command" title={scope}>
+              {scope}
+            </code>
+          ) : null}
+        </summary>
+        {detail ? <pre>{detail}</pre> : null}
+      </details>
+    );
+  }
   return <UnknownItem item={item} />;
+}
+
+function FileChangeGroup({
+  items,
+  changes,
+  cwd,
+}: {
+  items: any[];
+  changes: FileChange[];
+  cwd?: string;
+}) {
+  const label = fileChangeGroupLabel(changes);
+  const state = items.some((item) => item?.status === "failed")
+    ? "failed"
+    : items.some((item) => item?.status === "inProgress")
+      ? "running"
+      : "ok";
+  return (
+    <details className={`tool-row file-change-group ${state}`}>
+      <summary>
+        <Files />
+        <span className={`tool-action ${label}`}>{label}</span>
+        <span className="file-change-count">{changes.length} 个文件</span>
+      </summary>
+      <div className="file-change-group-content">
+        <FileDiff changes={changes} cwd={cwd} />
+      </div>
+    </details>
+  );
 }
 
 export function TurnBlock({
@@ -202,6 +285,7 @@ export function TurnBlock({
     turn.status === "running";
   const completed = !active && turn.status !== "running";
   const turnItems = Array.isArray(turn.items) ? turn.items : [];
+  const renderEntries = groupTurnItems(turnItems);
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
   );
@@ -219,7 +303,17 @@ export function TurnBlock({
         {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
         {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
       </header>
-      {turnItems.map((item: any) => {
+      {renderEntries.map((entry, itemIndex) => {
+        if (entry.kind === "fileChangeGroup")
+          return (
+            <FileChangeGroup
+              key={`file-group-${entry.items[0]?.id || itemIndex}`}
+              items={entry.items}
+              changes={entry.changes as FileChange[]}
+              cwd={thread.cwd}
+            />
+          );
+        const item = entry.item;
         const liveText =
           item.type === "agentMessage" && item.id
             ? streamedByItem.get(String(item.id))
@@ -227,7 +321,7 @@ export function TurnBlock({
         if (liveText !== undefined) renderedStreamIds.add(String(item.id));
         return (
           <TurnItem
-            key={item.id || `${item.type}-${item.command || ""}`}
+            key={item.id || `${item.type}-${item.command || itemIndex}`}
             item={item}
             streamed={liveText}
             streaming={String(item.id) === streamingItemId}

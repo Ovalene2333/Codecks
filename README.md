@@ -52,9 +52,10 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
 - 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
 - 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
-- 权限选择与 Codex CLI 对齐：`Approve for me` 使用 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
+- 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
 - 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
+- 时间线会把连续或单次包含多个文件的 `update` 合并为可展开的文件变更组；`read`、`explore`、MCP 和动态工具调用可展开查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器

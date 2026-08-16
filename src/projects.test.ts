@@ -171,6 +171,13 @@ test("new tasks default to a WSL path when the runtime uses --wsl", () => {
   );
 });
 
+test("new Codex tasks default to Workspace Write with Approve for me", () => {
+  const defaults = resolveNewThreadDefaults({ providers: [] });
+  assert.equal(defaults.sandbox, "workspace-write");
+  assert.equal(defaults.approvalPolicy, "on-request");
+  assert.equal(defaults.approvalsReviewer, "auto_review");
+});
+
 test("new task path defaults stay unchanged outside --wsl", () => {
   const providers = [
     { id: "official", name: "Official", kind: "official", online: true },
