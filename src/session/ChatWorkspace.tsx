@@ -36,7 +36,10 @@ import {
 } from "./commands";
 import type { ComposerImage } from "./images";
 import { readComposerDraft, writeComposerDraft } from "./drafts";
-import { collectStreamedAgentMessages } from "./streaming";
+import {
+  collectStreamedAgentMessages,
+  collectStreamedTurnItems,
+} from "./streaming";
 import {
   loadedUserMessages,
   reconcilePendingUserMessages,
@@ -140,10 +143,11 @@ export function ChatWorkspace({
     load();
   }, [load, threadCacheKey]);
 
+  const latestEvent = events.at(-1);
   useEffect(() => {
-    const event = events.at(-1);
+    const event = latestEvent;
     const method = String(event?.method || "");
-    if (!method || method.endsWith("/delta")) return;
+    if (!method || method.toLowerCase().endsWith("/delta")) return;
     if (event?.providerId && event.providerId !== thread.providerId) return;
     if ((event?.agentId || "codex") !== (thread.agentId || "codex")) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
@@ -154,7 +158,7 @@ export function ChatWorkspace({
     }
     const timer = window.setTimeout(() => load(), 300);
     return () => window.clearTimeout(timer);
-  }, [events.length, load, thread.id, thread.providerId, thread.agentId]);
+  }, [latestEvent, load, thread.id, thread.providerId, thread.agentId]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
@@ -453,6 +457,16 @@ export function ChatWorkspace({
           thread.agentId || "codex",
         )
       : [];
+  const streamedItems =
+    thread.status === "running" || thread.status === "waiting"
+      ? collectStreamedTurnItems(
+          events,
+          thread.providerId,
+          thread.id,
+          thread.activeTurnId,
+          thread.agentId || "codex",
+        )
+      : [];
   const threadApprovals = approvals.filter((approval) =>
     approvalBelongsToThread(approval, thread),
   );
@@ -513,6 +527,7 @@ export function ChatWorkspace({
           thread={thread}
           turns={Array.isArray(full?.turns) ? full.turns : []}
           streamed={streamed}
+          streamedItems={streamedItems}
           pendingUsers={pendingUsers}
           origin={origin}
           targetTurnId={searchTarget?.turnId}

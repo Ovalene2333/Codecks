@@ -34,6 +34,42 @@ test("an active turn renders exactly one streaming cursor", () => {
   assert.equal((html.match(/<i><\/i>/g) || []).length, 1);
 });
 
+test("an active turn renders a live install command before history reloads", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "running",
+    updatedAt: Date.now(),
+    activeTurnId: "turn-1",
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+      index: 1,
+      thread,
+      streamed: [],
+      streamedItems: [
+        {
+          itemId: "command-1",
+          item: {
+            id: "command-1",
+            type: "commandExecution",
+            command: "npm install -D @playwright/test",
+            status: "inProgress",
+          },
+        },
+      ],
+    }),
+  );
+
+  assert.match(html, /正在执行/);
+  assert.match(html, /npm install -D @playwright\/test/);
+});
+
 test("normalized history ids do not duplicate completed streamed messages", () => {
   const thread: ThreadSummary = {
     id: "thread-1",

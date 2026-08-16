@@ -16,8 +16,15 @@ import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown } from "./markdown";
 import { userImageParts } from "./images";
-import type { StreamedAgentMessage } from "./streaming";
-import { activeStreamItemId, streamsCoveredByHistory } from "./streaming";
+import type {
+  StreamedAgentMessage,
+  StreamedTurnItem,
+} from "./streaming";
+import {
+  activeStreamItemId,
+  mergeTurnItems,
+  streamsCoveredByHistory,
+} from "./streaming";
 import { userMessageText } from "./user-message";
 import {
   commandPresentation,
@@ -291,6 +298,7 @@ export function TurnBlock({
   targetItemId,
   targetRequest,
   streamed,
+  streamedItems = [],
   onCopy,
   onForkFrom,
   onEditUserMessage,
@@ -304,6 +312,7 @@ export function TurnBlock({
   targetItemId?: string;
   targetRequest?: number;
   streamed: StreamedAgentMessage[];
+  streamedItems?: StreamedTurnItem[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onEditUserMessage?: (item: any) => void;
@@ -315,7 +324,10 @@ export function TurnBlock({
     turn.status === "inProgress" ||
     turn.status === "running";
   const completed = !active && turn.status !== "running";
-  const turnItems = Array.isArray(turn.items) ? turn.items : [];
+  const historyItems = Array.isArray(turn.items) ? turn.items : [];
+  const turnItems = active
+    ? mergeTurnItems(historyItems, streamedItems)
+    : historyItems;
   const renderEntries = groupTurnItems(turnItems);
   const readTargets = turnReadTargets(turnItems, thread.cwd);
   const streamedByItem = new Map(
