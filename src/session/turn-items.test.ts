@@ -9,6 +9,7 @@ import {
   fileChangeGroupLabel,
   groupTurnItems,
   toolCallPresentation,
+  turnReadTargets,
 } from "./turn-items";
 
 test("groups consecutive file changes and multi-file updates", () => {
@@ -42,7 +43,7 @@ test("classifies Codex read and explore command actions", () => {
       },
       "/work",
     ),
-    { kind: "read", label: "read", target: "src/App.tsx" },
+    { kind: "read", label: "读取", target: "src/App.tsx" },
   );
   assert.deepEqual(
     commandPresentation(
@@ -53,7 +54,36 @@ test("classifies Codex read and explore command actions", () => {
       },
       "/work",
     ),
-    { kind: "explore", label: "explore", target: "tool-row · src" },
+    { kind: "explore", label: "检索", target: "tool-row · src" },
+  );
+});
+
+test("summarizes unique files read by commands and file tools", () => {
+  assert.deepEqual(
+    turnReadTargets(
+      [
+        {
+          type: "commandExecution",
+          commandActions: [
+            { type: "read", path: "/work/src/App.tsx" },
+            { type: "read", path: "/work/src/App.tsx" },
+            { type: "search", path: "/work/src" },
+          ],
+        },
+        {
+          type: "mcpToolCall",
+          tool: "workspace/read_file",
+          arguments: { file_path: "/work/README.md" },
+        },
+        {
+          type: "dynamicToolCall",
+          tool: "search",
+          input: { path: "/work/ignored.ts" },
+        },
+      ],
+      "/work",
+    ),
+    ["src/App.tsx", "README.md"],
   );
 });
 
@@ -75,7 +105,7 @@ test("extracts dynamic and MCP tool input and output", () => {
   );
 });
 
-test("TurnBlock renders collapsed updates and expandable read/explore content", () => {
+test("TurnBlock renders read overview, collapsed updates, and expandable tools", () => {
   const thread: ThreadSummary = {
     id: "thread",
     providerId: "provider",
@@ -124,6 +154,14 @@ test("TurnBlock renders collapsed updates and expandable read/explore content", 
             ],
             aggregatedOutput: "src/a.ts:1:tool",
           },
+          {
+            id: "read-b",
+            type: "commandExecution",
+            status: "completed",
+            command: "cat README.md",
+            commandActions: [{ type: "read", path: "/work/README.md" }],
+            aggregatedOutput: "docs",
+          },
         ],
       },
     }),
@@ -132,8 +170,10 @@ test("TurnBlock renders collapsed updates and expandable read/explore content", 
   assert.doesNotMatch(html, /<details[^>]*file-change-group[^>]* open/);
   assert.match(html, />update</);
   assert.match(html, />2 个文件</);
-  assert.match(html, />read</);
+  assert.match(html, /本轮已读取/);
+  assert.match(html, />2 个文件</);
+  assert.match(html, />读取</);
   assert.match(html, /const a = 1;/);
-  assert.match(html, />explore</);
+  assert.match(html, />检索</);
   assert.match(html, /src\/a\.ts:1:tool/);
 });
