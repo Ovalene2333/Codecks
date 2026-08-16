@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import { Puzzle, Terminal } from "lucide-react";
+import { ArrowLeft, Puzzle, Terminal } from "lucide-react";
 import { api } from "../api";
 import type { ToolDescriptor } from "../types";
-import { Drawer } from "../ui";
-import { HostTerminalView } from "./HostTerminalView";
+import { WebTerminalView } from "./WebTerminalView";
 
 const icons = { terminal: Terminal } as const;
 
@@ -19,21 +18,27 @@ export function ToolCenter({
   onClose: () => void;
 }) {
   const [tools, setTools] = useState<ToolDescriptor[]>([]);
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState("terminal");
   const [error, setError] = useState("");
   useEffect(() => {
     void api<{ tools: ToolDescriptor[] }>("/tools")
-      .then((result) => {
-        setTools(result.tools);
-        setSelected((current) => current || result.tools[0]?.id || "");
-      })
+      .then((result) => setTools(result.tools))
       .catch((loadError) => setError(loadError.message));
   }, []);
   const tool = tools.find((item) => item.id === selected);
 
   return (
-    <Drawer title="工具" className="tool-drawer" onClose={onClose}>
-      <div className="tool-center">
+    <main className="tool-page">
+      <header className="tool-page-header">
+        <button className="icon-btn" type="button" onClick={onClose} title="返回会话">
+          <ArrowLeft />
+        </button>
+        <div>
+          <h1>{tool?.name || "工具"}</h1>
+          <p>{tool?.description || "正在加载工具…"}</p>
+        </div>
+      </header>
+      <div className="tool-page-body">
         <nav className="tool-list" aria-label="可用工具">
           {tools.map((item) => {
             const Icon = icons[item.icon as keyof typeof icons] || Puzzle;
@@ -42,7 +47,11 @@ export function ToolCenter({
                 key={item.id}
                 type="button"
                 className={selected === item.id ? "on" : ""}
-                onClick={() => setSelected(item.id)}
+                onClick={() => {
+                  setSelected(item.id);
+                  if (item.pagePath && location.pathname !== item.pagePath)
+                    history.replaceState(null, "", item.pagePath);
+                }}
               >
                 <Icon />
                 <span>{item.name}</span>
@@ -52,17 +61,20 @@ export function ToolCenter({
           })}
         </nav>
         <div className="tool-view">
-          {error && <p className="error-banner">{error}</p>}
-          {tool?.id === "host-terminal" && (
-            <HostTerminalView
+          {error ? <p className="error-banner">{error}</p> : null}
+          {tool?.id === "terminal" ? (
+            <WebTerminalView
               tool={tool}
-              initialCwd={initialCwd}
-              directories={directories}
+              initialCwd={initialCwd || tool.defaultCwd}
+              directories={[tool.defaultCwd, ...directories].filter(
+                (value, index, values): value is string =>
+                  Boolean(value) && values.indexOf(value) === index,
+              )}
               onToast={onToast}
             />
-          )}
+          ) : null}
         </div>
       </div>
-    </Drawer>
+    </main>
   );
 }

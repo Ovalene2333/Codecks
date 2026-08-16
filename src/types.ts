@@ -228,6 +228,8 @@ export interface ToolDescriptor {
   icon: string;
   available: boolean;
   unavailableReason?: string;
+  pagePath?: string;
+  defaultCwd?: string;
 }
 
 export interface ApprovalResolveBody {

@@ -34,7 +34,7 @@ import { ThreadSettingsStore } from "./thread-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { ToolRegistry } from "./tools/types.js";
-import { HostTerminalTool } from "./tools/host-terminal.js";
+import { WebTerminalTool } from "./tools/web-terminal.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -143,7 +143,9 @@ const sessionSearch = new SessionSearchIndexer(
   new SessionSearchStore(dataDir),
   agents,
 );
-const tools = new ToolRegistry([new HostTerminalTool({ useWsl })]);
+const tools = new ToolRegistry([
+  new WebTerminalTool({ useWsl, processCwd: projectRoot }),
+]);
 const fullSnapshot = () => ({
   ...agents.snapshot(),
   projects: projects.list(),
@@ -248,15 +250,6 @@ app.post(
 app.get(
   "/api/tools",
   route(async () => ({ tools: tools.list() })),
-);
-app.post(
-  "/api/tools/:toolId/run",
-  route(async (req) =>
-    tools.run(
-      param(req.params.toolId),
-      z.object({ cwd: z.string().min(1).max(4_096) }).parse(req.body),
-    ),
-  ),
 );
 app.get(
   "/api/agents/:agentId/profiles",
@@ -1007,14 +1000,33 @@ app.get("/{*path}", (_req, res) =>
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const toolWss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
-  if (
-    url.pathname !== "/ws" ||
-    !authorized(url.searchParams.get("token") || undefined)
-  )
+  if (!authorized(url.searchParams.get("token") || undefined))
     return socket.destroy();
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  if (url.pathname === "/ws") {
+    wss.handleUpgrade(req, socket, head, (ws) =>
+      wss.emit("connection", ws, req),
+    );
+    return;
+  }
+  const match = url.pathname.match(/^\/ws\/tools\/([^/]+)$/);
+  if (!match) return socket.destroy();
+  const toolId = decodeURIComponent(match[1]);
+  toolWss.handleUpgrade(req, socket, head, (ws) => {
+    try {
+      tools.connect(toolId, ws);
+    } catch (error: any) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          message: error?.message || "工具连接失败",
+        }),
+      );
+      ws.close(1008, "tool unavailable");
+    }
+  });
 });
 wss.on("connection", (ws) =>
   ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
@@ -1128,6 +1140,7 @@ const shutdown = () => {
   clearRuntimeLock(dataDir, process.pid);
   tunnel?.kill();
   agents.stopAll();
+  tools.close();
   sessionSearch.close();
   void threadSummaries
     .flush()

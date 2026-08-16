@@ -93,7 +93,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 每个 Turn 会汇总显示 Codex 本轮读取过的文件；时间线也会把连续或单次包含多个文件的 `update` 合并为可展开的文件变更组，并将读取、检索、MCP 和动态工具调用展示为可展开的中文动作，可继续查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
-- 侧栏「工具」使用独立注册架构提供可扩展的小工具；首个「宿主机终端」可在当前 Session 或最近项目目录打开原生终端窗口。窗口出现在运行 Codecks Server 的电脑上，不会嵌入浏览器，也不会把 Shell 输入输出传到网页
+- 侧栏「工具」使用独立注册架构提供可扩展的小工具；首个 Web Terminal 默认挂载在 `/terminal`，可通过 `https://你的域名/terminal` 直接访问，并进入当前 Session、最近项目或自定义绝对目录的交互式宿主机 Shell。它支持 ANSI、全屏 TUI、窗口尺寸同步和移动端快捷键；Windows `--wsl` 模式进入 WSL，其他模式进入宿主系统默认 Shell。关闭页面或连接会自动结束对应 PTY
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
 - 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
