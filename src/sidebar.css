@@ -480,6 +480,9 @@
   min-width: 0;
   justify-content: flex-start;
 }
+.sidebar-footer > .provider-settings-btn {
+  grid-column: 1 / -1;
+}
 .sidebar-footer button svg,
 .sidebar-footer svg:last-child {
   margin-left: 0;

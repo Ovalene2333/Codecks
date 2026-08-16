@@ -40,7 +40,7 @@ import { ProviderModal } from "./overlays/ProviderModal";
 import { ProviderSwitchModal } from "./overlays/ProviderSwitchModal";
 import { RenameModal } from "./overlays/RenameModal";
 import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
-import { UsageDrawer } from "./usage/UsageChip";
+import { UsageDrawer, type UsageView } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
@@ -118,7 +118,7 @@ export function App() {
     | { kind: "project"; project: ProjectGroup }
     | null
   >(null);
-  const [usageOpen, setUsageOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState<UsageView | null>(null);
   const [projectEdit, setProjectEdit] = useState<ProjectRecord | null>(null);
   const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
@@ -876,7 +876,7 @@ export function App() {
         onNew={() => setThreadModal({})}
         onRefresh={refresh}
         onProviders={() => setProviderModal(true)}
-        onUsage={() => setUsageOpen(true)}
+        onUsage={setUsageOpen}
         onTasks={() => setTaskScope(null)}
         onTools={() => openPage("/terminal")}
         onNotifications={enableSystemNotifications}
@@ -998,7 +998,7 @@ export function App() {
                 setSelected(key);
               }}
               onToast={pushToast}
-              onUsage={() => setUsageOpen(true)}
+              onUsage={() => setUsageOpen("stats")}
               onTasks={() => setTaskScope(current.id)}
               onAppearance={() => setAppearanceOpen(true)}
               onOpenOrigin={() => openOrigin(current)}
@@ -1018,7 +1018,7 @@ export function App() {
                 ),
               })
             }
-            onUsage={() => setUsageOpen(true)}
+            onUsage={() => setUsageOpen("stats")}
           />
         )}
       </section>
@@ -1285,8 +1285,9 @@ export function App() {
           threads={allThreads}
           projects={snapshot.projects}
           currentSessionKey={current ? sessionKey(current) : undefined}
+          initialView={usageOpen}
           onRefreshLimits={refreshOfficialUsage}
-          onClose={() => setUsageOpen(false)}
+          onClose={() => setUsageOpen(null)}
         />
       )}
       {taskScope !== undefined && (
