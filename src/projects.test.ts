@@ -99,6 +99,23 @@ test("previewSessions keeps only the latest task until expanded", () => {
   assert.equal(previewSessions(sessions, true).length, 3);
 });
 
+test("filterProjectGroups includes sessions matched by body search", () => {
+  const groups = mergeProjectGroups(
+    [],
+    [
+      {
+        ...thread("/tmp/body", "body-hit"),
+        name: "unrelated title",
+        preview: "nothing",
+      },
+    ],
+  );
+  const filtered = filterProjectGroups(groups, "needle", {
+    matchingThread: (thread) => thread.id === "body-hit",
+  });
+  assert.equal(filtered[0]?.sessions[0]?.id, "body-hit");
+});
+
 test("filterProjectGroups matches project, session, model, and provider", () => {
   const groups = mergeProjectGroups(
     [],

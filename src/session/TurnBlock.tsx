@@ -286,6 +286,7 @@ export function TurnBlock({
   turn,
   index,
   thread,
+  highlighted,
   streamed,
   onCopy,
   onForkFrom,
@@ -296,6 +297,7 @@ export function TurnBlock({
   turn: any;
   index: number;
   thread: ThreadSummary;
+  highlighted?: boolean;
   streamed: StreamedAgentMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
@@ -322,7 +324,10 @@ export function TurnBlock({
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
   return (
-    <section className={`turn-block ${active ? "active" : ""}`}>
+    <section
+      className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
+      data-turn-id={turn?.id ? String(turn.id) : undefined}
+    >
       <header className="turn-head">
         Turn {index} · {fmtTime(started)}
         {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}

@@ -218,6 +218,20 @@
 .turn-block {
   margin: 0 0 16px;
 }
+.turn-block.search-target {
+  animation: search-target-flash 1.8s ease-out;
+}
+@keyframes search-target-flash {
+  0%,
+  30% {
+    background: rgb(245 184 65 / 12%);
+    box-shadow: 0 0 0 8px rgb(245 184 65 / 12%);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
 .optimistic-turn .turn-head {
   color: #8b7aad;
 }

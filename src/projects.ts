@@ -114,7 +114,10 @@ export function previewSessions<T>(sessions: T[], expanded: boolean) {
 export function filterProjectGroups(
   groups: ProjectGroup[],
   query: string,
-  options?: { providerName?: (providerId: string) => string },
+  options?: {
+    providerName?: (providerId: string) => string;
+    matchingThread?: (thread: ThreadSummary) => boolean;
+  },
 ) {
   const needle = query.trim().toLowerCase();
   if (!needle) return groups;
@@ -129,6 +132,7 @@ export function filterProjectGroups(
             const provider = options?.providerName?.(thread.providerId) || "";
             const agent = thread.agentId === "claude" ? "Claude Code" : "Codex";
             return (
+              Boolean(options?.matchingThread?.(thread)) ||
               thread.name.toLowerCase().includes(needle) ||
               thread.preview.toLowerCase().includes(needle) ||
               thread.model.toLowerCase().includes(needle) ||

@@ -13,7 +13,12 @@ import {
 import deckLogo from "../assets/logo.svg";
 import type { DeckNotificationPermission } from "../notifications";
 import type { ProjectGroup } from "../projects";
-import type { Provider, RuntimeSnapshot, ThreadSummary } from "../types";
+import type {
+  Provider,
+  RuntimeSnapshot,
+  SessionSearchMatch,
+  ThreadSummary,
+} from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
 import { UsageChip } from "../usage/UsageChip";
 
@@ -25,6 +30,9 @@ export function Sidebar({
   archivedCount,
   library,
   query,
+  searchMatches,
+  contentSearchPending,
+  contentSearchProgress,
   statusFilter,
   counts,
   projects,
@@ -68,6 +76,9 @@ export function Sidebar({
   archivedCount: number;
   library: "active" | "archived";
   query: string;
+  searchMatches: ReadonlyMap<string, SessionSearchMatch>;
+  contentSearchPending: boolean;
+  contentSearchProgress?: { indexed: number; total: number; building: boolean };
   statusFilter: "all" | "active" | "attention" | "unseen";
   counts: { running: number; waiting: number; errors: number; unseen: number };
   projects: ProjectGroup[];
@@ -91,7 +102,7 @@ export function Sidebar({
   onQuery: (value: string) => void;
   onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
   onToggleProject: (key: string) => void;
-  onSelect: (thread: ThreadSummary) => void;
+  onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
   onPin: (project: ProjectGroup) => void;
   onHide: (project: ProjectGroup) => void;
@@ -159,8 +170,8 @@ export function Sidebar({
             ref={searchRef}
             value={query}
             onChange={(event) => onQuery(event.target.value)}
-            placeholder="搜索项目、会话、模型"
-            aria-label="搜索项目和会话"
+            placeholder="搜索项目、会话与内容"
+            aria-label="搜索项目、会话和会话内容"
           />
           {query && (
             <button className="icon-btn" onClick={() => onQuery("")}>
@@ -209,7 +220,7 @@ export function Sidebar({
             : loading
               ? `同步中 · ${projectCount} 项目`
               : searching
-                ? `${matchCount} 个匹配 · ${projects.length} 个项目`
+                ? `${matchCount} 个匹配 · ${projects.length} 个项目${contentSearchPending ? " · 检索中" : contentSearchProgress?.building ? ` · 已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
                 : `${projectCount} 项目 · ${visibleSessions} 会话`}
         </span>
         <div className="watch-strip">
@@ -265,6 +276,8 @@ export function Sidebar({
             unseenSessions={unseenSessions}
             collapsed={!searching && !expandedProjects.has(project.key)}
             forkCounts={forkCounts}
+            searchQuery={query}
+            searchMatches={searchMatches}
             onToggle={() => onToggleProject(project.key)}
             onSelect={onSelect}
             onAdd={() => onAddInProject(project)}
@@ -291,7 +304,13 @@ export function Sidebar({
             ))}
           </div>
         )}
-        {!loading && !projects.length && (
+        {!loading && contentSearchPending && !projects.length && (
+          <div className="search-pending" role="status">
+            <RefreshCw />
+            正在检索会话内容
+          </div>
+        )}
+        {!loading && !contentSearchPending && !projects.length && (
           <div className="empty-list">
             {emptyKind === "search" ? <Search /> : <Bot />}
             <p>

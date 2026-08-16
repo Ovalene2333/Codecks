@@ -31,6 +31,8 @@ import {
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
+import { SessionSearchStore } from "./session-search.js";
+import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { ToolRegistry } from "./tools/types.js";
 import { HostTerminalTool } from "./tools/host-terminal.js";
 
@@ -137,6 +139,10 @@ const claude = new ClaudeAdapter({
   threadSettings,
 });
 const agents = new AgentRegistry([manager, claude]);
+const sessionSearch = new SessionSearchIndexer(
+  new SessionSearchStore(dataDir),
+  agents,
+);
 const tools = new ToolRegistry([new HostTerminalTool({ useWsl })]);
 const fullSnapshot = () => ({
   ...agents.snapshot(),
@@ -204,6 +210,30 @@ app.get(
 app.get(
   "/api/tasks",
   route(async () => ({ tasks: await agents.listTasks() })),
+);
+app.post(
+  "/api/session-search",
+  route(async (req) => {
+    const input = z
+      .object({
+        query: z.string().trim().min(3).max(200),
+        library: z.enum(["active", "archived"]).default("active"),
+        limit: z.number().int().min(1).max(50).default(30),
+      })
+      .parse(req.body);
+    const snapshot = agents.snapshot();
+    const threads =
+      input.library === "archived"
+        ? snapshot.archivedThreads || []
+        : snapshot.threads;
+    const allowed = new Set(
+      threads.map((thread) => `${thread.agentId || "codex"}:${thread.id}`),
+    );
+    return {
+      results: sessionSearch.store.search(input.query, allowed, input.limit),
+      ...sessionSearch.progress(threads),
+    };
+  }),
 );
 app.post(
   "/api/agents/:agentId/threads/:threadId/background-terminals/:processId/terminate",
@@ -292,9 +322,18 @@ app.post(
 );
 app.get(
   "/api/agents/:agentId/threads/:threadId",
-  route(async (req) =>
-    agents.readThread(agentId(req.params.agentId), param(req.params.threadId)),
-  ),
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    const full = await agents.readThread(id, threadId);
+    const snapshot = agents.get(id).snapshot();
+    const thread = [
+      ...snapshot.threads,
+      ...(snapshot.archivedThreads || []),
+    ].find((item) => item.id === threadId);
+    if (thread) sessionSearch.capture(thread, full);
+    return full;
+  }),
 );
 app.patch(
   "/api/agents/:agentId/threads/:threadId",
@@ -641,12 +680,19 @@ app.post(
 );
 app.get(
   "/api/threads/:providerId/:threadId",
-  route(async (req) =>
-    manager.readThread(
+  route(async (req) => {
+    const threadId = param(req.params.threadId);
+    const full = await manager.readThread(
       param(req.params.providerId),
-      param(req.params.threadId),
-    ),
-  ),
+      threadId,
+    );
+    const thread = [
+      ...manager.snapshot().threads,
+      ...(manager.snapshot().archivedThreads || []),
+    ].find((item) => item.id === threadId);
+    if (thread) sessionSearch.capture(thread, full);
+    return full;
+  }),
 );
 app.post(
   "/api/threads/:providerId/:threadId/turns",
@@ -993,6 +1039,7 @@ agents.on("event", (event) => {
     );
     if (snapshot.threads.length || archived.length || historiesReady)
       threadSummaries.schedule(snapshot.threads, archived);
+    sessionSearch.reconcileSoon();
   }
   const payload = JSON.stringify(
     event.type === "snapshot"
@@ -1059,7 +1106,10 @@ const runtimeStart = useWsl
   : undefined;
 agents
   .startAll()
-  .then(() => runtimeStart?.done("Agent runtime 已就绪"))
+  .then(() => {
+    runtimeStart?.done("Agent runtime 已就绪");
+    sessionSearch.reconcile();
+  })
   .catch((error) => {
     runtimeStart?.fail(`Agent 启动失败：${error?.message || error}`);
     console.error("Agent 启动失败:", error);
@@ -1078,6 +1128,7 @@ const shutdown = () => {
   clearRuntimeLock(dataDir, process.pid);
   tunnel?.kill();
   agents.stopAll();
+  sessionSearch.close();
   void threadSummaries
     .flush()
     .catch(() => undefined)

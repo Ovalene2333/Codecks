@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
-import type { Provider, ThreadSummary } from "../types";
+import type { Provider, SessionSearchMatch, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { relativeTime, sessionKey } from "../format";
 import { ProjectMenu } from "./ProjectMenu";
@@ -21,6 +21,8 @@ export function ProjectGroupView({
   unseenSessions,
   collapsed,
   forkCounts,
+  searchQuery,
+  searchMatches,
   onToggle,
   onSelect,
   onAdd,
@@ -41,8 +43,10 @@ export function ProjectGroupView({
   unseenSessions: ReadonlySet<string>;
   collapsed: boolean;
   forkCounts: Map<string, number>;
+  searchQuery: string;
+  searchMatches: ReadonlyMap<string, SessionSearchMatch>;
   onToggle: () => void;
-  onSelect: (thread: ThreadSummary) => void;
+  onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAdd: () => void;
   onPin: () => void;
   onHide: () => void;
@@ -105,6 +109,9 @@ export function ProjectGroupView({
         const unseen = unseenSessions.has(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
+        const searchMatch = searchMatches.get(
+          `${thread.agentId || "codex"}:${thread.id}`,
+        );
         const agentLabel = thread.agentId === "claude" ? "Claude" : "Codex";
         const providerLabel =
           provider?.name ||
@@ -115,11 +122,11 @@ export function ProjectGroupView({
             role="button"
             tabIndex={0}
             className={`session-row ${selected === key ? "selected" : ""} ${thread.forkedFromId ? "session-row--fork" : ""}`}
-            onClick={() => onSelect(thread)}
+            onClick={() => onSelect(thread, searchMatch)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                onSelect(thread);
+                onSelect(thread, searchMatch);
               }
             }}
           >
@@ -198,6 +205,15 @@ export function ProjectGroupView({
               </small>
               {forks > 0 && <small>{forks} 分支</small>}
             </div>
+            {searchMatch && (
+              <p className="session-search-hit">
+                <small>{searchMatch.role === "user" ? "你" : agentLabel}</small>
+                <SearchHighlight
+                  text={searchMatch.snippet}
+                  query={searchQuery}
+                />
+              </p>
+            )}
           </div>
         );
       })}
@@ -207,5 +223,18 @@ export function ProjectGroupView({
         </button>
       )}
     </div>
+  );
+}
+
+function SearchHighlight({ text, query }: { text: string; query: string }) {
+  const needle = query.trim();
+  const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+  if (!needle || index < 0) return <span>{text}</span>;
+  return (
+    <span>
+      {text.slice(0, index)}
+      <mark>{text.slice(index, index + needle.length)}</mark>
+      {text.slice(index + needle.length)}
+    </span>
   );
 }
