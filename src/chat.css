@@ -500,6 +500,39 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.read-summary {
+  border-left-color: #22d3ee !important;
+}
+.read-summary summary strong {
+  flex: none;
+  color: #e5edf7;
+  font-size: 12px;
+  font-weight: 500;
+}
+.timeline .read-summary > ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 7px 10px 9px 30px;
+  border-top: 1px solid #1d2631;
+  list-style: none;
+}
+.read-summary li {
+  position: relative;
+  min-width: 0;
+}
+.read-summary li::before {
+  position: absolute;
+  left: -14px;
+  color: #526174;
+  content: "\2022";
+}
+.read-summary li code {
+  color: #d5deea;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .timeline .tool-row > pre {
   max-height: min(46vh, 420px);
   overflow: auto;

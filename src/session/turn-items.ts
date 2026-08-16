@@ -35,6 +35,56 @@ function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function readActionTarget(action: any, cwd?: string) {
+  return shortenPath(
+    String(action?.path || action?.name || action?.command || ""),
+    cwd,
+  );
+}
+
+function toolReadTarget(item: any, cwd?: string) {
+  const tool = String(item?.tool || item?.name || "").toLowerCase();
+  if (
+    !/(^|[_.:/-])(read|readfile|getfile|read_file|get_file)($|[_.:/-])/.test(
+      tool,
+    )
+  )
+    return "";
+  const input = item?.arguments ?? item?.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const row = input as Record<string, unknown>;
+  return shortenPath(
+    String(
+      row.path ||
+        row.file ||
+        row.filePath ||
+        row.file_path ||
+        row.filename ||
+        "",
+    ),
+    cwd,
+  );
+}
+
+export function turnReadTargets(items: any[], cwd?: string) {
+  const targets: string[] = [];
+  for (const item of items) {
+    if (item?.type === "commandExecution") {
+      const actions = Array.isArray(item.commandActions)
+        ? item.commandActions
+        : [];
+      for (const action of actions) {
+        if (action?.type === "read")
+          targets.push(readActionTarget(action, cwd));
+      }
+      continue;
+    }
+    if (item?.type === "mcpToolCall" || item?.type === "dynamicToolCall")
+      targets.push(toolReadTarget(item, cwd));
+  }
+  return unique(targets);
+}
+
 export function fileChangeGroupLabel(changes: any[]) {
   const labels = unique(changes.map((change) => changeKindLabel(change?.kind)));
   return labels.length === 1 ? labels[0] : "changes";
@@ -53,11 +103,7 @@ export function commandPresentation(item: any, cwd?: string) {
   const kind = hasExplore ? "explore" : isRead ? "read" : "command";
   const targets = unique(
     actions.map((action: any) => {
-      if (action?.type === "read")
-        return shortenPath(
-          String(action.path || action.name || action.command || ""),
-          cwd,
-        );
+      if (action?.type === "read") return readActionTarget(action, cwd);
       if (action?.type === "search") {
         const query = String(action.query || "").trim();
         const path = shortenPath(String(action.path || ""), cwd);
@@ -70,7 +116,7 @@ export function commandPresentation(item: any, cwd?: string) {
   );
   return {
     kind,
-    label: kind === "command" ? "" : kind,
+    label: kind === "read" ? "读取" : kind === "explore" ? "检索" : "",
     target: targets.join(", "),
   } as const;
 }

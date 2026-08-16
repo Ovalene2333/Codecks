@@ -23,6 +23,7 @@ import {
   fileChangeGroupLabel,
   groupTurnItems,
   toolCallPresentation,
+  turnReadTargets,
 } from "./turn-items";
 
 export const userText = userMessageText;
@@ -258,6 +259,29 @@ function FileChangeGroup({
   );
 }
 
+function ReadSummary({ targets }: { targets: string[] }) {
+  if (targets.length === 0) return null;
+  return (
+    <details className="tool-row read-summary">
+      <summary>
+        <BookOpenText />
+        <span className="tool-action read">本轮已读取</span>
+        <strong>{targets.length} 个文件</strong>
+        <code className="tool-command" title={targets.join("、")}>
+          {targets.join("、")}
+        </code>
+      </summary>
+      <ul>
+        {targets.map((target) => (
+          <li key={target}>
+            <code>{target}</code>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function TurnBlock({
   turn,
   index,
@@ -286,6 +310,7 @@ export function TurnBlock({
   const completed = !active && turn.status !== "running";
   const turnItems = Array.isArray(turn.items) ? turn.items : [];
   const renderEntries = groupTurnItems(turnItems);
+  const readTargets = turnReadTargets(turnItems, thread.cwd);
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
   );
@@ -303,6 +328,7 @@ export function TurnBlock({
         {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
         {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
       </header>
+      <ReadSummary targets={readTargets} />
       {renderEntries.map((entry, itemIndex) => {
         if (entry.kind === "fileChangeGroup")
           return (
