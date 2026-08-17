@@ -1,18 +1,11 @@
 import {
   Component,
   useEffect,
-  useId,
   useRef,
   type ErrorInfo,
   type ReactNode,
 } from "react";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
-import useMediaQuery from "@mui/material/useMediaQuery";
 import { X } from "lucide-react";
-import { AppButton, AppIconButton } from "./design-system/components";
 import type { ThreadSummary } from "./types";
 
 export class RenderErrorBoundary extends Component<
@@ -85,34 +78,21 @@ export function Modal({
   className?: string;
   onClose: () => void;
 }) {
-  const titleId = useId();
-  const fullScreen = useMediaQuery("(max-width: 760px)");
   return (
-    <Dialog
-      open
-      disablePortal={typeof window === "undefined"}
-      fullWidth
-      fullScreen={fullScreen}
-      maxWidth="sm"
-      aria-labelledby={titleId}
-      onClose={onClose}
-      slotProps={{
-        backdrop: { className: "modal-backdrop" },
-        paper: {
-          className: `modal ds-dialog${className ? ` ${className}` : ""}`,
-        },
-      }}
-    >
-      <DialogTitle id={titleId}>
-        <span>{title}</span>
-        <AppIconButton label="关闭" onClick={onClose}>
-          <X />
-        </AppIconButton>
-      </DialogTitle>
-      <DialogContent className="ds-dialog-content" sx={{ overflowX: "hidden" }}>
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <section
+        className={`modal${className ? ` ${className}` : ""}`}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <header>
+          <h2>{title}</h2>
+          <button className="icon-btn" onClick={onClose}>
+            <X />
+          </button>
+        </header>
         {children}
-      </DialogContent>
-    </Dialog>
+      </section>
+    </div>
   );
 }
 
@@ -131,40 +111,22 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onClose: () => void;
 }) {
-  const titleId = useId();
   return (
-    <Dialog
-      open
-      disablePortal={typeof window === "undefined"}
-      fullWidth
-      maxWidth="xs"
-      aria-labelledby={titleId}
-      onClose={onClose}
-      slotProps={{ paper: { className: "ds-dialog ds-confirm-dialog" } }}
-    >
-      <DialogTitle id={titleId}>
-        <span>{title}</span>
-        <AppIconButton label="关闭" onClick={onClose}>
-          <X />
-        </AppIconButton>
-      </DialogTitle>
-      <DialogContent>
-        <div className="confirm-body">{body}</div>
-      </DialogContent>
-      <DialogActions>
-        <AppButton type="button" onClick={onClose}>
+    <Modal title={title} onClose={onClose}>
+      <div className="confirm-body">{body}</div>
+      <div className="confirm-actions">
+        <button type="button" onClick={onClose}>
           取消
-        </AppButton>
-        <AppButton
+        </button>
+        <button
           type="button"
-          variant="contained"
-          color={danger ? "error" : "primary"}
+          className={danger ? "danger-btn" : "primary"}
           onClick={onConfirm}
         >
           {confirmLabel}
-        </AppButton>
-      </DialogActions>
-    </Dialog>
+        </button>
+      </div>
+    </Modal>
   );
 }
 
