@@ -27,6 +27,13 @@ import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import { defaultAgentId } from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
+import {
+  AppButton,
+  AppAlert,
+  AppIconButton,
+  SelectField,
+  TextInput,
+} from "../design-system/components";
 
 export function NewThreadModal({
   providers,
@@ -162,57 +169,53 @@ export function NewThreadModal({
       }}
     >
       <form className="form" onSubmit={submit}>
-        <label>
-          Agent
-          <select
-            value={agentId}
-            onChange={(event) =>
-              selectAgent(event.target.value as "codex" | "claude")
-            }
-          >
-            {(agents.length
-              ? agents
-              : [
-                  {
-                    id: "codex" as const,
-                    name: "Codex",
-                    online: true,
-                    starting: false,
-                  },
-                ]
-            ).map((agent) => (
-              <option
-                key={agent.id}
-                value={agent.id}
-                disabled={!agent.online && !agent.starting}
-              >
-                {agent.name}
-                {!agent.online
-                  ? agent.starting
-                    ? "（启动中）"
-                    : "（离线）"
-                  : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        <SelectField
+          label="Agent"
+          value={agentId}
+          onChange={(event) =>
+            selectAgent(event.target.value as "codex" | "claude")
+          }
+        >
+          {(agents.length
+            ? agents
+            : [
+                {
+                  id: "codex" as const,
+                  name: "Codex",
+                  online: true,
+                  starting: false,
+                },
+              ]
+          ).map((agent) => (
+            <option
+              key={agent.id}
+              value={agent.id}
+              disabled={!agent.online && !agent.starting}
+            >
+              {agent.name}
+              {!agent.online
+                ? agent.starting
+                  ? "（启动中）"
+                  : "（离线）"
+                : ""}
+            </option>
+          ))}
+        </SelectField>
         {agentId === "codex" ? (
           <>
-            <label>
-              供应商
-              <select
-                value={form.providerId}
-                onChange={(e) =>
-                  setForm({ ...form, providerId: e.target.value })
-                }
-              >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SelectField
+              label="供应商"
+              value={form.providerId}
+              onChange={(event) =>
+                setForm({ ...form, providerId: event.target.value })
+              }
+            >
+              {providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </SelectField>
             <ModelPicker
               providerId={form.providerId}
               model={form.model}
@@ -224,50 +227,48 @@ export function NewThreadModal({
           </>
         ) : (
           <>
-            <label>
-              Claude 配置档
-              <select
-                value={form.providerId}
-                disabled={profilesLoading || profiles.length === 0}
-                onChange={(event) => {
-                  const profile = profiles.find(
-                    (item) => item.id === event.target.value,
+            <SelectField
+              label="Claude 配置档"
+              value={form.providerId}
+              disabled={profilesLoading || profiles.length === 0}
+              onChange={(event) => {
+                const nextProviderId = event.target.value;
+                const profile = profiles.find(
+                  (item) => item.id === nextProviderId,
+                );
+                if (profile?.official) {
+                  window.alert(
+                    "you can't choose it because the world IS NOT Anthropic's world",
                   );
-                  if (profile?.official) {
-                    event.currentTarget.value = form.providerId;
-                    window.alert(
-                      "you can't choose it because the world IS NOT Anthropic's world",
-                    );
-                    return;
-                  }
-                  if (profile?.enabled === false) {
-                    setError("此 Claude 中转配置缺少 API 地址或认证凭据");
-                    return;
-                  }
-                  setError("");
-                  setForm({ ...form, providerId: event.target.value });
-                }}
-              >
-                {profilesLoading ? (
-                  <option value="">正在读取…</option>
-                ) : profiles.length ? (
-                  <>
-                    <option value="" disabled>
-                      请选择 Claude 中转配置
+                  return;
+                }
+                if (profile?.enabled === false) {
+                  setError("此 Claude 中转配置缺少 API 地址或认证凭据");
+                  return;
+                }
+                setError("");
+                setForm({ ...form, providerId: nextProviderId });
+              }}
+            >
+              {profilesLoading ? (
+                <option value="">正在读取…</option>
+              ) : profiles.length ? (
+                <>
+                  <option value="" disabled>
+                    请选择 Claude 中转配置
+                  </option>
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                      {profile.current ? "（当前）" : ""}
+                      {profile.official ? "（不可用）" : ""}
                     </option>
-                    {profiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name}
-                        {profile.current ? "（当前）" : ""}
-                        {profile.official ? "（不可用）" : ""}
-                      </option>
-                    ))}
-                  </>
-                ) : (
-                  <option value="">未找到 CC Switch Claude 配置</option>
-                )}
-              </select>
-            </label>
+                  ))}
+                </>
+              ) : (
+                <option value="">未找到 CC Switch Claude 配置</option>
+              )}
+            </SelectField>
             <ModelPicker
               agentId="claude"
               providerId={form.providerId}
@@ -277,172 +278,162 @@ export function NewThreadModal({
                 setForm((current) => ({ ...current, model }))
               }
             />
-            <label>
-              Claude 权限
-              <select
-                value={form.permissionMode}
+            <SelectField
+              label="Claude 权限"
+              value={form.permissionMode}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  permissionMode: event.target.value as ClaudePermissionMode,
+                })
+              }
+            >
+              {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </SelectField>
+          </>
+        )}
+        <div className="input-action ds-input-action">
+          <TextInput
+            required
+            label="工作目录"
+            value={form.cwd}
+            onChange={(event) => {
+              const cwd = event.target.value;
+              setForm({ ...form, cwd });
+            }}
+            placeholder={
+              runtimeWsl
+                ? "/home/you/project 或 /mnt/d/Code/project"
+                : "D:\\Code\\project 或 /mnt/d/Code/project"
+            }
+          />
+          {runtimeWsl ? (
+            <AppButton
+              type="button"
+              className={`wsl-cwd-btn${wslPathMode ? " is-wsl" : ""}`}
+              aria-pressed={wslPathMode}
+              variant={wslPathMode ? "contained" : "outlined"}
+              title={
+                !form.cwd.trim()
+                  ? wslPathMode
+                    ? "WSL 路径模式已启用"
+                    : "切换为 WSL 路径"
+                  : isWslCwd(form.cwd)
+                    ? toggleWslCwd(form.cwd) === form.cwd.trim()
+                      ? "此目录只在 WSL 中，无法切回 Windows"
+                      : "切换为 Windows 目录"
+                    : "切换为 WSL 目录"
+              }
+              disabled={
+                Boolean(form.cwd.trim()) &&
+                toggleWslCwd(form.cwd) === form.cwd.trim()
+              }
+              onClick={() => {
+                if (!form.cwd.trim()) {
+                  setEmptyWslPathMode((current) => !current);
+                  return;
+                }
+                const cwd = toggleWslCwd(form.cwd);
+                setForm((current) => ({ ...current, cwd }));
+              }}
+            >
+              WSL
+            </AppButton>
+          ) : null}
+          <AppIconButton
+            type="button"
+            label="浏览目录"
+            tooltip="浏览目录"
+            onClick={() => setBrowse(true)}
+          >
+            <FolderOpen />
+          </AppIconButton>
+        </div>
+        <TextInput
+          label="会话名称（可选）"
+          value={form.name}
+          onChange={(event) => setForm({ ...form, name: event.target.value })}
+          placeholder="修复登录问题"
+        />
+        {agentId === "codex" && (
+          <>
+            <div className="form-grid">
+              <SelectField
+                label="Sandbox"
+                value={form.sandbox}
                 onChange={(event) =>
                   setForm({
                     ...form,
-                    permissionMode: event.target.value as ClaudePermissionMode,
+                    ...settingsForSandboxMode(
+                      event.target.value as SandboxMode,
+                      approvalMode(form.approvalPolicy, form.approvalsReviewer),
+                    ),
                   })
                 }
               >
-                {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+                {SANDBOX_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
                 ))}
-              </select>
-            </label>
-          </>
-        )}
-        <label>
-          工作目录
-          <div className="input-action">
-            <input
-              required
-              value={form.cwd}
-              onChange={(e) => {
-                const cwd = e.target.value;
-                setForm({ ...form, cwd });
-              }}
-              placeholder={
-                runtimeWsl
-                  ? "/home/you/project 或 /mnt/d/Code/project"
-                  : "D:\\Code\\project 或 /mnt/d/Code/project"
-              }
-            />
-            {runtimeWsl ? (
-              <button
-                type="button"
-                className={`wsl-cwd-btn${wslPathMode ? " is-wsl" : ""}`}
-                aria-pressed={wslPathMode}
-                title={
-                  !form.cwd.trim()
-                    ? wslPathMode
-                      ? "WSL 路径模式已启用"
-                      : "切换为 WSL 路径"
-                    : isWslCwd(form.cwd)
-                      ? toggleWslCwd(form.cwd) === form.cwd.trim()
-                        ? "此目录只在 WSL 中，无法切回 Windows"
-                        : "切换为 Windows 目录"
-                      : "切换为 WSL 目录"
-                }
-                disabled={
-                  Boolean(form.cwd.trim()) &&
-                  toggleWslCwd(form.cwd) === form.cwd.trim()
-                }
-                onClick={() => {
-                  if (!form.cwd.trim()) {
-                    setEmptyWslPathMode((current) => !current);
-                    return;
-                  }
-                  const cwd = toggleWslCwd(form.cwd);
-                  setForm((current) => ({ ...current, cwd }));
-                }}
-              >
-                WSL
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="icon-btn"
-              title="浏览目录"
-              onClick={() => setBrowse(true)}
-            >
-              <FolderOpen />
-            </button>
-          </div>
-        </label>
-        <label>
-          会话名称（可选）
-          <input
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="修复登录问题"
-          />
-        </label>
-        {agentId === "codex" && (
-          <>
-            <div className="form-grid">
-              <label>
-                Sandbox
-                <select
-                  value={form.sandbox}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      ...settingsForSandboxMode(
-                        e.target.value as SandboxMode,
-                        approvalMode(
-                          form.approvalPolicy,
-                          form.approvalsReviewer,
-                        ),
-                      ),
-                    })
-                  }
-                >
-                  {SANDBOX_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Approvals
-                <select
-                  value={approvalMode(
-                    form.approvalPolicy,
-                    form.approvalsReviewer,
-                  )}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      ...settingsForApprovalMode(
-                        e.target.value as ApprovalMode,
-                        form.sandbox,
-                      ),
-                    })
-                  }
-                >
-                  {APPROVAL_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <label>
-              Personality
-              <select
-                value={form.personality}
-                onChange={(e) =>
+              </SelectField>
+              <SelectField
+                label="Approvals"
+                value={approvalMode(
+                  form.approvalPolicy,
+                  form.approvalsReviewer,
+                )}
+                onChange={(event) =>
                   setForm({
                     ...form,
-                    personality: e.target.value as "" | Personality,
+                    ...settingsForApprovalMode(
+                      event.target.value as ApprovalMode,
+                      form.sandbox,
+                    ),
                   })
                 }
               >
-                <option value="">Default</option>
-                <option value="pragmatic">Pragmatic</option>
-                <option value="friendly">Friendly</option>
-                <option value="none">None</option>
-              </select>
-            </label>
+                {APPROVAL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+            </div>
+            <SelectField
+              label="Personality"
+              value={form.personality}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  personality: event.target.value as "" | Personality,
+                })
+              }
+            >
+              <option value="">Default</option>
+              <option value="pragmatic">Pragmatic</option>
+              <option value="friendly">Friendly</option>
+              <option value="none">None</option>
+            </SelectField>
           </>
         )}
-        {error && <p className="error-text">{error}</p>}
-        <button
-          className="primary"
+        {error && (
+          <AppAlert severity="error" variant="outlined">
+            {error}
+          </AppAlert>
+        )}
+        <AppButton
           type="submit"
+          variant="contained"
+          startIcon={<Sparkles />}
           disabled={submitting || !form.providerId || profilesLoading}
         >
-          <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}
-        </button>
+        </AppButton>
       </form>
       {browse && (
         <DirBrowser
