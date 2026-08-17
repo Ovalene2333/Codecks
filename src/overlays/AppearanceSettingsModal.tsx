@@ -6,7 +6,6 @@ import type {
   ThemePreference,
 } from "../appearance";
 import { Modal } from "../ui";
-import { ModeButton, ModeButtonGroup } from "../design-system/components";
 
 const themeOptions: {
   value: ThemePreference;
@@ -103,29 +102,21 @@ function SettingGroup({
   onChange: (value: string) => void;
 }) {
   return (
-    <section
-      className="appearance-group"
-      aria-labelledby={`appearance-${title}`}
-    >
-      <h3 id={`appearance-${title}`}>{title}</h3>
-      <ModeButtonGroup
-        exclusive
-        fullWidth
-        className="appearance-options"
-        value={value}
-        aria-label={title}
-        onChange={(_, next) => {
-          if (next !== null) onChange(next);
-        }}
-      >
+    <fieldset className="appearance-group">
+      <legend>{title}</legend>
+      <div className="appearance-options">
         {options.map((option) => {
           const Icon = option.icon;
+          const selected = option.value === value;
           return (
-            <ModeButton
-              key={option.value}
-              value={option.value}
-              aria-label={option.label}
-            >
+            <label className={selected ? "selected" : ""} key={option.value}>
+              <input
+                type="radio"
+                name={`appearance-${title}`}
+                value={option.value}
+                checked={selected}
+                onChange={() => onChange(option.value)}
+              />
               <span className="appearance-option-icon" aria-hidden="true">
                 <Icon />
               </span>
@@ -133,10 +124,10 @@ function SettingGroup({
                 <b>{option.label}</b>
                 <small>{option.detail}</small>
               </span>
-            </ModeButton>
+            </label>
           );
         })}
-      </ModeButtonGroup>
-    </section>
+      </div>
+    </fieldset>
   );
 }

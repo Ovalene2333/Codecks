@@ -500,28 +500,59 @@ aside {
   border: 0;
 }
 
-.appearance-group h3 {
-  margin: 0 0 8px;
+.appearance-group legend {
   margin-bottom: 8px;
   color: var(--text);
   font-size: var(--fs-ui);
   font-weight: 600;
 }
 
-.appearance-options.MuiToggleButtonGroup-root {
+.appearance-options {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
-.appearance-options .MuiToggleButton-root {
+.appearance-options label {
+  position: relative;
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  width: 100%;
   gap: 9px;
   min-height: 72px;
-  justify-content: stretch;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    background-color var(--ease),
+    transform var(--ease);
+}
+
+.appearance-options label:hover {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.appearance-options label.selected {
+  border-color: var(--focus-ring);
+  background: color-mix(in srgb, var(--focus-ring) 10%, var(--surface));
+}
+
+.appearance-options input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.appearance-options label:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .appearance-option-icon {
@@ -535,7 +566,7 @@ aside {
   color: var(--text-dim);
 }
 
-.appearance-options .Mui-selected .appearance-option-icon {
+.appearance-options label.selected .appearance-option-icon {
   border-color: var(--focus-ring);
   color: var(--text);
 }
@@ -712,11 +743,11 @@ html[data-motion="off"] *::after {
     right: 12px;
   }
 
-  .appearance-options.MuiToggleButtonGroup-root {
+  .appearance-options {
     grid-template-columns: 1fr;
   }
 
-  .appearance-options .MuiToggleButton-root {
+  .appearance-options label {
     min-height: 60px;
   }
 
