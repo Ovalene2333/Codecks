@@ -1,0 +1,127 @@
+/* Application-level geometry for the MUI-backed design system. */
+.modal.ds-dialog {
+  width: min(560px, calc(100% - 32px));
+  max-height: min(88dvh, 760px);
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.ds-dialog .MuiDialogTitle-root > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-dialog-content {
+  min-height: 0;
+}
+
+.ds-confirm-dialog .confirm-body {
+  margin-top: 2px;
+}
+
+.form > .MuiButton-contained {
+  min-width: 112px;
+  justify-self: end;
+}
+
+/* Keep legacy form selectors from restyling MUI's native input element. */
+.form .MuiInputBase-input {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+.form input.MuiInputBase-input {
+  padding: 10px 12px;
+}
+
+.form select.MuiInputBase-input {
+  padding: 10px 34px 10px 12px;
+}
+
+.form .MuiInputBase-input:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.ds-input-action {
+  align-items: flex-start;
+}
+
+.ds-input-action > .MuiFormControl-root {
+  min-width: 0;
+  flex: 1;
+}
+
+.ds-input-action > .MuiButton-root,
+.ds-input-action > .MuiIconButton-root {
+  min-width: 40px;
+  height: 40px;
+  flex: none;
+}
+
+.ds-input-action > .MuiButton-root {
+  padding-inline: 10px;
+}
+
+.ds-field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ds-field-with-action > .MuiFormControl-root {
+  min-width: 0;
+  flex: 1;
+}
+
+.ds-field-with-action > .MuiButton-root {
+  flex: none;
+  white-space: nowrap;
+}
+
+.appearance-options .MuiToggleButton-root > span:last-child {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .modal.ds-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .ds-dialog .MuiDialogTitle-root {
+    padding-top: max(8px, env(safe-area-inset-top));
+  }
+
+  .ds-dialog .MuiDialogContent-root {
+    padding: 16px 14px max(16px, env(safe-area-inset-bottom));
+  }
+
+  .form > .MuiButton-contained {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .ds-field-with-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ds-field-with-action > .MuiButton-root {
+    align-self: flex-end;
+  }
+}
