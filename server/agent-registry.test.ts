@@ -81,6 +81,16 @@ class FakeAgent extends EventEmitter implements AgentAdapter {
     };
   }
 
+  publicProfiles() {
+    return [
+      {
+        id: `${this.id}-profile`,
+        agentId: this.id,
+        name: `${this.id} profile`,
+      },
+    ];
+  }
+
   async startAll() {
     this.starts += 1;
   }
@@ -118,6 +128,10 @@ test("registry merges agent snapshots while preserving the primary runtime", () 
   assert.deepEqual(
     snapshot.agents.map((agent) => agent.id),
     ["codex", "claude"],
+  );
+  assert.deepEqual(
+    snapshot.agentProfiles.map((profile) => profile.id),
+    ["codex-profile", "claude-profile"],
   );
 });
 

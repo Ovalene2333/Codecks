@@ -1,7 +1,9 @@
 import type {
   AgentCapabilities,
   AgentDescriptor,
+  AgentProfile,
   Approval,
+  Provider,
   ThreadSummary,
 } from "./types";
 
@@ -74,6 +76,24 @@ export function agentName(
   return (
     agents?.find((agent) => agent.id === id)?.name ||
     (id === "claude" ? "Claude Code" : "Codex")
+  );
+}
+
+export function providerForThread(
+  providers: Provider[],
+  agentProfiles: AgentProfile[] | undefined,
+  thread: Pick<ThreadSummary, "agentId" | "providerId">,
+) {
+  if (agentIdFor(thread) !== "claude")
+    return providers.find((provider) => provider.id === thread.providerId);
+  const profiles = (agentProfiles || []).filter(
+    (profile) => profile.agentId === "claude",
+  );
+  return (
+    profiles.find((profile) => profile.id === thread.providerId) ||
+    (thread.providerId === "claude-current"
+      ? profiles.find((profile) => profile.current && profile.enabled !== false)
+      : undefined)
   );
 }
 

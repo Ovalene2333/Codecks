@@ -4,7 +4,7 @@ import {
   MoreHorizontal,
   SunMoon,
 } from "lucide-react";
-import type { Provider, ThreadSummary } from "../types";
+import type { AgentProfile, Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
@@ -22,7 +22,7 @@ export function ChatHeader({
   onCompact,
 }: {
   thread: ThreadSummary;
-  provider?: Provider;
+  provider?: Provider | AgentProfile;
   agentName: string;
   pendingCount: number;
   locked?: boolean;
@@ -64,10 +64,10 @@ export function ChatHeader({
             />
             <span className="chat-location">
               {basename(thread.cwd)}
-              {thread.agentId === "claude"
-                ? ` · ${agentName}`
-                : provider?.name
-                  ? ` · ${provider.name}`
+              {provider?.name
+                ? ` · ${provider.name}`
+                : thread.agentId === "claude"
+                  ? ` · ${agentName}`
                   : ""}
             </span>
           </p>
@@ -91,17 +91,18 @@ export function ChatHeader({
               showUnknown
             />
           </div>
-          {thread.agentId !== "claude" && (
-            <button
-              className="provider-switch secondary"
-              onClick={onSwitchProvider}
-              disabled={locked}
-              title="为此 Session 切换供应商"
-            >
-              <ArrowRightLeft />
-              <span>{provider?.name || "供应商"}</span>
-            </button>
-          )}
+          <button
+            className="provider-switch secondary"
+            onClick={onSwitchProvider}
+            disabled={locked}
+            title="为此 Session 切换供应商"
+          >
+            <ArrowRightLeft />
+            <span>
+              {provider?.name ||
+                (thread.agentId === "claude" ? "Claude 中转" : "供应商")}
+            </span>
+          </button>
           <button
             type="button"
             className="icon-btn appearance-trigger"
@@ -141,9 +142,8 @@ export function ChatHeader({
           className="mobile-provider"
           title={provider?.name || "供应商未知"}
         >
-          {thread.agentId === "claude"
-            ? agentName
-            : provider?.name || "供应商未知"}
+          {provider?.name ||
+            (thread.agentId === "claude" ? "Claude 中转" : "供应商未知")}
         </span>
       </div>
     </header>

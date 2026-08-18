@@ -5,6 +5,7 @@ import {
   approvalPath,
   capabilitiesFor,
   defaultAgentId,
+  providerForThread,
   threadActionPath,
   threadPath,
 } from "./agents.ts";
@@ -52,4 +53,36 @@ test("new sessions keep the preferred Agent when available and fall back online"
   ];
   assert.equal(defaultAgentId(agents, "codex"), "codex");
   assert.equal(defaultAgentId(agents, "claude"), "codex");
+});
+
+test("Claude sessions resolve exact and current relay profiles", () => {
+  const profiles = [
+    {
+      id: "claude-cc-current",
+      agentId: "claude" as const,
+      name: "Current relay",
+      current: true,
+      enabled: true,
+    },
+    {
+      id: "claude-cc-other",
+      agentId: "claude" as const,
+      name: "Other relay",
+      enabled: true,
+    },
+  ];
+  assert.equal(
+    providerForThread([], profiles, {
+      agentId: "claude",
+      providerId: "claude-current",
+    })?.name,
+    "Current relay",
+  );
+  assert.equal(
+    providerForThread([], profiles, {
+      agentId: "claude",
+      providerId: "claude-cc-other",
+    })?.name,
+    "Other relay",
+  );
 });

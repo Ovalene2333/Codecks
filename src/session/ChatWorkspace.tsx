@@ -13,6 +13,7 @@ import type {
   ApprovalsReviewer,
   ClaudePermissionMode,
   Personality,
+  AgentProfile,
   Provider,
   SandboxMode,
   ThreadSummary,
@@ -72,7 +73,7 @@ export function ChatWorkspace({
   onOpenOrigin,
 }: {
   thread: ThreadSummary;
-  provider?: Provider;
+  provider?: Provider | AgentProfile;
   agentName: string;
   capabilities: AgentCapabilities;
   approvals: Approval[];

@@ -609,12 +609,20 @@ export class ClaudeAdapter extends EventEmitter {
   async updateThreadSettings(
     _providerId: string,
     threadId: string,
-    settings: { model?: string; permissionMode?: ClaudePermissionMode },
+    settings: {
+      providerId?: string;
+      model?: string;
+      permissionMode?: ClaudePermissionMode;
+    },
   ) {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Claude Code 会话不存在");
     if (this.active.has(threadId))
       throw new Error("任务结束后才能修改 Claude 会话设置");
+    if (settings.providerId) {
+      const profile = this.resolveProfile(settings.providerId);
+      thread.providerId = profile.id;
+    }
     if (settings.model) thread.model = settings.model;
     if (settings.permissionMode)
       thread.permissionMode = settings.permissionMode;
