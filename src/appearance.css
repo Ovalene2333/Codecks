@@ -38,6 +38,13 @@ aside {
   color: var(--text);
 }
 
+/* Native select popovers do not consistently inherit the control background. */
+select option,
+select optgroup {
+  background: var(--control);
+  color: var(--text);
+}
+
 .session-search > svg,
 .project-toggle > svg:first-child,
 .thread-meta,

@@ -1260,6 +1260,7 @@ export function App() {
             <div className="phone-session-settings">
               <SessionToolbar
                 thread={current}
+                variant="panel"
                 locked={
                   current.status === "running" || current.status === "waiting"
                 }
