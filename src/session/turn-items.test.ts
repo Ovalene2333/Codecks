@@ -8,6 +8,7 @@ import {
   commandPresentation,
   fileChangeGroupLabel,
   groupTurnItems,
+  reasoningText,
   toolCallPresentation,
   turnReadTargets,
 } from "./turn-items";
@@ -31,6 +32,27 @@ test("groups consecutive file changes and multi-file updates", () => {
   assert.equal(grouped[2].kind, "fileChangeGroup");
   assert.equal(fileChangeGroupLabel((grouped[0] as any).changes), "update");
   assert.equal(fileChangeGroupLabel((grouped[2] as any).changes), "changes");
+});
+
+test("omits empty reasoning items while preserving visible summaries", () => {
+  const grouped = groupTurnItems([
+    { id: "empty", type: "reasoning", summary: [] },
+    { id: "whitespace", type: "reasoning", content: "   \n" },
+    {
+      id: "visible",
+      type: "reasoning",
+      summary: "  检查协议事件  ",
+    },
+    { id: "message", type: "agentMessage", text: "完成" },
+  ]);
+
+  assert.deepEqual(
+    grouped.map((entry) =>
+      entry.kind === "item" ? entry.item.id : entry.kind,
+    ),
+    ["visible", "message"],
+  );
+  assert.equal(reasoningText((grouped[0] as any).item), "检查协议事件");
 });
 
 test("classifies Codex read and explore command actions", () => {

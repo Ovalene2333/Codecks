@@ -181,8 +181,15 @@ export function Timeline({
           streamedItems.length === 0 &&
           (thread.status === "running" || thread.status === "waiting") && (
             <div className="message agent streaming" role="status">
-              正在准备响应…
-              <i />
+              <span className="streaming-content">
+                正在准备响应
+                <span className="streaming-dots">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              </span>
+              <span className="streaming-shimmer" />
             </div>
           )}
         {!hasActiveTurn && (streamed.length > 0 || streamedItems.length > 0) && (

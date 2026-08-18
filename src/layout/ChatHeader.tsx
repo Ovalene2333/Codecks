@@ -7,6 +7,7 @@ import {
 import type { Provider, ThreadSummary } from "../types";
 import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
+import { ContextBar } from "../usage/ContextBar";
 
 export function ChatHeader({
   thread,
@@ -18,6 +19,7 @@ export function ChatHeader({
   onMenu,
   onAppearance,
   onSwitchProvider,
+  onCompact,
 }: {
   thread: ThreadSummary;
   provider?: Provider;
@@ -28,6 +30,7 @@ export function ChatHeader({
   onMenu: () => void;
   onAppearance: () => void;
   onSwitchProvider: () => void;
+  onCompact?: () => void;
 }) {
   const contextLabel =
     thread.tokenUsage?.used != null && thread.tokenUsage.limit != null
@@ -44,7 +47,7 @@ export function ChatHeader({
           <div className="chat-title-row">
             <h2 title={thread.name}>{thread.name}</h2>
             <span
-              className={`agent-badge agent-${thread.agentId || "codex"}`}
+              className={`mobile-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
               title={`${agentName} 任务`}
             >
               {thread.agentId === "claude" ? "Claude" : "Codex"}
@@ -70,6 +73,24 @@ export function ChatHeader({
           </p>
         </div>
         <div className="chat-header-actions">
+          <span
+            className={`chat-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
+            title={`${agentName} 任务`}
+          >
+            {thread.agentId === "claude" ? "Claude" : "Codex"}
+          </span>
+          <div
+            className="desktop-context"
+            title={`上下文 ${contextLabel || "未知"}`}
+          >
+            <span className="desktop-context-label">上下文</span>
+            <ContextBar
+              usage={thread.tokenUsage}
+              compacting={thread.compacting}
+              onCompact={onCompact}
+              showUnknown
+            />
+          </div>
           {thread.agentId !== "claude" && (
             <button
               className="provider-switch secondary"

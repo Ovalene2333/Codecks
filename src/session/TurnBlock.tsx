@@ -30,6 +30,7 @@ import {
   commandPresentation,
   fileChangeGroupLabel,
   groupTurnItems,
+  reasoningText,
   toolCallPresentation,
   turnReadTargets,
 } from "./turn-items";
@@ -157,9 +158,7 @@ function TurnItem({
           <Activity />
           思考过程
         </summary>
-        <div>
-          {displayText(item.summary) || displayText(item.content) || ""}
-        </div>
+        <div>{reasoningText(item)}</div>
       </details>
     );
   if (item.type === "commandExecution") {

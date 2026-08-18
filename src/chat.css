@@ -102,6 +102,53 @@
 .chat-header-actions .context-bar {
   margin-left: 0;
 }
+.desktop-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.desktop-context-label {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+.desktop-context .context-bar {
+  gap: 6px;
+}
+.desktop-context .context-track {
+  width: 54px;
+}
+.desktop-context .compact-btn {
+  min-height: 25px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--control);
+}
+.chat-agent-badge {
+  margin-right: 2px;
+}
+.mobile-agent-badge {
+  display: none;
+}
+@media (max-width: 1100px) and (min-width: 761px) {
+  .chat-agent-badge,
+  .desktop-context-label,
+  .desktop-context .context-track {
+    display: none;
+  }
+  .desktop-context {
+    padding-inline: 7px;
+  }
+  .provider-switch.secondary {
+    max-width: 120px;
+  }
+}
 .mobile-chat-meta {
   display: none;
 }
@@ -1106,6 +1153,53 @@
     opacity: 0.35;
   }
 }
+.message.streaming {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.06);
+  border: 1px solid rgba(56, 189, 248, 0.15);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.streaming-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.streaming-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 1px;
+}
+.streaming-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dot-fade 1.2s ease-in-out infinite;
+}
+.streaming-dots i:nth-child(1) {
+  animation-delay: 0s;
+}
+.streaming-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.streaming-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes dot-fade {
+  0%, 60%, 100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
 @media (max-width: 1100px) {
   .toolbar-select select,
   .toolbar-select input {
@@ -1128,6 +1222,13 @@
   }
   .chat-header-actions .provider-switch {
     display: none;
+  }
+  .desktop-context,
+  .chat-agent-badge {
+    display: none;
+  }
+  .mobile-agent-badge {
+    display: inline-flex;
   }
   .chat-header-actions {
     gap: 2px;

@@ -4,10 +4,19 @@ export type TurnRenderEntry =
   | { kind: "item"; item: any }
   | { kind: "fileChangeGroup"; items: any[]; changes: any[] };
 
+export function reasoningText(item: any) {
+  const summary = displayText(item?.summary).trim();
+  return summary || displayText(item?.content).trim();
+}
+
 export function groupTurnItems(items: any[]): TurnRenderEntry[] {
   const grouped: TurnRenderEntry[] = [];
   for (let index = 0; index < items.length;) {
     const item = items[index];
+    if (item?.type === "reasoning" && !reasoningText(item)) {
+      index += 1;
+      continue;
+    }
     if (item?.type !== "fileChange") {
       grouped.push({ kind: "item", item });
       index += 1;

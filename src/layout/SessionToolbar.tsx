@@ -33,6 +33,7 @@ export function SessionToolbar({
   locked,
   onSettings,
   onCompact,
+  variant = "inline",
 }: {
   thread: ThreadSummary;
   locked?: boolean;
@@ -46,9 +47,12 @@ export function SessionToolbar({
     personality?: Personality;
   }) => void;
   onCompact: () => void;
+  variant?: "inline" | "panel";
 }) {
   return (
-    <div className={`session-toolbar ${locked ? "locked" : ""}`}>
+    <div
+      className={`session-toolbar session-toolbar--${variant} ${locked ? "locked" : ""}`}
+    >
       <div className="toolbar-fields">
         <ModelPicker
           agentId={thread.agentId || "codex"}

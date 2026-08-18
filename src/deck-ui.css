@@ -455,16 +455,16 @@ html[data-theme="light"] {
 }
 
 .composer-session-controls .session-toolbar {
-  min-height: 42px;
-  padding: 6px;
+  min-height: 44px;
+  padding: 5px 6px;
   border: 1px solid var(--line);
   border-bottom: 0;
   border-radius: var(--radius-md) var(--radius-md) 0 0;
-  background: var(--surface-muted);
+  background: var(--surface);
 }
 
 .composer-session-controls .toolbar-fields {
-  gap: 5px;
+  gap: 0;
 }
 
 .toolbar-select {
@@ -489,13 +489,46 @@ html[data-theme="light"] {
 .composer-session-controls .toolbar-select select,
 .composer-session-controls .toolbar-select input {
   width: auto;
-  max-width: 132px;
-  min-height: 30px;
+  max-width: 128px;
+  min-height: 32px;
   padding: 0 24px 0 4px;
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: 11px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.composer-session-controls .toolbar-select {
+  min-height: 32px;
+  padding: 0 5px;
+  overflow: visible;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  transition:
+    background-color var(--ease),
+    color var(--ease);
+}
+
+.composer-session-controls .toolbar-select:hover,
+.composer-session-controls .toolbar-select:focus-within {
+  background: var(--control-hover);
+}
+
+.composer-session-controls .toolbar-select:focus-within {
+  box-shadow: inset 0 -2px var(--focus-ring);
+}
+
+.composer-session-controls .toolbar-field-label {
+  padding: 0 5px 0 2px;
+}
+
+.composer-session-controls .toolbar-select select:focus-visible,
+.composer-session-controls .toolbar-select input:focus-visible {
+  outline: 0;
 }
 
 .composer-session-controls .compact-btn {
@@ -504,8 +537,16 @@ html[data-theme="light"] {
   gap: 5px;
   min-height: 32px;
   padding: 0 9px;
-  border-color: var(--line);
-  background: var(--control);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.composer-session-controls .compact-btn:hover:not(:disabled),
+.composer-session-controls .compact-btn:focus-visible {
+  border-color: transparent;
+  background: var(--control-hover);
+  color: var(--text);
 }
 
 .composer-session-controls .compact-btn svg {
@@ -525,9 +566,10 @@ html[data-theme="light"] {
 .composer textarea {
   min-height: 40px;
   max-height: 180px;
-  padding: 10px 8px;
+  padding: 9px 8px 10px;
   color: var(--text);
   font-size: 14px;
+  line-height: 20px;
 }
 
 .composer-box .attach,
@@ -535,6 +577,16 @@ html[data-theme="light"] {
   width: 40px;
   height: 40px;
   min-width: 40px;
+}
+
+.composer-box .attach {
+  align-self: flex-start;
+}
+
+.composer-box .attach svg {
+  width: 18px;
+  height: 18px;
+  transform: translateY(-1px);
 }
 
 .send {
@@ -561,6 +613,108 @@ html[data-theme="light"] {
     max-width: 116px;
     padding-left: 8px;
   }
+}
+
+/* The modal uses the same settings data, but needs a form rather than a toolbar. */
+.session-toolbar--panel {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.session-toolbar--panel .toolbar-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  overflow: visible;
+}
+
+.session-toolbar--panel .toolbar-fields > .toolbar-select:first-child {
+  grid-column: 1 / -1;
+}
+
+.session-toolbar--panel .toolbar-select {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-toolbar--panel .toolbar-select:hover,
+.session-toolbar--panel .toolbar-select:focus-within {
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-toolbar--panel .toolbar-field-label {
+  display: block;
+  align-self: auto;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.session-toolbar--panel .toolbar-select select,
+.session-toolbar--panel .toolbar-select input {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 40px;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.session-toolbar--panel .toolbar-select select:hover:not(:disabled),
+.session-toolbar--panel .toolbar-select input:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.session-toolbar--panel .toolbar-select select:focus-visible,
+.session-toolbar--panel .toolbar-select input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.session-toolbar--panel .toolbar-hint {
+  margin-top: -5px;
+  white-space: normal;
+  color: var(--warn);
+  font-size: var(--fs-meta);
+  line-height: 17px;
+}
+
+.session-toolbar--panel .compact-btn {
+  align-self: flex-end;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text-dim);
+}
+
+.session-toolbar--panel .compact-btn:hover:not(:disabled),
+.session-toolbar--panel .compact-btn:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  color: var(--text);
 }
 
 @media (max-width: 760px) {
@@ -688,6 +842,32 @@ html[data-theme="light"] {
   .phone-session-settings .toolbar-select input {
     border: 0;
     background: transparent;
+  }
+
+  .session-toolbar--panel .toolbar-fields {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .session-toolbar--panel .toolbar-fields > .toolbar-select:first-child {
+    grid-column: auto;
+  }
+
+  .phone-session-settings .session-toolbar--panel .toolbar-field-label {
+    display: block;
+  }
+
+  .session-toolbar--panel .toolbar-select select,
+  .session-toolbar--panel .toolbar-select input {
+    min-height: 44px;
+    height: 44px;
+    font-size: 14px;
+  }
+
+  .session-toolbar--panel .compact-btn {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
   }
 }
 

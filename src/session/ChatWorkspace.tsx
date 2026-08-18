@@ -512,6 +512,7 @@ export function ChatWorkspace({
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
         onAppearance={onAppearance}
+        onCompact={capabilities.sessionSettings ? compact : undefined}
       />
       <RenderErrorBoundary
         resetKey={thread.id}
