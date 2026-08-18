@@ -26,6 +26,17 @@ const relayProfile = {
   },
 };
 
+const backupRelayProfile = {
+  ...relayProfile,
+  id: "claude-cc-backup",
+  name: "Backup relay",
+  current: false,
+  env: {
+    ANTHROPIC_BASE_URL: "https://backup-relay.example.test",
+    ANTHROPIC_AUTH_TOKEN: "backup-secret",
+  },
+};
+
 test("Claude history summaries reuse unchanged files across server instances", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "deck-claude-index-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -266,7 +277,7 @@ test("Claude adapter exposes models and persists session model and permissions",
   );
   const calls: any[] = [];
   const adapter = new ClaudeAdapter({
-    initialProfiles: [relayProfile],
+    initialProfiles: [relayProfile, backupRelayProfile],
     historyFiles: async () => [history],
     queryFactory: mockQuery(async function* () {
       yield {
@@ -291,6 +302,7 @@ test("Claude adapter exposes models and persists session model and permissions",
     ["default", "sonnet", "opus", "haiku"],
   );
   await adapter.updateThreadSettings("claude-cc-relay", "session-settings", {
+    providerId: "claude-cc-backup",
     model: "opus",
     permissionMode: "acceptEdits",
   });
@@ -298,6 +310,17 @@ test("Claude adapter exposes models and persists session model and permissions",
   await waitFor(() => adapter.listThreads()[0].status === "idle");
   assert.equal(calls[0].options.model, "opus");
   assert.equal(calls[0].options.permissionMode, "acceptEdits");
+  assert.equal(
+    calls[0].options.env.ANTHROPIC_BASE_URL,
+    backupRelayProfile.env.ANTHROPIC_BASE_URL,
+  );
+  assert.equal(adapter.listThreads()[0].providerId, "claude-cc-backup");
+  await assert.rejects(
+    adapter.updateThreadSettings("claude-cc-backup", "session-settings", {
+      providerId: "missing-profile",
+    }),
+    /配置档不存在/,
+  );
 
   await adapter.renameThread(
     "claude-cc-relay",

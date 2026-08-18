@@ -11,6 +11,7 @@ import type {
 import type { AgentId } from "./agents/types.js";
 
 export interface ThreadSettings {
+  providerId?: string;
   model?: string;
   reasoningEffort?: string;
   personality?: Personality;
@@ -101,6 +102,7 @@ export class ThreadSettingsStore {
       const agentId = thread.agentId || "codex";
       if (this.data.settings[agentId]?.[thread.id]) continue;
       const settings = clean({
+        ...(agentId === "claude" ? { providerId: thread.providerId } : {}),
         model: thread.model,
         reasoningEffort: thread.reasoningEffort,
         personality: thread.personality,

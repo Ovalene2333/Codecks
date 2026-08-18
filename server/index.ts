@@ -343,6 +343,7 @@ app.patch(
         name: z.string().min(1).optional(),
         settings: z
           .object({
+            providerId: z.string().min(1).optional(),
             model: z.string().min(1).optional(),
             reasoningEffort: z.string().optional(),
             personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
@@ -367,10 +368,27 @@ app.patch(
           .optional(),
       })
       .parse(req.body);
+    if (id !== "claude" && input.settings?.providerId)
+      throw new Error("Codex 供应商切换必须使用会话迁移接口");
     if (input.name) await agents.renameThread(id, threadId, input.name);
     if (input.settings) {
       await agents.updateThreadSettings(id, threadId, input.settings);
       await threadSettings.update(id, threadId, input.settings);
+      if (input.settings.providerId) {
+        const snapshot = agents.get(id).snapshot();
+        const thread = [
+          ...snapshot.threads,
+          ...(snapshot.archivedThreads || []),
+        ].find((item) => item.id === threadId);
+        if (thread)
+          await projects.rememberCreate({
+            agentId: id,
+            cwd: thread.cwd,
+            providerId: thread.providerId,
+            model: thread.model,
+            permissionMode: thread.permissionMode,
+          });
+      }
     }
     return fullSnapshot();
   }),

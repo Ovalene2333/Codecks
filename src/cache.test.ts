@@ -215,6 +215,22 @@ test("compactSnapshot keeps runtimeWsl so the WSL cwd button can hydrate", () =>
   assert.equal(next.runtime?.runtimeWsl, true);
 });
 
+test("compactSnapshot keeps public Agent profiles for session labels", () => {
+  const next = compactSnapshot(
+    snapshot({
+      agentProfiles: [
+        {
+          id: "claude-cc-relay",
+          agentId: "claude",
+          name: "Relay",
+          enabled: true,
+        },
+      ],
+    }),
+  );
+  assert.equal(next.agentProfiles?.[0]?.name, "Relay");
+});
+
 test("thread cache returns the last write and dedupes inflight loads", async () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());

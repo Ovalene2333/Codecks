@@ -44,7 +44,13 @@ import { UsageDrawer, type UsageView } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
-import { agentName, approvalPath, capabilitiesFor, threadPath } from "./agents";
+import {
+  agentName,
+  approvalPath,
+  capabilitiesFor,
+  providerForThread,
+  threadPath,
+} from "./agents";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
 import { TaskCenter } from "./tasks/TaskCenter";
@@ -338,7 +344,6 @@ export function App() {
           const next = message.data as ThreadSummary;
           const same = (thread: ThreadSummary) =>
             thread.id === next.id &&
-            thread.providerId === next.providerId &&
             (thread.agentId || "codex") === (next.agentId || "codex");
           setSnapshot((current) => ({
             ...current,
@@ -359,6 +364,12 @@ export function App() {
                   (thread) => !same(thread),
                 ),
           }));
+          setSelected((current) =>
+            current?.startsWith(`${next.agentId || "codex"}:`) &&
+            current.endsWith(`:${next.id}`)
+              ? sessionKey(next)
+              : current,
+          );
         } else if (message.type === "thread.deleted") {
           const id = message.data.threadId;
           const deletedAgentId = message.data.agentId || "codex";
@@ -968,8 +979,10 @@ export function App() {
             <ChatWorkspace
               key={sessionKey(current)}
               thread={current}
-              provider={snapshot.providers.find(
-                (provider) => provider.id === current.providerId,
+              provider={providerForThread(
+                snapshot.providers,
+                snapshot.agentProfiles,
+                current,
               )}
               agentName={agentName(snapshot.agents, current)}
               capabilities={capabilitiesFor(snapshot.agents, current)}
@@ -1066,6 +1079,7 @@ export function App() {
         <ProviderSwitchModal
           thread={switchThread}
           providers={snapshot.providers}
+          agentProfiles={snapshot.agentProfiles || []}
           onClose={() => setSwitchThread(null)}
           onCreated={(providerId, threadId) => {
             setSelected(
@@ -1198,9 +1212,7 @@ export function App() {
             {
               label: "切换供应商",
               disabled:
-                sheet.agentId === "claude" ||
-                sheet.status === "running" ||
-                sheet.status === "waiting",
+                sheet.status === "running" || sheet.status === "waiting",
               onClick: () => setSwitchThread(sheet),
             },
             {

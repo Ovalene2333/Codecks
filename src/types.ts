@@ -298,6 +298,7 @@ export interface AgentProfile {
 
 export interface Snapshot {
   agents?: AgentDescriptor[];
+  agentProfiles?: AgentProfile[];
   providers: Provider[];
   threads: ThreadSummary[];
   archivedThreads?: ThreadSummary[];

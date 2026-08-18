@@ -116,6 +116,7 @@ function compactProvider(provider: Provider): Provider {
 
 export function compactSnapshot(snapshot: Snapshot): Snapshot {
   return {
+    agentProfiles: snapshot.agentProfiles,
     providers: (snapshot.providers || []).map(compactProvider),
     threads: (snapshot.threads || []).map(compactThread),
     archivedThreads: (snapshot.archivedThreads || []).map(compactThread),

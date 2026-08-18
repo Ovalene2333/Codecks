@@ -44,6 +44,9 @@ export class AgentRegistry extends EventEmitter {
     return {
       ...primary,
       agents: this.list(),
+      agentProfiles: [...this.adapters.values()].flatMap(
+        (adapter) => adapter.publicProfiles?.() || [],
+      ),
       threads: snapshots.flatMap((snapshot) => snapshot.threads || []),
       archivedThreads: snapshots.flatMap(
         (snapshot) => snapshot.archivedThreads || [],
