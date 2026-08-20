@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import { Folder, GitBranch } from "lucide-react";
+import { Folder, GitBranch, LoaderCircle } from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { TurnBlock } from "./TurnBlock";
@@ -180,16 +180,11 @@ export function Timeline({
         {streamed.length === 0 &&
           streamedItems.length === 0 &&
           (thread.status === "running" || thread.status === "waiting") && (
-            <div className="message agent streaming" role="status">
-              <span className="streaming-content">
-                正在准备响应
-                <span className="streaming-dots">
-                  <i />
-                  <i />
-                  <i />
-                </span>
+            <div className="message agent response-pending" role="status">
+              <span className="response-pending-spinner" aria-hidden="true">
+                <LoaderCircle />
               </span>
-              <span className="streaming-shimmer" />
+              <span>正在等待响应</span>
             </div>
           )}
         {!hasActiveTurn && (streamed.length > 0 || streamedItems.length > 0) && (
