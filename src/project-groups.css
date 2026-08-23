@@ -226,6 +226,63 @@
   color: #9aa8b8;
 }
 
+.sync-note.runtime-context-note {
+  align-items: flex-start;
+  border-color: var(--line);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+
+.sync-note.runtime-context-note > svg {
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.sync-note > .runtime-context-form {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 10px;
+}
+
+.sync-note .runtime-context-form .form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+}
+
+.runtime-context-form label {
+  min-width: 0;
+}
+
+.runtime-context-form code {
+  overflow-wrap: anywhere;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.sync-note .runtime-context-warning {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.runtime-context-form > button {
+  justify-self: end;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.runtime-context-form > button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .sync-note.pending {
   border-color: var(--line);
 }
@@ -785,6 +842,13 @@
   .sync-note.pending .primary {
     width: 100%;
     margin-left: 0;
+    min-height: 44px;
+  }
+  .sync-note .runtime-context-form .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .runtime-context-form > button {
+    width: 100%;
     min-height: 44px;
   }
   .wsl-cwd-btn {

@@ -35,6 +35,11 @@ export interface ConnectionOverlay {
   streamIdleTimeoutMs?: number | null;
 }
 
+export interface RuntimeModelConfig {
+  modelContextWindow?: number;
+  modelAutoCompactTokenLimit?: number;
+}
+
 export interface ProjectDefaults extends ConnectionOverlay {
   agentId?: "codex" | "claude";
   providerId?: string;
@@ -215,6 +220,7 @@ export interface RuntimeStatus {
   rateLimitsError?: string;
   archiveError?: string;
   runtimeWsl?: boolean;
+  modelConfig?: RuntimeModelConfig;
 }
 
 export interface RpcMessage {

@@ -55,6 +55,27 @@ test('provider secrets stay private and persist', async () => {
   assert.equal(store.get(saved.id)?.baseUrl, 'https://example.test/v1')
 })
 
+test('runtime model context settings persist outside config.toml', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-context-'))
+  const store = new ProviderStore(dir)
+  await store.load()
+  await store.updateRuntimeModelConfig({
+    modelContextWindow: 1_000_000,
+    modelAutoCompactTokenLimit: 900_000,
+  })
+
+  const reloaded = new ProviderStore(dir)
+  await reloaded.load()
+  assert.deepEqual(reloaded.runtimeModelConfig(), {
+    modelContextWindow: 1_000_000,
+    modelAutoCompactTokenLimit: 900_000,
+  })
+  assert.match(
+    await readFile(path.join(dir, 'runtime-config.json'), 'utf8'),
+    /1000000/,
+  )
+})
+
 test('refreshCcSwitch rediscovers a newly available database', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-'))
   const file = path.join(dir, 'cc-switch.db')
