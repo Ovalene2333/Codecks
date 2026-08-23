@@ -486,6 +486,29 @@ app.post(
     };
   }),
 );
+app.put(
+  "/api/runtime/model-context",
+  route(async (req) => {
+    const value = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+    const input = z
+      .object({
+        modelContextWindow: value.nullable().optional(),
+        modelAutoCompactTokenLimit: value.nullable().optional(),
+      })
+      .parse(req.body);
+    if (
+      input.modelContextWindow != null &&
+      input.modelAutoCompactTokenLimit != null &&
+      input.modelAutoCompactTokenLimit >= input.modelContextWindow
+    )
+      throw new Error("自动压缩阈值必须小于最大上下文");
+    await manager.updateRuntimeModelConfig({
+      modelContextWindow: input.modelContextWindow ?? undefined,
+      modelAutoCompactTokenLimit: input.modelAutoCompactTokenLimit ?? undefined,
+    });
+    return fullSnapshot();
+  }),
+);
 app.get(
   "/api/runtime/terminal-command",
   route(async (req) => ({

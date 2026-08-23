@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import WebSocket from "ws";
-import type { ConnectionOverlay, Provider, RpcMessage } from "./types.js";
+import type {
+  ConnectionOverlay,
+  Provider,
+  RpcMessage,
+  RuntimeModelConfig,
+} from "./types.js";
 import {
   compileRuntimeProvider,
   runtimeBootstrapArgs,
@@ -36,6 +41,18 @@ export function codexRuntimeEnvironment(
   };
 }
 
+export function runtimeModelConfigArgs(config?: RuntimeModelConfig) {
+  const args: string[] = [];
+  if (typeof config?.modelContextWindow === "number")
+    args.push("-c", `model_context_window=${config.modelContextWindow}`);
+  if (typeof config?.modelAutoCompactTokenLimit === "number")
+    args.push(
+      "-c",
+      `model_auto_compact_token_limit=${config.modelAutoCompactTokenLimit}`,
+    );
+  return args;
+}
+
 export function codexLaunchSpec(
   bin = "codex",
   platform = process.platform,
@@ -52,8 +69,7 @@ export function codexLaunchSpec(
   if (platform === "win32" && useWsl) {
     if (/[\r\n]/.test(bin)) throw new Error("CODEX_BIN 不能包含换行符");
     const shell = env.CODEX_WSL_SHELL || "bash";
-    if (/[\r\n]/.test(shell))
-      throw new Error("CODEX_WSL_SHELL 不能包含换行符");
+    if (/[\r\n]/.test(shell)) throw new Error("CODEX_WSL_SHELL 不能包含换行符");
     return {
       command: env.WSL_EXE || "wsl.exe",
       args: [
@@ -165,6 +181,7 @@ export class CodexClient extends EventEmitter {
     private overlayForProvider?: (
       providerId: string,
     ) => ConnectionOverlay | undefined,
+    private modelConfig?: RuntimeModelConfig,
   ) {
     super();
   }
@@ -181,7 +198,7 @@ export class CodexClient extends EventEmitter {
   private async doStart() {
     const env = codexRuntimeEnvironment(this.provider);
     const wslEnvNames = new Set(["CODEX_HOME"]);
-    const configArgs: string[] = [];
+    const configArgs = runtimeModelConfigArgs(this.modelConfig);
     if (this.runtimeProviders) {
       const nativeHome =
         this.provider.codexHome || path.join(os.homedir(), ".codex");

@@ -2,7 +2,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { Provider, PublicProvider } from "./types.js";
+import type { Provider, PublicProvider, RuntimeModelConfig } from "./types.js";
 import { CcSwitchSource, findCcSwitchDb } from "./cc-switch.js";
 import { extractProviderApiKey } from "./provider-config.js";
 
@@ -11,6 +11,8 @@ const colors = ["#8b5cf6", "#38bdf8", "#f59e0b", "#22c55e", "#f43f5e"];
 export class ProviderStore {
   private providers: Provider[] = [];
   private file: string;
+  private runtimeConfigFile: string;
+  private modelConfig: RuntimeModelConfig = {};
   private cc?: CcSwitchSource;
   private ccSignature = "";
   private revisionValue = 0;
@@ -20,10 +22,20 @@ export class ProviderStore {
     private inheritedCodexHome?: string,
   ) {
     this.file = path.join(dataDir, "providers.json");
+    this.runtimeConfigFile = path.join(dataDir, "runtime-config.json");
   }
 
   async load() {
     await mkdir(this.dataDir, { recursive: true });
+    try {
+      this.modelConfig = normalizeRuntimeModelConfig(
+        JSON.parse(await readFile(this.runtimeConfigFile, "utf8")),
+      );
+    } catch (error: any) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+        throw error;
+      this.modelConfig = {};
+    }
     try {
       this.providers = JSON.parse(await readFile(this.file, "utf8"));
     } catch (error: any) {
@@ -164,6 +176,21 @@ export class ProviderStore {
     );
   }
 
+  runtimeModelConfig(): RuntimeModelConfig {
+    return { ...this.modelConfig };
+  }
+
+  async updateRuntimeModelConfig(config: RuntimeModelConfig) {
+    const next = normalizeRuntimeModelConfig(config);
+    await writeFile(
+      this.runtimeConfigFile,
+      `${JSON.stringify(next, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    this.modelConfig = next;
+    return this.runtimeModelConfig();
+  }
+
   async upsert(
     input: Partial<Provider> & { name: string; kind: Provider["kind"] },
   ) {
@@ -212,4 +239,19 @@ export class ProviderStore {
       mode: 0o600,
     });
   }
+}
+
+function normalizeRuntimeModelConfig(input: unknown): RuntimeModelConfig {
+  if (!input || typeof input !== "object") return {};
+  const source = input as Record<string, unknown>;
+  const positiveInteger = (value: unknown) =>
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0
+      ? value
+      : undefined;
+  return {
+    modelContextWindow: positiveInteger(source.modelContextWindow),
+    modelAutoCompactTokenLimit: positiveInteger(
+      source.modelAutoCompactTokenLimit,
+    ),
+  };
 }

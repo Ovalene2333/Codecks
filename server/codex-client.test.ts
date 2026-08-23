@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   codexLaunchSpec,
   codexRuntimeEnvironment,
+  runtimeModelConfigArgs,
 } from "./codex-client.js";
 import { WSL_CODEX_SHELL_COMMAND } from "./runtime-platform.js";
 
@@ -91,6 +92,22 @@ test("passes provider overrides as separate argv entries", () => {
       "model_providers.deck.name='Relay API'",
     ],
   );
+});
+
+test("compiles context and auto-compact limits into runtime overrides", () => {
+  assert.deepEqual(
+    runtimeModelConfigArgs({
+      modelContextWindow: 1_000_000,
+      modelAutoCompactTokenLimit: 900_000,
+    }),
+    [
+      "-c",
+      "model_context_window=1000000",
+      "-c",
+      "model_auto_compact_token_limit=900000",
+    ],
+  );
+  assert.deepEqual(runtimeModelConfigArgs({}), []);
 });
 
 test("launches a loopback WebSocket runtime for terminal sharing", () => {

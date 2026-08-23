@@ -51,6 +51,7 @@ import type {
   RateLimits,
   ReviewTarget,
   RpcMessage,
+  RuntimeModelConfig,
   SandboxMode,
   ThreadSummary,
   TokenUsage,
@@ -210,6 +211,7 @@ export class CodexAdapter extends EventEmitter {
       `ws://127.0.0.1:${await this.resolveRuntimePort()}`,
       this.useWsl,
       (providerId) => this.projects?.overlayForProvider(providerId),
+      this.store.runtimeModelConfig?.() || {},
     );
     this.client = client;
     client.on("notification", (msg) => this.onNotification(msg));
@@ -444,6 +446,7 @@ export class CodexAdapter extends EventEmitter {
   }
 
   runtimeStatus() {
+    const modelConfig = this.store.runtimeModelConfig?.() || {};
     return {
       online: this.client?.online ?? false,
       starting: Boolean(this.startingClient),
@@ -460,6 +463,10 @@ export class CodexAdapter extends EventEmitter {
       rateLimitsError: this.rateLimitsError,
       archiveError: this.archiveError,
       runtimeWsl: this.useWsl,
+      ...(modelConfig.modelContextWindow ||
+      modelConfig.modelAutoCompactTokenLimit
+        ? { modelConfig }
+        : {}),
     };
   }
 
@@ -510,6 +517,36 @@ export class CodexAdapter extends EventEmitter {
     await this.ensure();
     await this.refreshAll();
     return this.runtimeStatus();
+  }
+
+  async updateRuntimeModelConfig(config: RuntimeModelConfig) {
+    const busy = this.busyThreads();
+    if (busy.length)
+      throw new Error(
+        `仍有 ${busy.length} 个 Codex 会话正在运行或等待审批，请处理后再保存上下文设置`,
+      );
+    const previous = this.store.runtimeModelConfig();
+    await this.store.updateRuntimeModelConfig(config);
+    this.restart();
+    try {
+      await this.ensure();
+      await this.refreshAll();
+      return this.runtimeStatus();
+    } catch (error: any) {
+      await this.store.updateRuntimeModelConfig(previous);
+      this.restart();
+      try {
+        await this.ensure();
+        await this.refreshAll();
+      } catch (rollbackError: any) {
+        throw new Error(
+          `上下文设置启动失败，恢复旧配置后 Runtime 仍无法启动：${rollbackError?.message || rollbackError}`,
+        );
+      }
+      throw new Error(
+        `上下文设置未生效，已恢复旧配置并重启 Runtime：${error?.message || error}`,
+      );
+    }
   }
 
   async createThread(

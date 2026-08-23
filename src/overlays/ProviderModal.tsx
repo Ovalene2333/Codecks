@@ -2,12 +2,13 @@ import { useState } from "react";
 import {
   Command,
   Database,
+  Gauge,
   Plus,
   RefreshCw,
   Server,
   Trash2,
 } from "lucide-react";
-import { api, post, remove } from "../api";
+import { api, post, put, remove } from "../api";
 import type { AgentDescriptor, Provider, Snapshot } from "../types";
 import { Modal } from "../ui";
 
@@ -26,6 +27,7 @@ export function ProviderModal({
   onSaved,
   onToast,
   onConfirmDelete,
+  onConfirmRuntimeRestart,
 }: {
   providers: Provider[];
   agents: AgentDescriptor[];
@@ -35,6 +37,7 @@ export function ProviderModal({
   onSaved: (s: Snapshot) => void;
   onToast: (message: string) => void;
   onConfirmDelete: (provider: Provider, run: () => Promise<void>) => void;
+  onConfirmRuntimeRestart: (run: () => Promise<void>) => void;
 }) {
   const [form, setForm] = useState({
     name: "",
@@ -44,8 +47,21 @@ export function ProviderModal({
     wireApi: "responses",
   });
   const [error, setError] = useState("");
+  const [contextError, setContextError] = useState("");
   const [reloading, setReloading] = useState(false);
   const [repairingHistory, setRepairingHistory] = useState(false);
+  const [savingContext, setSavingContext] = useState(false);
+  const [contextForm, setContextForm] = useState(() => ({
+    modelContextWindow:
+      runtime?.modelConfig?.modelContextWindow?.toString() || "",
+    modelAutoCompactTokenLimit:
+      runtime?.modelConfig?.modelAutoCompactTokenLimit?.toString() || "",
+  }));
+  const contextChanged =
+    contextForm.modelContextWindow !==
+      (runtime?.modelConfig?.modelContextWindow?.toString() || "") ||
+    contextForm.modelAutoCompactTokenLimit !==
+      (runtime?.modelConfig?.modelAutoCompactTokenLimit?.toString() || "");
   const hasCcSwitch = providers.some((p) => p.kind === "cc-switch");
   const codex = agents.find((agent) => agent.id === "codex");
   const isClaudeProvider = (p: Provider) => {
@@ -91,6 +107,56 @@ export function ProviderModal({
     } finally {
       setReloading(false);
     }
+  };
+  const requestContextSave = (event: React.FormEvent) => {
+    event.preventDefault();
+    setContextError("");
+    const parseValue = (value: string, label: string) => {
+      if (!value.trim()) return null;
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0)
+        throw new Error(`${label}必须是正整数`);
+      return parsed;
+    };
+    let modelContextWindow: number | null;
+    let modelAutoCompactTokenLimit: number | null;
+    try {
+      modelContextWindow = parseValue(
+        contextForm.modelContextWindow,
+        "最大上下文",
+      );
+      modelAutoCompactTokenLimit = parseValue(
+        contextForm.modelAutoCompactTokenLimit,
+        "自动压缩阈值",
+      );
+      if (
+        modelContextWindow != null &&
+        modelAutoCompactTokenLimit != null &&
+        modelAutoCompactTokenLimit >= modelContextWindow
+      )
+        throw new Error("自动压缩阈值必须小于最大上下文");
+    } catch (err: any) {
+      setContextError(err.message);
+      return;
+    }
+    onConfirmRuntimeRestart(async () => {
+      setContextError("");
+      setSavingContext(true);
+      try {
+        onSaved(
+          await put("/runtime/model-context", {
+            modelContextWindow,
+            modelAutoCompactTokenLimit,
+          }),
+        );
+        onToast("上下文设置已保存，Codex Runtime 已重启");
+      } catch (err: any) {
+        setContextError(err.message);
+        throw err;
+      } finally {
+        setSavingContext(false);
+      }
+    });
   };
   const copyCommand = async (providerId?: string) => {
     const query = new URLSearchParams();
@@ -138,6 +204,70 @@ export function ProviderModal({
           {reloading ? "加载中…" : "重新加载"}
         </button>
       </div>
+      <div className="sync-note runtime-context-note">
+        <Gauge />
+        <form
+          className="form runtime-context-form"
+          onSubmit={requestContextSave}
+        >
+          <div>
+            <b>Codex 上下文</b>
+            <small>
+              留空使用模型与 Runtime 默认值；实际可用上限取决于模型和账号。
+            </small>
+          </div>
+          <div className="form-grid">
+            <label>
+              最大上下文
+              <input
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={contextForm.modelContextWindow}
+                onChange={(event) =>
+                  setContextForm((current) => ({
+                    ...current,
+                    modelContextWindow: event.target.value,
+                  }))
+                }
+                placeholder="例如 1000000"
+              />
+              <code>model_context_window</code>
+            </label>
+            <label>
+              自动压缩阈值
+              <input
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                value={contextForm.modelAutoCompactTokenLimit}
+                onChange={(event) =>
+                  setContextForm((current) => ({
+                    ...current,
+                    modelAutoCompactTokenLimit: event.target.value,
+                  }))
+                }
+                placeholder="例如 900000"
+              />
+              <code>model_auto_compact_token_limit</code>
+            </label>
+          </div>
+          <small className="runtime-context-warning">
+            保存会重启共享 Codex Runtime；运行中或待审批时不能保存。不会改写
+            ~/.codex/config.toml。
+          </small>
+          {contextError && <p className="error-text">{contextError}</p>}
+          <button type="submit" disabled={savingContext || !contextChanged}>
+            {savingContext
+              ? "重启中…"
+              : contextChanged
+                ? "保存并重启"
+                : "已应用"}
+          </button>
+        </form>
+      </div>
       <div className="sync-note">
         <Database />
         <div>
@@ -162,7 +292,9 @@ export function ProviderModal({
       <div className="provider-list">
         {(() => {
           const ccProviders = providers.filter((p) => p.kind === "cc-switch");
-          const otherProviders = providers.filter((p) => p.kind !== "cc-switch");
+          const otherProviders = providers.filter(
+            (p) => p.kind !== "cc-switch",
+          );
           const codexCc = ccProviders.filter((p) => !isClaudeProvider(p));
           const claudeCc = ccProviders.filter((p) => isClaudeProvider(p));
           const renderRow = (p: Provider) => (

@@ -1057,6 +1057,19 @@ export function App() {
               run,
             })
           }
+          onConfirmRuntimeRestart={(run) =>
+            setConfirm({
+              title: "保存上下文设置并重启？",
+              body: (
+                <p>
+                  新设置需要重启共享的 <b>Codex Runtime</b> 才能生效。
+                  现有历史不会删除；如果有任务正在运行或等待审批，本次保存会被拒绝。
+                </p>
+              ),
+              confirmLabel: "保存并重启",
+              run,
+            })
+          }
         />
       )}
       {threadModal && (

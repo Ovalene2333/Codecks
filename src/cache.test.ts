@@ -215,6 +215,26 @@ test("compactSnapshot keeps runtimeWsl so the WSL cwd button can hydrate", () =>
   assert.equal(next.runtime?.runtimeWsl, true);
 });
 
+test("compactSnapshot keeps runtime context settings for the settings form", () => {
+  const next = compactSnapshot(
+    snapshot({
+      runtime: {
+        online: true,
+        starting: false,
+        remoteUrl: "ws://127.0.0.1:1",
+        modelConfig: {
+          modelContextWindow: 1_000_000,
+          modelAutoCompactTokenLimit: 900_000,
+        },
+      },
+    }),
+  );
+  assert.deepEqual(next.runtime?.modelConfig, {
+    modelContextWindow: 1_000_000,
+    modelAutoCompactTokenLimit: 900_000,
+  });
+});
+
 test("compactSnapshot keeps public Agent profiles for session labels", () => {
   const next = compactSnapshot(
     snapshot({
