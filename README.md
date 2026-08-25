@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code adapter 后端。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
+[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code 与 OpenCode adapter 后端。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
 
 只用 OpenAI Official 时无需安装 CC Switch；如果已经在 [CC Switch](https://github.com/farion1231/cc-switch) 中配置了多家连接，Codecks 也可以让每个 Session 独立选择供应商和模型，不必反复切换当前项。会话列表、任务中心和审批入口会统一标记实际使用的 Agent。
 
@@ -24,6 +24,7 @@
   - [快速开始](#快速开始)
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
     - 不支持 Claude 官方登录；仅支持带 relay 凭据的 CC Switch 配置
+  - [OpenCode 后端适配（实验性）](#opencode-后端适配)
 - **部署与日常使用**
   - [远程访问](#远程访问)
     - [访问实例](#实例)
@@ -89,6 +90,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
 - 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
+- 助手回复中的 Markdown 图片，以及 Codex / 兼容 Agent 返回的生成图片，会先显示为按需加载控件；点击后才请求图片，并使用浏览器懒加载，适合移动网络和远程值守场景节省流量
 - 侧栏搜索除项目、会话名、模型和摘要外，也会检索 Codex 与 Claude 会话中的用户消息和助手正文；输入至少 3 个字符后显示正文命中摘要，点击可打开并定位到对应 Turn。正文索引保存在 `.data/session-search.sqlite`，首次启动会在没有运行中任务时按最近会话优先、单并发后台补建，不会把完整对话放进浏览器快照
 - 每个 Turn 会汇总显示 Codex 本轮读取过的文件；运行中的命令、文件变更、MCP 和动态工具调用会随实时事件立即进入时间线，不必等待历史写盘。连续或单次包含多个文件的 `update` 会合并为可展开的文件变更组，读取和检索也会显示为可展开的中文动作，可继续查看命令、参数与返回内容
 - 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
@@ -166,6 +168,12 @@ POST /api/agents/claude/approvals/:approvalId
 ```
 
 新建会话至少传入 `cwd`；`providerId` 可省略以使用 CC Switch 当前可用的 Claude 中转配置，`model` 和 `permissionMode` 可选。任务空闲时可通过 `PATCH /api/agents/claude/threads/:threadId` 的 `settings.providerId` 修改该会话后续 turn 使用的中转。Claude Official 配置会显示为不可用，后端也会拒绝直接调用。Claude 的 fork、归档、压缩、review、独立 shell 和 MCP/Skills 列表尚未开放，能力矩阵会将这些操作标为不可用。
+
+### OpenCode 后端适配
+
+> **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；可通过 `OPENCODE_BIN` 指定可执行文件。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
+
+新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
 
 ## 远程访问
 
@@ -326,6 +334,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_WSL_HOME`                | WSL `~/.codex`             | Windows `--wsl` 模式下的 Codex home                                                    |
 | `CLAUDE_CONFIG_DIR`             | 自动发现                   | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`                        |
 | `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
+| `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
 | `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
 | `DATA_DIR`                      | `.data`                    | Codecks 偏好、项目与用量缓存、自定义供应商元数据                                       |

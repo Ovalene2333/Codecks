@@ -7,7 +7,7 @@ const MAX_ITEM_CHARS = 100_000;
 const MAX_THREAD_CHARS = 2_000_000;
 
 export interface SessionSearchMatch {
-  agentId: "codex" | "claude";
+  agentId: "codex" | "claude" | "opencode";
   threadId: string;
   turnId?: string;
   itemId?: string;

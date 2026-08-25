@@ -338,6 +338,27 @@ export function ChatWorkspace({
       else updateDraft({ text: "", images: [] });
     }
     if (!command) {
+      const pendingTurnId = thread.activeTurnId;
+      const liveItemIds = pendingTurnId
+        ? [
+            ...new Set(
+              events
+                .filter(
+                  (event) =>
+                    event?.providerId === thread.providerId &&
+                    (event?.agentId || "codex") ===
+                      (thread.agentId || "codex") &&
+                    event?.params?.threadId === thread.id &&
+                    event?.params?.turnId === pendingTurnId,
+                )
+                .map(
+                  (event) => event?.params?.item?.id || event?.params?.itemId,
+                )
+                .filter(Boolean)
+                .map(String),
+            ),
+          ]
+        : [];
       setPendingUsers((current) => [
         ...current,
         {
@@ -345,6 +366,8 @@ export function ChatWorkspace({
           text: value,
           images: pendingImages,
           loadedUserMessageCount,
+          turnId: pendingTurnId,
+          liveItemIds,
         },
       ]);
     }

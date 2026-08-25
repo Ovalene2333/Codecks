@@ -175,7 +175,7 @@ export function collectStreamedAgentMessages(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
-  agentId: "codex" | "claude" = "codex",
+  agentId: "codex" | "claude" | "opencode" = "codex",
 ): StreamedAgentMessage[] {
   const messages = new Map<string, StreamedAgentMessage>();
 
@@ -208,7 +208,7 @@ export function collectStreamedTurnItems(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
-  agentId: "codex" | "claude" = "codex",
+  agentId: "codex" | "claude" | "opencode" = "codex",
 ): StreamedTurnItem[] {
   const items = new Map<string, StreamedTurnItem>();
 

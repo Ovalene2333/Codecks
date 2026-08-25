@@ -112,10 +112,17 @@ export function ProjectGroupView({
         const searchMatch = searchMatches.get(
           `${thread.agentId || "codex"}:${thread.id}`,
         );
-        const agentLabel = thread.agentId === "claude" ? "Claude" : "Codex";
+        const agentLabel =
+          thread.agentId === "claude"
+            ? "Claude"
+            : thread.agentId === "opencode"
+              ? "OpenCode"
+              : "Codex";
         const providerLabel =
           provider?.name ||
-          (thread.agentId === "claude" ? "" : thread.providerId);
+          (thread.agentId === "claude" || thread.agentId === "opencode"
+            ? ""
+            : thread.providerId);
         return (
           <div
             key={key}

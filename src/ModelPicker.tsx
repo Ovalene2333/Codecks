@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
+import type { AgentId } from "./agents";
 
 export function ModelPicker({
   agentId = "codex",
@@ -12,7 +13,7 @@ export function ModelPicker({
   compact,
   disabled,
 }: {
-  agentId?: "codex" | "claude";
+  agentId?: AgentId;
   providerId: string;
   model: string;
   reasoningEffort: string;
@@ -32,8 +33,8 @@ export function ModelPicker({
     let cancelled = false;
     setLoading(true);
     const path =
-      agentId === "claude"
-        ? `/agents/claude/models?providerId=${encodeURIComponent(providerId)}`
+      agentId === "claude" || agentId === "opencode"
+        ? `/agents/${agentId}/models?providerId=${encodeURIComponent(providerId)}`
         : `/providers/${providerId}/models`;
     api<ModelInfo[]>(path)
       .then((list) => {

@@ -303,8 +303,9 @@ export class CodexClient extends EventEmitter {
     this.send({ id, result });
   }
 
-  stop() {
+  stop(): Promise<void> {
     this.stopping = true;
+    const child = this.child;
     const pid = this.child?.pid;
     if (pid && process.platform === "win32") {
       spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
@@ -324,6 +325,12 @@ export class CodexClient extends EventEmitter {
       item.reject(error);
     }
     this.pending.clear();
+    if (!child || child.exitCode !== null)
+      return Promise.resolve();
+    return Promise.race([
+      new Promise<void>((resolve) => child.once("exit", () => resolve())),
+      new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+    ]);
   }
 
   private send(message: RpcMessage) {

@@ -83,7 +83,7 @@ export function formatTokens(value?: number) {
 }
 
 export function sessionKey(thread: {
-  agentId?: "codex" | "claude";
+  agentId?: "codex" | "claude" | "opencode";
   providerId: string;
   id: string;
 }) {

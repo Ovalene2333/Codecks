@@ -16,6 +16,7 @@ import {
 import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
+import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
 import { AgentRegistry } from "./agents/registry.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
@@ -33,6 +34,7 @@ import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
+import { resolveThreadImage } from "./thread-image.js";
 import { ToolRegistry } from "../plugin/server-registry.js";
 import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
@@ -138,7 +140,12 @@ const claude = new ClaudeAdapter({
   initialThreads,
   threadSettings,
 });
-const agents = new AgentRegistry([manager, claude]);
+const opencode = new OpenCodeAdapter({
+  bin: process.env.OPENCODE_BIN || undefined,
+  initialThreads,
+  threadSettings,
+});
+const agents = new AgentRegistry([manager, claude, opencode]);
 const sessionSearch = new SessionSearchIndexer(
   new SessionSearchStore(dataDir),
   agents,
@@ -194,7 +201,7 @@ const route =
 const param = (value: string | string[]) =>
   Array.isArray(value) ? value[0] : value;
 const agentId = (value: string | string[]) =>
-  z.enum(["codex", "claude"]).parse(param(value)) as AgentId;
+  z.enum(["codex", "claude", "opencode"]).parse(param(value)) as AgentId;
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -331,6 +338,24 @@ app.get(
     ].find((item) => item.id === threadId);
     if (thread) sessionSearch.capture(thread, full);
     return full;
+  }),
+);
+app.get(
+  "/api/agents/:agentId/threads/:threadId/image",
+  route(async (req, res) => {
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    const requestedPath = String(req.query.path || "");
+    const snapshot = agents.get(id).snapshot();
+    const thread = [
+      ...snapshot.threads,
+      ...(snapshot.archivedThreads || []),
+    ].find((item) => item.id === threadId);
+    if (!thread?.cwd) throw new Error("会话不存在或没有工作目录");
+    const imagePath = await resolveThreadImage(thread.cwd, requestedPath);
+    await new Promise<void>((resolve, reject) => {
+      res.sendFile(imagePath, (error) => (error ? reject(error) : resolve()));
+    });
   }),
 );
 app.patch(
@@ -539,7 +564,7 @@ app.put(
         hidden: z.boolean().optional(),
         defaults: z
           .object({
-            agentId: z.enum(["codex", "claude"]).optional(),
+            agentId: z.enum(["codex", "claude", "opencode"]).optional(),
             providerId: z.string().optional(),
             model: z.string().optional(),
             reasoningEffort: z.string().optional(),
@@ -601,7 +626,7 @@ app.put(
   route(async (req) => {
     const input = z
       .object({
-        lastAgentId: z.enum(["codex", "claude"]).optional(),
+        lastAgentId: z.enum(["codex", "claude", "opencode"]).optional(),
         lastProviderId: z.string().optional(),
         lastModel: z.string().optional(),
         lastReasoningEffort: z.string().optional(),

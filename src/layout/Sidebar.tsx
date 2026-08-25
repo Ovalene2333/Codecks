@@ -368,6 +368,14 @@ export function Sidebar({
               <b>{counts.running + counts.waiting}</b>
             )}
           </button>
+          <button
+            type="button"
+            className="sidebar-settings-entry"
+            onClick={onProviders}
+          >
+            <Settings />
+            <span>设置</span>
+          </button>
           <div className="sidebar-tools-wrap" ref={toolsMenuRef}>
             <button
               type="button"
@@ -411,20 +419,6 @@ export function Sidebar({
                   <span>
                     <b>Git 管理</b>
                     <small>改动、提交与分支</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onProviders();
-                  }}
-                >
-                  <Settings />
-                  <span>
-                    <b>供应商设置</b>
-                    <small>连接与默认配置</small>
                   </span>
                 </button>
                 <button

@@ -14,18 +14,16 @@ import {
 import { displayCommand, displayText, fmtTime } from "../format";
 import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
-import { AssistantMarkdown } from "./markdown";
-import { userImageParts } from "./images";
-import type {
-  StreamedAgentMessage,
-  StreamedTurnItem,
-} from "./streaming";
+import { AssistantMarkdown, DeferredImage } from "./markdown";
+import { assistantImageParts, userImageParts } from "./images";
+import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
 import {
   activeStreamItemId,
   mergeTurnItems,
   streamsCoveredByHistory,
 } from "./streaming";
 import { userMessageText } from "./user-message";
+import type { PendingUserMessage } from "./optimistic";
 import {
   commandPresentation,
   fileChangeGroupLabel,
@@ -61,6 +59,7 @@ function TurnItem({
   onEditUserMessage,
   onRetryUserMessage,
   messageActionsDisabled,
+  thread,
 }: {
   item: any;
   streamed?: string;
@@ -70,6 +69,7 @@ function TurnItem({
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (item: any) => void;
   messageActionsDisabled?: boolean;
+  thread: ThreadSummary;
 }) {
   if (item.type === "userMessage") {
     const images = userImageParts(item);
@@ -141,16 +141,45 @@ function TurnItem({
       </div>
     );
   if (item.type === "agentMessage") {
+    const images = assistantImageParts(item);
     return (
       <div className={`message agent ${streaming ? "streaming" : ""}`}>
         <AssistantMarkdown
           text={streamed !== undefined ? streamed : displayText(item.text)}
           onCopy={onCopy}
         />
+        {images.length > 0 && (
+          <div className="message-images assistant-images">
+            {images.map((image, index) => (
+              <DeferredImage
+                key={`${image.url}-${index}`}
+                src={image.url}
+                alt={image.alt || "生成或引用的图片"}
+                thread={thread}
+              />
+            ))}
+          </div>
+        )}
         {streaming && <i />}
       </div>
     );
   }
+  const standaloneImages = assistantImageParts(item);
+  if (standaloneImages.length > 0)
+    return (
+      <div className="message agent image-message">
+        <div className="message-images assistant-images">
+          {standaloneImages.map((image, index) => (
+            <DeferredImage
+              key={`${image.url}-${index}`}
+              src={image.url}
+              alt={image.alt || "生成或引用的图片"}
+              thread={thread}
+            />
+          ))}
+        </div>
+      </div>
+    );
   if (item.type === "reasoning")
     return (
       <details className="tool-row reasoning">
@@ -289,6 +318,23 @@ function ReadSummary({ targets }: { targets: string[] }) {
   );
 }
 
+function OptimisticUserMessage({ message }: { message: PendingUserMessage }) {
+  return (
+    <div className="user-message-wrap optimistic-user-message">
+      <div className="message user">
+        {message.images.length > 0 && (
+          <div className="message-images">
+            {message.images.map((image) => (
+              <img key={image.id} src={image.url} alt={image.name} />
+            ))}
+          </div>
+        )}
+        {message.text}
+      </div>
+    </div>
+  );
+}
+
 export function TurnBlock({
   turn,
   index,
@@ -298,6 +344,7 @@ export function TurnBlock({
   targetRequest,
   streamed,
   streamedItems = [],
+  pendingUsers = [],
   onCopy,
   onForkFrom,
   onEditUserMessage,
@@ -312,6 +359,7 @@ export function TurnBlock({
   targetRequest?: number;
   streamed: StreamedAgentMessage[];
   streamedItems?: StreamedTurnItem[];
+  pendingUsers?: PendingUserMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onEditUserMessage?: (item: any) => void;
@@ -336,6 +384,24 @@ export function TurnBlock({
   const renderedStreamIds = active
     ? streamsCoveredByHistory(turnItems, streamed)
     : new Set<string>();
+  const newLiveIds = new Set(
+    streamedItems.map((entry) => String(entry.itemId || "")).filter(Boolean),
+  );
+  const pendingBefore = new Map<number, PendingUserMessage[]>();
+  const pendingAtEnd: PendingUserMessage[] = [];
+  for (const message of pendingUsers) {
+    const sentIds = new Set(message.liveItemIds || []);
+    const index = renderEntries.findIndex((entry) => {
+      const ids =
+        entry.kind === "fileChangeGroup"
+          ? entry.items.map((item) => String(item?.id || ""))
+          : [String(entry.item?.id || "")];
+      return ids.some((id) => newLiveIds.has(id) && !sentIds.has(id));
+    });
+    if (index < 0) pendingAtEnd.push(message);
+    else
+      pendingBefore.set(index, [...(pendingBefore.get(index) || []), message]);
+  }
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
@@ -351,14 +417,21 @@ export function TurnBlock({
       </header>
       <ReadSummary targets={readTargets} />
       {renderEntries.map((entry, itemIndex) => {
+        const pendingMarkup = (pendingBefore.get(itemIndex) || []).map(
+          (message) => (
+            <OptimisticUserMessage key={message.id} message={message} />
+          ),
+        );
         if (entry.kind === "fileChangeGroup")
           return (
-            <FileChangeGroup
-              key={`file-group-${entry.items[0]?.id || itemIndex}`}
-              items={entry.items}
-              changes={entry.changes as FileChange[]}
-              cwd={thread.cwd}
-            />
+            <Fragment key={`file-group-${entry.items[0]?.id || itemIndex}`}>
+              {pendingMarkup}
+              <FileChangeGroup
+                items={entry.items}
+                changes={entry.changes as FileChange[]}
+                cwd={thread.cwd}
+              />
+            </Fragment>
           );
         const item = entry.item;
         const liveText =
@@ -384,6 +457,7 @@ export function TurnBlock({
                 : undefined
             }
             messageActionsDisabled={messageActionsDisabled}
+            thread={thread}
           />
         );
         return targeted ? (
@@ -392,12 +466,19 @@ export function TurnBlock({
             className="search-item-target"
             data-item-id={item.id ? String(item.id) : undefined}
           >
+            {pendingMarkup}
             {content}
           </div>
         ) : (
-          <Fragment key={itemKey}>{content}</Fragment>
+          <Fragment key={itemKey}>
+            {pendingMarkup}
+            {content}
+          </Fragment>
         );
       })}
+      {pendingAtEnd.map((message) => (
+        <OptimisticUserMessage key={message.id} message={message} />
+      ))}
       {active &&
         streamed
           .filter((message) => !renderedStreamIds.has(message.itemId))

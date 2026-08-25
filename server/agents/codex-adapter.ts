@@ -93,6 +93,7 @@ export class CodexAdapter extends EventEmitter {
   readonly id: AgentId = "codex";
   private client?: CodexClient;
   private startingClient?: Promise<CodexClient>;
+  private stoppingClient?: Promise<void>;
   private threads = new Map<string, ThreadSummary>();
   private loadedThreads = new Set<string>();
   // thread/start is in-memory only. Codex writes a rollout on the first turn,
@@ -199,7 +200,9 @@ export class CodexAdapter extends EventEmitter {
   }
 
   private async startClient(previous?: CodexClient) {
-    previous?.stop();
+    const pendingStop = this.stoppingClient;
+    if (pendingStop) await pendingStop;
+    if (previous) await previous.stop();
     this.loadedThreads.clear();
     this.knownRollouts.clear();
     const profile = this.store.runtimeProfile();
@@ -243,8 +246,13 @@ export class CodexAdapter extends EventEmitter {
 
   restart(_providerId?: string) {
     this.clearCompactions();
-    this.client?.stop();
+    const previous = this.client;
     this.client = undefined;
+    const stopping = previous?.stop() || Promise.resolve();
+    this.stoppingClient = stopping;
+    void stopping.finally(() => {
+      if (this.stoppingClient === stopping) this.stoppingClient = undefined;
+    });
     this.startingClient = undefined;
     this.loadedThreads.clear();
     this.knownRollouts.clear();

@@ -84,7 +84,7 @@ export function SessionToolbar({
               ))}
             </select>
           </label>
-        ) : (
+        ) : thread.agentId === "opencode" ? null : (
           <>
             <label className="toolbar-select">
               <span className="toolbar-field-label">沙箱</span>
@@ -166,7 +166,7 @@ export function SessionToolbar({
         )}
       </div>
       {locked && <small className="toolbar-hint">任务结束后生效</small>}
-      {thread.agentId !== "claude" && (
+      {(thread.agentId || "codex") === "codex" && (
         <button
           type="button"
           className="text-btn compact-btn"

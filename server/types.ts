@@ -41,7 +41,7 @@ export interface RuntimeModelConfig {
 }
 
 export interface ProjectDefaults extends ConnectionOverlay {
-  agentId?: "codex" | "claude";
+  agentId?: "codex" | "claude" | "opencode";
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -62,7 +62,7 @@ export interface ProjectRecord {
 }
 
 export interface DeckPreferences extends ConnectionOverlay {
-  lastAgentId?: "codex" | "claude";
+  lastAgentId?: "codex" | "claude" | "opencode";
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;
@@ -151,7 +151,7 @@ export interface FileChange {
 }
 
 export interface ThreadSummary {
-  agentId?: "codex" | "claude";
+  agentId?: "codex" | "claude" | "opencode";
   id: string;
   providerId: string;
   name: string;
@@ -195,7 +195,7 @@ export interface ActiveTaskCommand extends BackgroundTerminal {
 
 export interface ActiveTask {
   id: string;
-  agentId: "codex" | "claude";
+  agentId: "codex" | "claude" | "opencode";
   providerId: string;
   threadId: string;
   threadName: string;

@@ -120,7 +120,7 @@ const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
 
 export function matchingSlashCommands(
   text: string,
-  agentId: "codex" | "claude" = "codex",
+  agentId: "codex" | "claude" | "opencode" = "codex",
 ) {
   const value = text.trim();
   if (!value) return [];
