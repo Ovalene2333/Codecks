@@ -92,6 +92,8 @@ export function Timeline({
     thread.id,
     turns,
     streamed,
+    streamedItems,
+    pendingUsers,
     targetTurnId,
     targetItemId,
     targetRequest,
@@ -154,6 +156,9 @@ export function Timeline({
               targetRequest={targetRequest}
               streamed={streamed}
               streamedItems={index === activeTurnIndex ? streamedItems : []}
+              pendingUsers={pendingUsers.filter(
+                (message) => message.turnId === String(turn?.id || ""),
+              )}
               onCopy={onCopy}
               onForkFrom={onForkFrom}
               onEditUserMessage={onEditUserMessage}
@@ -162,21 +167,34 @@ export function Timeline({
             />
           </RenderErrorBoundary>
         ))}
-        {pendingUsers.map((message) => (
-          <section className="turn-block optimistic-turn" key={message.id}>
-            <header className="turn-head">正在发送</header>
-            <div className="message user">
-              {message.images.length > 0 && (
-                <div className="message-images">
-                  {message.images.map((image) => (
-                    <img key={image.id} src={image.url} alt={image.name} />
-                  ))}
-                </div>
-              )}
-              {message.text}
-            </div>
-          </section>
-        ))}
+        {pendingUsers
+          .filter(
+            (message) =>
+              !message.turnId ||
+              (!turns.some(
+                (turn) => String(turn?.id || "") === message.turnId,
+              ) &&
+                !(
+                  !hasActiveTurn &&
+                  (streamed.length > 0 || streamedItems.length > 0) &&
+                  message.turnId === String(thread.activeTurnId || "")
+                )),
+          )
+          .map((message) => (
+            <section className="turn-block optimistic-turn" key={message.id}>
+              <header className="turn-head">正在发送</header>
+              <div className="message user">
+                {message.images.length > 0 && (
+                  <div className="message-images">
+                    {message.images.map((image) => (
+                      <img key={image.id} src={image.url} alt={image.name} />
+                    ))}
+                  </div>
+                )}
+                {message.text}
+              </div>
+            </section>
+          ))}
         {streamed.length === 0 &&
           streamedItems.length === 0 &&
           (thread.status === "running" || thread.status === "waiting") && (
@@ -187,23 +205,28 @@ export function Timeline({
               <span>正在等待响应</span>
             </div>
           )}
-        {!hasActiveTurn && (streamed.length > 0 || streamedItems.length > 0) && (
-          <TurnBlock
-            turn={{
-              id: thread.activeTurnId,
-              status: "inProgress",
-              items: [],
-            }}
-            index={turns.length + 1}
-            thread={thread}
-            streamed={streamed}
-            streamedItems={streamedItems}
-            onCopy={onCopy}
-            onEditUserMessage={onEditUserMessage}
-            onRetryUserMessage={onRetryUserMessage}
-            messageActionsDisabled={messageActionsDisabled}
-          />
-        )}
+        {!hasActiveTurn &&
+          (streamed.length > 0 || streamedItems.length > 0) && (
+            <TurnBlock
+              turn={{
+                id: thread.activeTurnId,
+                status: "inProgress",
+                items: [],
+              }}
+              index={turns.length + 1}
+              thread={thread}
+              streamed={streamed}
+              streamedItems={streamedItems}
+              pendingUsers={pendingUsers.filter(
+                (message) =>
+                  message.turnId === String(thread.activeTurnId || ""),
+              )}
+              onCopy={onCopy}
+              onEditUserMessage={onEditUserMessage}
+              onRetryUserMessage={onRetryUserMessage}
+              messageActionsDisabled={messageActionsDisabled}
+            />
+          )}
       </div>
     </div>
   );

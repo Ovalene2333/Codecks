@@ -35,3 +35,14 @@ export const remove = <T = any>(url: string, body?: any) =>
     method: "DELETE",
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+export async function getBlob(url: string) {
+  const response = await fetch(`/api${url}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `图片加载失败 (${response.status})`);
+  }
+  return response.blob();
+}

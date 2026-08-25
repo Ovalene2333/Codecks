@@ -145,6 +145,73 @@ test("a persisted Claude message stays before its following tool while streaming
   assert.ok(html.indexOf(text) < html.indexOf("rg provider-row"));
 });
 
+test("an optimistic steer is inserted before commands that arrive after it", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "running",
+    updatedAt: Date.now(),
+    activeTurnId: "turn-1",
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-1",
+        status: "inProgress",
+        items: [
+          { id: "user-1", type: "userMessage", text: "开始" },
+          {
+            id: "old-command",
+            type: "commandExecution",
+            command: "rg 旧命令",
+            status: "completed",
+          },
+        ],
+      },
+      index: 1,
+      thread,
+      streamed: [],
+      streamedItems: [
+        {
+          itemId: "old-command",
+          item: {
+            id: "old-command",
+            type: "commandExecution",
+            command: "rg 旧命令",
+            status: "completed",
+          },
+        },
+        {
+          itemId: "new-command",
+          item: {
+            id: "new-command",
+            type: "commandExecution",
+            command: "rg 新命令",
+            status: "inProgress",
+          },
+        },
+      ],
+      pendingUsers: [
+        {
+          id: "pending-1",
+          text: "追加消息",
+          images: [],
+          loadedUserMessageCount: 1,
+          turnId: "turn-1",
+          liveItemIds: ["old-command"],
+        },
+      ],
+    }),
+  );
+
+  assert.ok(html.indexOf("rg 旧命令") < html.indexOf("追加消息"));
+  assert.ok(html.indexOf("追加消息") < html.indexOf("rg 新命令"));
+});
+
 test("history user messages expose retry-from-here instead of append resend", () => {
   const thread: ThreadSummary = {
     id: "thread-1",

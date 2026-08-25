@@ -37,7 +37,7 @@ export function TaskCenter({
 }: {
   scopeThreadId?: string;
   statusVersion: string;
-  onOpenThread: (agentId: "codex" | "claude", threadId: string) => void;
+  onOpenThread: (agentId: "codex" | "claude" | "opencode", threadId: string) => void;
   onToast: (message: string) => void;
   onClose: () => void;
 }) {

@@ -280,7 +280,7 @@ export class ProjectStore {
   }
 
   async rememberCreate(input: {
-    agentId?: "codex" | "claude";
+    agentId?: "codex" | "claude" | "opencode";
     cwd: string;
     providerId?: string;
     model?: string;

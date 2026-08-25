@@ -132,6 +132,6 @@ test("userImageParts reads data-url attachments from user messages", () => {
         { type: "image", url: "data:image/png;base64,abc=" },
       ],
     }),
-    [{ url: "data:image/png;base64,abc=", alt: undefined }],
+    [{ url: "data:image/png;base64,abc=" }],
   );
 });

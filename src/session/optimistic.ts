@@ -7,6 +7,8 @@ export interface PendingUserMessage {
   text: string;
   images: ComposerImage[];
   loadedUserMessageCount: number;
+  turnId?: string;
+  liveItemIds?: string[];
 }
 
 export function loadedUserMessages(turns: any[]) {

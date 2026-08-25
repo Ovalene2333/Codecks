@@ -9,7 +9,7 @@ import type {
   TurnImage,
 } from "../types.js";
 
-export type AgentId = "codex" | "claude";
+export type AgentId = "codex" | "claude" | "opencode";
 export type AgentHistoryStatus = "cached" | "loading" | "ready" | "error";
 
 export interface AgentCapabilities {

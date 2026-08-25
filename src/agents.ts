@@ -7,7 +7,7 @@ import type {
   ThreadSummary,
 } from "./types";
 
-export type AgentId = "codex" | "claude";
+export type AgentId = "codex" | "claude" | "opencode";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -75,7 +75,7 @@ export function agentName(
   const id = agentIdFor(value);
   return (
     agents?.find((agent) => agent.id === id)?.name ||
-    (id === "claude" ? "Claude Code" : "Codex")
+    (id === "claude" ? "Claude Code" : id === "opencode" ? "OpenCode" : "Codex")
   );
 }
 
@@ -84,16 +84,16 @@ export function providerForThread(
   agentProfiles: AgentProfile[] | undefined,
   thread: Pick<ThreadSummary, "agentId" | "providerId">,
 ) {
-  if (agentIdFor(thread) !== "claude")
+  if (agentIdFor(thread) === "codex")
     return providers.find((provider) => provider.id === thread.providerId);
   const profiles = (agentProfiles || []).filter(
-    (profile) => profile.agentId === "claude",
+    (profile) => profile.agentId === agentIdFor(thread),
   );
   return (
     profiles.find((profile) => profile.id === thread.providerId) ||
     (thread.providerId === "claude-current"
       ? profiles.find((profile) => profile.current && profile.enabled !== false)
-      : undefined)
+      : profiles.find((profile) => profile.id === thread.providerId))
   );
 }
 

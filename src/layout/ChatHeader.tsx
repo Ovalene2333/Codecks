@@ -50,7 +50,7 @@ export function ChatHeader({
               className={`mobile-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
               title={`${agentName} 任务`}
             >
-              {thread.agentId === "claude" ? "Claude" : "Codex"}
+              {thread.agentId === "claude" ? "Claude" : thread.agentId === "opencode" ? "OpenCode" : "Codex"}
             </span>
             {pendingCount > 0 && (
               <mark className="pending-count">{pendingCount}</mark>
@@ -77,7 +77,7 @@ export function ChatHeader({
             className={`chat-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
             title={`${agentName} 任务`}
           >
-            {thread.agentId === "claude" ? "Claude" : "Codex"}
+            {thread.agentId === "claude" ? "Claude" : thread.agentId === "opencode" ? "OpenCode" : "Codex"}
           </span>
           <div
             className="desktop-context"
@@ -91,18 +91,20 @@ export function ChatHeader({
               showUnknown
             />
           </div>
-          <button
-            className="provider-switch secondary"
-            onClick={onSwitchProvider}
-            disabled={locked}
-            title="为此 Session 切换供应商"
-          >
-            <ArrowRightLeft />
-            <span>
-              {provider?.name ||
-                (thread.agentId === "claude" ? "Claude 中转" : "供应商")}
-            </span>
-          </button>
+          {thread.agentId !== "opencode" && (
+            <button
+              className="provider-switch secondary"
+              onClick={onSwitchProvider}
+              disabled={locked}
+              title="为此 Session 切换供应商"
+            >
+              <ArrowRightLeft />
+              <span>
+                {provider?.name ||
+                  (thread.agentId === "claude" ? "Claude 中转" : "供应商")}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             className="icon-btn appearance-trigger"
@@ -143,7 +145,7 @@ export function ChatHeader({
           title={provider?.name || "供应商未知"}
         >
           {provider?.name ||
-            (thread.agentId === "claude" ? "Claude 中转" : "供应商未知")}
+            (thread.agentId === "claude" ? "Claude 中转" : thread.agentId === "opencode" ? "OpenCode" : "供应商未知")}
         </span>
       </div>
     </header>

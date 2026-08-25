@@ -430,6 +430,42 @@
   border-radius: 4px;
   padding: 0.1em 0.35em;
 }
+.deferred-image {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  margin: 4px 0 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-muted);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.deferred-image:hover,
+.deferred-image:focus-visible {
+  border-color: var(--focus-ring);
+  color: var(--text);
+  outline: none;
+}
+.deferred-image svg {
+  width: 15px;
+  height: 15px;
+}
+.markdown-image {
+  display: block;
+  width: auto;
+  max-width: min(620px, 100%);
+  max-height: 520px;
+  margin: 6px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  object-fit: contain;
+  background: #0c1219;
+}
 .timeline .tool-item,
 .timeline .tool-row {
   margin: 2px 0;

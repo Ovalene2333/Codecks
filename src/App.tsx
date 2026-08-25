@@ -73,14 +73,62 @@ import {
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 const isToolPath = (pathname: string) => Boolean(toolPath(pathname));
+const mobileViewportQuery = "(max-width: 760px)";
+
+type DeckHistoryState = {
+  __codexDeck?: true;
+  page?: "workspace" | "tools";
+  view?: "workspace" | "session";
+  session?: string;
+};
+
+const readDeckHistoryState = () => {
+  const state = window.history.state;
+  return state && typeof state === "object"
+    ? (state as DeckHistoryState)
+    : undefined;
+};
+
+const isDeckSessionState = (
+  state: DeckHistoryState | undefined,
+): state is DeckHistoryState & { view: "session"; session: string } =>
+  state?.__codexDeck === true &&
+  state.view === "session" &&
+  Boolean(state.session);
+
+const currentHistoryUrl = () =>
+  `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+const nextDeckHistoryState = (
+  patch: Pick<DeckHistoryState, "page" | "view" | "session">,
+) => ({
+  ...(window.history.state && typeof window.history.state === "object"
+    ? window.history.state
+    : {}),
+  __codexDeck: true as const,
+  ...patch,
+});
 
 export function App() {
   const appearance = useAppearance();
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia(mobileViewportQuery).matches,
+  );
   const [snapshot, setSnapshot] = useState(() => readSnapshotCache() || empty);
   const [loading, setLoading] = useState(
     () => !hasSidebarData(readSnapshotCache()),
   );
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState<string | undefined>(() => {
+    if (
+      typeof window === "undefined" ||
+      !window.matchMedia(mobileViewportQuery).matches
+    )
+      return undefined;
+    const state = readDeckHistoryState();
+    return isDeckSessionState(state) ? state.session : undefined;
+  });
   const [library, setLibrary] = useState<"active" | "archived">("active");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(readUiCache().expandedProjects),
@@ -137,6 +185,14 @@ export function App() {
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
 
+  useEffect(() => {
+    const media = window.matchMedia(mobileViewportQuery);
+    const syncViewport = () => setIsMobileViewport(media.matches);
+    syncViewport();
+    media.addEventListener("change", syncViewport);
+    return () => media.removeEventListener("change", syncViewport);
+  }, []);
+
   const pushToast = useCallback((message: string) => {
     const id = Date.now() + Math.random();
     setToasts((current) => [...current, { id, message }]);
@@ -147,16 +203,96 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (location.pathname === "/page/terminal")
-      history.replaceState(null, "", "/terminal");
-    const syncPage = () =>
+    const canonicalPath =
+      location.pathname === "/page/terminal"
+        ? "/terminal"
+        : currentHistoryUrl();
+    const initialPage = isToolPath(
+      location.pathname === "/page/terminal" ? "/terminal" : location.pathname,
+    )
+      ? "tools"
+      : "workspace";
+    const initialState = readDeckHistoryState();
+    if (
+      location.pathname === "/page/terminal" ||
+      !initialState?.__codexDeck ||
+      !initialState.view
+    ) {
+      window.history.replaceState(
+        nextDeckHistoryState({ page: initialPage, view: "workspace" }),
+        "",
+        canonicalPath,
+      );
+    }
+    const syncPage = () => {
       setPage(isToolPath(location.pathname) ? "tools" : "workspace");
+      if (!isMobileViewport) {
+        if (isDeckSessionState(readDeckHistoryState()))
+          window.history.replaceState(
+            nextDeckHistoryState({
+              page: isToolPath(location.pathname) ? "tools" : "workspace",
+              view: "workspace",
+            }),
+            "",
+            currentHistoryUrl(),
+          );
+        setSelected(undefined);
+        setSidebar(true);
+        return;
+      }
+      const state = readDeckHistoryState();
+      if (isDeckSessionState(state)) {
+        setSelected(state.session);
+        setSidebar(false);
+      } else {
+        setSelected(undefined);
+        setSidebar(true);
+      }
+    };
     window.addEventListener("popstate", syncPage);
+    syncPage();
     return () => window.removeEventListener("popstate", syncPage);
-  }, []);
+  }, [isMobileViewport]);
+
+  useEffect(() => {
+    if (!isMobileViewport) {
+      if (selected) setSidebar(false);
+      return;
+    }
+    const state = readDeckHistoryState();
+    const url = currentHistoryUrl();
+    const historyPage = isToolPath(location.pathname) ? "tools" : "workspace";
+    if (selected) {
+      const nextState = nextDeckHistoryState({
+        page: "workspace",
+        view: "session",
+        session: selected,
+      });
+      if (isDeckSessionState(state))
+        window.history.replaceState(nextState, "", url);
+      else window.history.pushState(nextState, "", url);
+      setSidebar(false);
+      return;
+    }
+    if (isDeckSessionState(state))
+      window.history.replaceState(
+        nextDeckHistoryState({ page: historyPage, view: "workspace" }),
+        "",
+        url,
+      );
+  }, [isMobileViewport, selected]);
 
   const openPage = useCallback((pathname: string) => {
-    history.pushState(null, "", pathname);
+    window.history.pushState(
+      nextDeckHistoryState({
+        page: isToolPath(pathname) ? "tools" : "workspace",
+        view: "workspace",
+      }),
+      "",
+      pathname,
+    );
+    setSelected(undefined);
+    setSidebar(true);
     setPage(isToolPath(pathname) ? "tools" : "workspace");
   }, []);
 
@@ -212,7 +348,17 @@ export function App() {
     const sharedToken = fragment.get("token");
     if (sharedToken) {
       setToken(sharedToken);
-      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      const state = readDeckHistoryState();
+      window.history.replaceState(
+        state?.__codexDeck
+          ? state
+          : nextDeckHistoryState({
+              page: isToolPath(location.pathname) ? "tools" : "workspace",
+              view: "workspace",
+            }),
+        "",
+        `${location.pathname}${location.search}`,
+      );
     }
     refresh();
   }, [refresh]);

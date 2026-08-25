@@ -130,7 +130,12 @@ export function filterProjectGroups(
         ? group.sessions
         : group.sessions.filter((thread) => {
             const provider = options?.providerName?.(thread.providerId) || "";
-            const agent = thread.agentId === "claude" ? "Claude Code" : "Codex";
+            const agent =
+              thread.agentId === "claude"
+                ? "Claude Code"
+                : thread.agentId === "opencode"
+                  ? "OpenCode"
+                  : "Codex";
             return (
               Boolean(options?.matchingThread?.(thread)) ||
               thread.name.toLowerCase().includes(needle) ||

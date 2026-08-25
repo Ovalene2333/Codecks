@@ -25,7 +25,7 @@ import {
 } from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
-import { defaultAgentId } from "../agents";
+import { defaultAgentId, type AgentId } from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 
 export function NewThreadModal({
@@ -46,7 +46,7 @@ export function NewThreadModal({
   runtimeWsl?: boolean;
   onClose: () => void;
   onCreated: (
-    agentId: "codex" | "claude",
+    agentId: AgentId,
     providerId: string,
     id: string,
   ) => void;
@@ -62,7 +62,7 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
-  const [agentId, setAgentId] = useState<"codex" | "claude">(preferredAgentId);
+  const [agentId, setAgentId] = useState<AgentId>(preferredAgentId);
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [form, setForm] = useState({
@@ -110,7 +110,7 @@ export function NewThreadModal({
     };
   }, [agentId]);
 
-  const selectAgent = (next: "codex" | "claude") => {
+  const selectAgent = (next: AgentId) => {
     setAgentId(next);
     setError("");
     if (next === "codex")
@@ -132,7 +132,7 @@ export function NewThreadModal({
       const payload = {
         ...form,
         providerId: form.providerId || undefined,
-        ...(agentId === "claude"
+        ...(agentId === "claude" || agentId === "opencode"
           ? {
               reasoningEffort: undefined,
               personality: undefined,
@@ -167,7 +167,7 @@ export function NewThreadModal({
           <select
             value={agentId}
             onChange={(event) =>
-              selectAgent(event.target.value as "codex" | "claude")
+              selectAgent(event.target.value as AgentId)
             }
           >
             {(agents.length
@@ -222,7 +222,7 @@ export function NewThreadModal({
               }
             />
           </>
-        ) : (
+        ) : agentId === "claude" ? (
           <>
             <label>
               Claude 配置档
@@ -295,6 +295,40 @@ export function NewThreadModal({
                 ))}
               </select>
             </label>
+          </>
+        ) : (
+          <>
+            <label>
+              OpenCode 供应商
+              <select
+                value={form.providerId}
+                disabled={profilesLoading || profiles.length === 0}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, providerId: event.target.value }))
+                }
+              >
+                {profilesLoading ? (
+                  <option value="">正在读取…</option>
+                ) : profiles.length ? (
+                  profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">使用 OpenCode 默认供应商</option>
+                )}
+              </select>
+            </label>
+            <ModelPicker
+              agentId="opencode"
+              providerId={form.providerId}
+              model={form.model}
+              reasoningEffort=""
+              onChange={({ model }) =>
+                setForm((current) => ({ ...current, model }))
+              }
+            />
           </>
         )}
         <label>

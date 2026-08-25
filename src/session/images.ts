@@ -4,11 +4,19 @@ export interface ComposerImage {
   url: string;
 }
 
+export interface MessageImage {
+  url: string;
+  alt?: string;
+}
+
 export const MAX_COMPOSER_IMAGES = 8;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
 export function isImageFile(file: File) {
-  return file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+  return (
+    file.type.startsWith("image/") ||
+    /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)
+  );
 }
 
 export async function fileToComposerImage(file: File): Promise<ComposerImage> {
@@ -50,29 +58,103 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
-export function userImageParts(item: any): { url: string; alt?: string }[] {
-  const parts: { url: string; alt?: string }[] = [];
+function imageUrl(part: any): string {
+  if (typeof part === "string") return part;
+  if (!part || typeof part !== "object") return "";
+  const encoded = part.b64_json || part.base64;
+  if (typeof encoded === "string" && encoded)
+    return `data:image/png;base64,${encoded}`;
+  return (
+    [
+      part.url,
+      part.image_url,
+      part.imageUrl,
+      part.src,
+      part.path,
+      part.savedPath,
+      part.saved_path,
+      part.result,
+    ].find(
+      (value) => typeof value === "string" && value,
+    ) || ""
+  );
+}
+
+function isRenderableImageUrl(url: string) {
+  return (
+    /^data:image\//i.test(url) ||
+    /^blob:/i.test(url) ||
+    /^https?:\/\//i.test(url) ||
+    /\.(?:png|jpe?g|gif|webp|bmp|avif)(?:[?#].*)?$/i.test(url)
+  );
+}
+
+function collectImageParts(item: any, requireImageType: boolean) {
+  const parts: MessageImage[] = [];
   const push = (part: any) => {
-    if (!part || typeof part !== "object") return;
+    if (!part) return;
     const type = String(part.type || "");
     if (
-      type !== "image" &&
-      type !== "localImage" &&
-      type !== "inputImage" &&
-      type !== "input_image"
+      requireImageType &&
+      ![
+        "image",
+        "localImage",
+        "inputImage",
+        "input_image",
+        "output_image",
+        "outputImage",
+        "imageView",
+        "image_view",
+        "imageGeneration",
+        "image_generation",
+      ].includes(type)
     )
       return;
-    const url =
-      typeof part.url === "string"
-        ? part.url
-        : typeof part.image_url === "string"
-          ? part.image_url
-          : typeof part.path === "string"
-            ? part.path
-            : "";
-    if (url) parts.push({ url, alt: part.name || part.alt });
+    const url = imageUrl(part);
+    if (url && (!requireImageType || isRenderableImageUrl(url))) {
+      const alt = part.name || part.alt || part.title;
+      parts.push(alt ? { url, alt } : { url });
+    }
   };
   if (Array.isArray(item?.content)) item.content.forEach(push);
   if (Array.isArray(item?.images)) item.images.forEach(push);
+  return parts;
+}
+
+export function userImageParts(item: any): MessageImage[] {
+  return collectImageParts(item, true);
+}
+
+export function assistantImageParts(item: any): MessageImage[] {
+  const parts = collectImageParts(item, true);
+  for (const nested of [
+    item,
+    item?.items,
+    item?.result,
+    item?.output,
+    item?.data,
+  ]) {
+    const nestedParts = collectImageParts(
+      { content: Array.isArray(nested) ? nested : [nested] },
+      false,
+    );
+    for (const part of nestedParts)
+      if (!parts.some((existing) => existing.url === part.url))
+        parts.push(part);
+  }
+  const direct = [
+    item?.image,
+    item?.image_url,
+    item?.imageUrl,
+    item?.output_image,
+  ].map(imageUrl);
+  for (const url of direct) {
+    if (
+      url &&
+      isRenderableImageUrl(url) &&
+      !parts.some((part) => part.url === url)
+    )
+      parts.push({ url });
+  }
   return parts;
 }
