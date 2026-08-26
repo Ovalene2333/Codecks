@@ -1,17 +1,29 @@
-import type { Snapshot } from './types'
+import type { Snapshot } from "./types";
 
-let token = localStorage.getItem('codex-deck-token') || ''
-export const getToken = () => token
-export const setToken = (next: string) => { token = next; localStorage.setItem('codex-deck-token', next) }
+const storage = typeof localStorage === "undefined" ? undefined : localStorage;
+let token = storage?.getItem("codex-deck-token") || "";
+export const getToken = () => token;
+export const setToken = (next: string) => {
+  token = next;
+  storage?.setItem("codex-deck-token", next);
+};
 
-export async function api<T = any>(url: string, options: RequestInit = {}): Promise<T> {
+export async function api<T = any>(
+  url: string,
+  options: RequestInit = {},
+): Promise<T> {
   const response = await fetch(`/api${url}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.error || `请求失败 (${response.status})`)
-  return data
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok)
+    throw new Error(data.error || `请求失败 (${response.status})`);
+  return data;
 }
 
 export const getSnapshot = () => api<Snapshot>("/snapshot");

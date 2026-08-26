@@ -130,6 +130,8 @@ test("WSL usage output maps rollout paths back to thread ids", () => {
 });
 
 test("WSL usage scripts read the latest token_count without quote loss", async (t) => {
+  if (process.platform === "win32")
+    return t.skip("POSIX shell fixture is not available in Windows Node");
   const root = await mkdtemp(path.join(os.tmpdir(), "deck-wsl-usage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const dir = path.join(root, "archived_sessions");

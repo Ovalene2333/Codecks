@@ -217,18 +217,40 @@ test("new task path defaults stay unchanged outside --wsl", () => {
   );
 });
 
-test("legacy project approval defaults do not combine with reviewer preferences", () => {
+test("legacy Workspace Write plus Never ask defaults migrate to Approve for me", () => {
   const defaults = resolveNewThreadDefaults({
     project: {
       key: "/tmp/demo",
       cwd: "/tmp/demo",
-      defaults: { approvalPolicy: "never" },
+      defaults: {
+        sandbox: "workspace-write",
+        approvalPolicy: "never",
+      },
       updatedAt: 1,
     },
     preferences: {
       recentDirs: [],
       lastApprovalPolicy: "on-request",
       lastApprovalsReviewer: "auto_review",
+    },
+    providers: [],
+  });
+  assert.equal(defaults.sandbox, "workspace-write");
+  assert.equal(defaults.approvalPolicy, "on-request");
+  assert.equal(defaults.approvalsReviewer, "auto_review");
+});
+
+test("explicit project approval reviewers remain unchanged", () => {
+  const defaults = resolveNewThreadDefaults({
+    project: {
+      key: "/tmp/demo",
+      cwd: "/tmp/demo",
+      defaults: {
+        sandbox: "workspace-write",
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+      },
+      updatedAt: 1,
     },
     providers: [],
   });
