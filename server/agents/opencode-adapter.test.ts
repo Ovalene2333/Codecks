@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import { OpenCodeAdapter } from "./opencode-adapter.js";
 
@@ -54,7 +55,9 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
 
   const events: any[] = [];
   adapter.on("event", (event) => events.push(event));
-  const existing: any = adapter.listThreads().find((thread) => thread.id === "existing-session");
+  const existing: any = adapter
+    .listThreads()
+    .find((thread) => thread.id === "existing-session");
   existing.activeTurnId = "turn-123";
   (adapter as any).onEvent({
     type: "session.status",
@@ -66,4 +69,60 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
     status: "completed",
   });
   assert.ok(calls.some((call) => call.url.includes("/session")));
+});
+
+test("OpenCode adapter launches the Windows npm shim through cmd", async () => {
+  const calls: Array<{ command: string; args: string[]; options: any }> = [];
+  const child = new EventEmitter() as any;
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  const adapter = new OpenCodeAdapter({
+    platform: "win32",
+    port: 4096,
+    spawnProcess: (command, args, options) => {
+      calls.push({ command, args, options });
+      return child;
+    },
+    fetcher: (async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/global/health")
+        return Response.json({ healthy: true });
+      if (pathname === "/session") return Response.json([]);
+      if (pathname === "/provider") return Response.json({ all: {} });
+      return new Response("");
+    }) as typeof fetch,
+  });
+
+  await adapter.startAll();
+  assert.match(calls[0].command.toLowerCase(), /cmd\.exe$/);
+  assert.deepEqual(calls[0].args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.match(calls[0].args[3], /"opencode\.cmd" "serve"/);
+  assert.equal(calls[0].options.windowsVerbatimArguments, true);
+  assert.equal(adapter.descriptor().online, true);
+  adapter.restart();
+});
+
+test("OpenCode adapter reports stderr and stops a failed startup", async () => {
+  const child = new EventEmitter() as any;
+  child.stderr = new EventEmitter();
+  let killed = false;
+  child.kill = () => {
+    killed = true;
+    return true;
+  };
+  const adapter = new OpenCodeAdapter({
+    port: 4096,
+    spawnProcess: () => {
+      queueMicrotask(() => {
+        child.stderr.emit("data", "configuration is invalid");
+        child.emit("exit", 1, null);
+      });
+      return child;
+    },
+    fetcher: (() => new Promise(() => undefined)) as typeof fetch,
+  });
+
+  await assert.rejects(adapter.startAll(), /configuration is invalid/);
+  assert.equal(killed, true);
+  assert.match(adapter.descriptor().error || "", /configuration is invalid/);
 });

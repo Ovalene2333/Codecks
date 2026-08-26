@@ -169,6 +169,11 @@ export function resolveNewThreadDefaults(input: {
   const hasProjectApprovalDefaults = Boolean(
     defaults?.approvalPolicy || defaults?.approvalsReviewer,
   );
+  const legacyWorkspaceNever = Boolean(
+    defaults?.sandbox === "workspace-write" &&
+    defaults.approvalPolicy === "never" &&
+    !defaults.approvalsReviewer,
+  );
   const preferredProviderId = defaults?.providerId || prefs?.lastProviderId;
   const preferredProvider = online.find(
     (provider) => provider.id === preferredProviderId,
@@ -184,12 +189,16 @@ export function resolveNewThreadDefaults(input: {
     reasoningEffort:
       defaults?.reasoningEffort || prefs?.lastReasoningEffort || "",
     sandbox: defaults?.sandbox || prefs?.lastSandbox || "workspace-write",
-    approvalPolicy: hasProjectApprovalDefaults
-      ? defaults?.approvalPolicy || "on-request"
-      : prefs?.lastApprovalPolicy || "on-request",
-    approvalsReviewer: hasProjectApprovalDefaults
-      ? defaults?.approvalsReviewer || "user"
-      : prefs?.lastApprovalsReviewer || "auto_review",
+    approvalPolicy: legacyWorkspaceNever
+      ? "on-request"
+      : hasProjectApprovalDefaults
+        ? defaults?.approvalPolicy || "on-request"
+        : prefs?.lastApprovalPolicy || "on-request",
+    approvalsReviewer: legacyWorkspaceNever
+      ? "auto_review"
+      : hasProjectApprovalDefaults
+        ? defaults?.approvalsReviewer || "user"
+        : prefs?.lastApprovalsReviewer || "auto_review",
     permissionMode:
       defaults?.permissionMode || prefs?.lastPermissionMode || "default",
   };

@@ -34,11 +34,24 @@ interface OpenCodeAdapterOptions {
   spawnProcess?: (
     command: string,
     args: string[],
-    options: { env: NodeJS.ProcessEnv },
+    options: {
+      env: NodeJS.ProcessEnv;
+      stdio: ["ignore", "ignore", "pipe"];
+      windowsHide: boolean;
+      windowsVerbatimArguments?: boolean;
+    },
   ) => ChildProcess;
   port?: number;
+  platform?: NodeJS.Platform;
   initialThreads?: ThreadSummary[];
   threadSettings?: ThreadSettingsStore;
+}
+
+function windowsCommand(command: string, args: string[]) {
+  if (/\r|\n|"/.test(command))
+    throw new Error("OPENCODE_BIN 包含 Windows cmd 不支持的字符");
+  const values = [command, ...args];
+  return `call ${values.map((value) => `"${value}"`).join(" ")}`;
 }
 
 type OpenCodeSession = {
@@ -93,7 +106,9 @@ function sessionSummary(
     cwd: session.directory || "",
     model: "default",
     status,
-    updatedAt: Number(session.time?.updated || session.time?.created || Date.now()),
+    updatedAt: Number(
+      session.time?.updated || session.time?.created || Date.now(),
+    ),
     sessionId: session.id,
     controlMode: "managed",
   };
@@ -128,7 +143,9 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
             id: String(message.id || randomUUID()),
             type: "userMessage",
             content: parts
-              .filter((part: any) => part.type === "text" || part.type === "file")
+              .filter(
+                (part: any) => part.type === "text" || part.type === "file",
+              )
               .map((part: any) =>
                 part.type === "file"
                   ? { type: "image", url: part.url, name: part.filename }
@@ -143,16 +160,29 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
     if (message?.role !== "assistant" || !turn) continue;
     for (const part of parts) {
       if (part.type === "text")
-        turn.items.push({ id: part.id, type: "agentMessage", text: part.text || "" });
+        turn.items.push({
+          id: part.id,
+          type: "agentMessage",
+          text: part.text || "",
+        });
       else if (part.type === "reasoning")
-        turn.items.push({ id: part.id, type: "reasoning", summary: part.text || "" });
+        turn.items.push({
+          id: part.id,
+          type: "reasoning",
+          summary: part.text || "",
+        });
       else if (part.type === "tool") {
         const state = part.state || {};
         turn.items.push({
           id: part.id,
           type: "commandExecution",
           command: state.title || part.tool || "OpenCode 工具",
-          status: state.status === "error" ? "failed" : state.status === "completed" ? "completed" : "inProgress",
+          status:
+            state.status === "error"
+              ? "failed"
+              : state.status === "completed"
+                ? "completed"
+                : "inProgress",
           aggregatedOutput: state.output || state.error || "",
         });
       }
@@ -179,6 +209,7 @@ export class OpenCodeAdapter extends EventEmitter {
   private process?: ChildProcess;
   private eventAbort?: AbortController;
   private fetcher: Fetcher;
+  private processStderr = "";
 
   constructor(private options: OpenCodeAdapterOptions = {}) {
     super();
@@ -197,11 +228,17 @@ export class OpenCodeAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "OpenCode",
-      available: Boolean(this.options.bin || process.env.OPENCODE_BIN || "opencode"),
+      available: Boolean(
+        this.options.bin || process.env.OPENCODE_BIN || "opencode",
+      ),
       online: this.online,
       starting: this.starting,
       error: this.error,
-      historyStatus: this.online ? "ready" : this.starting ? "loading" : "cached",
+      historyStatus: this.online
+        ? "ready"
+        : this.starting
+          ? "loading"
+          : "cached",
       capabilities: OPENCODE_CAPABILITIES,
     };
   }
@@ -227,7 +264,12 @@ export class OpenCodeAdapter extends EventEmitter {
     const profile = this.profiles.find((item) => item.id === providerId);
     if (!profile)
       return [
-        { id: "default", model: "default", displayName: "Default", isDefault: true },
+        {
+          id: "default",
+          model: "default",
+          displayName: "Default",
+          isDefault: true,
+        },
         ...this.profiles.flatMap((item) =>
           Object.entries(item.models || {}).map(([id, model]) => ({
             id: `${item.id}/${id}`,
@@ -237,7 +279,12 @@ export class OpenCodeAdapter extends EventEmitter {
         ),
       ];
     return [
-      { id: "default", model: "default", displayName: "Default", isDefault: true },
+      {
+        id: "default",
+        model: "default",
+        displayName: "Default",
+        isDefault: true,
+      },
       ...Object.entries(profile.models || {}).map(([id, model]) => ({
         id: `${profile.id}/${id}`,
         model: `${profile.id}/${id}`,
@@ -261,20 +308,76 @@ export class OpenCodeAdapter extends EventEmitter {
     try {
       const port = this.options.port || (await findFreeListenPort());
       this.baseUrl = `http://127.0.0.1:${port}`;
-      const command = this.options.bin || process.env.OPENCODE_BIN || "opencode";
-      const spawnProcess = this.options.spawnProcess || ((bin, args, opts) =>
-        spawn(bin, args, { env: opts.env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true }));
-      this.process = spawnProcess(command, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], { env: process.env });
-      this.process.once("error", (error) => this.offline(error));
-      this.process.once("exit", () => this.offline(new Error("OpenCode server 已退出")));
-      await this.waitForHealth();
+      const platform = this.options.platform || process.platform;
+      const configuredCommand = this.options.bin || process.env.OPENCODE_BIN;
+      let command =
+        configuredCommand ||
+        (platform === "win32" ? "opencode.cmd" : "opencode");
+      if (platform === "win32" && command.toLowerCase() === "opencode")
+        command = "opencode.cmd";
+      const serveArgs = [
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ];
+      const commandIsBatch =
+        platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
+      const spawnCommand = commandIsBatch
+        ? process.env.ComSpec || "cmd.exe"
+        : command;
+      const spawnArgs = commandIsBatch
+        ? ["/d", "/s", "/c", windowsCommand(command, serveArgs)]
+        : serveArgs;
+      const spawnProcess =
+        this.options.spawnProcess ||
+        ((bin, args, opts) => spawn(bin, args, opts));
+      const child = spawnProcess(spawnCommand, spawnArgs, {
+        env: process.env,
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+        windowsVerbatimArguments: commandIsBatch || undefined,
+      });
+      this.process = child;
+      this.processStderr = "";
+      child.stderr?.on("data", (chunk) => {
+        this.processStderr = `${this.processStderr}${String(chunk)}`.slice(
+          -4_000,
+        );
+      });
+      let ready = false;
+      let rejectProcessFailure: (error: Error) => void = () => undefined;
+      const processFailure = new Promise<never>((_resolve, reject) => {
+        rejectProcessFailure = reject;
+      });
+      const failed = (error: Error) => {
+        if (this.process !== child) return;
+        const detail = this.processError(error);
+        if (ready) this.offline(detail);
+        else rejectProcessFailure(detail);
+      };
+      child.once("error", (error) => failed(error));
+      child.once("exit", (code, signal) =>
+        failed(
+          new Error(
+            `OpenCode server 已退出${code == null ? "" : `（代码 ${code}）`}${signal ? `（信号 ${signal}）` : ""}`,
+          ),
+        ),
+      );
+      await Promise.race([this.waitForHealth(), processFailure]);
+      ready = true;
       this.online = true;
       this.error = undefined;
       await this.refreshAll();
       void this.consumeEvents();
     } catch (error: any) {
-      this.offline(error);
-      throw error;
+      const detail = this.processError(error);
+      const child = this.process;
+      this.process = undefined;
+      child?.kill();
+      this.offline(detail);
+      throw detail;
     } finally {
       this.starting = false;
       this.broadcast("agent.status", this.descriptor());
@@ -292,27 +395,40 @@ export class OpenCodeAdapter extends EventEmitter {
       seen.add(session.id);
       const existing = this.threads.get(session.id);
       this.threads.set(session.id, {
-        ...sessionSummary(session, existing?.status === "running" || existing?.status === "waiting" ? existing.status : "idle"),
+        ...sessionSummary(
+          session,
+          existing?.status === "running" || existing?.status === "waiting"
+            ? existing.status
+            : "idle",
+        ),
         ...existing,
         ...this.options.threadSettings?.get(this.id, session.id),
         agentId: this.id,
       });
     }
     for (const [id, thread] of this.threads)
-      if (!seen.has(id) && thread.status !== "running" && thread.status !== "waiting") this.threads.delete(id);
+      if (
+        !seen.has(id) &&
+        thread.status !== "running" &&
+        thread.status !== "waiting"
+      )
+        this.threads.delete(id);
     this.broadcast("agent.status", this.descriptor());
     this.broadcast("snapshot", this.snapshot());
   }
 
   busyThreads() {
-    return this.listThreads().filter((thread) => thread.status === "running" || thread.status === "waiting");
+    return this.listThreads().filter(
+      (thread) => thread.status === "running" || thread.status === "waiting",
+    );
   }
 
   restart() {
     this.eventAbort?.abort();
     this.eventAbort = undefined;
-    this.process?.kill();
+    const child = this.process;
     this.process = undefined;
+    child?.kill();
     this.online = false;
     for (const thread of this.busyThreads()) {
       thread.status = "offline";
@@ -324,7 +440,10 @@ export class OpenCodeAdapter extends EventEmitter {
     return [...this.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  async createThread(providerId: string, input: { cwd: string; name?: string; model?: string }) {
+  async createThread(
+    providerId: string,
+    input: { cwd: string; name?: string; model?: string },
+  ) {
     const session = await this.request<OpenCodeSession>("/session", {
       method: "POST",
       directory: input.cwd,
@@ -344,24 +463,40 @@ export class OpenCodeAdapter extends EventEmitter {
 
   async readThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
-    const records = await this.request<any[]>(`/session/${encodeURIComponent(threadId)}/message`, { directory: thread.cwd });
-    return { ...normalizeMessages({ id: thread.id, directory: thread.cwd }, records), agentId: this.id, providerId: thread.providerId };
+    const records = await this.request<any[]>(
+      `/session/${encodeURIComponent(threadId)}/message`,
+      { directory: thread.cwd },
+    );
+    return {
+      ...normalizeMessages({ id: thread.id, directory: thread.cwd }, records),
+      agentId: this.id,
+      providerId: thread.providerId,
+    };
   }
 
   async renameThread(_providerId: string, threadId: string, name: string) {
     const thread = this.requireThread(threadId);
     const next = name.trim();
     if (!next) throw new Error("会话名称不能为空");
-    await this.request(`/session/${encodeURIComponent(threadId)}`, { method: "PATCH", directory: thread.cwd, body: { title: next } });
+    await this.request(`/session/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      directory: thread.cwd,
+      body: { title: next },
+    });
     thread.name = next;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
     return thread;
   }
 
-  async updateThreadSettings(_providerId: string, threadId: string, settings: { model?: string }) {
+  async updateThreadSettings(
+    _providerId: string,
+    threadId: string,
+    settings: { model?: string },
+  ) {
     const thread = this.requireThread(threadId);
-    if (thread.status === "running" || thread.status === "waiting") throw new Error("任务结束后才能修改 OpenCode 会话设置");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务结束后才能修改 OpenCode 会话设置");
     if (settings.model) thread.model = settings.model;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
@@ -370,14 +505,23 @@ export class OpenCodeAdapter extends EventEmitter {
 
   async deleteThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
-    if (thread.status === "running" || thread.status === "waiting") throw new Error("运行中的 OpenCode 会话不能删除");
-    await this.request(`/session/${encodeURIComponent(threadId)}`, { method: "DELETE", directory: thread.cwd });
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("运行中的 OpenCode 会话不能删除");
+    await this.request(`/session/${encodeURIComponent(threadId)}`, {
+      method: "DELETE",
+      directory: thread.cwd,
+    });
     this.threads.delete(threadId);
     this.broadcast("thread.deleted", { agentId: this.id, threadId });
     return { ok: true };
   }
 
-  async sendTurn(_providerId: string, threadId: string, text: string, images?: TurnImage[]) {
+  async sendTurn(
+    _providerId: string,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
     const thread = this.requireThread(threadId);
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
     const turnId = randomUUID();
@@ -386,28 +530,54 @@ export class OpenCodeAdapter extends EventEmitter {
     thread.lastError = undefined;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
-    this.emitAgentEvent(thread, "turn/started", { threadId, turn: { id: turnId, status: "inProgress" } });
-    const model = thread.model && thread.model !== "default" ? this.modelInput(thread.model) : undefined;
+    this.emitAgentEvent(thread, "turn/started", {
+      threadId,
+      turn: { id: turnId, status: "inProgress" },
+    });
+    const model =
+      thread.model && thread.model !== "default"
+        ? this.modelInput(thread.model)
+        : undefined;
     await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
       method: "POST",
       directory: thread.cwd,
-      body: { parts: [...(text ? [textPart(text)] : []), ...(images || []).map(imagePart)], ...(model ? { model } : {}) },
+      body: {
+        parts: [
+          ...(text ? [textPart(text)] : []),
+          ...(images || []).map(imagePart),
+        ],
+        ...(model ? { model } : {}),
+      },
     });
     return { turn: { id: turnId, status: "inProgress" } };
   }
 
   async interrupt(_providerId: string, threadId: string, _turnId: string) {
     const thread = this.requireThread(threadId);
-    await this.request(`/session/${encodeURIComponent(threadId)}/abort`, { method: "POST", directory: thread.cwd });
+    await this.request(`/session/${encodeURIComponent(threadId)}/abort`, {
+      method: "POST",
+      directory: thread.cwd,
+    });
     return { ok: true };
   }
 
-  async resolveApproval(approvalId: string, body: string | { decision?: string }) {
+  async resolveApproval(
+    approvalId: string,
+    body: string | { decision?: string },
+  ) {
     const approval = this.approvals.get(approvalId);
     if (!approval) throw new Error("审批已处理或不存在");
     const decision = typeof body === "string" ? body : body.decision;
-    const response = decision === "acceptForSession" ? "always" : decision === "accept" ? "once" : "reject";
-    await this.request(`/session/${encodeURIComponent(approval.sessionID)}/permissions/${encodeURIComponent(approval.id)}`, { method: "POST", directory: approval.cwd, body: { response } });
+    const response =
+      decision === "acceptForSession"
+        ? "always"
+        : decision === "accept"
+          ? "once"
+          : "reject";
+    await this.request(
+      `/session/${encodeURIComponent(approval.sessionID)}/permissions/${encodeURIComponent(approval.id)}`,
+      { method: "POST", directory: approval.cwd, body: { response } },
+    );
     this.approvals.delete(approvalId);
     this.broadcast("approval.resolved", { agentId: this.id, approvalId });
     return { ok: true };
@@ -415,13 +585,13 @@ export class OpenCodeAdapter extends EventEmitter {
 
   private async waitForHealth() {
     let lastError: unknown;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
+    for (let attempt = 0; attempt < 150; attempt += 1) {
       try {
         await this.request("/global/health");
         return;
       } catch (error) {
         lastError = error;
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
     throw lastError || new Error("OpenCode server 未在限定时间内启动");
@@ -431,8 +601,12 @@ export class OpenCodeAdapter extends EventEmitter {
     const abort = new AbortController();
     this.eventAbort = abort;
     try {
-      const response = await this.fetcher(requestUrl(this.baseUrl!, "/global/event"), { signal: abort.signal });
-      if (!response.ok || !response.body) throw new Error(`OpenCode 事件流不可用：${response.status}`);
+      const response = await this.fetcher(
+        requestUrl(this.baseUrl!, "/global/event"),
+        { signal: abort.signal },
+      );
+      if (!response.ok || !response.body)
+        throw new Error(`OpenCode 事件流不可用：${response.status}`);
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
@@ -443,9 +617,13 @@ export class OpenCodeAdapter extends EventEmitter {
         const chunks = buffered.split(/\n\n/);
         buffered = chunks.pop() || "";
         for (const chunk of chunks) {
-          const line = chunk.split(/\r?\n/).find((item) => item.startsWith("data:"));
+          const line = chunk
+            .split(/\r?\n/)
+            .find((item) => item.startsWith("data:"));
           if (!line) continue;
-          try { this.onEvent(JSON.parse(line.slice(5))); } catch {}
+          try {
+            this.onEvent(JSON.parse(line.slice(5)));
+          } catch {}
         }
       }
     } catch (error: any) {
@@ -456,17 +634,30 @@ export class OpenCodeAdapter extends EventEmitter {
   private onEvent(event: any) {
     const payload = event?.payload || event;
     const body = payload?.properties || {};
-    const sessionId = body.sessionID || body.info?.id || body.part?.sessionID || body.session?.id;
+    const sessionId =
+      body.sessionID ||
+      body.info?.id ||
+      body.part?.sessionID ||
+      body.session?.id;
     const thread = sessionId ? this.threads.get(sessionId) : undefined;
-    if (payload?.type === "session.created" || payload?.type === "session.updated") {
+    if (
+      payload?.type === "session.created" ||
+      payload?.type === "session.updated"
+    ) {
       const summary = sessionSummary(body.info);
-      this.threads.set(summary.id, { ...this.threads.get(summary.id), ...summary });
+      this.threads.set(summary.id, {
+        ...this.threads.get(summary.id),
+        ...summary,
+      });
       this.broadcast("thread.updated", this.threads.get(summary.id));
       return;
     }
     if (payload?.type === "session.deleted" && sessionId) {
       this.threads.delete(sessionId);
-      this.broadcast("thread.deleted", { agentId: this.id, threadId: sessionId });
+      this.broadcast("thread.deleted", {
+        agentId: this.id,
+        threadId: sessionId,
+      });
       return;
     }
     if (payload?.type === "session.status" && thread) {
@@ -485,7 +676,9 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "session.error" && thread) {
       thread.status = "error";
       thread.activeTurnId = undefined;
-      thread.lastError = String(body.error?.data?.message || body.error?.message || "OpenCode 任务失败");
+      thread.lastError = String(
+        body.error?.data?.message || body.error?.message || "OpenCode 任务失败",
+      );
       this.broadcast("thread.updated", thread);
       return;
     }
@@ -503,28 +696,53 @@ export class OpenCodeAdapter extends EventEmitter {
         command: permission.title,
         reason: permission.title,
         availableDecisions: ["decline", "accept", "acceptForSession"],
-        request: { method: "opencode/permission", params: { threadId: permission.sessionID, permission } },
+        request: {
+          method: "opencode/permission",
+          params: { threadId: permission.sessionID, permission },
+        },
       };
       this.approvals.set(id, pending);
-      if (thread) { thread.status = "waiting"; this.broadcast("thread.updated", thread); }
+      if (thread) {
+        thread.status = "waiting";
+        this.broadcast("thread.updated", thread);
+      }
       this.broadcast("approval.requested", pending);
       return;
     }
     if (payload?.type === "message.part.updated" && thread) {
       const part = body.part;
       if (part?.type === "text" && body.delta)
-        this.emitAgentEvent(thread, "item/agentMessage/delta", { threadId: thread.id, turnId: thread.activeTurnId, itemId: part.messageID || part.id, delta: body.delta });
-      else this.emitAgentEvent(thread, "item/updated", { threadId: thread.id, turnId: thread.activeTurnId, item: part });
+        this.emitAgentEvent(thread, "item/agentMessage/delta", {
+          threadId: thread.id,
+          turnId: thread.activeTurnId,
+          itemId: part.messageID || part.id,
+          delta: body.delta,
+        });
+      else
+        this.emitAgentEvent(thread, "item/updated", {
+          threadId: thread.id,
+          turnId: thread.activeTurnId,
+          item: part,
+        });
     }
   }
 
   private permissionKind(type: string): ApprovalKind {
-    return /edit|write|patch/i.test(type) ? "file" : /question/i.test(type) ? "question" : "command";
+    return /edit|write|patch/i.test(type)
+      ? "file"
+      : /question/i.test(type)
+        ? "question"
+        : "command";
   }
 
   private modelInput(value: string) {
     const separator = value.indexOf("/");
-    return separator > 0 ? { providerID: value.slice(0, separator), modelID: value.slice(separator + 1) } : undefined;
+    return separator > 0
+      ? {
+          providerID: value.slice(0, separator),
+          modelID: value.slice(separator + 1),
+        }
+      : undefined;
   }
 
   private requireThread(threadId: string) {
@@ -533,14 +751,25 @@ export class OpenCodeAdapter extends EventEmitter {
     return thread;
   }
 
-  private async request<T = any>(pathname: string, options: { method?: string; directory?: string; body?: unknown } = {}): Promise<T> {
+  private async request<T = any>(
+    pathname: string,
+    options: { method?: string; directory?: string; body?: unknown } = {},
+  ): Promise<T> {
     if (!this.baseUrl) throw new Error("OpenCode server 尚未启动");
-    const response = await this.fetcher(requestUrl(this.baseUrl, pathname, options.directory), {
-      method: options.method,
-      headers: options.body ? { "content-type": "application/json" } : undefined,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
-    if (!response.ok) throw new Error(`OpenCode API ${response.status}: ${(await response.text()).slice(0, 500)}`);
+    const response = await this.fetcher(
+      requestUrl(this.baseUrl, pathname, options.directory),
+      {
+        method: options.method,
+        headers: options.body
+          ? { "content-type": "application/json" }
+          : undefined,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      },
+    );
+    if (!response.ok)
+      throw new Error(
+        `OpenCode API ${response.status}: ${(await response.text()).slice(0, 500)}`,
+      );
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   }
@@ -551,8 +780,21 @@ export class OpenCodeAdapter extends EventEmitter {
     this.broadcast("agent.status", this.descriptor());
   }
 
+  private processError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stderr = this.processStderr.trim();
+    return new Error(
+      stderr && !message.includes(stderr) ? `${message}: ${stderr}` : message,
+    );
+  }
+
   private emitAgentEvent(thread: ThreadSummary, method: string, params: any) {
-    this.broadcast("agent.event", { agentId: this.id, providerId: thread.providerId, method, params });
+    this.broadcast("agent.event", {
+      agentId: this.id,
+      providerId: thread.providerId,
+      method,
+      params,
+    });
   }
 
   private broadcast(type: string, data: unknown) {

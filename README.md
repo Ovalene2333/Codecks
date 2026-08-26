@@ -87,7 +87,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
 - 侧栏「任务」统一汇总所有受管 Codex / Claude Session 的活动 Turn、运行命令和待确认状态；可以跳转来源或停止整个任务。较新 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，并允许单独停止；旧 Runtime 自动退化为 Turn 级中断
 - 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
-- 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
+- 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；旧版本留下且未标记 reviewer 的 `Workspace Write + Never ask` 项目默认值会自动按此安全默认值解释。`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
 - 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
 - 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
 - 助手回复中的 Markdown 图片，以及 Codex / 兼容 Agent 返回的生成图片，会先显示为按需加载控件；点击后才请求图片，并使用浏览器懒加载，适合移动网络和远程值守场景节省流量
@@ -171,7 +171,7 @@ POST /api/agents/claude/approvals/:approvalId
 
 ### OpenCode 后端适配
 
-> **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；可通过 `OPENCODE_BIN` 指定可执行文件。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
+> **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
 
 新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
 

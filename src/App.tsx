@@ -182,6 +182,13 @@ export function App() {
   const [page, setPage] = useState(() =>
     isToolPath(location.pathname) ? "tools" : "workspace",
   );
+  const openThreadModalFromSidebar = (next: {
+    cwd?: string;
+    project?: ProjectRecord;
+  }) => {
+    setThreadModal(next);
+    if (window.matchMedia(mobileViewportQuery).matches) setSidebar(false);
+  };
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
 
@@ -1030,7 +1037,7 @@ export function App() {
         archiveError={snapshot.runtime?.archiveError}
         loading={loading || historySyncing}
         onClose={() => setSidebar(false)}
-        onNew={() => setThreadModal({})}
+        onNew={() => openThreadModalFromSidebar({})}
         onRefresh={refresh}
         onProviders={() => setProviderModal(true)}
         onUsage={setUsageOpen}
@@ -1049,7 +1056,7 @@ export function App() {
         }
         onSelect={selectThread}
         onAddInProject={(project) =>
-          setThreadModal({
+          openThreadModalFromSidebar({
             cwd: project.cwd,
             project: snapshot.projects?.find(
               (item) => item.key === project.key,
