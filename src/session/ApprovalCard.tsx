@@ -284,19 +284,38 @@ function QuestionApproval({
   const [answers, setAnswers] = useState<{ value: string; other: string }[]>(
     () => items.map(() => ({ value: "", other: "" })),
   );
+  const pickedLabels = (answer: { value: string }) =>
+    answer.value
+      .split(",")
+      .map((label) => label.trim())
+      .filter(Boolean);
+  const pick = (index: number, label: string, multiple?: boolean) =>
+    setAnswers((current) =>
+      current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        if (!multiple)
+          return row.value === label ? { ...row, value: "" } : { ...row, value: label };
+        const picked = row.value.split(", ").filter(Boolean);
+        const next = picked.includes(label)
+          ? picked.filter((item) => item !== label)
+          : [...picked, label];
+        return { ...row, value: next.join(", ") };
+      }),
+    );
   const ready = useMemo(
     () =>
       items.every((question, index) => {
         const answer = answers[index];
-        if (!answer?.value) return false;
-        const option = (question.options || []).find(
-          (item: any) =>
-            (item.value || item.label) === answer.value ||
-            item.id === answer.value,
+        if (!(question.options || []).length)
+          return Boolean(answer.value.trim());
+        const labels = pickedLabels(answer);
+        if (!labels.length) return false;
+        const selected = (question.options || []).filter((item: any) =>
+          labels.includes(String(item.label ?? item.value)),
         );
-        if (question.isOther || option?.isOther || answer.value === "other")
-          return Boolean(answer.other.trim());
-        return true;
+        if (selected.length === labels.length && !selected.some((item: any) => item.isOther))
+          return true;
+        return Boolean(answer.other.trim());
       }),
     [answers, items],
   );
@@ -311,77 +330,92 @@ function QuestionApproval({
           <small>请完成下列问题后继续</small>
         </div>
       </header>
-      {items.map((question, index) => {
-        const options = question.options || [];
-        const answer = answers[index];
-        const selected = options.find(
-          (item: any) =>
-            (item.value || item.label) === answer.value ||
-            item.id === answer.value,
-        );
-        const other =
-          question.isOther || selected?.isOther || answer.value === "other";
-        return (
-          <label className="question-block" key={question.id || index}>
-            {question.header ||
-              question.prompt ||
-              question.question ||
-              `问题 ${index + 1}`}
-            {options.length ? (
-              <select
-                value={answer.value}
-                onChange={(event) =>
-                  setAnswers((current) =>
-                    current.map((row, rowIndex) =>
-                      rowIndex === index
-                        ? { ...row, value: event.target.value }
-                        : row,
-                    ),
-                  )
-                }
-              >
-                <option value="">选择一项</option>
-                {options.map((option: any) => (
-                  <option
-                    key={option.value || option.label || option.id}
-                    value={option.value || option.label || option.id}
-                  >
-                    {option.label || option.value || option.id}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={answer.value}
-                onChange={(event) =>
-                  setAnswers((current) =>
-                    current.map((row, rowIndex) =>
-                      rowIndex === index
-                        ? { ...row, value: event.target.value }
-                        : row,
-                    ),
-                  )
-                }
-              />
-            )}
-            {other && (
-              <input
-                value={answer.other}
-                placeholder="其他…"
-                onChange={(event) =>
-                  setAnswers((current) =>
-                    current.map((row, rowIndex) =>
-                      rowIndex === index
-                        ? { ...row, other: event.target.value }
-                        : row,
-                    ),
-                  )
-                }
-              />
-            )}
-          </label>
-        );
-      })}
+      <div className="question-list">
+        {items.map((question, index) => {
+          const options = question.options || [];
+          const answer = answers[index];
+          const labels = pickedLabels(answer);
+          const multiple = Boolean(approval.multiple || question.multiple);
+          const custom =
+            question.custom === true ||
+            Boolean(question.isOther) ||
+            (Boolean(options.length) &&
+              labels.length > 0 &&
+              !options.some((item: any) =>
+                labels.includes(String(item.label ?? item.value)),
+              ));
+          return (
+            <section className="question-card" key={question.id || index}>
+              <header className="question-head">
+                {items.length > 1 && (
+                  <span className="question-index">{index + 1}</span>
+                )}
+                <div>
+                  <b>{question.header || question.prompt || `问题 ${index + 1}`}</b>
+                  {question.header && (question.question || question.prompt) ? (
+                    <small>{question.question || question.prompt}</small>
+                  ) : null}
+                  {multiple ? <small>可多选</small> : null}
+                </div>
+              </header>
+              {options.length > 0 ? (
+                <div className="question-options">
+                  {options.map((option: any) => {
+                    const label = String(option.label ?? option.value ?? "");
+                    const active = labels.includes(label);
+                    return (
+                      <button
+                        type="button"
+                        key={label}
+                        className={`question-option ${active ? "selected" : ""}`}
+                        disabled={disabled}
+                        onClick={() => pick(index, label, multiple)}
+                      >
+                        <Check className={`question-check ${active ? "" : "hidden"}`} />
+                        <span>
+                          <b>{label}</b>
+                          {option.description ? <small>{option.description}</small> : null}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <input
+                  className="question-other"
+                  value={answer.value}
+                  placeholder="输入你的回答…"
+                  onChange={(event) =>
+                    setAnswers((current) =>
+                      current.map((row, rowIndex) =>
+                        rowIndex === index
+                          ? { ...row, value: event.target.value }
+                          : row,
+                      ),
+                    )
+                  }
+                />
+              )}
+              {(custom || question.custom === true) && options.length > 0 && (
+                <input
+                  className="question-other"
+                  value={answer.other}
+                  placeholder="其他…"
+                  onChange={(event) =>
+                    setAnswers((current) =>
+                      current.map((row, rowIndex) =>
+                        rowIndex === index
+                          ? { ...row, other: event.target.value }
+                          : row,
+                      ),
+                    )
+                  }
+                />
+              )}
+            </section>
+          );
+        })}
+      </div>
       <div className="approval-actions">
         <button
           type="button"
@@ -392,6 +426,7 @@ function QuestionApproval({
               answers: items.map((question, index) => ({
                 id: question.id,
                 value: answers[index].value,
+                values: pickedLabels(answers[index]),
                 isOther: Boolean(
                   question.isOther || answers[index].other.trim(),
                 ),

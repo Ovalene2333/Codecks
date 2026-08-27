@@ -735,6 +735,137 @@ aside,
   padding-left: 56px;
 }
 
+.question-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 4px;
+  padding-right: 15px;
+  padding-left: 56px;
+}
+
+.question-card {
+  display: grid;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+}
+
+.question-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.question-index {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.question-head > div {
+  min-width: 0;
+}
+
+.question-head b {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  line-height: 1.35;
+}
+
+.question-head small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
+.question-options {
+  display: grid;
+  gap: 6px;
+}
+
+.question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 40px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.question-option:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.question-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.question-option .question-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.question-option .question-check.hidden {
+  visibility: hidden;
+  opacity: 0.25;
+}
+
+.question-option > span {
+  min-width: 0;
+}
+
+.question-option b {
+  display: block;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.question-option small {
+  display: block;
+  margin-top: 1px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
+.question-other {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-ui);
+}
+
 @media (max-width: 760px) {
   .approval-card {
     margin: 10px 0 14px;
@@ -753,7 +884,8 @@ aside,
   }
 
   .permission-list,
-  .question-block {
+  .question-block,
+  .question-list {
     padding-right: 13px;
     padding-left: 13px;
   }

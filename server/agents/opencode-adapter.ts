@@ -723,9 +723,17 @@ export class OpenCodeAdapter extends EventEmitter {
       if (!items.length) await decline();
       else {
         const payload = {
-          answers: items.map((item: any) => [
-            String(item?.value || item?.label || item?.other || "").trim(),
-          ]),
+          answers: items.map((item: any) => {
+            // Multi-select questions carry a values array; single-select
+            // answers fall back to the joined value / label / free text.
+            const explicit = Array.isArray(item?.values)
+              ? item.values.map((value: any) => String(value).trim()).filter(Boolean)
+              : [];
+            const single = String(
+              item?.value || item?.label || item?.other || "",
+            ).trim();
+            return explicit.length ? explicit : [single];
+          }),
         };
         try {
           await this.request(
@@ -866,8 +874,10 @@ export class OpenCodeAdapter extends EventEmitter {
             value: String(option.label ?? option.value ?? ""),
           }),
         ),
+        ...(item.multiple ? { multiple: true } : {}),
+        ...(item.custom ? { custom: true } : {}),
       }));
-      const first = request.questions?.[0];
+      const multiple = questions.some((item: any) => item.multiple);
       const pending = {
         id,
         agentId: this.id,
@@ -880,7 +890,7 @@ export class OpenCodeAdapter extends EventEmitter {
           questions[0]?.header || questions[0]?.prompt || "OpenCode 提问",
         reason: `OpenCode 请求回答 ${questions.length} 个问题`,
         questions,
-        multiple: Boolean(first?.multiple),
+        ...(multiple ? { multiple: true } : {}),
         request: {
           method: "opencode/question",
           params: { threadId: request.sessionID, requestId: request.id },
