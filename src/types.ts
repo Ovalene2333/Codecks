@@ -84,6 +84,20 @@ export interface FileChange {
   diff?: string;
 }
 
+/**
+ * Native item that has no Codex-shaped equivalent (OpenCode todo parts,
+ * Claude TodoWrite snapshots, ...). Rendered by per-agent frontend adapters
+ * under src/session/adapters; unknown kinds fall back to a collapsed view.
+ */
+export interface TurnExtensionItem {
+  id: string;
+  type: "extension";
+  kind: string;
+  agentId?: "codex" | "claude" | "opencode";
+  status?: "inProgress" | "completed" | "failed";
+  payload?: unknown;
+}
+
 export interface ApprovalQuestion {
   id?: string;
   prompt?: string;

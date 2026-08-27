@@ -146,10 +146,34 @@ export interface AccountInfo {
 export type ApprovalKind =
   "command" | "file" | "permission" | "question" | "unknown";
 
+export interface ApprovalQuestion {
+  id?: string;
+  prompt?: string;
+  header?: string;
+  question?: string;
+  options?: { label: string; value?: string; isOther?: boolean }[];
+  isOther?: boolean;
+}
+
 export interface FileChange {
   path: string;
   kind?: string;
   diff?: string;
+}
+
+/**
+ * Native item that has no Codex-shaped equivalent (OpenCode todo parts,
+ * Claude TodoWrite snapshots, agent-specific tool metadata, ...). The raw
+ * payload is preserved so per-agent frontend adapters can render it; agents
+ * without an adapter fall back to the generic collapsed view.
+ */
+export interface TurnExtensionItem {
+  id: string;
+  type: "extension";
+  kind: string;
+  agentId?: "codex" | "claude" | "opencode";
+  status?: "inProgress" | "completed" | "failed";
+  payload?: unknown;
 }
 
 export interface ThreadSummary {

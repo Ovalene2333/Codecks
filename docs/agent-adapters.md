@@ -160,6 +160,23 @@ Claude 当前声明 `approvals`、`images`、`interrupt`、`models`、`sessionSe
 6. 桌面和移动端都验证新建、发送、流式输出、审批、取消和恢复。
 7. 更新 README 的安装、配置、能力差异和迁移说明。
 
+## 前端适配器（消息展示侧）
+
+服务端 adapter 把 native 数据归一化为 Codex 形状的 `turns[].items[]` 与
+`agent.event` 流；没有通用形状可表达的原生条目用 `extension` 条目透传：
+
+```ts
+{ id, type: "extension", kind: string, agentId?, status?, payload? }
+```
+
+- 服务端：历史归一化时不要丢弃原生数据（OpenCode 的 todo/choice part、
+  Claude 的 `TodoWrite` 等），能转成 `extension` 就保留原始 payload。
+- 前端：`src/session/adapters/` 按 `agentId` 提供 `AgentUiAdapter`，
+  `TurnItem` 渲染前先问适配器，未认领的条目回落到通用渲染与
+  `UnknownItem` 兜底；`streaming.ts` 负责把 OpenCode 的
+  `item/updated` 原生 part 快照转成共享 item 形状。
+- 纯转换逻辑放 `adapters/native-parts.ts`，供 streaming 与各适配器共用。
+
 ## 测试
 
 Codex adapter 的核心回归测试：

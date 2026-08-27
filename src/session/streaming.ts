@@ -1,4 +1,5 @@
 import { displayText } from "../format";
+import { openCodePartToItem } from "./adapters/native-parts";
 
 export interface StreamedAgentMessage {
   itemId: string;
@@ -19,6 +20,7 @@ const LIVE_ITEM_TYPES = new Set([
   "reasoning",
   "enteredReviewMode",
   "exitedReviewMode",
+  "extension",
 ]);
 
 function sameStream(left: any, right: any) {
@@ -58,18 +60,39 @@ function completedStream(event: any, stream: any) {
   );
 }
 
+/**
+ * OpenCode broadcasts full native part snapshots as `item/updated`; each
+ * update replaces the previous snapshot for the same part, so coalesce them
+ * in the bounded event buffer instead of evicting older live items.
+ */
+function sameNativeUpdate(left: any, right: any) {
+  return (
+    left?.method === "item/updated" &&
+    right?.method === "item/updated" &&
+    (left?.agentId || "codex") === (right?.agentId || "codex") &&
+    left?.providerId === right?.providerId &&
+    left?.params?.threadId === right?.params?.threadId &&
+    left?.params?.turnId === right?.params?.turnId &&
+    String(left?.params?.item?.id) === String(right?.params?.item?.id)
+  );
+}
+
 export function appendCodexEvent(events: any[], event: any) {
+  const deduped =
+    event?.method === "item/updated"
+      ? events.filter((item) => !sameNativeUpdate(item, event))
+      : events;
   if (
     event?.method === "item/agentMessage/delta" ||
     event?.method === "item/commandExecution/outputDelta"
   ) {
-    const existingIndex = events.findIndex((item) =>
+    const existingIndex = deduped.findIndex((item) =>
       event.method === "item/agentMessage/delta"
         ? sameStream(item, event)
         : sameCommandOutput(item, event),
     );
     if (existingIndex >= 0) {
-      const current = events[existingIndex];
+      const current = deduped[existingIndex];
       const merged = {
         ...current,
         params: {
@@ -80,8 +103,8 @@ export function appendCodexEvent(events: any[], event: any) {
         },
       };
       return [
-        ...events.slice(0, existingIndex),
-        ...events.slice(existingIndex + 1),
+        ...deduped.slice(0, existingIndex),
+        ...deduped.slice(existingIndex + 1),
         merged,
       ];
     }
@@ -89,12 +112,12 @@ export function appendCodexEvent(events: any[], event: any) {
 
   const updatedEvents =
     event?.method === "item/completed"
-      ? events.map((item) =>
+      ? deduped.map((item) =>
           completedStream(event, item)
             ? { ...item, streamCompleted: true }
             : item,
         )
-      : events;
+      : deduped;
 
   const withoutPreviousTurn =
     event?.method === "turn/started" && event?.params?.threadId
@@ -220,6 +243,14 @@ export function collectStreamedTurnItems(
 
     const method = String(event?.method || "");
     const eventItem = event?.params?.item;
+    if (method === "item/updated") {
+      // Native part snapshot (OpenCode): convert to the shared item shape.
+      const converted = openCodePartToItem(eventItem);
+      const itemId = String(converted?.id || eventItem?.id || "");
+      if (!itemId || !converted) continue;
+      items.set(itemId, { itemId, item: converted });
+      continue;
+    }
     if (
       (method === "item/started" || method === "item/completed") &&
       eventItem?.id &&

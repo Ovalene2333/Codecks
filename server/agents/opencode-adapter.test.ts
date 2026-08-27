@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { OpenCodeAdapter } from "./opencode-adapter.js";
+import { openCodePartToItem, OpenCodeAdapter } from "./opencode-adapter.js";
 
 test("OpenCode adapter binds provider models and preserves the completed turn id", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -195,4 +195,73 @@ test("OpenCode adapter reports stderr and stops a failed startup", async () => {
   await assert.rejects(adapter.startAll(), /configuration is invalid/);
   assert.equal(killed, true);
   assert.match(adapter.descriptor().error || "", /configuration is invalid/);
+});
+
+test("OpenCode normalization keeps todo tool payloads and native parts", () => {
+  const todo = openCodePartToItem({
+    id: "prt-1",
+    type: "tool",
+    tool: "todowrite",
+    state: {
+      status: "completed",
+      title: "Update todos",
+      input: { todos: [{ content: "ship", status: "in_progress" }] },
+      metadata: { todos: [{ content: "ship", status: "in_progress" }] },
+      output: "saved",
+    },
+  });
+  assert.equal(todo.type, "commandExecution");
+  assert.equal(todo.tool, "todowrite");
+  assert.deepEqual(todo.todos, [{ content: "ship", status: "in_progress" }]);
+
+  const unknown = openCodePartToItem({ id: "prt-2", type: "patch" });
+  assert.equal(unknown.type, "extension");
+  assert.equal(unknown.kind, "patch");
+});
+
+test("OpenCode question permissions expose options and accept answers", async () => {
+  const posts: Array<{ url: string; body: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      if (init?.method === "POST")
+        posts.push({ url: String(url), body: String(init.body) });
+      return Response.json({});
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "n",
+    preview: "",
+    cwd: "/w",
+    model: "m",
+    status: "idle",
+    updatedAt: 1,
+  });
+  adapter.on("event", () => undefined);
+  (adapter as any).onEvent({
+    type: "permission.updated",
+    properties: {
+      sessionID: "s1",
+      id: "perm-1",
+      type: "question",
+      title: "选择实现方案",
+      metadata: { question: "用哪种方案？", options: [{ label: "A", value: "a" }, "B"] },
+    },
+  });
+  const approval: any = adapter.snapshot().approvals[0];
+  assert.equal(approval.kind, "question");
+  assert.equal(approval.questions[0].prompt, "用哪种方案？");
+  assert.deepEqual(
+    approval.questions[0].options.map((option: any) => option.label),
+    ["A", "B"],
+  );
+
+  await adapter.resolveApproval(approval.id, {
+    answers: [{ value: "a" }],
+  });
+  assert.match(posts.at(-1)!.url, /permissions\/perm-1/);
+  assert.deepEqual(JSON.parse(posts.at(-1)!.body), { response: "a" });
 });
