@@ -9,6 +9,7 @@ export function Composer({
   text,
   images,
   sending,
+  imageWarning,
   onChange,
   onImages,
   onSend,
@@ -22,6 +23,7 @@ export function Composer({
   text: string;
   images: ComposerImage[];
   sending: boolean;
+  imageWarning?: string;
   onChange: (value: string) => void;
   onImages: (images: ComposerImage[]) => void;
   onSend: () => void;
@@ -134,6 +136,11 @@ export function Composer({
             </figure>
           ))}
         </div>
+      )}
+      {images.length > 0 && imageWarning && (
+        <p className="composer-image-warning" role="status">
+          {imageWarning}
+        </p>
       )}
       {sessionControls && (
         <div className="composer-session-controls">{sessionControls}</div>

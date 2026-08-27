@@ -143,6 +143,8 @@ export interface ModelInfo {
   displayName: string;
   hidden?: boolean;
   isDefault?: boolean;
+  groupName?: string;
+  supportsImages?: boolean;
   defaultReasoningEffort?: string;
   supportedReasoningEfforts?: {
     reasoningEffort: string;

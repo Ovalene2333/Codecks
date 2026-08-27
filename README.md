@@ -173,7 +173,7 @@ POST /api/agents/claude/approvals/:approvalId
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
 
-新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
+新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：按 provider 分组列出其模型目录，模型 ID 为 `providerID/modelID`，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定；OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
 
 ## 远程访问
 

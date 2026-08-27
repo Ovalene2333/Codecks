@@ -64,8 +64,24 @@ type OpenCodeSession = {
 type OpenCodeProfile = {
   id: string;
   name: string;
-  models?: Record<string, { name?: string; displayName?: string }>;
+  models?: Record<string, OpenCodeModelMeta>;
 };
+
+type OpenCodeModelMeta = {
+  name?: string;
+  displayName?: string;
+  attachment?: boolean;
+  modalities?: { input?: string[] };
+};
+
+function modelSupportsImages(meta?: OpenCodeModelMeta): boolean | undefined {
+  if (!meta) return undefined;
+  const inputs = meta.modalities?.input;
+  if (Array.isArray(inputs))
+    return inputs.some((item) => /^image/i.test(String(item)));
+  if (typeof meta.attachment === "boolean") return meta.attachment;
+  return undefined;
+}
 
 function normalizeProfiles(value: unknown): OpenCodeProfile[] {
   if (Array.isArray(value)) return value as OpenCodeProfile[];
@@ -81,6 +97,14 @@ function normalizeProfiles(value: unknown): OpenCodeProfile[] {
       }));
   }
   return [];
+}
+
+function configDefaultModel(config: unknown) {
+  const providerID = String(
+    (config as any)?.model?.providerID ?? "",
+  ).trim();
+  const modelID = String((config as any)?.model?.modelID ?? "").trim();
+  return providerID && modelID ? { providerID, modelID } : undefined;
 }
 
 function requestUrl(baseUrl: string, pathname: string, directory?: string) {
@@ -200,6 +224,7 @@ export class OpenCodeAdapter extends EventEmitter {
   readonly id: AgentId = "opencode";
   private threads = new Map<string, ThreadSummary>();
   private profiles: OpenCodeProfile[] = [];
+  private configDefault?: { providerID: string; modelID: string };
   private approvals = new Map<string, any>();
   private online = false;
   private starting = false;
@@ -261,35 +286,36 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   listModels(providerId?: string): ModelInfo[] {
-    const profile = this.profiles.find((item) => item.id === providerId);
-    if (!profile)
-      return [
-        {
-          id: "default",
-          model: "default",
-          displayName: "Default",
-          isDefault: true,
-        },
-        ...this.profiles.flatMap((item) =>
-          Object.entries(item.models || {}).map(([id, model]) => ({
-            id: `${item.id}/${id}`,
-            model: `${item.id}/${id}`,
-            displayName: model.name || model.displayName || id,
-          })),
-        ),
-      ];
+    const matched = providerId
+      ? this.profiles.filter((item) => item.id === providerId)
+      : this.profiles;
+    const scope = matched.length ? matched : this.profiles;
+    const entries: ModelInfo[] = [];
+    for (const profile of scope) {
+      const groupName = profile.name || profile.id;
+      for (const [id, model] of Object.entries(profile.models || {})) {
+        entries.push({
+          id: `${profile.id}/${id}`,
+          model: `${profile.id}/${id}`,
+          displayName: model.name || model.displayName || id,
+          groupName,
+          isDefault:
+            this.configDefault?.providerID === profile.id &&
+            this.configDefault.modelID === id
+              ? true
+              : undefined,
+          supportsImages: modelSupportsImages(model),
+        });
+      }
+    }
     return [
       {
         id: "default",
         model: "default",
-        displayName: "Default",
-        isDefault: true,
+        displayName: "跟随 OpenCode 默认",
+        isDefault: !this.configDefault ? true : undefined,
       },
-      ...Object.entries(profile.models || {}).map(([id, model]) => ({
-        id: `${profile.id}/${id}`,
-        model: `${profile.id}/${id}`,
-        displayName: model.name || model.displayName || id,
-      })),
+      ...entries,
     ];
   }
 
@@ -385,11 +411,13 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   async refreshAll() {
-    const [sessions, providers] = await Promise.all([
+    const [sessions, providers, config] = await Promise.all([
       this.request<OpenCodeSession[]>("/session"),
       this.request<unknown>("/provider").catch(() => []),
+      this.request<unknown>("/config").catch(() => undefined),
     ]);
     this.profiles = normalizeProfiles(providers);
+    this.configDefault = configDefaultModel(config);
     const seen = new Set<string>();
     for (const session of sessions) {
       seen.add(session.id);
@@ -524,6 +552,19 @@ export class OpenCodeAdapter extends EventEmitter {
   ) {
     const thread = this.requireThread(threadId);
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
+    const parsed =
+      thread.model && thread.model !== "default"
+        ? this.modelInput(thread.model)
+        : undefined;
+    if (images?.length && parsed) {
+      const meta = this.profiles.find(
+        (item) => item.id === parsed.providerID,
+      )?.models?.[parsed.modelID];
+      if (modelSupportsImages(meta) === false)
+        throw new Error(
+          `当前模型 ${thread.model} 不支持图片输入，请移除图片或改用支持视觉的模型后再发送`,
+        );
+    }
     const turnId = randomUUID();
     thread.status = "running";
     thread.activeTurnId = turnId;
@@ -534,10 +575,7 @@ export class OpenCodeAdapter extends EventEmitter {
       threadId,
       turn: { id: turnId, status: "inProgress" },
     });
-    const model =
-      thread.model && thread.model !== "default"
-        ? this.modelInput(thread.model)
-        : undefined;
+    const model = parsed;
     await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
       method: "POST",
       directory: thread.cwd,
