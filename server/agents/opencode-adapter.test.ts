@@ -9,12 +9,19 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
     fetcher: (async (url, init) => {
       const value = String(url);
       calls.push({ url: value, init });
+      if (value.includes("/config"))
+        return Response.json({
+          model: { providerID: "openai", modelID: "gpt-5" },
+        });
       if (value.includes("/provider"))
         return Response.json({
           all: {
             openai: {
               name: "OpenAI",
-              models: { "gpt-5": { name: "GPT-5" } },
+              models: {
+                "gpt-5": { name: "GPT-5", attachment: false },
+                "gpt-5v": { name: "GPT-5V", modalities: { input: ["text", "image"] } },
+              },
             },
           },
         });
@@ -42,10 +49,18 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
       online: false,
     },
   ]);
+  const models = adapter.listModels("openai");
   assert.deepEqual(
-    adapter.listModels("openai").map((model) => model.model),
-    ["default", "openai/gpt-5"],
+    models.map((model) => [model.model, model.isDefault === true]),
+    [
+      ["default", false],
+      ["openai/gpt-5", true],
+      ["openai/gpt-5v", false],
+    ],
   );
+  assert.equal(models[1].groupName, "OpenAI");
+  assert.equal(models[1].supportsImages, false);
+  assert.equal(models[2].supportsImages, true);
 
   const created: any = await adapter.createThread("openai", {
     cwd: "/work",
@@ -69,6 +84,61 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
     status: "completed",
   });
   assert.ok(calls.some((call) => call.url.includes("/session")));
+});
+
+test("OpenCode adapter rejects image attachments on text-only models", async () => {
+  const messagePosts: Array<{ url: string; init?: RequestInit }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && init?.method === "POST") {
+        messagePosts.push({ url: value, init });
+        return Response.json({ id: "msg" });
+      }
+      if (value.includes("/session") && init?.method === "POST")
+        return Response.json({ id: "new-session", directory: "/work" });
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            openai: {
+              name: "OpenAI",
+              models: {
+                "gpt-5": { name: "GPT-5", attachment: false },
+                "gpt-5v": {
+                  name: "GPT-5V",
+                  modalities: { input: ["text", "image"] },
+                },
+              },
+            },
+          },
+        });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  await adapter.createThread("openai", { cwd: "/work", model: "openai/gpt-5" });
+  const image = { url: "data:image/png;base64,x", name: "image.png" };
+
+  await assert.rejects(
+    adapter.sendTurn("openai", "new-session", "看看这张图", [image]),
+    /不支持图片输入/,
+  );
+  assert.equal(
+    (adapter.listThreads()[0] as any).status !== "running",
+    true,
+    "失败的发送不应把会话标记为运行中",
+  );
+
+  await adapter.updateThreadSettings("openai", "new-session", {
+    model: "openai/gpt-5v",
+  });
+  await adapter.sendTurn("openai", "new-session", "看看这张图", [image]);
+  assert.equal(messagePosts.length, 1);
+  assert.deepEqual(JSON.parse(String(messagePosts[0].init?.body)).model, {
+    providerID: "openai",
+    modelID: "gpt-5v",
+  });
 });
 
 test("OpenCode adapter launches the Windows npm shim through cmd", async () => {

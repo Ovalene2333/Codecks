@@ -1,8 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
+
+function modelLabel(item: ModelInfo) {
+  const suffix =
+    item.isDefault && item.model !== "default"
+      ? "（默认）"
+      : item.supportsImages === false
+        ? "（不支持图片）"
+        : "";
+  return `${item.displayName}${suffix}`;
+}
 
 export function ModelPicker({
   agentId = "codex",
@@ -67,6 +77,20 @@ export function ModelPicker({
   }, [agentId, providerId]);
 
   const efforts = selected?.supportedReasoningEfforts || [];
+  const segments = useMemo(() => {
+    const plain: ModelInfo[] = [];
+    const groups: { name: string; items: ModelInfo[] }[] = [];
+    for (const item of models) {
+      if (!item.groupName) {
+        plain.push(item);
+        continue;
+      }
+      const last = groups.at(-1);
+      if (last && last.name === item.groupName) last.items.push(item);
+      else groups.push({ name: item.groupName, items: [item] });
+    }
+    return { plain, groups };
+  }, [models]);
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
@@ -103,11 +127,27 @@ export function ModelPicker({
             }}
           >
             {!model && <option value="">选择模型</option>}
-            {models.map((item) => (
-              <option key={item.id || item.model} value={item.model}>
-                {item.displayName}
-                {item.isDefault ? "（默认）" : ""}
+            {segments.plain.map((item) => (
+              <option
+                key={item.id || item.model}
+                value={item.model}
+                title={item.id}
+              >
+                {modelLabel(item)}
               </option>
+            ))}
+            {segments.groups.map((group) => (
+              <optgroup key={group.name} label={group.name}>
+                {group.items.map((item) => (
+                  <option
+                    key={item.id || item.model}
+                    value={item.model}
+                    title={item.id}
+                  >
+                    {modelLabel(item)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         )}

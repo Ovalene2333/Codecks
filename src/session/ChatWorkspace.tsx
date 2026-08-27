@@ -14,6 +14,7 @@ import type {
   ClaudePermissionMode,
   Personality,
   AgentProfile,
+  ModelInfo,
   Provider,
   SandboxMode,
   ThreadSummary,
@@ -108,6 +109,7 @@ export function ChatWorkspace({
   const [sending, setSending] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [commandModal, setCommandModal] = useState<CommandModalKind>();
+  const [modelCatalog, setModelCatalog] = useState<ModelInfo[]>([]);
   const fullRef = useRef(full);
   fullRef.current = full;
   const updateDraft = (next: typeof draft) => {
@@ -143,6 +145,23 @@ export function ChatWorkspace({
     setFull(cached || undefined);
     load();
   }, [load, threadCacheKey]);
+  useEffect(() => {
+    if ((thread.agentId || "codex") !== "opencode" || !thread.providerId) {
+      setModelCatalog([]);
+      return;
+    }
+    let cancelled = false;
+    api<ModelInfo[]>(
+      `/agents/opencode/models?providerId=${encodeURIComponent(thread.providerId)}`,
+    )
+      .then((list) => {
+        if (!cancelled) setModelCatalog(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [thread.agentId, thread.providerId]);
 
   const latestEvent = events.at(-1);
   useEffect(() => {
@@ -514,6 +533,15 @@ export function ChatWorkspace({
     thread.status === "running" ||
     thread.status === "waiting" ||
     Boolean(thread.compacting);
+  const activeModel = modelCatalog.find(
+    (item) => item.model === thread.model || item.id === thread.model,
+  );
+  const imageWarning =
+    (thread.agentId || "codex") === "opencode" &&
+    draft.images.length > 0 &&
+    activeModel?.supportsImages === false
+      ? `${activeModel.displayName} 不支持图片输入，发送会被拒绝；请更换支持视觉的模型或移除图片`
+      : "";
   const usageLimit = String(taskErrorCode || "")
     .toLowerCase()
     .includes("usagelimit");
@@ -602,6 +630,7 @@ export function ChatWorkspace({
         text={draft.text}
         images={draft.images}
         sending={sending}
+        imageWarning={imageWarning}
         onChange={(text) => updateDraft({ ...draft, text })}
         onImages={(images) => updateDraft({ ...draft, images })}
         onSend={send}
