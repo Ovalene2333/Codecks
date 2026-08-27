@@ -219,13 +219,13 @@ test("OpenCode normalization keeps todo tool payloads and native parts", () => {
   assert.equal(unknown.kind, "patch");
 });
 
-test("OpenCode question permissions expose options and accept answers", async () => {
-  const posts: Array<{ url: string; body: string }> = [];
+test("OpenCode native questions surface as answerable approval cards", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url, init) => {
       if (init?.method === "POST")
-        posts.push({ url: String(url), body: String(init.body) });
-      return Response.json({});
+        posts.push({ url: String(url), body: init.body ? String(init.body) : undefined });
+      return Response.json(true);
     }) as typeof fetch,
   });
   (adapter as any).baseUrl = "http://127.0.0.1:4096";
@@ -237,31 +237,74 @@ test("OpenCode question permissions expose options and accept answers", async ()
     preview: "",
     cwd: "/w",
     model: "m",
-    status: "idle",
+    status: "running",
     updatedAt: 1,
   });
-  adapter.on("event", () => undefined);
+
   (adapter as any).onEvent({
-    type: "permission.updated",
+    type: "question.asked",
     properties: {
+      id: "que_1",
       sessionID: "s1",
-      id: "perm-1",
-      type: "question",
-      title: "选择实现方案",
-      metadata: { question: "用哪种方案？", options: [{ label: "A", value: "a" }, "B"] },
+      questions: [
+        {
+          header: "实现方案",
+          question: "用哪种持久化？",
+          options: [
+            { label: "SQLite", description: "嵌入式" },
+            { label: "JSON 文件", description: "简单" },
+          ],
+        },
+      ],
+      tool: { messageID: "msg-1", callID: "call-1" },
     },
   });
+
   const approval: any = adapter.snapshot().approvals[0];
   assert.equal(approval.kind, "question");
-  assert.equal(approval.questions[0].prompt, "用哪种方案？");
+  assert.equal(approval.questions[0].prompt, "用哪种持久化？");
   assert.deepEqual(
     approval.questions[0].options.map((option: any) => option.label),
-    ["A", "B"],
+    ["SQLite", "JSON 文件"],
   );
+  assert.equal(adapter.listThreads()[0].status, "waiting");
 
   await adapter.resolveApproval(approval.id, {
-    answers: [{ value: "a" }],
+    answers: [{ value: "JSON 文件" }],
   });
-  assert.match(posts.at(-1)!.url, /permissions\/perm-1/);
-  assert.deepEqual(JSON.parse(posts.at(-1)!.body), { response: "a" });
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].url, /\/question\/que_1\/reply/);
+  assert.deepEqual(JSON.parse(posts[0].body!), { answers: [["JSON 文件"]] });
+  assert.equal(adapter.snapshot().approvals.length, 0);
+
+  (adapter as any).onEvent({
+    type: "question.asked",
+    properties: { id: "que_2", sessionID: "s1", questions: [] },
+  });
+  const second: any = adapter.snapshot().approvals[0];
+  await adapter.resolveApproval(second.id, { decision: "decline" });
+  assert.match(posts[1].url, /\/question\/que_2\/reject/);
+});
+
+test("OpenCode replied/rejected events clear stale question cards", () => {
+  const adapter = new OpenCodeAdapter({ fetcher: (async () => Response.json(true)) as typeof fetch });
+  adapter.on("event", () => undefined);
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "n",
+    preview: "",
+    cwd: "/w",
+    model: "m",
+    status: "waiting",
+    updatedAt: 1,
+  });
+  (adapter as any).approvals.set("s1:que_x", { id: "s1:que_x" });
+
+  (adapter as any).onEvent({
+    type: "question.rejected",
+    properties: { sessionID: "s1", requestID: "que_x" },
+  });
+  assert.equal(adapter.snapshot().approvals.length, 0);
 });

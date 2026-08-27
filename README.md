@@ -180,7 +180,7 @@ POST /api/agents/claude/approvals/:approvalId
 会话时间线由通用的消息/命令/文件改动渲染器和每个 Agent 自己的前端适配器组成：Codex 形状的条目走通用渲染，Agent 原生特有条目（`extension` 条目）则交给对应适配器渲染。目前两条管线已打通：
 
 - **Claude**：`TodoWrite` 产生的任务清单以勾选面板显示（运行中实时出现，历史会话同样保留），未知选项折叠展示。
-- **OpenCode**：todo 工具的任务清单同样显示为勾选面板；工具事件保留结构化的入参与元数据；question 类权限审批会携带原生问题与选项，可选择后提交（兼容仅支持一次/总是/拒绝响应的版本）。
+- **OpenCode**：todo 工具的任务清单同样显示为勾选面板；工具事件保留结构化的入参与元数据。Agent 在任务中调用 OpenCode 的 question 工具提问时（新版 `question.asked` 事件），Deck 会弹出问题卡展示原生选项供选择回答或拒绝；旧的 question 类 permission 审批也兼容（携带原生问题时按问题卡渲染）。
 
 没有专属适配器的 `extension` 条目回落为可展开的原始 JSON 视图，不会静默丢失。
 
