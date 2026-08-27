@@ -153,6 +153,8 @@ export interface ApprovalQuestion {
   question?: string;
   options?: { label: string; value?: string; isOther?: boolean }[];
   isOther?: boolean;
+  multiple?: boolean;
+  custom?: boolean;
 }
 
 export interface FileChange {

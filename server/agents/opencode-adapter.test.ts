@@ -250,6 +250,7 @@ test("OpenCode native questions surface as answerable approval cards", async () 
         {
           header: "实现方案",
           question: "用哪种持久化？",
+          multiple: true,
           options: [
             { label: "SQLite", description: "嵌入式" },
             { label: "JSON 文件", description: "简单" },
@@ -262,6 +263,7 @@ test("OpenCode native questions surface as answerable approval cards", async () 
 
   const approval: any = adapter.snapshot().approvals[0];
   assert.equal(approval.kind, "question");
+  assert.equal(approval.multiple, true);
   assert.equal(approval.questions[0].prompt, "用哪种持久化？");
   assert.deepEqual(
     approval.questions[0].options.map((option: any) => option.label),
@@ -270,11 +272,13 @@ test("OpenCode native questions surface as answerable approval cards", async () 
   assert.equal(adapter.listThreads()[0].status, "waiting");
 
   await adapter.resolveApproval(approval.id, {
-    answers: [{ value: "JSON 文件" }],
+    answers: [{ value: "SQLite, JSON 文件", values: ["SQLite", "JSON 文件"] }],
   });
   assert.equal(posts.length, 1);
   assert.match(posts[0].url, /\/question\/que_1\/reply/);
-  assert.deepEqual(JSON.parse(posts[0].body!), { answers: [["JSON 文件"]] });
+  assert.deepEqual(JSON.parse(posts[0].body!), {
+    answers: [["SQLite", "JSON 文件"]],
+  });
   assert.equal(adapter.snapshot().approvals.length, 0);
 
   (adapter as any).onEvent({

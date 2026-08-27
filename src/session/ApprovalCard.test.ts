@@ -42,3 +42,30 @@ test("Codex approval cards keep the Codex actor label", () => {
 
   assert.match(html, /Codex 请求修改文件/);
 });
+
+test("OpenCode question cards render native options with descriptions", () => {
+  const html = render({
+    id: "s1:que_1",
+    agentId: "opencode",
+    providerId: "p",
+    kind: "question",
+    request: { method: "opencode/question", params: {} },
+    questions: [
+      {
+        id: "que_1",
+        header: "实现方案",
+        prompt: "用哪种持久化？",
+        options: [
+          { label: "SQLite" },
+          { label: "JSON 文件" },
+        ],
+      },
+    ],
+  } as Approval);
+
+  assert.match(html, /kind-question/);
+  assert.match(html, /实现方案/);
+  assert.match(html, /用哪种持久化？/);
+  assert.match(html, /question-option/);
+  assert.match(html, /提交回答/);
+});
