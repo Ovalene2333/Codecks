@@ -663,6 +663,8 @@ export class OpenCodeAdapter extends EventEmitter {
     const approval = this.approvals.get(approvalId);
     if (!approval) throw new Error("审批已处理或不存在");
     const decision = typeof body === "string" ? body : body.decision;
+    if (approval.request?.method === "opencode/question")
+      return this.resolveQuestion(approval, decision, (body as any)?.answers);
     // Question approvals carry the picked option back to OpenCode as the
     // permission response; a missing/unusable value falls back to allow-once.
     const answered =
@@ -696,6 +698,53 @@ export class OpenCodeAdapter extends EventEmitter {
     }
     this.approvals.delete(approvalId);
     this.broadcast("approval.resolved", { agentId: this.id, approvalId });
+    return { ok: true };
+  }
+
+  /**
+   * Answers or dismisses a native OpenCode question request
+   * (question.asked). Each answer is sent as an array of picked labels, one
+   * entry per question in order; free-text answers are wrapped the same way.
+   */
+  private async resolveQuestion(
+    approval: any,
+    decision?: string,
+    answers?: unknown,
+  ) {
+    const decline = () =>
+      this.request(
+        `/question/${encodeURIComponent(approval.requestId)}/reject`,
+        { method: "POST", directory: approval.cwd },
+      );
+    if (decision === "decline" || decision === "cancel") {
+      await decline();
+    } else {
+      const items = Array.isArray(answers) ? answers : [];
+      if (!items.length) await decline();
+      else {
+        const payload = {
+          answers: items.map((item: any) => [
+            String(item?.value || item?.label || item?.other || "").trim(),
+          ]),
+        };
+        try {
+          await this.request(
+            `/question/${encodeURIComponent(approval.requestId)}/reply`,
+            { method: "POST", directory: approval.cwd, body: payload },
+          );
+        } catch {
+          // Question may have been answered or retracted elsewhere; drop it.
+          this.approvals.delete(approval.id);
+          this.broadcast("approval.resolved", {
+            agentId: this.id,
+            approvalId: approval.id,
+          });
+          throw new Error("OpenCode 问题已失效，请重新发送");
+        }
+      }
+    }
+    this.approvals.delete(approval.id);
+    this.broadcast("approval.resolved", { agentId: this.id, approvalId: approval.id });
     return { ok: true };
   }
 
@@ -796,6 +845,63 @@ export class OpenCodeAdapter extends EventEmitter {
         body.error?.data?.message || body.error?.message || "OpenCode 任务失败",
       );
       this.broadcast("thread.updated", thread);
+      return;
+    }
+    if (payload?.type === "question.asked") {
+      // Newer OpenCode versions ask questions through the dedicated question
+      // system (question.asked SSE + /question/:id/reply) instead of
+      // permission.updated; both share the question approval card here.
+      const request = body;
+      const id = `${request.sessionID}:${request.id}`;
+      const questions: ApprovalQuestion[] = (Array.isArray(request.questions)
+        ? request.questions
+        : []
+      ).map((item: any, index: number) => ({
+        id: String(request.id || index),
+        header: typeof item.header === "string" ? item.header : undefined,
+        prompt: item.question,
+        options: (Array.isArray(item.options) ? item.options : []).map(
+          (option: any) => ({
+            label: String(option.label ?? option.value ?? ""),
+            value: String(option.label ?? option.value ?? ""),
+          }),
+        ),
+      }));
+      const first = request.questions?.[0];
+      const pending = {
+        id,
+        agentId: this.id,
+        providerId: thread?.providerId,
+        cwd: thread?.cwd,
+        sessionID: request.sessionID,
+        requestId: request.id,
+        kind: "question" as ApprovalKind,
+        command:
+          questions[0]?.header || questions[0]?.prompt || "OpenCode 提问",
+        reason: `OpenCode 请求回答 ${questions.length} 个问题`,
+        questions,
+        multiple: Boolean(first?.multiple),
+        request: {
+          method: "opencode/question",
+          params: { threadId: request.sessionID, requestId: request.id },
+        },
+      };
+      this.approvals.set(id, pending);
+      if (thread) {
+        thread.status = "waiting";
+        this.broadcast("thread.updated", thread);
+      }
+      this.broadcast("approval.requested", pending);
+      return;
+    }
+    if (
+      (payload?.type === "question.replied" ||
+        payload?.type === "question.rejected") &&
+      body.requestID
+    ) {
+      const id = `${body.sessionID}:${body.requestID}`;
+      if (this.approvals.delete(id))
+        this.broadcast("approval.resolved", { agentId: this.id, approvalId: id });
       return;
     }
     if (payload?.type === "permission.updated") {
