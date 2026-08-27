@@ -86,9 +86,33 @@ function usageFrom(records: ClaudeRecord[]): TokenUsage | undefined {
   };
 }
 
+export function claudeTodos(input: any): any[] {
+  const todos = input?.todos;
+  if (!Array.isArray(todos)) return [];
+  return todos
+    .filter(Boolean)
+    .map((todo: any) =>
+      typeof todo === "string"
+        ? { content: todo }
+        : { ...todo, content: String(todo.content ?? todo.text ?? todo.title ?? "") },
+    );
+}
+
 function toolItem(part: ClaudeRecord, record: ClaudeRecord) {
   const id = String(part.id || record.uuid);
   const input = part.input && typeof part.input === "object" ? part.input : {};
+  if (part.name === "TodoWrite") {
+    const todos = claudeTodos(input);
+    if (todos.length)
+      return {
+        id,
+        type: "extension",
+        kind: "todo",
+        agentId: "claude",
+        status: "inProgress",
+        payload: { todos },
+      };
+  }
   if (part.name === "Bash")
     return {
       id,
@@ -116,6 +140,8 @@ function toolItem(part: ClaudeRecord, record: ClaudeRecord) {
     command: `${part.name || "Tool"}${detail}`,
     status: "inProgress",
     aggregatedOutput: "",
+    ...(part.name && part.name !== "Bash" ? { tool: part.name } : {}),
+    ...(Object.keys(input).length ? { input } : {}),
   };
 }
 

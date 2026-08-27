@@ -175,6 +175,15 @@ POST /api/agents/claude/approvals/:approvalId
 
 新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：按 provider 分组列出其模型目录，模型 ID 为 `providerID/modelID`，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定；OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
 
+### Agent 专属内容展示
+
+会话时间线由通用的消息/命令/文件改动渲染器和每个 Agent 自己的前端适配器组成：Codex 形状的条目走通用渲染，Agent 原生特有条目（`extension` 条目）则交给对应适配器渲染。目前两条管线已打通：
+
+- **Claude**：`TodoWrite` 产生的任务清单以勾选面板显示（运行中实时出现，历史会话同样保留），未知选项折叠展示。
+- **OpenCode**：todo 工具的任务清单同样显示为勾选面板；工具事件保留结构化的入参与元数据；question 类权限审批会携带原生问题与选项，可选择后提交（兼容仅支持一次/总是/拒绝响应的版本）。
+
+没有专属适配器的 `extension` 条目回落为可展开的原始 JSON 视图，不会静默丢失。
+
 ## 远程访问
 
 远程访问拆成三层，互不绑定：

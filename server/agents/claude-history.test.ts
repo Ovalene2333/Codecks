@@ -136,3 +136,53 @@ test("Claude history tolerates malformed lines and empty sessions", () => {
   assert.equal(parsed?.summary.id, "from-record");
   assert.equal(parsed?.summary.updatedAt, 123);
 });
+
+test("Claude history renders TodoWrite snapshots as extension todo items", () => {
+  const parsed = parseClaudeHistory(
+    jsonl([
+      {
+        type: "user",
+        uuid: "u1",
+        parentUuid: null,
+        sessionId: "session-todo",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "Plan the work" },
+      },
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        sessionId: "session-todo",
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          model: "claude-test",
+          content: [
+            {
+              type: "tool_use",
+              id: "todo-tool-1",
+              name: "TodoWrite",
+              input: {
+                todos: [
+                  { content: "design", status: "completed", activeForm: "设计" },
+                  { content: "build", status: "in_progress" },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]),
+    "/tmp/session-todo.jsonl",
+  );
+  assert.ok(parsed);
+  const item = parsed.thread.turns[0].items.find(
+    (item: any) => item.type === "extension",
+  );
+  assert.equal(item.kind, "todo");
+  assert.equal(item.agentId, "claude");
+  assert.deepEqual(item.payload.todos, [
+    { content: "design", status: "completed", activeForm: "设计" },
+    { content: "build", status: "in_progress" },
+  ]);
+});

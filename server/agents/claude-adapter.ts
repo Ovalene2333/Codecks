@@ -45,6 +45,7 @@ import type {
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
 import {
+  claudeTodos,
   readClaudeHistory,
   type ClaudeHistoryThread,
 } from "./claude-history.js";
@@ -884,6 +885,36 @@ export class ClaudeAdapter extends EventEmitter {
             },
           },
         });
+      return;
+    }
+    // Complete assistant messages surface finished tool_use blocks (the
+    // block-level stream events above only carry text/thinking deltas).
+    // TodoWrite snapshots are forwarded as extension items so the frontend
+    // can render the live todo list before the history reload lands.
+    if (message.type === "assistant") {
+      const parts = Array.isArray(message.message?.content)
+        ? message.message.content
+        : [];
+      for (const part of parts) {
+        if (part?.type !== "tool_use") continue;
+        const todos = claudeTodos(part.input);
+        if (!todos.length) continue;
+        this.emitAgentEvent(thread, {
+          method: "item/completed",
+          params: {
+            threadId: thread.id,
+            turnId,
+            item: {
+              id: String(part.id || `${turnId}:${parts.indexOf(part)}`),
+              type: "extension",
+              kind: "todo",
+              agentId: this.id,
+              status: "completed",
+              payload: { todos },
+            },
+          },
+        });
+      }
       return;
     }
     if (message.type === "result") {

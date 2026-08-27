@@ -340,3 +340,67 @@ test("live turn items update matching history and append missing commands", () =
     ],
   );
 });
+
+test("native item/updated snapshots convert and replace their previous state", () => {
+  let events: any[] = [];
+  const update = (todos: any[]) => ({
+    agentId: "opencode",
+    providerId: "openai",
+    method: "item/updated",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "prt-todo",
+        type: "tool",
+        tool: "todowrite",
+        state: {
+          status: todos.length ? "completed" : "running",
+          title: "Update todos",
+          metadata: { todos },
+        },
+      },
+    },
+  });
+
+  events = appendCodexEvent(events, update([]));
+  events = appendCodexEvent(events, update([{ content: "ship it" }]));
+  events = appendCodexEvent(events, delta("回答", "msg-1"));
+  assert.equal(events.length, 2, "repeated part updates coalesce");
+
+  const items = collectStreamedTurnItems(events, "openai", "thread-1", "turn-1", "opencode");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.type, "commandExecution");
+  assert.equal(items[0].item.tool, "todowrite");
+  assert.deepEqual(items[0].item.todos, [{ content: "ship it" }]);
+});
+
+test("extension items stream live for Claude todo snapshots", () => {
+  const events = [
+    {
+      agentId: "claude",
+      providerId: "claude-current",
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "todo-tool-1",
+          type: "extension",
+          kind: "todo",
+          agentId: "claude",
+          status: "completed",
+          payload: { todos: [{ content: "build", status: "in_progress" }] },
+        },
+      },
+    },
+  ];
+
+  const items = collectStreamedTurnItems(events, "claude-current", "thread-1", "turn-1", "claude");
+  assert.equal(items.length, 1);
+  assert.equal(items[0].item.kind, "todo");
+  assert.equal(
+    mergeTurnItems([], items)[0].payload.todos[0].content,
+    "build",
+  );
+});

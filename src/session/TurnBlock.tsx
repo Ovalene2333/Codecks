@@ -32,6 +32,7 @@ import {
   toolCallPresentation,
   turnReadTargets,
 } from "./turn-items";
+import { uiAdapterFor } from "./adapters";
 
 export const userText = userMessageText;
 
@@ -71,6 +72,11 @@ function TurnItem({
   messageActionsDisabled?: boolean;
   thread: ThreadSummary;
 }) {
+  // Per-agent adapters get first pick at items they understand (extension
+  // payloads, agent-specific tool shapes); everything else falls through to
+  // the shared Codex-shaped renderers below.
+  const adapted = uiAdapterFor(thread.agentId)?.renderItem?.(item, { thread });
+  if (adapted !== undefined) return adapted;
   if (item.type === "userMessage") {
     const images = userImageParts(item);
     const text = userText(item);

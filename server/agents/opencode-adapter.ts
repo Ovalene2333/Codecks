@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { findFreeListenPort } from "../runtime-port.js";
 import type {
   ApprovalKind,
+  ApprovalQuestion,
   ModelInfo,
   ThreadSummary,
   TurnImage,
@@ -183,33 +184,8 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
     }
     if (message?.role !== "assistant" || !turn) continue;
     for (const part of parts) {
-      if (part.type === "text")
-        turn.items.push({
-          id: part.id,
-          type: "agentMessage",
-          text: part.text || "",
-        });
-      else if (part.type === "reasoning")
-        turn.items.push({
-          id: part.id,
-          type: "reasoning",
-          summary: part.text || "",
-        });
-      else if (part.type === "tool") {
-        const state = part.state || {};
-        turn.items.push({
-          id: part.id,
-          type: "commandExecution",
-          command: state.title || part.tool || "OpenCode 工具",
-          status:
-            state.status === "error"
-              ? "failed"
-              : state.status === "completed"
-                ? "completed"
-                : "inProgress",
-          aggregatedOutput: state.output || state.error || "",
-        });
-      }
+      const mapped = openCodePartToItem(part);
+      if (mapped) turn.items.push(mapped);
     }
   }
   return {
@@ -218,6 +194,87 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
     model: "default",
     turns,
   };
+}
+
+/**
+ * Maps a native OpenCode part to the shared Codex-shaped turn item. Tool
+ * parts keep their structured input/metadata and unknown part types become
+ * `extension` items with the raw payload attached so per-agent frontend
+ * adapters can render what OpenCode natively produced (todos, questions...).
+ */
+export function openCodePartToItem(part: any): any | undefined {
+  if (!part?.type && !part?.tool) return undefined;
+  if (part.type === "text")
+    return { id: String(part.id), type: "agentMessage", text: part.text || "" };
+  if (part.type === "reasoning")
+    return { id: String(part.id), type: "reasoning", summary: part.text || "" };
+  if (part.type === "tool") {
+    const state = part.state || {};
+    const item: any = {
+      id: String(part.id),
+      type: "commandExecution",
+      command: state.title || part.tool || "OpenCode 工具",
+      status:
+        state.status === "error"
+          ? "failed"
+          : state.status === "completed"
+            ? "completed"
+            : "inProgress",
+      aggregatedOutput: state.output || state.error || "",
+      ...(part.tool ? { tool: part.tool } : {}),
+      ...(state.input != null ? { input: state.input } : {}),
+      ...(state.metadata != null ? { metadata: state.metadata } : {}),
+    };
+    const todos = opencodeTodos(item);
+    if (todos.length) item.todos = todos;
+    return item;
+  }
+  if (part.type === "file") return undefined;
+  return {
+    id: String(part.id),
+    type: "extension",
+    kind: String(part.type || "unknown"),
+    agentId: "opencode",
+    payload: part,
+  };
+}
+
+/** Todos emitted by OpenCode's todo tools live in state.input or state.metadata. */
+export function opencodeTodos(item: any): any[] {
+  for (const source of [item?.metadata?.todos, item?.input?.todos, item?.input?.items]) {
+    if (Array.isArray(source) && source.length)
+      return source.filter(Boolean).map((todo: any) =>
+        typeof todo === "string"
+          ? { content: todo }
+          : { ...todo, content: String(todo.content ?? todo.text ?? todo.title ?? "") },
+      );
+  }
+  return [];
+}
+
+function permissionQuestions(permission: any): ApprovalQuestion[] | undefined {
+  if (!/question|ask/i.test(String(permission?.type || ""))) return undefined;
+  const meta = permission.metadata && typeof permission.metadata === "object" ? permission.metadata : {};
+  const rawOptions = meta.options ?? meta.choices ?? meta.answers;
+  const options = Array.isArray(rawOptions)
+    ? rawOptions.map((option: any) =>
+        typeof option === "string"
+          ? { label: option, value: option }
+          : {
+              label: String(option.label ?? option.value ?? ""),
+              value: String(option.value ?? option.label ?? option.id ?? ""),
+            },
+      )
+    : [];
+  return [
+    {
+      id: String(permission.id || ""),
+      prompt:
+        meta.question ?? meta.message ?? permission.title ?? undefined,
+      header: typeof meta.header === "string" ? meta.header : undefined,
+      options,
+    },
+  ];
 }
 
 export class OpenCodeAdapter extends EventEmitter {
@@ -601,21 +658,42 @@ export class OpenCodeAdapter extends EventEmitter {
 
   async resolveApproval(
     approvalId: string,
-    body: string | { decision?: string },
+    body: string | { decision?: string; answers?: unknown },
   ) {
     const approval = this.approvals.get(approvalId);
     if (!approval) throw new Error("审批已处理或不存在");
     const decision = typeof body === "string" ? body : body.decision;
-    const response =
-      decision === "acceptForSession"
-        ? "always"
-        : decision === "accept"
-          ? "once"
-          : "reject";
-    await this.request(
-      `/session/${encodeURIComponent(approval.sessionID)}/permissions/${encodeURIComponent(approval.id)}`,
-      { method: "POST", directory: approval.cwd, body: { response } },
-    );
+    // Question approvals carry the picked option back to OpenCode as the
+    // permission response; a missing/unusable value falls back to allow-once.
+    const answered =
+      !decision && Array.isArray((body as any)?.answers)
+        ? (body as any).answers
+            .map((answer: any) => String(answer?.value || answer?.label || answer?.other || "").trim())
+            .filter(Boolean)
+            .join(", ")
+        : undefined;
+    const respond = async (response: string) =>
+      this.request(
+        `/session/${encodeURIComponent(approval.sessionID)}/permissions/${encodeURIComponent(
+          approval.permissionId || approval.id,
+        )}`,
+        { method: "POST", directory: approval.cwd, body: { response } },
+      );
+    if (answered) {
+      try {
+        await respond(answered);
+      } catch {
+        await respond("once");
+      }
+    } else {
+      const response =
+        decision === "acceptForSession"
+          ? "always"
+          : decision === "accept"
+            ? "once"
+            : "reject";
+      await respond(response);
+    }
     this.approvals.delete(approvalId);
     this.broadcast("approval.resolved", { agentId: this.id, approvalId });
     return { ok: true };
@@ -723,6 +801,7 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "permission.updated") {
       const permission = body;
       const id = `${permission.sessionID}:${permission.id}`;
+      const questions = permissionQuestions(permission);
       const pending = {
         id,
         agentId: this.id,
@@ -730,10 +809,10 @@ export class OpenCodeAdapter extends EventEmitter {
         cwd: thread?.cwd,
         sessionID: permission.sessionID,
         permissionId: permission.id,
-        kind: this.permissionKind(permission.type),
+        kind: questions ? ("question" as ApprovalKind) : this.permissionKind(permission.type),
         command: permission.title,
         reason: permission.title,
-        availableDecisions: ["decline", "accept", "acceptForSession"],
+        ...(questions ? { questions } : { availableDecisions: ["decline", "accept", "acceptForSession"] }),
         request: {
           method: "opencode/permission",
           params: { threadId: permission.sessionID, permission },
