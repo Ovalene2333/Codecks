@@ -307,7 +307,11 @@ DDNS_HOST=deck.example.com DDNS_TOKEN=<api-token> DDNS_ZONE=<zone-id> npm start 
 
 `DDNS_IPV6` 默认 `auto`（取本机全局 IPv6，也可填死一个地址），`DDNS_IPV4` 默认 `none`（家宽多半没有公网 IPv4；有的话设为 `auto` 自动探测），`DDNS_INTERVAL` 默认每 10 分钟同步一次。DDNS 是明文 http 直连；需要 https 时在前面加反代并改用 `--public-origin` 宣告。
 
-**7. 固定令牌，方便书签收藏**
+**7. 低延迟组网（Tailscale / ZeroTier，适合校园网）**
+
+校园网、公司内网这种“不给 v6、不放行入站”的环境，别跟防火墙死磕：两边装 Tailscale（个人免费）进同一个账号，PC 和手机之间就是一根 WireGuard 直连隧道，延迟一般就是校园网到运营商的直连水平。Codecks 照常用 `--lan` 启动，终端会把 Tailscale 分配的 `100.x.x.x` 入口和二维码一起打印出来，手机连着 Tailscale 扫码即进，6 位验证码照常用。打洞失败时会自动转中继，照样可用、延迟高一点。ZeroTier 同理（免费 25 节点）。
+
+**8. 固定令牌，方便书签收藏**
 
 ```bash
 HOST=0.0.0.0 REMOTE_TOKEN='replace-with-a-long-random-string' npm start
