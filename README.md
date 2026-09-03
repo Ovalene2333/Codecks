@@ -79,6 +79,7 @@ Codecks 不依赖 CC Switch 或中转服务，已有 OpenAI Official 登录可�
 Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会复制 `CODEX_HOME`，也不会把历史拆成孤岛。
 
 - 按工作目录分组，同一路径可以并行多个独立 session
+- 项目折叠后不再只留一条：运行、待确认、出错或压缩中的会话会全部显示，最近 24 小时内更新过的会话一并显示，当前选中和「有新回复」的会话也不会被折叠隐藏；其余会话收进「其余 N 条」，展开即看到全部
 - 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
 - Server 会把最近一次成功同步的会话摘要写入 `.data/thread-summaries.json`，重启后先显示摘要，再在后台校准原生历史；摘要不包含完整对话，也不是另一套 history
 - Codex 正常启动通过 app-server 的 State DB 索引列出 session，不再扫描全部 rollout 修复元数据；供应商设置中的“历史索引 · 修复”才会显式扫描原生 rollout，并在 State DB 缺失但本地仍有缓存时自动执行一次恢复
@@ -173,7 +174,7 @@ POST /api/agents/claude/approvals/:approvalId
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
 
-新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：按 provider 分组列出其模型目录，模型 ID 为 `providerID/modelID`，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定；OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：超过一定数量后，供应商和模型选择器会切换为可搜索选择器，打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；新建会话时供应商会默认选中 OpenCode 配置的默认 provider。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。
+新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：按 provider 分组列出其模型目录，模型 ID 为 `providerID/modelID`，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定；OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：超过一定数量后，供应商和模型选择器会切换为可搜索选择器，打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉；新建会话时供应商会默认选中 OpenCode 配置的默认 provider。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其内容仍可通过所属会话查看。
 
 ### Agent 专属内容展示
 

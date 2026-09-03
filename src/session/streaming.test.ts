@@ -375,6 +375,38 @@ test("native item/updated snapshots convert and replace their previous state", (
   assert.deepEqual(items[0].item.todos, [{ content: "ship it" }]);
 });
 
+test("OpenCode text deltas use the part id used by persisted history", () => {
+  const events = [
+    {
+      agentId: "opencode",
+      providerId: "openai",
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "part-1",
+        delta: "same message",
+      },
+    },
+  ];
+  assert.deepEqual(
+    collectStreamedAgentMessages(
+      events,
+      "openai",
+      "thread-1",
+      "turn-1",
+      "opencode",
+    ),
+    [{ itemId: "part-1", text: "same message" }],
+  );
+  assert.ok(
+    streamsCoveredByHistory(
+      [{ id: "part-1", type: "agentMessage", text: "same message" }],
+      [{ itemId: "part-1", text: "same message", completed: true }],
+    ).has("part-1"),
+  );
+});
+
 test("extension items stream live for Claude todo snapshots", () => {
   const events = [
     {

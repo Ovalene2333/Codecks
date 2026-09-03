@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Search } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, ChevronDown, Search, X } from "lucide-react";
 
 export interface SearchableOption {
   value: string;
@@ -44,6 +45,18 @@ interface PickerAnchor {
   bottom?: number;
 }
 
+/* Narrow screens get a bottom sheet: a fixed dropdown next to the trigger is
+   cramped under the thumb and gets clipped by scrollable modal bodies. */
+const SHEET_QUERY = "(max-width: 760px)";
+const DROPDOWN_MIN_SPACE = 240;
+const DROPDOWN_MIN_SPACE_ABOVE = 200;
+
+function isSheetLayout() {
+  return (
+    typeof window !== "undefined" && window.matchMedia(SHEET_QUERY).matches
+  );
+}
+
 function anchorFor(trigger: HTMLElement | null): PickerAnchor | undefined {
   if (!trigger) return undefined;
   const box = trigger.getBoundingClientRect();
@@ -59,7 +72,9 @@ function anchorFor(trigger: HTMLElement | null): PickerAnchor | undefined {
   const spaceBelow = window.innerHeight - box.bottom;
   const spaceAbove = box.top;
   const preferAbove =
-    spaceBelow < 240 && spaceAbove > spaceBelow && spaceAbove > 200;
+    spaceBelow < DROPDOWN_MIN_SPACE &&
+    spaceAbove > spaceBelow &&
+    spaceAbove > DROPDOWN_MIN_SPACE_ABOVE;
   return preferAbove
     ? { left, width, bottom: window.innerHeight - box.top + 4 }
     : { left, width, top: box.bottom + 4 };
@@ -92,7 +107,9 @@ export function SearchablePicker({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [anchor, setAnchor] = useState<PickerAnchor>();
+  const [sheet, setSheet] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -104,20 +121,32 @@ export function SearchablePicker({
   const segments = useMemo(() => groupSearchableOptions(filtered), [filtered]);
   const selected = options.find((option) => option.value === value);
 
-  const refreshAnchor = () => setAnchor(anchorFor(triggerRef.current));
+  const refreshAnchor = () => {
+    if (isSheetLayout()) {
+      setSheet(true);
+      setAnchor(undefined);
+      return;
+    }
+    setSheet(false);
+    setAnchor(anchorFor(triggerRef.current));
+  };
 
   const openPanel = () => {
     if (disabled || (loading && !options.length)) return;
     refreshAnchor();
     setQuery("");
     setActive(
-      Math.max(0, options.findIndex((option) => option.value === value)),
+      Math.max(
+        0,
+        options.findIndex((option) => option.value === value),
+      ),
     );
     setOpen(true);
   };
 
   const closePanel = (refocus = true) => {
     setOpen(false);
+    setQuery("");
     if (refocus) triggerRef.current?.focus();
   };
 
@@ -129,24 +158,29 @@ export function SearchablePicker({
 
   useEffect(() => {
     if (!open) return;
-    searchRef.current?.focus();
-    const onDocMouseDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) closePanel(false);
+    /* On the sheet layout the keyboard would cover the list, so only focus the
+       filter box when a physical pointer is in use. */
+    if (!sheet) searchRef.current?.focus();
+    const onDocPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
+      closePanel(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closePanel();
     };
     window.addEventListener("resize", refreshAnchor);
     document.addEventListener("scroll", refreshAnchor, true);
-    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("pointerdown", onDocPointerDown);
     document.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("resize", refreshAnchor);
       document.removeEventListener("scroll", refreshAnchor, true);
-      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("pointerdown", onDocPointerDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, sheet]);
 
   useEffect(() => {
     if (!open) return;
@@ -240,53 +274,75 @@ export function SearchablePicker({
         </span>
         <ChevronDown />
       </button>
-      {open && (
-        <div
-          className="search-picker-panel"
-          role="listbox"
-          aria-label={ariaLabel}
-          style={{
-            left: anchor?.left,
-            width: anchor?.width,
-            top: anchor?.top,
-            bottom: anchor?.bottom,
-          }}
-        >
-          <div className="search-picker-search">
-            <Search />
-            <input
-              ref={searchRef}
-              value={query}
-              placeholder="输入关键字筛选…"
-              aria-label={`筛选${ariaLabel}`}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActive(0);
+      {open &&
+        createPortal(
+          <>
+            {sheet && <div className="search-picker-backdrop" />}
+            <div
+              ref={panelRef}
+              className={`search-picker-panel${sheet ? " sheet" : ""}`}
+              role="listbox"
+              aria-label={ariaLabel}
+              style={{
+                left: anchor?.left,
+                width: anchor?.width,
+                top: anchor?.top,
+                bottom: anchor?.bottom,
               }}
-              onKeyDown={onSearchKeyDown}
-            />
-          </div>
-          <div className="search-picker-list" ref={listRef}>
-            {loading && !options.length ? (
-              <p className="search-picker-empty">
-                {loadingText || "正在读取…"}
-              </p>
-            ) : !filtered.length ? (
-              <p className="search-picker-empty">{emptyText}</p>
-            ) : (
-              <>
-                {segments.plain.map(renderOption)}
-                {segments.groups.map((group) => (
-                  <div key={group.name} className="search-picker-group-wrap">
-                    <div className="search-picker-group">{group.name}</div>
-                    {group.items.map(renderOption)}
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        </div>
-      )}
+            >
+              {sheet && (
+                <div className="search-picker-sheet-head">
+                  <span>{ariaLabel}</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="关闭"
+                    onClick={() => closePanel()}
+                  >
+                    <X />
+                  </button>
+                </div>
+              )}
+              <div className="search-picker-search">
+                <Search />
+                <input
+                  ref={searchRef}
+                  value={query}
+                  placeholder="输入关键字筛选…"
+                  aria-label={`筛选${ariaLabel}`}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setActive(0);
+                  }}
+                  onKeyDown={onSearchKeyDown}
+                />
+              </div>
+              <div className="search-picker-list" ref={listRef}>
+                {loading && !options.length ? (
+                  <p className="search-picker-empty">
+                    {loadingText || "正在读取…"}
+                  </p>
+                ) : !filtered.length ? (
+                  <p className="search-picker-empty">{emptyText}</p>
+                ) : (
+                  <>
+                    {segments.plain.map(renderOption)}
+                    {segments.groups.map((group) => (
+                      <div
+                        key={group.name}
+                        className="search-picker-group-wrap"
+                      >
+                        <div className="search-picker-group">{group.name}</div>
+                        {group.items.map(renderOption)}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
+          </>,
+          document.body,
+        )}
     </span>
   );
 }

@@ -32,6 +32,12 @@ export function openCodeTodos(item: any): any[] {
 /** Converts a raw OpenCode message part into the shared turn item shape. */
 export function openCodePartToItem(part: any): any | undefined {
   if (!part?.type && !part?.tool) return undefined;
+  if (
+    ["step-start", "step-finish", "snapshot", "patch"].includes(
+      String(part.type),
+    )
+  )
+    return undefined;
   if (part.type === "text")
     return { id: String(part.id), type: "agentMessage", text: part.text || "" };
   if (part.type === "reasoning")
