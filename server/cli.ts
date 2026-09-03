@@ -3,6 +3,7 @@ import {
   parseExposeSpec,
   type TunnelOption,
 } from "./tunnel.js";
+import { isIP } from "node:net";
 
 export type { TunnelOption };
 
@@ -10,6 +11,7 @@ export interface CliOptions {
   host: string;
   port: number;
   lan: boolean;
+  lan6: boolean;
   tunnel?: TunnelOption;
   cloudflaredBin?: string;
   token?: string;
@@ -25,6 +27,7 @@ export function parseCli(
   let host = env.HOST || "127.0.0.1";
   let port = numberPort(env.PORT || "4174");
   let lan = false;
+  let lan6 = false;
   let exposeRaw = env.CODEX_DECK_EXPOSE?.trim() || "";
   let publicOrigin =
     env.CODEX_DECK_PUBLIC_ORIGIN?.trim() || env.PUBLIC_ORIGIN?.trim() || "";
@@ -45,6 +48,7 @@ export function parseCli(
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--lan") lan = true;
+    else if (arg === "--lan6") lan6 = true;
     else if (arg === "--cf-tunnel" || arg === "--share-once") {
       lan = true;
       quick = true;
@@ -98,15 +102,37 @@ export function parseCli(
     tunnelUrlPattern,
     env,
   });
+  if (argv.includes("--lan") && argv.includes("--lan6"))
+    throw new Error("--lan 与 --lan6 不能同时使用");
   if (
     tunnel &&
-    (tunnel.provider === "cloudflare" || tunnel.provider === "command")
+    (tunnel.provider === "cloudflare" ||
+      tunnel.provider === "command" ||
+      tunnel.provider === "ddns")
   )
     lan = true;
-  if (lan) host = "0.0.0.0";
+  if (lan6) lan = true;
+  if (tunnel?.provider === "ddns") {
+    host = tunnel.ddns.ipv6 === "none" ? "0.0.0.0" : "::";
+  } else if (lan6) {
+    host = "::";
+  } else if (lan) {
+    host = "0.0.0.0";
+  }
   if (noToken && token)
     throw new Error("--no-token 不能与 --token 或 REMOTE_TOKEN 同时使用");
-  return { host, port, lan, tunnel, cloudflaredBin, token, noToken, wsl, help };
+  return {
+    host,
+    port,
+    lan,
+    lan6,
+    tunnel,
+    cloudflaredBin,
+    token,
+    noToken,
+    wsl,
+    help,
+  };
 }
 
 function resolveTunnelOption(input: {
@@ -193,6 +219,30 @@ function resolveTunnelOption(input: {
     };
   }
 
+  if (kind === "ddns") {
+    const provider =
+      expose?.provider === "ddns" && expose.ddns ? expose.ddns : undefined;
+    if (!provider)
+      throw new Error(
+        "ddns 暴露方式需要指定供应商：--expose ddns:duckdns 或 --expose ddns:cloudflare",
+      );
+    const host = input.env.DDNS_HOST?.trim();
+    const token = input.env.DDNS_TOKEN?.trim();
+    if (!host || !token)
+      throw new Error("ddns 暴露方式必须设置 DDNS_HOST 和 DDNS_TOKEN");
+    normalizePublicOrigin(host);
+    const zone = input.env.DDNS_ZONE?.trim() || undefined;
+    if (provider === "cloudflare" && !zone)
+      throw new Error("Cloudflare DDNS 需要 DDNS_ZONE（Zone ID）");
+    const ipv4 = resolveIpSetting(input.env.DDNS_IPV4, "none", 4);
+    const ipv6 = resolveIpSetting(input.env.DDNS_IPV6, "auto", 6);
+    const intervalMinutes = parseDdnsInterval(input.env.DDNS_INTERVAL);
+    return {
+      provider: "ddns",
+      ddns: { provider, host, token, zone, ipv4, ipv6, intervalMinutes },
+    };
+  }
+
   if (kind === "cloudflare-quick") {
     return { provider: "cloudflare", mode: "quick" };
   }
@@ -244,6 +294,27 @@ function requiredValue(argv: string[], index: number, option: string) {
   return value;
 }
 
+function resolveIpSetting(
+  value: string | undefined,
+  fallback: "auto" | "none",
+  family: 4 | 6,
+): "auto" | "none" | string {
+  const raw = value?.trim() || "";
+  if (!raw) return fallback;
+  if (raw === "auto" || raw === "none") return raw;
+  if (isIP(raw) !== family)
+    throw new Error(`DDNS_IPV${family} 不是有效的 IPv${family} 地址：${raw}`);
+  return raw;
+}
+
+function parseDdnsInterval(value: string | undefined) {
+  if (!value?.trim()) return 10;
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440)
+    throw new Error(`DDNS_INTERVAL 无效：${value}（应为 1-1440 分钟）`);
+  return minutes;
+}
+
 function numberPort(value: string) {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
@@ -256,16 +327,22 @@ export const CLI_HELP = `Codex Deck
 用法：npm start -- [选项]
 
 监听
-  --lan                    监听局域网并打印手机访问地址
-  --host <地址>            自定义监听地址（默认 127.0.0.1）
+  --lan                    监听局域网并打印手机访问地址（IPv4）
+  --lan6                   监听所有 IPv6 网卡（双栈，同时接受 IPv4），打印 IPv6 入口
+  --host <地址>            自定义监听地址（默认 127.0.0.1；IPv6 可填 :: 或具体地址）
   --port <端口>            服务端口（默认 4174）
 
 暴露（把本地端口接到外面；与监听、鉴权独立）
-  --expose <供应商>        announce | cloudflare[:quick|named|share] | command
+  --expose <供应商>        announce | cloudflare[:quick|named|share] | command | ddns:duckdns|ddns:cloudflare
   --public-origin <url>    已有反代或固定域名时的 https 入口
   --tunnel-bin <路径>      command 供应商的可执行文件
   --tunnel-args <模板>     command 参数模板，可用 {port}、{url}
   --tunnel-url-pattern     从命令输出提取公网 URL 的正则
+
+DDNS（--expose ddns:<供应商>，需 DDNS_HOST、DDNS_TOKEN）
+  环境变量                  DDNS_HOST、DDNS_TOKEN、DDNS_ZONE（cloudflare）、
+                            DDNS_IPV4=auto|none|<ip>、DDNS_IPV6=auto|none|<ip>、
+                            DDNS_INTERVAL=<分钟>
 
 Cloudflare 兼容入口
   --share                  等同 --expose cloudflare:share

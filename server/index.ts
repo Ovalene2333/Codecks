@@ -20,7 +20,9 @@ import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
 import { AgentRegistry } from "./agents/registry.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
-import { lanAddresses } from "./network.js";
+import { formatHost, isIpv6Host, lanAddresses } from "./network.js";
+import { Pairing, PairRateLimiter } from "./pairing.js";
+import { printQrCode } from "./terminal-qr.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
 import { resolveRuntimeCodexHome } from "./runtime-home.js";
 import { shouldUseWslRuntime } from "./runtime-platform.js";
@@ -93,11 +95,16 @@ if (wslWake) wslWake.done(`WSL Codex 主目录 ${codexHome}`);
 else if (useWsl) writeLine(process.stdout, `WSL Codex 主目录 ${codexHome}`);
 const port = cli.port;
 const host = cli.host;
-const lanListener = host !== "127.0.0.1" && host !== "localhost";
+const ipv6Host = isIpv6Host(host);
+const lanListener =
+  host !== "127.0.0.1" && host !== "localhost" && host !== "::1";
 const remote = lanListener || Boolean(cli.tunnel);
 const token = cli.noToken
   ? ""
   : cli.token || (remote ? randomBytes(24).toString("base64url") : "");
+const pairing =
+  remote && !cli.noToken && !cli.token ? new Pairing(token) : undefined;
+const pairLimiter = pairing ? new PairRateLimiter() : undefined;
 if (remote && cli.noToken)
   process.stderr.write(
     "\n⚠ 安全警告：--no-token 已关闭鉴权。任何能访问该地址的人都可以操作 Codex、执行命令和修改文件。\n\n",
@@ -162,6 +169,36 @@ const fullSnapshot = () => ({
 const app = express();
 app.use(express.json({ limit: "24mb" }));
 
+app.get("/api/health", (_req, res) =>
+  res.json({
+    ok: true,
+    platform: process.platform,
+    wsl: Boolean(process.env.WSL_DISTRO_NAME),
+    runtimeWsl: useWsl,
+    authRequired: Boolean(token),
+    pairing: Boolean(pairing),
+    ccSwitch: store.ccSwitchPath || null,
+  }),
+);
+app.post("/api/pair", (req, res) => {
+  if (!pairing || !pairLimiter)
+    return res.status(403).json({ error: "此服务未开启验证码配对" });
+  const ip = String(req.ip || "unknown");
+  if (!pairLimiter.allowed(ip))
+    return res.status(429).json({ error: "尝试次数过多，请稍后再试" });
+  const input = z
+    .object({ code: z.string().regex(/^\d{6}$/) })
+    .safeParse(req.body);
+  if (!input.success)
+    return res.status(400).json({ error: "验证码应为 6 位数字" });
+  if (!pairing.verify(input.data.code)) {
+    pairLimiter.failed(ip);
+    return res.status(401).json({ error: "验证码错误" });
+  }
+  pairLimiter.ok(ip);
+  return res.json({ token: pairing.secret });
+});
+
 const authorized = (value?: string) => {
   if (!token) return true;
   if (!value) return false;
@@ -203,16 +240,6 @@ const param = (value: string | string[]) =>
 const agentId = (value: string | string[]) =>
   z.enum(["codex", "claude", "opencode"]).parse(param(value)) as AgentId;
 
-app.get("/api/health", (_req, res) =>
-  res.json({
-    ok: true,
-    platform: process.platform,
-    wsl: Boolean(process.env.WSL_DISTRO_NAME),
-    runtimeWsl: useWsl,
-    authRequired: Boolean(token),
-    ccSwitch: store.ccSwitchPath || null,
-  }),
-);
 app.get(
   "/api/snapshot",
   route(async () => fullSnapshot()),
@@ -1169,18 +1196,31 @@ try {
   process.exit(1);
 }
 
-console.log(`Codex Deck: http://${host}:${port}`);
+console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
 if (lanListener) {
-  const urls = lanAddresses(port, token);
-  if (urls.length)
-    process.stdout.write(`\n局域网手机入口：\n${urls.join("\n")}\n\n`);
-  else
+  const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");
+  if (urls.length) {
+    process.stdout.write(`\n局域网手机入口：\n${urls.join("\n")}\n`);
+    for (const url of urls) printQrCode(url);
+  } else {
     process.stderr.write(
-      "未检测到可用的局域网 IPv4 地址，请检查防火墙或网卡。\n",
+      ipv6Host
+        ? "未检测到可用的局域网 IPv6 地址，请检查防火墙或网卡。\n"
+        : "未检测到可用的局域网 IPv4 地址，请检查防火墙或网卡。\n",
     );
+  }
 }
 if (cli.tunnel)
   tunnel = startTunnel(cli.tunnel, port, token, cli.cloudflaredBin);
+
+if (pairing) {
+  const seconds = Math.round(pairing.windowMs / 1000);
+  pairing.start((code) =>
+    process.stdout.write(
+      `\n配对验证码：${code}（每 ${seconds} 秒更新；打开页面后在登录框输入）\n`,
+    ),
+  );
+}
 
 const runtimeStart = useWsl
   ? startPhase("正在启动 WSL 中的 Agent runtime…", {
@@ -1209,6 +1249,7 @@ setInterval(async () => {
 
 const shutdown = () => {
   clearRuntimeLock(dataDir, process.pid);
+  pairing?.stop();
   tunnel?.kill();
   agents.stopAll();
   tools.close();

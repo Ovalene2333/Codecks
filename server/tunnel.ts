@@ -1,11 +1,14 @@
 import { startCloudflareTunnel } from "./tunnel-cloudflare.js";
 import { startCommandTunnel } from "./tunnel-command.js";
+import { startDdns } from "./ddns.js";
+import { printQrCode } from "./terminal-qr.js";
 import type { ExposeSpec, TunnelController, TunnelOption } from "./tunnel-types.js";
 import { accessUrl, normalizePublicOrigin } from "./tunnel-url.js";
 
 export type {
   CloudflareTunnelOption,
   CommandTunnelOption,
+  DdnsOption,
   ExposeSpec,
   TunnelController,
   TunnelMode,
@@ -17,7 +20,7 @@ export {
   expandTunnelArgs,
   splitArgs,
 } from "./tunnel-command.js";
-export { accessUrl, normalizePublicOrigin } from "./tunnel-url.js";
+export { accessUrl, normalizePublicOrigin, directUrl } from "./tunnel-url.js";
 
 export function parseExposeSpec(raw: string): ExposeSpec {
   const trimmed = raw.trim();
@@ -30,6 +33,16 @@ export function parseExposeSpec(raw: string): ExposeSpec {
   if (provider === "announce" || provider === "command") {
     if (rest) throw new Error(`--expose ${provider} 不接受额外参数`);
     return { provider };
+  }
+
+  if (provider === "ddns") {
+    if (!rest) return { provider: "ddns" };
+    const ddns = rest.toLowerCase();
+    if (ddns === "duckdns" || ddns === "cloudflare")
+      return { provider: "ddns", ddns };
+    throw new Error(
+      `未知的 DDNS 供应商：${rest}。可用 ddns:duckdns、ddns:cloudflare。`,
+    );
   }
 
   if (provider === "cloudflare") {
@@ -53,7 +66,7 @@ export function parseExposeSpec(raw: string): ExposeSpec {
   }
 
   throw new Error(
-    `未知的 --expose 供应商：${raw}。可用 announce、cloudflare、command。`,
+    `未知的 --expose 供应商：${raw}。可用 announce、cloudflare、command、ddns。`,
   );
 }
 
@@ -62,7 +75,9 @@ export function startAnnounceTunnel(
   token: string,
 ): TunnelController {
   const normalized = normalizePublicOrigin(origin);
-  process.stdout.write(`\n公网入口：\n${accessUrl(normalized, token)}\n\n`);
+  const url = accessUrl(normalized, token);
+  process.stdout.write(`\n公网入口：\n${url}\n`);
+  printQrCode(url);
   return { kill() {} };
 }
 
@@ -76,5 +91,6 @@ export function startTunnel(
     return startAnnounceTunnel(option.origin, token);
   if (option.provider === "command")
     return startCommandTunnel(option, port, token);
+  if (option.provider === "ddns") return startDdns(option.ddns, token, port);
   return startCloudflareTunnel(option, port, token, cloudflaredBin);
 }

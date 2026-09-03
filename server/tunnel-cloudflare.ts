@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { startManagedTunnel } from "./tunnel-process.js";
+import { printQrCode } from "./terminal-qr.js";
 import type {
   CloudflareTunnelOption,
   TunnelController,
@@ -77,24 +78,24 @@ export function startCloudflareTunnel(
     onReady: (origin) => {
       if (mode.mode === "quick") {
         if (origin) {
-          process.stdout.write(
-            `\nCloudflare 临时入口：\n${accessUrl(origin, token)}\n\n`,
-          );
+          const entry = accessUrl(origin, token);
+          process.stdout.write(`\nCloudflare 临时入口：\n${entry}\n`);
+          printQrCode(entry);
         }
         return;
       }
       if (mode.mode === "share" && fixedOrigin) {
-        process.stdout.write(
-          `\nNamed Tunnel 已连接：${fixedOrigin}\n公网入口：\n${accessUrl(fixedOrigin, token)}\n\n`,
-        );
+        const entry = accessUrl(fixedOrigin, token);
+        process.stdout.write(`\nNamed Tunnel 已连接：${fixedOrigin}\n公网入口：\n${entry}\n`);
+        printQrCode(entry);
         return;
       }
       if (mode.mode !== "named") return;
       process.stdout.write(`Named Tunnel 已连接：${mode.name}\n`);
       if (fixedOrigin) {
-        process.stdout.write(
-          `公网入口：\n${accessUrl(fixedOrigin, token)}\n\n`,
-        );
+        const entry = accessUrl(fixedOrigin, token);
+        process.stdout.write(`公网入口：\n${entry}\n`);
+        printQrCode(entry);
       }
     },
   });

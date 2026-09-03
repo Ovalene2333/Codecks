@@ -1,4 +1,5 @@
 import { startManagedTunnel } from "./tunnel-process.js";
+import { printQrCode } from "./terminal-qr.js";
 import type { CommandTunnelOption, TunnelController } from "./tunnel-types.js";
 import { accessUrl, normalizePublicOrigin } from "./tunnel-url.js";
 
@@ -70,7 +71,9 @@ export function startCommandTunnel(
     onReady: (origin) => {
       const url = origin || fixed;
       if (!url) return;
-      process.stdout.write(`\n公网入口：\n${accessUrl(url, token)}\n\n`);
+      const entry = accessUrl(url, token);
+      process.stdout.write(`\n公网入口：\n${entry}\n`);
+      printQrCode(entry);
     },
   });
 }

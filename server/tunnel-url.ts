@@ -20,3 +20,13 @@ export function accessUrl(origin: string, token: string) {
   const base = `${origin.replace(/\/$/, "")}/`;
   return token ? `${base}#token=${encodeURIComponent(token)}` : base;
 }
+
+/**
+ * Entry URL for a host reachable directly over HTTP (DDNS points the domain
+ * at the machine's own address), preserving the service port.
+ */
+export function directUrl(host: string, port: number, token: string) {
+  const display = host.includes(":") ? `[${host}]` : host;
+  const base = `http://${display}:${port}/`;
+  return token ? `${base}#token=${encodeURIComponent(token)}` : base;
+}
