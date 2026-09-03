@@ -50,6 +50,7 @@ import {
   type ClaudeHistoryThread,
 } from "./claude-history.js";
 import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
+import { stopChildProcess } from "../process-tree.js";
 
 const CLAUDE_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -335,6 +336,12 @@ export class ClaudeAdapter extends EventEmitter {
   private historyHomes = new Map<string, string>();
   private active = new Map<string, ActiveQuery>();
   private approvals = new Map<string, PendingApproval>();
+  /**
+   * SDK 经自定义 spawn 拉起的 OS 进程。query 正常结束时 SDK 自己回收；
+   * restart / 退出时若还有残留（尤其 Windows cmd 包裹层身后的真身），
+   * 在这里连带结束，防止出现第二种孤儿。
+   */
+  private spawnedClaude = new Set<SpawnedProcess>();
   private profiles: ClaudeProfile[] = [];
   private online = false;
   private starting = false;
@@ -498,6 +505,8 @@ export class ClaudeAdapter extends EventEmitter {
       void current.query.interrupt().catch(() => undefined);
       void current.query.return(undefined).catch(() => undefined);
     }
+    for (const child of this.spawnedClaude) stopChildProcess(child);
+    this.spawnedClaude.clear();
     for (const approval of this.approvals.values())
       approval.resolve({
         behavior: "deny",
@@ -518,6 +527,23 @@ export class ClaudeAdapter extends EventEmitter {
     return [...this.threads.values()].sort(
       (left, right) => right.updatedAt - left.updatedAt,
     );
+  }
+
+  /**
+   * 记录 SDK 拉起的子进程并在其退出时摘除；restart 时兜底整树结束。
+   * 只在 cmd/.bat 与 wsl 包裹路径上使用，直接 spawn 的由 SDK 自行管理。
+   */
+  private trackClaudeProcess(child: SpawnedProcess): SpawnedProcess {
+    this.spawnedClaude.add(child);
+    try {
+      (child as { once?: (...args: any[]) => void }).once?.(
+        "exit",
+        () => this.spawnedClaude.delete(child),
+      );
+    } catch {
+      // 忽略：极端情况下兜底靠 restart 清空集合。
+    }
+    return child;
   }
 
   async createThread(
@@ -792,17 +818,21 @@ export class ClaudeAdapter extends EventEmitter {
           ...(runtime === "wsl"
             ? {
                 spawnClaudeCodeProcess: (options: SpawnOptions) =>
-                  spawnWslClaudeCodeProcess(
-                    options,
-                    this.options.claudeWslBin || "claude",
-                    onStderr,
+                  this.trackClaudeProcess(
+                    spawnWslClaudeCodeProcess(
+                      options,
+                      this.options.claudeWslBin || "claude",
+                      onStderr,
+                    ),
                   ),
               }
             : process.platform === "win32" &&
                 /\.(?:cmd|bat)$/i.test(this.options.claudeBin || "")
               ? {
                   spawnClaudeCodeProcess: (options: SpawnOptions) =>
-                    spawnClaudeCodeProcess(options, onStderr),
+                    this.trackClaudeProcess(
+                      spawnClaudeCodeProcess(options, onStderr),
+                    ),
                 }
               : {}),
         },

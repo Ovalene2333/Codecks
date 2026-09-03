@@ -3,6 +3,7 @@ import path from "node:path";
 import * as pty from "node-pty";
 import { z } from "zod";
 import { WebSocket } from "ws";
+import { killProcessTree } from "../../server/process-tree.js";
 import { windowsPathToWsl } from "../../server/runtime-platform.js";
 import type { DeckTool, ToolDescriptor } from "../server-registry.js";
 
@@ -76,8 +77,25 @@ export class WebTerminalTool implements DeckTool {
       processCwd?: string;
       spawn?: SpawnPty;
       maxSessions?: number;
+      killProcessTree?: (pid: number) => void;
     } = {},
   ) {}
+
+  /**
+   * pty 退出时连带结束整棵树：powershell 下用户起的 dev server 等孙进程
+   * 只靠 pty.kill() 杀不掉。WSL 例外——VM 内进程语义不同，
+   * --terminate 会误伤整个发行版，只杀 wsl.exe 客户端。
+   */
+  private killTerminalTree(terminal: pty.IPty) {
+    if ((this.options.platform || process.platform) !== "win32") return;
+    if (this.options.useWsl) return;
+    if (typeof terminal.pid !== "number") return;
+    try {
+      (this.options.killProcessTree || killProcessTree)(terminal.pid);
+    } catch {
+      // 忽略，随后仍会 terminal.kill()。
+    }
+  }
 
   descriptor(): ToolDescriptor {
     return {
@@ -102,13 +120,15 @@ export class WebTerminalTool implements DeckTool {
     const dispose = () => {
       closed = true;
       if (!terminal) return;
-      this.sessions.delete(terminal);
+      const ptyInstance = terminal;
+      this.sessions.delete(ptyInstance);
+      terminal = undefined;
+      this.killTerminalTree(ptyInstance);
       try {
-        terminal.kill();
+        ptyInstance.kill();
       } catch {
         // The process may already have exited.
       }
-      terminal = undefined;
     };
 
     socket.on("message", async (raw) => {
@@ -183,6 +203,7 @@ export class WebTerminalTool implements DeckTool {
 
   close() {
     for (const terminal of this.sessions) {
+      this.killTerminalTree(terminal);
       try {
         terminal.kill();
       } catch {

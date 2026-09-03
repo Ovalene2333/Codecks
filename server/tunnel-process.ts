@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { stopChildProcess } from "./process-tree.js";
 import type { TunnelController } from "./tunnel-types.js";
 
 export interface ManagedTunnelOptions {
@@ -76,7 +77,10 @@ export function startManagedTunnel(
     kill() {
       stopped = true;
       if (retry) clearTimeout(retry);
-      active?.kill();
+      const child = active;
+      active = undefined;
+      // 自定义 --tunnel-bin 可能是 .bat/.cmd：只 kill 外层会漏孙进程。
+      stopChildProcess(child);
     },
   };
 }

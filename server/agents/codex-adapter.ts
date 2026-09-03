@@ -1401,6 +1401,10 @@ export class CodexAdapter extends EventEmitter {
     }
     const client = await this.ensure(approval.providerId);
     client.respond(approval.request.id!, result);
+    const params = approval.request.params || {};
+    const itemId = params.itemId || params.item?.id;
+    // fileChange 明细只为本次审批服务，决议后即删，否则 key 永不回收。
+    if (itemId) this.pendingFileChanges.delete(itemId);
     this.approvals.delete(approvalId);
     this.broadcast("approval.resolved", { approvalId });
   }
@@ -1564,6 +1568,16 @@ export class CodexAdapter extends EventEmitter {
     if (item?.id && (item.type === "fileChange" || item.changes)) {
       const changes = parseFileChanges(item.changes);
       if (changes) {
+        // 有界：approval 决议后会删除对应条目，这里再兜一层上限，
+        // 防止异常路径（如 runtime 掉线）下无限累积。
+        if (this.pendingFileChanges.size >= 1000) {
+          const overflow = this.pendingFileChanges.size - 800;
+          let removed = 0;
+          for (const key of this.pendingFileChanges.keys()) {
+            if (removed++ >= overflow) break;
+            this.pendingFileChanges.delete(key);
+          }
+        }
         this.pendingFileChanges.set(item.id, changes);
         this.attachFileChanges(item.id);
       }

@@ -134,3 +134,52 @@ test("web terminal bridges PTY output, input, resize and close", async () => {
   socket.emit("close");
   assert.equal(killed, false, "already-exited PTY is not killed twice");
 });
+
+test("closing a live terminal kills its process tree first", async () => {
+  let killed = false;
+  const treeKilled: number[] = [];
+  const fakePty = {
+    pid: 4321,
+    write: () => {},
+    resize: () => {},
+    kill: () => {
+      killed = true;
+    },
+    onData: () => ({ dispose: () => {} }),
+    onExit: () => ({ dispose: () => {} }),
+  };
+  const sent: any[] = [];
+  const socket = Object.assign(new EventEmitter(), {
+    readyState: WebSocket.OPEN,
+    send: (value: string) => sent.push(JSON.parse(value)),
+    close: () => {},
+  });
+  const tool = new WebTerminalTool({
+    platform: "win32",
+    processCwd: process.cwd(),
+    spawn: (() => fakePty) as any,
+    killProcessTree: (pid: number) => {
+      treeKilled.push(pid);
+    },
+  });
+  tool.connect(socket as unknown as WebSocket);
+  socket.emit(
+    "message",
+    Buffer.from(
+      JSON.stringify({
+        type: "start",
+        cwd: process.cwd(),
+        cols: 100,
+        rows: 30,
+      }),
+    ),
+  );
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (sent.some((message) => message.type === "ready")) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(sent.some((message) => message.type === "ready"), true);
+  socket.emit("close");
+  assert.deepEqual(treeKilled, [4321]);
+  assert.equal(killed, true);
+});
