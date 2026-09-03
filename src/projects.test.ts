@@ -10,6 +10,9 @@ import {
 } from "./projects";
 import type { ThreadSummary } from "./types";
 
+const NOW = 1_700_000_000_000;
+const FIVE_DAYS = 5 * 86_400_000;
+
 const thread = (cwd: string, id = "t1"): ThreadSummary => ({
   id,
   providerId: "p",
@@ -88,15 +91,89 @@ test("mergeProjectGroups collapses record and thread path aliases", () => {
 
 test("previewSessions keeps only the latest task until expanded", () => {
   const sessions = [
-    thread("/tmp/a", "a"),
-    thread("/tmp/a", "b"),
-    thread("/tmp/a", "c"),
+    { ...thread("/tmp/a", "a"), updatedAt: NOW },
+    { ...thread("/tmp/a", "b"), updatedAt: NOW - FIVE_DAYS },
+    { ...thread("/tmp/a", "c"), updatedAt: NOW - FIVE_DAYS },
   ];
   assert.deepEqual(
-    previewSessions(sessions, false).map((item) => item.id),
+    previewSessions(sessions, false, { now: NOW }).map((item) => item.id),
     ["a"],
   );
-  assert.equal(previewSessions(sessions, true).length, 3);
+  assert.equal(previewSessions(sessions, true, { now: NOW }).length, 3);
+});
+
+test("previewSessions keeps every session touched inside the recent window", () => {
+  const sessions = [
+    { ...thread("/tmp/a", "today-1"), updatedAt: NOW - 60_000 },
+    { ...thread("/tmp/a", "today-2"), updatedAt: NOW - 3 * 3_600_000 },
+    { ...thread("/tmp/a", "old"), updatedAt: NOW - FIVE_DAYS },
+  ];
+  assert.deepEqual(
+    previewSessions(sessions, false, { now: NOW }).map((item) => item.id),
+    ["today-1", "today-2"],
+  );
+});
+
+test("previewSessions never hides running, waiting or failed sessions", () => {
+  const sessions = [
+    { ...thread("/tmp/a", "idle-now"), updatedAt: NOW },
+    { ...thread("/tmp/a", "running-old"), updatedAt: NOW - FIVE_DAYS, status: "running" as const },
+    { ...thread("/tmp/a", "waiting-old"), updatedAt: NOW - FIVE_DAYS, status: "waiting" as const },
+    { ...thread("/tmp/a", "error-old"), updatedAt: NOW - FIVE_DAYS, status: "error" as const },
+    { ...thread("/tmp/a", "compacting-old"), updatedAt: NOW - FIVE_DAYS, compacting: true },
+    { ...thread("/tmp/a", "stale"), updatedAt: NOW - FIVE_DAYS },
+  ];
+  assert.deepEqual(
+    previewSessions(sessions, false, { now: NOW }).map((item) => item.id),
+    [
+      "idle-now",
+      "running-old",
+      "waiting-old",
+      "error-old",
+      "compacting-old",
+    ],
+  );
+});
+
+test("previewSessions keeps pinned sessions outside the recent window", () => {
+  const sessions = [
+    { ...thread("/tmp/a", "recent"), updatedAt: NOW },
+    { ...thread("/tmp/a", "pinned"), updatedAt: NOW - FIVE_DAYS },
+  ];
+  assert.deepEqual(
+    previewSessions(sessions, false, {
+      now: NOW,
+      isPinned: (item) => item.id === "pinned",
+    }).map((item) => item.id),
+    ["recent", "pinned"],
+  );
+});
+
+test("previewSessions caps extra sessions but keeps active ones", () => {
+  const sessions = [
+    ...["e1", "e2", "e3", "e4", "e5", "e6"].map((id, index) => ({
+      ...thread("/tmp/a", id),
+      updatedAt: NOW - index * 60_000,
+    })),
+    { ...thread("/tmp/a", "active"), updatedAt: NOW - FIVE_DAYS, status: "running" as const },
+  ];
+  assert.deepEqual(
+    previewSessions(sessions, false, { now: NOW, limit: 3 }).map(
+      (item) => item.id,
+    ),
+    ["e1", "e2", "active"],
+  );
+});
+
+test("previewSessions always shows something for a collapsed project", () => {
+  const sessions = [
+    { ...thread("/tmp/a", "old-1"), updatedAt: NOW - FIVE_DAYS },
+    { ...thread("/tmp/a", "old-2"), updatedAt: NOW - FIVE_DAYS },
+  ];
+  assert.deepEqual(
+    previewSessions(sessions, false, { now: NOW }).map((item) => item.id),
+    ["old-1"],
+  );
 });
 
 test("filterProjectGroups includes sessions matched by body search", () => {

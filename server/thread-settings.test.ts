@@ -34,6 +34,19 @@ test("thread settings survive a store restart and retain every explicit choice",
   });
 });
 
+test("OpenCode thread settings survive a store restart", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-oc-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  await store.update("opencode", "session-1", { model: "openai/gpt-5" });
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.deepEqual(restored.get("opencode", "session-1"), {
+    model: "openai/gpt-5",
+  });
+});
+
 test("resetting a service tier removes its saved override", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-tier-"));
   const store = new ThreadSettingsStore(dir);

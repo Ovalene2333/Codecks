@@ -142,6 +142,121 @@ test("OpenCode adapter rejects image attachments on text-only models", async () 
   });
 });
 
+test("OpenCode keeps the created model, hides subagent sessions and drops replayed user parts", async () => {
+  const saved = new Map<string, any>();
+  const threadSettings = {
+    get: (_agent: string, id: string) => saved.get(id),
+    update: async (_agent: string, id: string, next: any) => {
+      const merged = { ...(saved.get(id) || {}), ...next };
+      saved.set(id, merged);
+      return merged;
+    },
+  };
+  let sessions: any[] = [];
+  const adapter = new OpenCodeAdapter({
+    threadSettings: threadSettings as any,
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/session") && init?.method === "POST")
+        return Response.json({ id: "new-session", directory: "/work" });
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json(sessions);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  await adapter.createThread("openai", {
+    cwd: "/work",
+    model: "openai/gpt-5",
+  });
+  assert.deepEqual(saved.get("new-session"), { model: "openai/gpt-5" });
+
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  // A late session.updated must not downgrade the model picked at creation.
+  (adapter as any).onEvent({
+    type: "session.updated",
+    properties: {
+      info: {
+        id: "new-session",
+        directory: "/work",
+        title: "Renamed by OpenCode",
+        time: { updated: 2 },
+      },
+    },
+  });
+  const thread: any = adapter
+    .listThreads()
+    .find((item) => item.id === "new-session");
+  assert.equal(thread.model, "openai/gpt-5");
+  assert.equal(thread.name, "Renamed by OpenCode");
+
+  // Subagent sessions are children of a Deck thread and must stay hidden.
+  (adapter as any).onEvent({
+    type: "session.created",
+    properties: {
+      info: { id: "child", parentID: "new-session", directory: "/work" },
+    },
+  });
+  sessions = [
+    { id: "new-session", directory: "/work", time: { updated: 3 } },
+    { id: "child", parentID: "new-session", directory: "/work" },
+  ];
+  await adapter.refreshAll();
+  assert.deepEqual(
+    adapter.listThreads().map((item) => item.id),
+    ["new-session"],
+  );
+
+  // User parts are replayed over SSE; only assistant parts become items.
+  (adapter as any).onEvent({
+    type: "message.updated",
+    properties: {
+      sessionID: "new-session",
+      info: { id: "msg-user", role: "user" },
+    },
+  });
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "new-session",
+      part: {
+        id: "part-user",
+        sessionID: "new-session",
+        messageID: "msg-user",
+        type: "text",
+        text: "hello",
+      },
+    },
+  });
+  (adapter as any).onEvent({
+    type: "message.updated",
+    properties: {
+      sessionID: "new-session",
+      info: { id: "msg-assistant", role: "assistant" },
+    },
+  });
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "new-session",
+      part: {
+        id: "part-assistant",
+        sessionID: "new-session",
+        messageID: "msg-assistant",
+        type: "text",
+        text: "hi",
+      },
+    },
+  });
+  const items = events.filter(
+    (event) => event.type === "agent.event" && event.data.method === "item/updated",
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].data.params.item.id, "part-assistant");
+});
+
 test("OpenCode adapter launches the Windows npm shim through cmd", async () => {
   const calls: Array<{ command: string; args: string[]; options: any }> = [];
   const child = new EventEmitter() as any;
@@ -198,7 +313,7 @@ test("OpenCode adapter reports stderr and stops a failed startup", async () => {
   assert.match(adapter.descriptor().error || "", /configuration is invalid/);
 });
 
-test("OpenCode normalization keeps todo tool payloads and native parts", () => {
+test("OpenCode normalization keeps todo tool payloads and hides step metadata", () => {
   const todo = openCodePartToItem({
     id: "prt-1",
     type: "tool",
@@ -215,9 +330,45 @@ test("OpenCode normalization keeps todo tool payloads and native parts", () => {
   assert.equal(todo.tool, "todowrite");
   assert.deepEqual(todo.todos, [{ content: "ship", status: "in_progress" }]);
 
-  const unknown = openCodePartToItem({ id: "prt-2", type: "patch" });
+  assert.equal(openCodePartToItem({ id: "prt-2", type: "patch" }), undefined);
+  const unknown = openCodePartToItem({ id: "prt-3", type: "choice" });
   assert.equal(unknown.type, "extension");
-  assert.equal(unknown.kind, "patch");
+  assert.equal(unknown.kind, "choice");
+});
+
+test("OpenCode history binds the latest turn to the active Deck turn", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      assert.match(String(url), /\/message/);
+      return Response.json([
+        {
+          info: { id: "user-message", role: "user", time: { created: 1 } },
+          parts: [{ id: "user-part", type: "text", text: "继续" }],
+        },
+        {
+          info: { id: "assistant-message", role: "assistant" },
+          parts: [{ id: "answer-part", type: "text", text: "处理中" }],
+        },
+      ]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "n",
+    preview: "",
+    cwd: "/work",
+    model: "default",
+    status: "running",
+    activeTurnId: "deck-turn",
+    updatedAt: 1,
+  });
+
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.turns.at(-1).id, "deck-turn");
+  assert.equal(loaded.turns.at(-1).status, "inProgress");
 });
 
 test("OpenCode native questions surface as answerable approval cards", async () => {

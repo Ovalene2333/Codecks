@@ -7,6 +7,7 @@ import type {
   ApprovalQuestion,
   ModelInfo,
   ThreadSummary,
+  TokenUsage,
   TurnImage,
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
@@ -59,6 +60,8 @@ type OpenCodeSession = {
   id: string;
   directory?: string;
   title?: string;
+  /** Set on child sessions spawned by subagents; they are not Deck threads. */
+  parentID?: string;
   time?: { created?: number; updated?: number };
 };
 
@@ -73,6 +76,7 @@ type OpenCodeModelMeta = {
   displayName?: string;
   attachment?: boolean;
   modalities?: { input?: string[] };
+  limit?: { context?: number; output?: number };
 };
 
 function modelSupportsImages(meta?: OpenCodeModelMeta): boolean | undefined {
@@ -98,6 +102,28 @@ function normalizeProfiles(value: unknown): OpenCodeProfile[] {
       }));
   }
   return [];
+}
+
+/**
+ * `/provider` answers `{ all, connected, default }`. `connected` holds the
+ * providers OpenCode can actually call right now; the rest of the catalog is
+ * still browsable but must not be presented as if it were usable.
+ */
+function connectedProviderIds(value: unknown): Set<string> {
+  if (!value || typeof value !== "object") return new Set();
+  const record = value as { connected?: unknown };
+  const list = Array.isArray(record.connected) ? record.connected : [];
+  const ids = new Set<string>();
+  for (const item of list) {
+    const id =
+      typeof item === "string"
+        ? item
+        : item && typeof item === "object"
+          ? String((item as { id?: unknown }).id ?? "")
+          : "";
+    if (id.trim()) ids.add(id.trim());
+  }
+  return ids;
 }
 
 function configDefaultModel(config: unknown) {
@@ -152,7 +178,11 @@ function imagePart(image: TurnImage) {
   };
 }
 
-function normalizeMessages(session: OpenCodeSession, records: any[]) {
+function normalizeMessages(
+  session: OpenCodeSession,
+  records: any[],
+  activeTurnId?: string,
+) {
   const turns: any[] = [];
   let turn: any;
   for (const record of records || []) {
@@ -188,6 +218,11 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
       if (mapped) turn.items.push(mapped);
     }
   }
+  if (activeTurnId && turns.length > 0) {
+    const activeTurn = turns[turns.length - 1];
+    activeTurn.id = activeTurnId;
+    activeTurn.status = "inProgress";
+  }
   return {
     id: session.id,
     cwd: session.directory || "",
@@ -204,6 +239,12 @@ function normalizeMessages(session: OpenCodeSession, records: any[]) {
  */
 export function openCodePartToItem(part: any): any | undefined {
   if (!part?.type && !part?.tool) return undefined;
+  if (
+    ["step-start", "step-finish", "snapshot", "patch"].includes(
+      String(part.type),
+    )
+  )
+    return undefined;
   if (part.type === "text")
     return { id: String(part.id), type: "agentMessage", text: part.text || "" };
   if (part.type === "reasoning")
@@ -281,8 +322,11 @@ export class OpenCodeAdapter extends EventEmitter {
   readonly id: AgentId = "opencode";
   private threads = new Map<string, ThreadSummary>();
   private profiles: OpenCodeProfile[] = [];
+  private connected = new Set<string>();
   private configDefault?: { providerID: string; modelID: string };
   private approvals = new Map<string, any>();
+  /** Role of the last seen OpenCode message, used to skip replayed user parts. */
+  private messageRoles = new Map<string, string>();
   private online = false;
   private starting = false;
   private startingTask?: Promise<void>;
@@ -332,8 +376,25 @@ export class OpenCodeAdapter extends EventEmitter {
     };
   }
 
+  /**
+   * Providers OpenCode can actually use first: the configured default, then
+   * every connected provider, then the rest of the (still browsable) catalog.
+   */
+  private rankedProfiles() {
+    const rank = (id: string) =>
+      this.configDefault?.providerID === id
+        ? 0
+        : this.connected.has(id)
+          ? 1
+          : 2;
+    return this.profiles
+      .map((profile, index) => ({ profile, index, rank: rank(profile.id) }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.profile);
+  }
+
   publicProfiles() {
-    return this.profiles.map((profile) => ({
+    return this.rankedProfiles().map((profile) => ({
       id: profile.id,
       agentId: this.id,
       name: profile.name,
@@ -342,6 +403,7 @@ export class OpenCodeAdapter extends EventEmitter {
       ...(this.configDefault?.providerID === profile.id
         ? { current: true }
         : {}),
+      ...(this.connected.has(profile.id) ? { connected: true } : {}),
     }));
   }
 
@@ -349,10 +411,11 @@ export class OpenCodeAdapter extends EventEmitter {
     const matched = providerId
       ? this.profiles.filter((item) => item.id === providerId)
       : this.profiles;
-    const scope = matched.length ? matched : this.profiles;
+    const scope = matched.length ? matched : this.rankedProfiles();
     const entries: ModelInfo[] = [];
     for (const profile of scope) {
       const groupName = profile.name || profile.id;
+      const connected = this.connected.has(profile.id);
       for (const [id, model] of Object.entries(profile.models || {})) {
         entries.push({
           id: `${profile.id}/${id}`,
@@ -364,6 +427,7 @@ export class OpenCodeAdapter extends EventEmitter {
             this.configDefault.modelID === id
               ? true
               : undefined,
+          ...(connected ? { connected: true } : {}),
           supportsImages: modelSupportsImages(model),
         });
       }
@@ -470,6 +534,29 @@ export class OpenCodeAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * Merges a native session into the Deck thread. OpenCode owns the title,
+   * directory and timestamps; Deck keeps the settings it was given at
+   * creation time (model, provider, live status) so a `session.created` or
+   * `session.updated` event cannot downgrade a thread back to `default`.
+   */
+  private mergeThread(session: OpenCodeSession, existing?: ThreadSummary) {
+    const busy =
+      existing?.status === "running" || existing?.status === "waiting";
+    const summary = sessionSummary(session, busy ? existing!.status : "idle");
+    const settings = this.options.threadSettings?.get(this.id, session.id);
+    return {
+      ...summary,
+      ...existing,
+      ...settings,
+      agentId: this.id,
+      name: session.title || existing?.name || summary.name,
+      preview: session.title || existing?.preview || summary.preview,
+      cwd: session.directory || existing?.cwd || summary.cwd,
+      updatedAt: Math.max(summary.updatedAt, existing?.updatedAt || 0),
+    };
+  }
+
   async refreshAll() {
     const [sessions, providers, config] = await Promise.all([
       this.request<OpenCodeSession[]>("/session"),
@@ -477,22 +564,18 @@ export class OpenCodeAdapter extends EventEmitter {
       this.request<unknown>("/config").catch(() => undefined),
     ]);
     this.profiles = normalizeProfiles(providers);
+    this.connected = connectedProviderIds(providers);
     this.configDefault = configDefaultModel(config);
     const seen = new Set<string>();
     for (const session of sessions) {
+      // Subagent sessions are children of the thread that spawned them and
+      // must not surface as separate Deck sessions.
+      if (session.parentID) continue;
       seen.add(session.id);
-      const existing = this.threads.get(session.id);
-      this.threads.set(session.id, {
-        ...sessionSummary(
-          session,
-          existing?.status === "running" || existing?.status === "waiting"
-            ? existing.status
-            : "idle",
-        ),
-        ...existing,
-        ...this.options.threadSettings?.get(this.id, session.id),
-        agentId: this.id,
-      });
+      this.threads.set(
+        session.id,
+        this.mergeThread(session, this.threads.get(session.id)),
+      );
     }
     for (const [id, thread] of this.threads)
       if (
@@ -544,6 +627,12 @@ export class OpenCodeAdapter extends EventEmitter {
       model: input.model || "default",
       name: input.name || session.title || "新 OpenCode 会话",
     };
+    // Persist the picked model so the next refresh (or a Deck restart) keeps
+    // it instead of falling back to OpenCode's own default.
+    if (input.model)
+      await this.options.threadSettings?.update(this.id, thread.id, {
+        model: input.model,
+      });
     this.threads.set(thread.id, thread);
     this.broadcast("thread.updated", thread);
     return thread;
@@ -556,9 +645,16 @@ export class OpenCodeAdapter extends EventEmitter {
       { directory: thread.cwd },
     );
     return {
-      ...normalizeMessages({ id: thread.id, directory: thread.cwd }, records),
+      ...normalizeMessages(
+        { id: thread.id, directory: thread.cwd },
+        records,
+        thread.status === "running" || thread.status === "waiting"
+          ? thread.activeTurnId
+          : undefined,
+      ),
       agentId: this.id,
       providerId: thread.providerId,
+      model: thread.model,
     };
   }
 
@@ -820,12 +916,12 @@ export class OpenCodeAdapter extends EventEmitter {
       payload?.type === "session.created" ||
       payload?.type === "session.updated"
     ) {
-      const summary = sessionSummary(body.info);
-      this.threads.set(summary.id, {
-        ...this.threads.get(summary.id),
-        ...summary,
-      });
-      this.broadcast("thread.updated", this.threads.get(summary.id));
+      const session = body.info as OpenCodeSession | undefined;
+      if (!session?.id) return;
+      if (session.parentID) return;
+      const next = this.mergeThread(session, this.threads.get(session.id));
+      this.threads.set(next.id, next);
+      this.broadcast("thread.updated", next);
       return;
     }
     if (payload?.type === "session.deleted" && sessionId) {
@@ -838,6 +934,13 @@ export class OpenCodeAdapter extends EventEmitter {
     }
     if (payload?.type === "session.status" && thread) {
       thread.status = body.status?.type === "busy" ? "running" : "idle";
+      if (thread.status === "running" && !thread.activeTurnId) {
+        thread.activeTurnId = randomUUID();
+        this.emitAgentEvent(thread, "turn/started", {
+          threadId: thread.id,
+          turn: { id: thread.activeTurnId, status: "inProgress" },
+        });
+      }
       const completedTurnId = thread.activeTurnId || "opencode";
       if (thread.status === "idle") thread.activeTurnId = undefined;
       thread.updatedAt = Date.now();
@@ -945,13 +1048,22 @@ export class OpenCodeAdapter extends EventEmitter {
       this.broadcast("approval.requested", pending);
       return;
     }
+    if (payload?.type === "message.updated") {
+      const info = body.info;
+      if (info?.id && info?.role) this.rememberRole(info.id, info.role);
+      return;
+    }
     if (payload?.type === "message.part.updated" && thread) {
       const part = body.part;
+      // OpenCode replays the parts of the message the user just sent. The
+      // turn history already renders that message, so forwarding it here
+      // would show it a second time as if the assistant repeated it.
+      if (this.isUserPart(part)) return;
       if (part?.type === "text" && body.delta)
         this.emitAgentEvent(thread, "item/agentMessage/delta", {
           threadId: thread.id,
           turnId: thread.activeTurnId,
-          itemId: part.messageID || part.id,
+          itemId: part.id || part.messageID,
           delta: body.delta,
         });
       else
@@ -961,6 +1073,22 @@ export class OpenCodeAdapter extends EventEmitter {
           item: part,
         });
     }
+  }
+
+  private rememberRole(messageId: unknown, role: unknown) {
+    const id = String(messageId || "").trim();
+    if (!id) return;
+    this.messageRoles.set(id, String(role || ""));
+    if (this.messageRoles.size > 400)
+      this.messageRoles = new Map(
+        [...this.messageRoles].slice(-200),
+      );
+  }
+
+  private isUserPart(part: any) {
+    const messageId = String(part?.messageID || "").trim();
+    if (!messageId) return false;
+    return this.messageRoles.get(messageId) === "user";
   }
 
   private permissionKind(type: string): ApprovalKind {

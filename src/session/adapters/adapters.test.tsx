@@ -35,8 +35,15 @@ test("OpenCode todo tool parts keep structured todos through normalization", () 
   assert.equal(item.todos[0].content, "ship");
 });
 
-test("unknown OpenCode parts become extension items with the raw payload", () => {
-  const part = { id: "prt-2", type: "choice", options: ["a"] };
+test("OpenCode step metadata does not become an extension item", () => {
+  assert.equal(
+    openCodePartToItem({ id: "prt-2", type: "step-start" }),
+    undefined,
+  );
+});
+
+test("unknown OpenCode parts remain extension items with the raw payload", () => {
+  const part = { id: "prt-3", type: "choice", options: ["a"] };
   const item = openCodePartToItem(part);
   assert.deepEqual(
     { ...item, payload: item.payload },

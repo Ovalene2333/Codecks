@@ -57,17 +57,16 @@ export class ThreadSettingsStore {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       if (parsed?.version !== 1 || !parsed?.settings) return;
+      const group = (agentId: AgentId) =>
+        parsed.settings[agentId] && typeof parsed.settings[agentId] === "object"
+          ? (parsed.settings[agentId] as Record<string, ThreadSettings>)
+          : {};
       this.data = {
         version: 1,
         settings: {
-          codex:
-            parsed.settings.codex && typeof parsed.settings.codex === "object"
-              ? parsed.settings.codex
-              : {},
-          claude:
-            parsed.settings.claude && typeof parsed.settings.claude === "object"
-              ? parsed.settings.claude
-              : {},
+          codex: group("codex"),
+          claude: group("claude"),
+          opencode: group("opencode"),
         },
       };
     } catch (error: any) {

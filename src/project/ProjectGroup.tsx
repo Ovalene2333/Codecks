@@ -60,7 +60,12 @@ export function ProjectGroupView({
   providers: Provider[];
 }) {
   const [menu, setMenu] = useState(false);
-  const visible = previewSessions(project.sessions, !collapsed);
+  const visible = previewSessions(project.sessions, !collapsed, {
+    isPinned: (thread) => {
+      const key = sessionKey(thread);
+      return key === selected || unseenSessions.has(key);
+    },
+  });
   const hiddenCount = project.sessions.length - visible.length;
   const providerById = new Map(
     providers.map((item) => [item.id, item] as const),
@@ -68,7 +73,12 @@ export function ProjectGroupView({
   return (
     <div className={`project-group ${project.pinned ? "pinned" : ""}`}>
       <div className="project-heading">
-        <button className="project-toggle" onClick={onToggle}>
+        <button
+          className="project-toggle"
+          aria-expanded={!collapsed}
+          title={collapsed ? "展开该项目" : "折叠该项目"}
+          onClick={onToggle}
+        >
           {collapsed ? <ChevronRight /> : <ChevronDown />}
           <Folder />
           <span title={project.cwd}>{project.name}</span>

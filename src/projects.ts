@@ -106,9 +106,60 @@ export function threadsForProject(
   );
 }
 
-export function previewSessions<T>(sessions: T[], expanded: boolean) {
+/** Sessions updated within this window stay visible while a project is collapsed. */
+export const COLLAPSED_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Upper bound for a collapsed preview; active sessions are never dropped by it. */
+export const COLLAPSED_PREVIEW_LIMIT = 8;
+
+export function isActiveThread(thread: ThreadSummary) {
+  return (
+    thread.status === "starting" ||
+    thread.status === "running" ||
+    thread.status === "waiting" ||
+    thread.status === "error" ||
+    Boolean(thread.compacting)
+  );
+}
+
+export interface CollapsedPreviewOptions {
+  now?: number;
+  recentWindowMs?: number;
+  limit?: number;
+  /** Extra sessions to keep even when they fall outside the recent window. */
+  isPinned?: (thread: ThreadSummary) => boolean;
+}
+
+/**
+ * A collapsed project still needs to answer "what is going on here?", so it
+ * keeps every session that needs attention (running / waiting / error), every
+ * session touched inside the recent window, and any pinned session. The rest
+ * collapses into the "其余 N 条" affordance.
+ */
+export function previewSessions(
+  sessions: ThreadSummary[],
+  expanded: boolean,
+  options: CollapsedPreviewOptions = {},
+): ThreadSummary[] {
   if (expanded || sessions.length <= 1) return sessions;
-  return sessions.slice(0, 1);
+  const now = options.now ?? Date.now();
+  const window = options.recentWindowMs ?? COLLAPSED_RECENT_WINDOW_MS;
+  const limit = Math.max(1, options.limit ?? COLLAPSED_PREVIEW_LIMIT);
+  const active: ThreadSummary[] = [];
+  const recent: ThreadSummary[] = [];
+  for (const thread of sessions) {
+    if (isActiveThread(thread)) {
+      active.push(thread);
+      continue;
+    }
+    const fresh =
+      Number.isFinite(thread.updatedAt) && now - thread.updatedAt <= window;
+    if (fresh || options.isPinned?.(thread)) recent.push(thread);
+  }
+  if (!active.length && !recent.length) return sessions.slice(0, 1);
+  const room = Math.max(0, limit - active.length);
+  const keep = new Set([...active, ...recent.slice(0, room)]);
+  // Filter instead of concatenating so the preview keeps the caller's order.
+  return sessions.filter((thread) => keep.has(thread));
 }
 
 export function filterProjectGroups(

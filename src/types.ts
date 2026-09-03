@@ -160,6 +160,8 @@ export interface ModelInfo {
   hidden?: boolean;
   isDefault?: boolean;
   groupName?: string;
+  /** The upstream provider of this model is logged in / usable right now. */
+  connected?: boolean;
   supportsImages?: boolean;
   defaultReasoningEffort?: string;
   supportedReasoningEfforts?: {
@@ -179,6 +181,12 @@ export interface ThreadSummary {
   preview: string;
   cwd: string;
   model: string;
+  /**
+   * Concrete model the agent actually ran with, resolved from its own history
+   * (for example `anthropic/claude-sonnet-4-5`) when `model` is a placeholder
+   * such as OpenCode's `default`. Display only — `model` stays the setting.
+   */
+  resolvedModel?: string;
   status: "starting" | "running" | "waiting" | "idle" | "error" | "offline";
   updatedAt: number;
   activeTurnId?: string;
@@ -319,6 +327,8 @@ export interface AgentProfile {
   official?: boolean;
   enabled?: boolean;
   online?: boolean;
+  /** Logged in / usable in the upstream agent (OpenCode `connected`). */
+  connected?: boolean;
 }
 
 export interface Snapshot {
