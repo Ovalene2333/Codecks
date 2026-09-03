@@ -27,6 +27,9 @@ import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import { defaultAgentId, type AgentId } from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
+import { SearchablePicker } from "../SearchablePicker";
+
+const SEARCHABLE_PROVIDERS = 12;
 
 export function NewThreadModal({
   providers,
@@ -300,25 +303,45 @@ export function NewThreadModal({
           <>
             <label>
               OpenCode 供应商
-              <select
-                value={form.providerId}
-                disabled={profilesLoading || profiles.length === 0}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, providerId: event.target.value }))
-                }
-              >
-                {profilesLoading ? (
-                  <option value="">正在读取…</option>
-                ) : profiles.length ? (
-                  profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">使用 OpenCode 默认供应商</option>
-                )}
-              </select>
+              {profiles.length > SEARCHABLE_PROVIDERS ? (
+                <SearchablePicker
+                  ariaLabel="OpenCode 供应商"
+                  value={form.providerId}
+                  disabled={profilesLoading}
+                  loading={profilesLoading}
+                  placeholder="搜索供应商"
+                  emptyText="没有匹配的供应商"
+                  options={profiles.map((profile) => ({
+                    value: profile.id,
+                    label: profile.name,
+                    hint: profile.id !== profile.name ? profile.id : undefined,
+                    meta: profile.current ? "默认" : undefined,
+                  }))}
+                  onChange={(providerId) =>
+                    setForm((current) => ({ ...current, providerId }))
+                  }
+                />
+              ) : (
+                <select
+                  value={form.providerId}
+                  disabled={profilesLoading || profiles.length === 0}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, providerId: event.target.value }))
+                  }
+                >
+                  {profilesLoading ? (
+                    <option value="">正在读取…</option>
+                  ) : profiles.length ? (
+                    profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">使用 OpenCode 默认供应商</option>
+                  )}
+                </select>
+              )}
             </label>
             <ModelPicker
               agentId="opencode"
