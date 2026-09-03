@@ -339,6 +339,9 @@ export class OpenCodeAdapter extends EventEmitter {
       name: profile.name,
       enabled: true,
       online: this.online,
+      ...(this.configDefault?.providerID === profile.id
+        ? { current: true }
+        : {}),
     }));
   }
 

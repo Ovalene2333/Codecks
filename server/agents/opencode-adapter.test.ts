@@ -47,6 +47,7 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
       name: "OpenAI",
       enabled: true,
       online: false,
+      current: true,
     },
   ]);
   const models = adapter.listModels("openai");

@@ -3,6 +3,9 @@ import { api } from "./api";
 import { reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
+import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
+
+const SEARCHABLE_CATALOG = 12;
 
 function modelLabel(item: ModelInfo) {
   const suffix =
@@ -91,6 +94,22 @@ export function ModelPicker({
     }
     return { plain, groups };
   }, [models]);
+  const searchOptions = useMemo<SearchableOption[]>(
+    () =>
+      models.map((item) => ({
+        value: item.model,
+        label: item.displayName,
+        group: item.groupName,
+        hint: item.id !== item.displayName ? item.id : undefined,
+        meta: item.isDefault
+          ? "默认"
+          : item.supportsImages === false
+            ? "无图片"
+            : undefined,
+      })),
+    [models],
+  );
+  const searchable = !manual && models.length > SEARCHABLE_CATALOG;
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
@@ -105,6 +124,30 @@ export function ModelPicker({
               onChange({ model: e.target.value, reasoningEffort })
             }
             placeholder={loading ? "正在读取模型目录…" : "模型 ID"}
+          />
+        ) : searchable ? (
+          <SearchablePicker
+            ariaLabel="模型"
+            value={model}
+            options={searchOptions}
+            disabled={disabled}
+            loading={loading}
+            placeholder="选择模型"
+            emptyText="没有匹配的模型"
+            fallbackLabel={model || undefined}
+            onChange={(next) => {
+              const nextModel = models.find(
+                (item) =>
+                  item.model === next || item.id === next,
+              );
+              onChange({
+                model: next,
+                reasoningEffort:
+                  nextModel?.defaultReasoningEffort ||
+                  nextModel?.supportedReasoningEfforts?.[0]?.reasoningEffort ||
+                  "",
+              });
+            }}
           />
         ) : (
           <select
