@@ -556,6 +556,33 @@ aside,
   border-color: var(--line);
 }
 
+.auth-card form + form {
+  margin-top: 12px;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.auth-error {
+  margin: 8px 0 0;
+  color: var(--danger-text);
+  font-size: var(--fs-meta);
+}
+
 .session-row.selected,
 .thread-list > button.selected {
   border-left-color: transparent;

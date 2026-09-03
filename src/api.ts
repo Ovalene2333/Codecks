@@ -58,3 +58,14 @@ export async function getBlob(url: string) {
   }
   return response.blob();
 }
+
+export const pairWithCode = (code: string) =>
+  api<{ token: string }>("/pair", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+
+export async function getHealth() {
+  const response = await fetch("/api/health");
+  return response.json().catch(() => ({}));
+}

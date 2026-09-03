@@ -13,6 +13,7 @@ test("LAN and tunnel flags imply a LAN listener", () => {
     host: "0.0.0.0",
     port: 4174,
     lan: true,
+    lan6: false,
     tunnel: undefined,
     cloudflaredBin: undefined,
     token: undefined,
@@ -20,6 +21,23 @@ test("LAN and tunnel flags imply a LAN listener", () => {
     wsl: false,
     help: false,
   });
+  assert.deepEqual(parseCli(["--lan6"], {} as any), {
+    host: "::",
+    port: 4174,
+    lan: true,
+    lan6: true,
+    tunnel: undefined,
+    cloudflaredBin: undefined,
+    token: undefined,
+    noToken: false,
+    wsl: false,
+    help: false,
+  });
+  assert.throws(() => parseCli(["--lan", "--lan6"], {} as any), /不能同时/);
+  assert.throws(
+    () => parseCli(["--lan6", "--lan"], {} as any),
+    /不能同时/,
+  );
   assert.deepEqual(parseCli(["--cf-tunnel"], {} as any).tunnel, {
     provider: "cloudflare",
     mode: "quick",
@@ -241,4 +259,142 @@ test("LAN URLs include token in a fragment and omit loopback", () => {
     ],
   });
   assert.deepEqual(urls, ["http://192.168.1.9:4174/#token=secret"]);
+});
+
+test("IPv6 LAN URLs are bracketed and skip link-local and loopback", () => {
+  const base = {
+    lo: [
+      {
+        address: "::1",
+        netmask: "ffff:ffff:ffff:ffff::",
+        family: "IPv6",
+        mac: "",
+        internal: true,
+        scopeid: 0,
+        cidr: "::1/128",
+      },
+    ],
+    wlan0: [
+      {
+        address: "fe80::1%wlan0",
+        netmask: "ffff:ffff:ffff:ffff::",
+        family: "IPv6",
+        mac: "",
+        internal: false,
+        scopeid: 5,
+        cidr: "fe80::1/64",
+      },
+      {
+        address: "240e:390:abcd:1234:aaaa:bbbb:cccc:dddd",
+        netmask: "ffff:ffff:ffff:ffff::",
+        family: "IPv6",
+        mac: "",
+        internal: false,
+        scopeid: 0,
+        cidr: "240e:390:abcd:1234::/64",
+      },
+    ],
+  } as any;
+  assert.deepEqual(lanAddresses(4174, "secret", base, "ipv6"), [
+    "http://[240e:390:abcd:1234:aaaa:bbbb:cccc:dddd]:4174/#token=secret",
+  ]);
+  assert.deepEqual(lanAddresses(4174, "secret", base, "ipv4"), []);
+});
+
+test("ddns expose resolves from env and selects the listener family", () => {
+  const duckdns = parseCli(["--expose", "ddns:duckdns"], {
+    DDNS_HOST: "mydeck.duckdns.org",
+    DDNS_TOKEN: "tok",
+  } as any);
+  assert.equal(duckdns.lan, true);
+  assert.equal(duckdns.host, "::");
+  assert.deepEqual(duckdns.tunnel, {
+    provider: "ddns",
+    ddns: {
+      provider: "duckdns",
+      host: "mydeck.duckdns.org",
+      token: "tok",
+      zone: undefined,
+      ipv4: "none",
+      ipv6: "auto",
+      intervalMinutes: 10,
+    },
+  });
+
+  const v4Only = parseCli(
+    ["--expose", "ddns:cloudflare"],
+    {
+      DDNS_HOST: "deck.example.com",
+      DDNS_TOKEN: "cf-tok",
+      DDNS_ZONE: "zone123",
+      DDNS_IPV6: "none",
+      DDNS_INTERVAL: "5",
+    } as any,
+  );
+  assert.equal(v4Only.host, "0.0.0.0");
+  assert.deepEqual(v4Only.tunnel, {
+    provider: "ddns",
+    ddns: {
+      provider: "cloudflare",
+      host: "deck.example.com",
+      token: "cf-tok",
+      zone: "zone123",
+      ipv4: "none",
+      ipv6: "none",
+      intervalMinutes: 5,
+    },
+  });
+
+  const pinned = parseCli(
+    ["--expose", "ddns:duckdns"],
+    {
+      DDNS_HOST: "mydeck.duckdns.org",
+      DDNS_TOKEN: "tok",
+      DDNS_IPV6: "240e:390:abcd:1234::1",
+      DDNS_IPV4: "auto",
+    } as any,
+  );
+  assert.equal(
+    (pinned.tunnel as any).ddns.ipv6,
+    "240e:390:abcd:1234::1",
+  );
+  assert.equal((pinned.tunnel as any).ddns.ipv4, "auto");
+
+  assert.throws(
+    () => parseCli(["--expose", "ddns"], {} as any),
+    /需要指定供应商/,
+  );
+  assert.throws(
+    () =>
+      parseCli(["--expose", "ddns:duckdns"], {
+        DDNS_HOST: "mydeck.duckdns.org",
+      } as any),
+    /DDNS_TOKEN/,
+  );
+  assert.throws(
+    () =>
+      parseCli(["--expose", "ddns:cloudflare"], {
+        DDNS_HOST: "deck.example.com",
+        DDNS_TOKEN: "tok",
+      } as any),
+    /DDNS_ZONE/,
+  );
+  assert.throws(
+    () =>
+      parseCli(["--expose", "ddns:duckdns"], {
+        DDNS_HOST: "mydeck.duckdns.org",
+        DDNS_TOKEN: "tok",
+        DDNS_IPV6: "127.0.0.1",
+      } as any),
+    /IPv6/,
+  );
+  assert.throws(
+    () =>
+      parseCli(["--expose", "ddns:duckdns"], {
+        DDNS_HOST: "mydeck.duckdns.org",
+        DDNS_TOKEN: "tok",
+        DDNS_INTERVAL: "0",
+      } as any),
+    /DDNS_INTERVAL/,
+  );
 });

@@ -27,6 +27,16 @@ test("parseExposeSpec accepts provider aliases and named profiles", () => {
   });
   assert.deepEqual(parseExposeSpec("announce"), { provider: "announce" });
   assert.deepEqual(parseExposeSpec("command"), { provider: "command" });
+  assert.deepEqual(parseExposeSpec("ddns"), { provider: "ddns" });
+  assert.deepEqual(parseExposeSpec("ddns:duckdns"), {
+    provider: "ddns",
+    ddns: "duckdns",
+  });
+  assert.deepEqual(parseExposeSpec("ddns:cloudflare"), {
+    provider: "ddns",
+    ddns: "cloudflare",
+  });
+  assert.throws(() => parseExposeSpec("ddns:noip"), /未知的 DDNS/);
   assert.throws(() => parseExposeSpec("cloudflare:foo"), /未知的 Cloudflare/);
   assert.throws(() => parseExposeSpec("announce:extra"), /不接受额外参数/);
 });
@@ -90,6 +100,40 @@ test("announce provider prints a tokenized public origin", () => {
     process.stdout.write = write;
   }
   assert.match(writes.join(""), /https:\/\/deck\.example\.com\/#token=tok/);
+});
+
+test("ddns provider prints a direct HTTP entry on the service port", () => {
+  const writes: string[] = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: any, ...args: any[]) => {
+    writes.push(String(chunk));
+    return write(chunk, ...args);
+  }) as typeof process.stdout.write;
+  try {
+    const tunnel = startTunnel(
+      {
+        provider: "ddns",
+        ddns: {
+          provider: "duckdns",
+          host: "mydeck.duckdns.org",
+          token: "tok",
+          ipv4: "none",
+          ipv6: "none",
+          intervalMinutes: 10,
+        },
+      },
+      4174,
+      "tok",
+    );
+    tunnel.kill();
+  } finally {
+    process.stdout.write = write;
+  }
+  assert.match(writes.join(""), /DDNS 入口/);
+  assert.match(
+    writes.join(""),
+    /http:\/\/mydeck\.duckdns\.org:4174\/#token=tok/,
+  );
 });
 
 test("command provider detects a public https origin from stdout", async () => {

@@ -174,7 +174,7 @@ POST /api/agents/claude/approvals/:approvalId
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态。
 
-新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：按 provider 分组列出其模型目录，模型 ID 为 `providerID/modelID`，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定；OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：超过一定数量后，供应商和模型选择器会切换为可搜索选择器，打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉；新建会话时供应商会默认选中 OpenCode 配置的默认 provider。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其内容仍可通过所属会话查看。
+新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：因为模型 ID 就是 `providerID/modelID`，选模型即选供应商，所有入口（新建会话、会话设置、命令面板）都只用一个按 provider 分组的可搜索选择器，不再先挑供应商再挑模型；关键字会同时匹配供应商名、模型名和模型 ID，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定，OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的 `/provider` 里已连接（connected）的供应商会排在目录最前面并在分组标题上标记「已连接」，未登录的供应商仍然可以浏览和搜索，只是排在后面。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、归档、fork、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。会话元信息与 `/status` 显示 OpenCode 实际使用的模型 ID：即使设置是「跟随 OpenCode 默认」，也会解析成最后一条回复里的 `providerID/modelID`，头部供应商名同样按这个解析结果走。上下文用量来自最后一条 assistant 回复的 tokens（input + output + reasoning + cache），上限取模型目录里的 `limit.context`，填进 `tokenUsage` 后头部上下文条、`/status` 与用量统计都会生效；该数值在打开会话或重新读取历史时刷新，不会在每一轮结束后实时回读。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其内容仍可通过所属会话查看。
 
 ### Agent 专属内容展示
 
@@ -191,13 +191,13 @@ POST /api/agents/claude/approvals/:approvalId
 
 | 层   | 做什么                             | 常用参数                                |
 | ---- | ---------------------------------- | --------------------------------------- |
-| 监听 | Codecks 听哪个网卡                 | `--lan`、`--host`、`--port`             |
+| 监听 | Codecks 听哪个网卡                 | `--lan`、`--lan6`、`--host`、`--port`   |
 | 暴露 | 要不要、以及怎么把本地端口接到外面 | `--expose`、`--public-origin`           |
-| 鉴权 | 谁能打开控制台                     | `REMOTE_TOKEN`、`--token`、`--no-token` |
+| 鉴权 | 谁能打开控制台                     | 扫码 / 6 位验证码 / `REMOTE_TOKEN`、`--token`、`--no-token` |
 
-启动后会生成访问令牌，并把带令牌的入口打印到终端。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌。`--public-origin` 或任何 `--expose` 都会视为远程入口，即使只监听 `127.0.0.1` 也会发令牌。
+远程模式下默认开启配对鉴权：终端会打印带令牌的入口、扫码直达的二维码，以及一个每 60 秒更新的 6 位验证码。手机扫终端二维码直接进入控制台；在登录页手动打开时，输入验证码即可配对。也可用 `REMOTE_TOKEN` 或 `--token` 固定令牌，此时验证码配对关闭，但二维码照常打印。`--public-origin` 或任何 `--expose` 都会视为远程入口，即使只监听 `127.0.0.1` 也会发令牌。
 
-也可直接调用构建产物，或使用对应 scripts：`npm run lan`、`npm run cf-tunnel`、`npm run share`。
+也可直接调用构建产物，或使用对应 scripts：`npm run lan`、`npm run lan6`、`npm run cf-tunnel`、`npm run share`。
 
 ```bash
 node dist-server/server/index.js --lan
@@ -207,10 +207,17 @@ node dist-server/server/index.js --lan
 
 **1. 同一 Wi-Fi 下用手机打开**
 
-只监听局域网，不拉隧道。终端会打印本机 IPv4 入口。
+只监听局域网，不拉隧道。终端会打印本机入口、扫码二维码和 6 位验证码。
 
 ```bash
 npm start -- --lan
+```
+
+纯 IPv6 局域网（或本机有公网 v6）用 `--lan6`：监听 `::`（双栈，IPv4 照样可用），终端打印中括号 IPv6 入口。
+
+```bash
+npm start -- --lan6
+npm run lan6
 ```
 
 **2. 已经有 Caddy / nginx / 独立 cloudflared / 路由器反代**
@@ -286,7 +293,21 @@ CODEX_DECK_TUNNEL_BIN=ngrok
 CODEX_DECK_TUNNEL_ARGS=http {port}
 ```
 
-**6. 固定令牌，方便书签收藏**
+**6. 家里动态 IPv6 + 动态域名（DDNS）**
+
+家里宽带只有动态 IPv6（无公网 IPv4）时，用 DDNS 把域名指到本机 IPv6，实现外网直连，无需隧道中转，速度就是运营商直连。Codecks 会监听 `::`、定期把检测到的公网地址写回 DNS 记录，并打印 `http://域名:4174/` 入口和二维码。路由器上把该端口转发到本机即可。
+
+```bash
+# DuckDNS：先去 duckdns.org 注册子域并拿到 token
+DDNS_HOST=mydeck.duckdns.org DDNS_TOKEN=<token> npm start -- --expose ddns:duckdns
+
+# Cloudflare DNS：需 API token（DNS 编辑权限）和 Zone ID
+DDNS_HOST=deck.example.com DDNS_TOKEN=<api-token> DDNS_ZONE=<zone-id> npm start -- --expose ddns:cloudflare
+```
+
+`DDNS_IPV6` 默认 `auto`（取本机全局 IPv6，也可填死一个地址），`DDNS_IPV4` 默认 `none`（家宽多半没有公网 IPv4；有的话设为 `auto` 自动探测），`DDNS_INTERVAL` 默认每 10 分钟同步一次。DDNS 是明文 http 直连；需要 https 时在前面加反代并改用 `--public-origin` 宣告。
+
+**7. 固定令牌，方便书签收藏**
 
 ```bash
 HOST=0.0.0.0 REMOTE_TOKEN='replace-with-a-long-random-string' npm start
@@ -335,7 +356,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 
 | 变量                            | 默认值                     | 说明                                                                                   |
 | ------------------------------- | -------------------------- | -------------------------------------------------------------------------------------- |
-| `HOST`                          | `127.0.0.1`                | HTTP 监听地址                                                                          |
+| `HOST`                          | `127.0.0.1`                | HTTP 监听地址（IPv6 填 `::`）                                                          |
 | `PORT`                          | `4174`                     | HTTP 端口                                                                              |
 | `REMOTE_TOKEN`                  | _(空)_                     | API / WebSocket Bearer 令牌；非本机监听时必填                                          |
 | `CODEX_BIN`                     | `codex`                    | Codex CLI 路径                                                                         |
@@ -350,7 +371,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `DATA_DIR`                      | `.data`                    | Codecks 偏好、项目与用量缓存、自定义供应商元数据                                       |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_                   | 仅监听本机的 Codex control WebSocket 端口                                              |
 | `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径                                                        |
-| `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command`                |
+| `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` / `ddns:duckdns\|ddns:cloudflare` |
 | `CODEX_DECK_PUBLIC_ORIGIN`      | _(空)_                     | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN`                              |
 | `CODEX_DECK_TUNNEL_BIN`         | _(空)_                     | `command` 供应商的可执行文件                                                           |
 | `CODEX_DECK_TUNNEL_ARGS`        | _(空)_                     | `command` 参数模板，支持 `{port}`、`{url}`                                             |
@@ -359,6 +380,12 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CODEX_DECK_TUNNEL_PROTOCOL`    | `http2`                    | Cloudflare Quick Tunnel 传输协议                                                       |
 | `CF_TUNNEL_TOKEN`               | _(空)_                     | Named Tunnel connector token（`--share`）                                              |
 | `CF_TUNNEL_HOSTNAME`            | _(空)_                     | 固定公网域名（`--share`）                                                              |
+| `DDNS_HOST`                     | _(空)_                     | DDNS 域名（`--expose ddns:*` 必填）                                                    |
+| `DDNS_TOKEN`                    | _(空)_                     | DDNS 令牌 / API token（必填）                                                          |
+| `DDNS_ZONE`                     | _(空)_                     | Cloudflare Zone ID（`ddns:cloudflare` 必填）                                           |
+| `DDNS_IPV4`                     | `none`                     | `auto` / `none` / 固定 IPv4                                                            |
+| `DDNS_IPV6`                     | `auto`                     | `auto` / `none` / 固定 IPv6                                                            |
+| `DDNS_INTERVAL`                 | `10`                       | DDNS 同步间隔（分钟）                                                                  |
 
 ### CC Switch
 

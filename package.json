@@ -10,6 +10,7 @@
     "build": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
     "start": "node dist-server/server/index.js",
     "lan": "node dist-server/server/index.js --lan",
+    "lan6": "node dist-server/server/index.js --lan6",
     "cf-tunnel": "node dist-server/server/index.js --cf-tunnel",
     "share": "node dist-server/server/index.js --share",
     "test": "node --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
@@ -22,6 +23,7 @@
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "node-pty": "^1.1.0",
+    "qrcode-terminal": "^0.12.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
@@ -32,6 +34,7 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
+    "@types/qrcode-terminal": "^0.12.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@types/ws": "^8.5.13",

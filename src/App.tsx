@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, KeyRound, Menu, SunMoon } from "lucide-react";
-import { api, getSnapshot, getToken, post, put, remove, setToken } from "./api";
+import {
+  api,
+  getHealth,
+  getSnapshot,
+  getToken,
+  pairWithCode,
+  post,
+  put,
+  remove,
+  setToken,
+} from "./api";
 import { useAppearance } from "./appearance";
 import type {
   ProjectRecord,
@@ -159,6 +169,8 @@ export function App() {
   );
   const [sidebar, setSidebar] = useState(true);
   const [authError, setAuthError] = useState(false);
+  const [pairingAvailable, setPairingAvailable] = useState(false);
+  const [pairMessage, setPairMessage] = useState("");
   const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
   const [confirm, setConfirm] = useState<{
     title: string;
@@ -349,6 +361,20 @@ export function App() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!authError) return;
+    let cancelled = false;
+    setPairMessage("");
+    getHealth()
+      .then((health) => {
+        if (!cancelled) setPairingAvailable(Boolean(health?.pairing));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [authError]);
 
   useEffect(() => {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -956,7 +982,50 @@ export function App() {
             <KeyRound />
           </span>
           <h1>连接 Codex Deck</h1>
-          <p>输入服务端设置的 REMOTE_TOKEN。令牌只保存在这个浏览器中。</p>
+          <p>
+            {pairingAvailable
+              ? "输入终端里显示的 6 位配对验证码，或直接粘贴访问令牌。令牌只保存在这个浏览器中。"
+              : "输入服务端设置的 REMOTE_TOKEN。令牌只保存在这个浏览器中。"}
+          </p>
+          {pairingAvailable && (
+            <>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const value = new FormData(event.currentTarget).get(
+                    "code",
+                  ) as string;
+                  if (!/^\d{6}$/.test(value.trim())) {
+                    setPairMessage("验证码应为 6 位数字");
+                    return;
+                  }
+                  setPairMessage("");
+                  pairWithCode(value.trim())
+                    .then(({ token: paired }) => {
+                      setToken(paired);
+                      setAuthError(false);
+                      refresh();
+                    })
+                    .catch((error: any) =>
+                      setPairMessage(error?.message || "配对失败"),
+                    );
+                }}
+              >
+                <input
+                  autoFocus
+                  required
+                  name="code"
+                  inputMode="numeric"
+                  maxLength={6}
+                  pattern="\d{6}"
+                  placeholder="6 位验证码"
+                />
+                <button className="primary">验证并连接</button>
+              </form>
+              {pairMessage && <p className="auth-error">{pairMessage}</p>}
+              <div className="auth-divider">或</div>
+            </>
+          )}
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -969,8 +1038,6 @@ export function App() {
             }}
           >
             <input
-              autoFocus
-              required
               name="token"
               type="password"
               placeholder="访问令牌"
