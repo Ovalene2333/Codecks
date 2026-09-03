@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { findFreeListenPort } from "../runtime-port.js";
@@ -45,6 +45,11 @@ interface OpenCodeAdapterOptions {
   ) => ChildProcess;
   port?: number;
   platform?: NodeJS.Platform;
+  /**
+   * Windows 上真实的 server 是 `cmd.exe` 包裹层身后的孙进程，
+   * 默认用 `taskkill /T` 连带结束；测试可注入 mock 断言。
+   */
+  killProcessTree?: (pid: number) => void;
   initialThreads?: ThreadSummary[];
   threadSettings?: ThreadSettingsStore;
 }
@@ -56,10 +61,31 @@ function windowsCommand(command: string, args: string[]) {
   return `call ${values.map((value) => `"${value}"`).join(" ")}`;
 }
 
+/**
+ * 默认的进程树结束：只有 Windows 需要。`pid` 一定是数字（调用方保证），
+ * 以参数数组形式传给 `taskkill`，不经过 shell，不存在注入风险。
+ * 非 Windows 上直接返回，调用方随后仍会 `child.kill()`。
+ */
+function defaultKillProcessTree(pid: number) {
+  if (process.platform !== "win32") return;
+  try {
+    spawnSync(
+      process.env.ComSpec || "cmd.exe",
+      ["/d", "/s", "/c", `taskkill /PID ${pid} /T /F`],
+      { windowsHide: true, stdio: "ignore" },
+    );
+  } catch {
+    // taskkill 失败也不要紧：随后还会尝试 child.kill()。
+  }
+}
+
 type OpenCodeSession = {
   id: string;
   directory?: string;
   title?: string;
+  /** OpenCode generates this readable name; `title` stays empty until renamed. */
+  slug?: string;
+  model?: { id?: string; providerID?: string; variant?: string };
   /** Set on child sessions spawned by subagents; they are not Deck threads. */
   parentID?: string;
   time?: { created?: number; updated?: number };
@@ -76,16 +102,31 @@ type OpenCodeModelMeta = {
   displayName?: string;
   attachment?: boolean;
   modalities?: { input?: string[] };
+  /** Current shape: `capabilities.input.image`; older builds used the rest. */
+  capabilities?: { attachment?: boolean; input?: { image?: boolean } };
+  variants?: Record<string, unknown>;
   limit?: { context?: number; output?: number };
 };
 
 function modelSupportsImages(meta?: OpenCodeModelMeta): boolean | undefined {
   if (!meta) return undefined;
+  const image = meta.capabilities?.input?.image;
+  if (typeof image === "boolean") return image;
+  const attachment = meta.capabilities?.attachment;
+  if (typeof attachment === "boolean") return attachment;
   const inputs = meta.modalities?.input;
   if (Array.isArray(inputs))
     return inputs.some((item) => /^image/i.test(String(item)));
   if (typeof meta.attachment === "boolean") return meta.attachment;
   return undefined;
+}
+
+/** Reasoning effort in OpenCode is a model variant: low / medium / high / max. */
+function modelVariants(meta?: OpenCodeModelMeta) {
+  const names = Object.keys(meta?.variants || {}).filter(Boolean);
+  return names.length
+    ? names.map((name) => ({ reasoningEffort: name }))
+    : undefined;
 }
 
 function normalizeProfiles(value: unknown): OpenCodeProfile[] {
@@ -148,14 +189,17 @@ function sessionSummary(
   session: OpenCodeSession,
   status: ThreadSummary["status"] = "idle",
 ): ThreadSummary {
+  const name = session.title || session.slug || "OpenCode 会话";
+  const variant = session.model?.variant;
   return {
     agentId: "opencode",
     id: session.id,
     providerId: profileId(session),
-    name: session.title || "OpenCode 会话",
-    preview: session.title || "OpenCode 会话",
+    name,
+    preview: name,
     cwd: session.directory || "",
     model: "default",
+    ...(variant && variant !== "default" ? { reasoningEffort: variant } : {}),
     status,
     updatedAt: Number(
       session.time?.updated || session.time?.created || Date.now(),
@@ -163,6 +207,48 @@ function sessionSummary(
     sessionId: session.id,
     controlMode: "managed",
   };
+}
+
+/**
+ * 和 Codex 对齐：OpenCode 的 `slug` 只是服务端随机生成的
+ * `形容词-名词`（如 witty-comet），`title` 为空直到手动重命名。
+ * 有首条用户消息时，用它做 name/preview，而不是展示随机 slug。
+ */
+const DEFAULT_OPENCODE_NAMES = new Set(["OpenCode 会话", "新 OpenCode 会话"]);
+
+function cleanOpenCodePreview(value: unknown) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstOpenCodeUserPreview(records: any[]) {
+  for (const record of records || []) {
+    const message = record?.info || record?.message || record;
+    if (message?.role !== "user") continue;
+    const parts = Array.isArray(record?.parts) ? record.parts : [];
+    const text = parts
+      .filter((part: any) => part?.type === "text" && part?.text)
+      .map((part: any) => String(part.text))
+      .join(" ");
+    const cleaned =
+      cleanOpenCodePreview(text) ||
+      cleanOpenCodePreview((message as any)?.content);
+    if (cleaned) return cleaned;
+  }
+  return "";
+}
+
+/** 随机 slug 长这样：curious-comet / neon-lagoon，全小写字母加连字符。 */
+function isOpenCodeSlug(value?: string) {
+  return /^[a-z]{3,}-[a-z]{3,}(?:-[a-z]{3,})?$/.test(String(value || "").trim());
+}
+
+function isOpenCodeDefaultName(name?: string) {
+  const value = String(name || "").trim();
+  if (!value) return true;
+  if (DEFAULT_OPENCODE_NAMES.has(value)) return true;
+  return isOpenCodeSlug(value);
 }
 
 function textPart(text: string) {
@@ -229,6 +315,22 @@ function normalizeMessages(
     model: "default",
     turns,
   };
+}
+
+/** Newest assistant message of a session, or undefined before the first reply. */
+function lastAssistantInfo(records: any[]) {
+  for (let index = (records || []).length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    const info = record?.info || record?.message || record;
+    if (info?.role === "assistant") return info;
+  }
+  return undefined;
+}
+
+function tokenNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
 }
 
 /**
@@ -327,6 +429,11 @@ export class OpenCodeAdapter extends EventEmitter {
   private approvals = new Map<string, any>();
   /** Role of the last seen OpenCode message, used to skip replayed user parts. */
   private messageRoles = new Map<string, string>();
+  /**
+   * OpenCode 服务端的 `title`（手动重命名才有）。有它时首条消息
+   * 不得覆盖用户起的名字；没它时才用首条消息对齐 Codex。
+   */
+  private sessionTitles = new Map<string, string>();
   private online = false;
   private starting = false;
   private startingTask?: Promise<void>;
@@ -410,7 +517,7 @@ export class OpenCodeAdapter extends EventEmitter {
   listModels(providerId?: string): ModelInfo[] {
     const matched = providerId
       ? this.profiles.filter((item) => item.id === providerId)
-      : this.profiles;
+      : this.rankedProfiles();
     const scope = matched.length ? matched : this.rankedProfiles();
     const entries: ModelInfo[] = [];
     for (const profile of scope) {
@@ -428,6 +535,7 @@ export class OpenCodeAdapter extends EventEmitter {
               ? true
               : undefined,
           ...(connected ? { connected: true } : {}),
+          supportedReasoningEfforts: modelVariants(model),
           supportsImages: modelSupportsImages(model),
         });
       }
@@ -456,6 +564,8 @@ export class OpenCodeAdapter extends EventEmitter {
     this.starting = true;
     this.broadcast("agent.status", this.descriptor());
     try {
+      // 已有健康 server 时直接复用，避免每次 startAll 都另起一个端口泄漏。
+      if (await this.reuseHealthyServer()) return;
       const port = this.options.port || (await findFreeListenPort());
       this.baseUrl = `http://127.0.0.1:${port}`;
       const platform = this.options.platform || process.platform;
@@ -525,7 +635,7 @@ export class OpenCodeAdapter extends EventEmitter {
       const detail = this.processError(error);
       const child = this.process;
       this.process = undefined;
-      child?.kill();
+      this.killChild(child);
       this.offline(detail);
       throw detail;
     } finally {
@@ -545,16 +655,47 @@ export class OpenCodeAdapter extends EventEmitter {
       existing?.status === "running" || existing?.status === "waiting";
     const summary = sessionSummary(session, busy ? existing!.status : "idle");
     const settings = this.options.threadSettings?.get(this.id, session.id);
+    const title = String(session.title || "").trim();
+    this.sessionTitles.set(session.id, title);
     return {
       ...summary,
       ...existing,
       ...settings,
       agentId: this.id,
-      name: session.title || existing?.name || summary.name,
-      preview: session.title || existing?.preview || summary.preview,
+      name: session.title || existing?.name || session.slug || summary.name,
+      preview:
+        session.title || existing?.preview || session.slug || summary.preview,
       cwd: session.directory || existing?.cwd || summary.cwd,
       updatedAt: Math.max(summary.updatedAt, existing?.updatedAt || 0),
     };
+  }
+
+  /**
+   * 和 Codex 一致：没有服务端 title 时，用首条用户消息做标题。
+   * 有 title（新建时填了名 / 手动重命名）时绝不覆盖。
+   */
+  private applyFirstMessageNaming(thread: ThreadSummary, records: any[]) {
+    if (String(this.sessionTitles.get(thread.id) || "").trim()) return thread;
+    const preview = firstOpenCodeUserPreview(records);
+    if (!preview) return thread;
+    // 重启后标题表是空的，这时只覆盖随机 slug / 默认名，
+    // 自定义名字（和 preview 不一致、也不是 slug）一律保留。
+    if (
+      this.sessionTitles.has(thread.id) ||
+      isOpenCodeDefaultName(thread.name) ||
+      isOpenCodeDefaultName(thread.preview)
+    ) {
+      const next: ThreadSummary = {
+        ...thread,
+        name: preview.slice(0, 42),
+        preview,
+        updatedAt: Math.max(thread.updatedAt || 0, Date.now()),
+      };
+      this.threads.set(next.id, next);
+      this.broadcast("thread.updated", next);
+      return next;
+    }
+    return thread;
   }
 
   async refreshAll() {
@@ -582,8 +723,10 @@ export class OpenCodeAdapter extends EventEmitter {
         !seen.has(id) &&
         thread.status !== "running" &&
         thread.status !== "waiting"
-      )
+      ) {
         this.threads.delete(id);
+        this.sessionTitles.delete(id);
+      }
     this.broadcast("agent.status", this.descriptor());
     this.broadcast("snapshot", this.snapshot());
   }
@@ -594,12 +737,62 @@ export class OpenCodeAdapter extends EventEmitter {
     );
   }
 
+  /**
+   * 已有 server 且健康检查通过时复用它；事件流沿用旧的，不重复订阅。
+   * 不健康则把残留子进程连带结束，返回 false 让调用方重新拉起。
+   */
+  private async reuseHealthyServer(): Promise<boolean> {
+    const child = this.process;
+    if (!this.online || !child || !this.baseUrl) return false;
+    if (child.killed || child.exitCode != null) return false;
+    try {
+      const healthy = await Promise.race([
+        this.request("/global/health").then(
+          () => true,
+          () => false,
+        ),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      if (healthy) {
+        await this.refreshAll();
+        return true;
+      }
+    } catch {
+      // 走到下面按不健康处理。
+    }
+    this.killChild(child);
+    if (this.process === child) this.process = undefined;
+    this.online = false;
+    return false;
+  }
+
+  /**
+   * 先杀整棵进程树（Windows 上连带结束 cmd 身后的 opencode.exe），
+   * 再杀直接子进程兜底；一律吞错，绝不因为清理失败抛错。
+   */
+  private killChild(child: ChildProcess | undefined) {
+    if (!child) return;
+    const pid = typeof child.pid === "number" ? child.pid : undefined;
+    if (pid != null) {
+      try {
+        (this.options.killProcessTree || defaultKillProcessTree)(pid);
+      } catch {
+        // 忽略，继续尝试 child.kill()。
+      }
+    }
+    try {
+      child.kill();
+    } catch {
+      // 忽略：进程可能已经退出。
+    }
+  }
+
   restart() {
     this.eventAbort?.abort();
     this.eventAbort = undefined;
     const child = this.process;
     this.process = undefined;
-    child?.kill();
+    this.killChild(child);
     this.online = false;
     for (const thread of this.busyThreads()) {
       thread.status = "offline";
@@ -620,12 +813,16 @@ export class OpenCodeAdapter extends EventEmitter {
       directory: input.cwd,
       body: { title: input.name },
     });
+    const displayName = input.name || session.title || "新 OpenCode 会话";
+    this.sessionTitles.set(session.id, String(input.name || session.title || "").trim());
     const thread = {
       ...sessionSummary(session),
       providerId: providerId || profileId(session),
       cwd: input.cwd,
       model: input.model || "default",
-      name: input.name || session.title || "新 OpenCode 会话",
+      // 新会话没有首条消息前不展示随机 slug，和 Codex 的“新会话”一致。
+      name: displayName,
+      preview: displayName,
     };
     // Persist the picked model so the next refresh (or a Deck restart) keeps
     // it instead of falling back to OpenCode's own default.
@@ -638,23 +835,95 @@ export class OpenCodeAdapter extends EventEmitter {
     return thread;
   }
 
+  /**
+   * OpenCode stores per-message token counts instead of a running context
+   * total, so the newest assistant message is what Deck can show as "context
+   * used", next to the context window the model itself advertises.
+   */
+  private applyThreadUsage(thread: ThreadSummary, records: any[]) {
+    const info = lastAssistantInfo(records);
+    const providerID = String(info?.providerID || "").trim();
+    const modelID = String(info?.modelID || "").trim();
+    const resolved =
+      providerID && modelID
+        ? `${providerID}/${modelID}`
+        : thread.model && thread.model !== "default"
+          ? thread.model
+          : this.configDefault
+            ? `${this.configDefault.providerID}/${this.configDefault.modelID}`
+            : undefined;
+    const tokens = info?.tokens || {};
+    const cache = tokens.cache || {};
+    const input = tokenNumber(tokens.input);
+    const output = tokenNumber(tokens.output);
+    const reasoning = tokenNumber(tokens.reasoning);
+    const cachedInput = tokenNumber(cache.read) + tokenNumber(cache.write);
+    const used = input + output + reasoning + cachedInput;
+    const limit =
+      providerID && modelID
+        ? this.modelContextLimit(providerID, modelID)
+        : undefined;
+    const tokenUsage: TokenUsage | undefined =
+      used > 0 || limit
+        ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit }
+        : undefined;
+    const sameUsage =
+      thread.tokenUsage?.used === tokenUsage?.used &&
+      thread.tokenUsage?.limit === tokenUsage?.limit;
+    if (resolved === thread.resolvedModel && sameUsage) return thread;
+    const next: ThreadSummary = {
+      ...thread,
+      ...(resolved ? { resolvedModel: resolved } : {}),
+      ...(tokenUsage ? { tokenUsage } : {}),
+    };
+    this.threads.set(next.id, next);
+    this.broadcast("thread.updated", next);
+    return next;
+  }
+
+  /** Effort chosen in Deck, kept only when the model in use advertises it. */
+  private threadVariant(thread: ThreadSummary) {
+    const effort = thread.reasoningEffort?.trim();
+    if (!effort) return undefined;
+    const parsed = this.modelInput(thread.model || thread.resolvedModel || "");
+    if (!parsed) return undefined;
+    const model = this.profiles.find((item) => item.id === parsed.providerID)
+      ?.models?.[parsed.modelID];
+    const supported = modelVariants(model);
+    if (!supported?.some((item) => item.reasoningEffort === effort))
+      return undefined;
+    return effort;
+  }
+
+  private modelContextLimit(providerID: string, modelID: string) {
+    const profile = this.profiles.find((item) => item.id === providerID);
+    const limit = profile?.models?.[modelID]?.limit?.context;
+    return typeof limit === "number" && limit > 0 ? limit : undefined;
+  }
+
   async readThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
     const records = await this.request<any[]>(
       `/session/${encodeURIComponent(threadId)}/message`,
       { directory: thread.cwd },
     );
+    const renamed = this.applyFirstMessageNaming(thread, records);
+    const current = this.applyThreadUsage(renamed, records);
     return {
       ...normalizeMessages(
-        { id: thread.id, directory: thread.cwd },
+        { id: current.id, directory: current.cwd },
         records,
-        thread.status === "running" || thread.status === "waiting"
-          ? thread.activeTurnId
+        current.status === "running" || current.status === "waiting"
+          ? current.activeTurnId
           : undefined,
       ),
       agentId: this.id,
-      providerId: thread.providerId,
-      model: thread.model,
+      providerId: current.providerId,
+      model: current.model,
+      ...(current.resolvedModel
+        ? { resolvedModel: current.resolvedModel }
+        : {}),
+      ...(current.tokenUsage ? { tokenUsage: current.tokenUsage } : {}),
     };
   }
 
@@ -667,6 +936,7 @@ export class OpenCodeAdapter extends EventEmitter {
       directory: thread.cwd,
       body: { title: next },
     });
+    this.sessionTitles.set(threadId, next);
     thread.name = next;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
@@ -676,12 +946,20 @@ export class OpenCodeAdapter extends EventEmitter {
   async updateThreadSettings(
     _providerId: string,
     threadId: string,
-    settings: { model?: string },
+    settings: { model?: string; reasoningEffort?: string },
   ) {
     const thread = this.requireThread(threadId);
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("任务结束后才能修改 OpenCode 会话设置");
     if (settings.model) thread.model = settings.model;
+    if (settings.reasoningEffort !== undefined)
+      thread.reasoningEffort = settings.reasoningEffort || undefined;
+    // Same persistence as createThread: a refresh or restart must not drop the
+    // model/effort picked in Deck.
+    await this.options.threadSettings?.update(this.id, threadId, {
+      model: thread.model,
+      reasoningEffort: settings.reasoningEffort,
+    });
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
     return thread;
@@ -696,6 +974,7 @@ export class OpenCodeAdapter extends EventEmitter {
       directory: thread.cwd,
     });
     this.threads.delete(threadId);
+    this.sessionTitles.delete(threadId);
     this.broadcast("thread.deleted", { agentId: this.id, threadId });
     return { ok: true };
   }
@@ -726,12 +1005,33 @@ export class OpenCodeAdapter extends EventEmitter {
     thread.activeTurnId = turnId;
     thread.lastError = undefined;
     thread.updatedAt = Date.now();
+    // 首条消息先在本地落标题，和 Codex 一样不用等服务端回包。
+    const optimistic = cleanOpenCodePreview(text);
+    if (
+      optimistic &&
+      !String(this.sessionTitles.get(threadId) || "").trim() &&
+      (isOpenCodeDefaultName(thread.name) ||
+        isOpenCodeDefaultName(thread.preview) ||
+        !this.sessionTitles.has(threadId))
+    ) {
+      // 重启后标题表未知时同样只覆盖 slug/默认名，自定义名不动。
+      if (
+        this.sessionTitles.has(threadId) ||
+        isOpenCodeDefaultName(thread.name)
+      ) {
+        thread.name = optimistic.slice(0, 42);
+        thread.preview = optimistic;
+      }
+    }
     this.broadcast("thread.updated", thread);
     this.emitAgentEvent(thread, "turn/started", {
       threadId,
       turn: { id: turnId, status: "inProgress" },
     });
     const model = parsed;
+    // The reasoning effort is a per-message variant; only send one the model
+    // actually advertises, otherwise OpenCode rejects the request.
+    const variant = this.threadVariant(thread);
     await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
       method: "POST",
       directory: thread.cwd,
@@ -741,6 +1041,7 @@ export class OpenCodeAdapter extends EventEmitter {
           ...(images || []).map(imagePart),
         ],
         ...(model ? { model } : {}),
+        ...(variant ? { variant } : {}),
       },
     });
     return { turn: { id: turnId, status: "inProgress" } };
@@ -926,6 +1227,7 @@ export class OpenCodeAdapter extends EventEmitter {
     }
     if (payload?.type === "session.deleted" && sessionId) {
       this.threads.delete(sessionId);
+      this.sessionTitles.delete(sessionId);
       this.broadcast("thread.deleted", {
         agentId: this.id,
         threadId: sessionId,
