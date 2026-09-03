@@ -1247,7 +1247,10 @@ setInterval(async () => {
   }
 }, 5_000).unref();
 
+let shuttingDown = false;
 const shutdown = () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   clearRuntimeLock(dataDir, process.pid);
   pairing?.stop();
   tunnel?.kill();
@@ -1259,5 +1262,7 @@ const shutdown = () => {
     .catch(() => undefined)
     .finally(() => server.close(() => process.exit(0)));
 };
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+// Windows Ctrl+Break 只在 win32 上存在，其他平台注册会报错，故加守卫。
+if (process.platform === "win32") process.once("SIGBREAK", shutdown);

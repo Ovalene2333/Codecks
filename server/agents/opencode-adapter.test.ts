@@ -313,6 +313,238 @@ test("OpenCode adapter reports stderr and stops a failed startup", async () => {
   assert.match(adapter.descriptor().error || "", /configuration is invalid/);
 });
 
+test("OpenCode ranks connected providers ahead of the rest of the catalog", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config"))
+        return Response.json({ model: { providerID: "mistral", modelID: "large" } });
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            openai: { name: "OpenAI", models: { "gpt-5": { name: "GPT-5" } } },
+            mistral: { name: "Mistral", models: { large: { name: "Large" } } },
+            anthropic: {
+              name: "Anthropic",
+              models: { sonnet: { name: "Sonnet" } },
+            },
+          },
+          connected: ["anthropic", "mistral"],
+        });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  // Mistral is the configured default, so it leads the connected block; the
+  // never-connected OpenAI provider falls behind both of them.
+  assert.deepEqual(
+    adapter.publicProfiles().map((profile) => [profile.id, profile.connected === true]),
+    [
+      ["mistral", true],
+      ["anthropic", true],
+      ["openai", false],
+    ],
+  );
+  assert.deepEqual(
+    adapter
+      .listModels()
+      .filter((model) => model.model !== "default")
+      .map((model) => [model.model, model.connected === true]),
+    [
+      ["mistral/large", true],
+      ["anthropic/sonnet", true],
+      ["openai/gpt-5", false],
+    ],
+  );
+});
+
+test("OpenCode resolves the concrete model id and context usage from the last reply", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            anthropic: {
+              name: "Anthropic",
+              models: {
+                "claude-sonnet-4-5": {
+                  name: "Claude Sonnet 4.5",
+                  limit: { context: 200_000 },
+                },
+              },
+            },
+          },
+          connected: ["anthropic"],
+        });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "继续" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              tokens: {
+                input: 1_200,
+                output: 300,
+                reasoning: 50,
+                cache: { read: 7_000, write: 0 },
+              },
+            },
+            parts: [{ id: "p2", type: "text", text: "好" }],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.resolvedModel, "anthropic/claude-sonnet-4-5");
+  assert.deepEqual(loaded.tokenUsage, {
+    input: 1_200,
+    cachedInput: 7_000,
+    output: 300,
+    reasoningOutput: 50,
+    used: 8_550,
+    limit: 200_000,
+  });
+  // `default` stays the setting; the resolved id is display only.
+  assert.equal(loaded.model, "default");
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  assert.equal(thread.resolvedModel, "anthropic/claude-sonnet-4-5");
+  assert.equal(thread.tokenUsage.used, 8_550);
+});
+
+test("OpenCode sessions fall back to the generated slug and expose effort variants", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            openai: {
+              name: "OpenAI",
+              models: {
+                "gpt-5": {
+                  name: "GPT-5",
+                  limit: { context: 400_000 },
+                  variants: { low: {}, medium: {}, high: {} },
+                  capabilities: { input: { image: false } },
+                },
+                "gpt-5v": {
+                  name: "GPT-5V",
+                  capabilities: { input: { image: true } },
+                },
+              },
+            },
+          },
+          connected: ["openai"],
+        });
+      if (value.includes("/session"))
+        return Response.json([
+          {
+            id: "s1",
+            directory: "/work",
+            // OpenCode fills `slug`, not `title`, until someone renames it.
+            slug: "witty-comet",
+            title: "",
+            model: { id: "gpt-5", providerID: "openai", variant: "high" },
+            time: { updated: 5 },
+          },
+        ]);
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  const thread = adapter.listThreads().find((item) => item.id === "s1");
+  assert.equal(thread?.name, "witty-comet");
+  assert.equal(thread?.preview, "witty-comet");
+  assert.equal(thread?.reasoningEffort, "high");
+
+  const models = adapter.listModels();
+  const gpt5 = models.find((model) => model.model === "openai/gpt-5");
+  assert.deepEqual(
+    gpt5?.supportedReasoningEfforts?.map((item) => item.reasoningEffort),
+    ["low", "medium", "high"],
+  );
+  assert.equal(gpt5?.supportsImages, false);
+  assert.equal(
+    models.find((model) => model.model === "openai/gpt-5v")?.supportsImages,
+    true,
+  );
+});
+
+test("OpenCode sends the picked effort as a variant the model advertises", async () => {
+  const saved = new Map<string, any>();
+  const posts: Array<{ body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    threadSettings: {
+      get: (_agent: string, id: string) => saved.get(id),
+      update: async (_agent: string, id: string, next: any) => {
+        const merged = { ...(saved.get(id) || {}), ...next };
+        saved.set(id, merged);
+        return merged;
+      },
+    } as any,
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && init?.method === "POST") {
+        posts.push({ body: init.body ? String(init.body) : undefined });
+        return Response.json({ id: "msg" });
+      }
+      if (value.includes("/session") && init?.method === "POST")
+        return Response.json({ id: "s1", directory: "/work" });
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            openai: {
+              name: "OpenAI",
+              models: { "gpt-5": { name: "GPT-5", variants: { low: {}, high: {} } } },
+            },
+          },
+          connected: ["openai"],
+        });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  await adapter.createThread("openai", { cwd: "/work", model: "openai/gpt-5" });
+
+  await adapter.updateThreadSettings("openai", "s1", {
+    model: "openai/gpt-5",
+    reasoningEffort: "high",
+  });
+  assert.equal(saved.get("s1")?.reasoningEffort, "high");
+  await adapter.sendTurn("openai", "s1", "继续");
+  assert.deepEqual(JSON.parse(String(posts.at(-1)?.body)).variant, "high");
+
+  // An effort the model does not advertise is dropped instead of rejected.
+  const sent = (adapter as any).threads.get("s1");
+  sent.status = "idle";
+  sent.activeTurnId = undefined;
+  await adapter.updateThreadSettings("openai", "s1", {
+    reasoningEffort: "ultra",
+  });
+  await adapter.sendTurn("openai", "s1", "继续");
+  assert.equal(JSON.parse(String(posts.at(-1)?.body)).variant, undefined);
+  assert.equal(posts.length, 2);
+});
+
 test("OpenCode normalization keeps todo tool payloads and hides step metadata", () => {
   const todo = openCodePartToItem({
     id: "prt-1",
@@ -442,6 +674,99 @@ test("OpenCode native questions surface as answerable approval cards", async () 
   assert.match(posts[1].url, /\/question\/que_2\/reject/);
 });
 
+test("OpenCode restart kills the Windows process tree, not just cmd", async () => {
+  const treeKilled: number[] = [];
+  let directKilled = false;
+  const child = new EventEmitter() as any;
+  child.pid = 4242;
+  child.stderr = new EventEmitter();
+  child.kill = () => {
+    directKilled = true;
+    return true;
+  };
+  const adapter = new OpenCodeAdapter({
+    platform: "win32",
+    port: 4096,
+    killProcessTree: (pid: number) => {
+      treeKilled.push(pid);
+    },
+    spawnProcess: () => child,
+    fetcher: (async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/global/health")
+        return Response.json({ healthy: true });
+      if (pathname === "/session") return Response.json([]);
+      if (pathname === "/provider") return Response.json({ all: {} });
+      return new Response("");
+    }) as typeof fetch,
+  });
+
+  await adapter.startAll();
+  adapter.restart();
+  assert.deepEqual(treeKilled, [4242]);
+  assert.equal(directKilled, true);
+  assert.equal(adapter.descriptor().online, false);
+});
+
+test("OpenCode failed startup kills the process tree", async () => {
+  const treeKilled: number[] = [];
+  let directKilled = false;
+  const child = new EventEmitter() as any;
+  child.pid = 7777;
+  child.stderr = new EventEmitter();
+  child.kill = () => {
+    directKilled = true;
+    return true;
+  };
+  const adapter = new OpenCodeAdapter({
+    port: 4096,
+    killProcessTree: (pid: number) => {
+      treeKilled.push(pid);
+    },
+    spawnProcess: () => {
+      queueMicrotask(() => {
+        child.stderr.emit("data", "boom");
+        child.emit("exit", 1, null);
+      });
+      return child;
+    },
+    fetcher: (() => new Promise(() => undefined)) as typeof fetch,
+  });
+
+  await assert.rejects(adapter.startAll(), /boom/);
+  assert.deepEqual(treeKilled, [7777]);
+  assert.equal(directKilled, true);
+});
+
+test("OpenCode startAll reuses a healthy server instead of spawning again", async () => {
+  let spawns = 0;
+  const child = new EventEmitter() as any;
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  const adapter = new OpenCodeAdapter({
+    port: 4096,
+    spawnProcess: () => {
+      spawns += 1;
+      return child;
+    },
+    fetcher: (async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/global/health")
+        return Response.json({ healthy: true });
+      if (pathname === "/session") return Response.json([]);
+      if (pathname === "/provider") return Response.json({ all: {} });
+      return new Response("");
+    }) as typeof fetch,
+  });
+
+  await adapter.startAll();
+  assert.equal(spawns, 1);
+  await adapter.startAll();
+  assert.equal(spawns, 1);
+  assert.equal(adapter.descriptor().online, true);
+  adapter.restart();
+});
+
 test("OpenCode replied/rejected events clear stale question cards", () => {
   const adapter = new OpenCodeAdapter({ fetcher: (async () => Response.json(true)) as typeof fetch });
   adapter.on("event", () => undefined);
@@ -463,4 +788,83 @@ test("OpenCode replied/rejected events clear stale question cards", () => {
     properties: { sessionID: "s1", requestID: "que_x" },
   });
   assert.equal(adapter.snapshot().approvals.length, 0);
+});
+
+test("OpenCode new threads hide the random slug until the first message", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      if (String(url).includes("/session") && init?.method === "POST")
+        return Response.json({ id: "s1", directory: "/work", slug: "curious-comet", title: "" });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  const created: any = await adapter.createThread("p", { cwd: "/work" });
+  assert.equal(created.name, "新 OpenCode 会话");
+  assert.equal(created.preview, "新 OpenCode 会话");
+});
+
+test("OpenCode uses the first user message as title when OpenCode left title empty", async () => {
+  const message = (text: string) => [
+    {
+      info: { id: "m1", role: "user", time: { created: 1 } },
+      parts: [{ id: "p1", type: "text", text }],
+    },
+  ];
+  const makeAdapter = (session: any) =>
+    new OpenCodeAdapter({
+      fetcher: (async (url) => {
+        const value = String(url);
+        if (value.includes("/message")) return Response.json(message("修复登录闪退问题，点按钮没反应"));
+        if (value.includes("/provider")) return Response.json({ all: {} });
+        if (value.includes("/config")) return Response.json({});
+        if (value.includes("/session")) return Response.json([session]);
+        return Response.json([]);
+      }) as typeof fetch,
+    });
+
+  const untitled = makeAdapter({ id: "s1", directory: "/work", slug: "curious-comet", title: "" });
+  (untitled as any).baseUrl = "http://127.0.0.1:4096";
+  await untitled.refreshAll();
+  assert.equal(untitled.listThreads()[0].name, "curious-comet");
+  await untitled.readThread("p", "s1");
+  const renamed: any = untitled.listThreads().find((item) => item.id === "s1");
+  assert.equal(renamed.preview, "修复登录闪退问题，点按钮没反应");
+  assert.equal(renamed.name, "修复登录闪退问题，点按钮没反应".slice(0, 42));
+
+  const titled = makeAdapter({ id: "s1", directory: "/work", slug: "curious-comet", title: "手动标题" });
+  (titled as any).baseUrl = "http://127.0.0.1:4096";
+  await titled.refreshAll();
+  await titled.readThread("p", "s1");
+  assert.equal(titled.listThreads()[0].name, "手动标题");
+});
+
+test("OpenCode sendTurn names slug threads optimistically but keeps manual renames", async () => {
+  const makeAdapter = () =>
+    new OpenCodeAdapter({
+      fetcher: (async (url, init) => {
+        const value = String(url);
+        if (value.includes("/message") && init?.method === "POST") return Response.json({ id: "msg" });
+        if (value.includes("/provider")) return Response.json({ all: {} });
+        if (value.includes("/config")) return Response.json({});
+        if (value.includes("/session"))
+          return Response.json([{ id: "s1", directory: "/work", slug: "neon-lagoon", title: "" }]);
+        return Response.json([]);
+      }) as typeof fetch,
+    });
+  const adapter = makeAdapter();
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  await adapter.sendTurn("p", "s1", "帮我看看为什么构建这么慢");
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "s1")?.name,
+    "帮我看看为什么构建这么慢".slice(0, 42),
+  );
+
+  const manual = makeAdapter();
+  (manual as any).baseUrl = "http://127.0.0.1:4096";
+  await manual.refreshAll();
+  await manual.renameThread("p", "s1", "我的构建优化");
+  await manual.sendTurn("p", "s1", "换个话题聊聊别的");
+  assert.equal(manual.listThreads().find((item) => item.id === "s1")?.name, "我的构建优化");
 });
