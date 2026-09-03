@@ -483,6 +483,10 @@ export function App() {
 
   useEffect(() => {
     const threads = [...snapshot.threads, ...(snapshot.archivedThreads || [])];
+    const liveIds = new Set(snapshot.approvals.map((approval) => approval.id));
+    // 已决议的 id 及时摘除，否则 Set 随运行时间无限增长。
+    for (const id of [...notifiedApprovals.current])
+      if (!liveIds.has(id)) notifiedApprovals.current.delete(id);
     for (const approval of snapshot.approvals) {
       if (notifiedApprovals.current.has(approval.id)) continue;
       notifiedApprovals.current.add(approval.id);

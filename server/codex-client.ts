@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import WebSocket from "ws";
+import { killProcessTree, stopChildProcess } from "./process-tree.js";
 import type {
   ConnectionOverlay,
   Provider,
@@ -156,6 +157,7 @@ function findNpmCodexJs(shim: string) {
 
 export class CodexClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
+  private lineReader?: readline.Interface;
   private socket?: WebSocket;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -182,6 +184,10 @@ export class CodexClient extends EventEmitter {
       providerId: string,
     ) => ConnectionOverlay | undefined,
     private modelConfig?: RuntimeModelConfig,
+    private processHooks: {
+      spawnProcess?: typeof spawn;
+      killProcessTree?: (pid: number) => void;
+    } = {},
   ) {
     super();
   }
@@ -237,11 +243,13 @@ export class CodexClient extends EventEmitter {
     this.failed = false;
     this.stopping = false;
     this.launchSummary = `${launch.command} ${launch.args.join(" ")}`;
-    this.child = spawn(launch.command, launch.args, {
+    const spawnProcess = this.processHooks.spawnProcess || spawn;
+    const spawned = spawnProcess(launch.command, launch.args, {
       env: launchEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
+    this.child = spawned;
     this.child.once("error", (error) => this.fail(error));
     this.child.once("exit", (code) => {
       if (!this.stopping)
@@ -253,29 +261,41 @@ export class CodexClient extends EventEmitter {
       this.processOutput = `${this.processOutput}${text}`.slice(-8_000);
       this.emit("log", text);
     });
-    if (this.remoteUrl)
-      this.child.stdout.on("data", (chunk) => {
-        const text = chunk.toString();
-        this.processOutput = `${this.processOutput}${text}`.slice(-8_000);
-        this.emit("log", text);
-      });
-    if (this.remoteUrl) {
-      await this.connectSocket(this.remoteUrl);
-    } else {
-      readline
-        .createInterface({ input: this.child.stdout })
-        .on("line", (line) => {
-          try {
-            this.handle(JSON.parse(line));
-          } catch {
-            this.emit("log", `无法解析 app-server 输出: ${line}`);
-          }
+    try {
+      if (this.remoteUrl) {
+        this.child.stdout.on("data", (chunk) => {
+          const text = chunk.toString();
+          this.processOutput = `${this.processOutput}${text}`.slice(-8_000);
+          this.emit("log", text);
         });
+        await this.connectSocket(this.remoteUrl);
+      } else {
+        // readline interface 必须显式 close，否则每次重启 runtime 都会
+        // 漏一个挂在 stdout 上的监听图。
+        this.lineReader = readline
+          .createInterface({ input: this.child.stdout })
+          .on("line", (line) => {
+            try {
+              this.handle(JSON.parse(line));
+            } catch {
+              this.emit("log", `无法解析 app-server 输出: ${line}`);
+            }
+          });
+      }
+      await this.request("initialize", {
+        clientInfo: { name: "codex-deck", title: "Codex Deck", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      });
+    } catch (error) {
+      // 启动后半段失败（端口未就绪、initialize 超时）时子进程还在跑，
+      // 必须当场杀掉，否则留下一个无人管理的 app-server 孤儿。
+      this.closeLineReader();
+      this.socket?.close();
+      this.socket = undefined;
+      this.killChild(spawned);
+      if (this.child === spawned) this.child = undefined;
+      throw error;
     }
-    await this.request("initialize", {
-      clientInfo: { name: "codex-deck", title: "Codex Deck", version: "0.1.0" },
-      capabilities: { experimentalApi: true },
-    });
     this.notify("initialized");
     this.online = true;
     this.lastError = undefined;
@@ -306,16 +326,9 @@ export class CodexClient extends EventEmitter {
   stop(): Promise<void> {
     this.stopping = true;
     const child = this.child;
-    const pid = this.child?.pid;
-    if (pid && process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
-    } else {
-      this.child?.kill();
-    }
     this.child = undefined;
+    this.closeLineReader();
+    this.killChild(child);
     this.socket?.close();
     this.socket = undefined;
     this.online = false;
@@ -325,12 +338,28 @@ export class CodexClient extends EventEmitter {
       item.reject(error);
     }
     this.pending.clear();
-    if (!child || child.exitCode !== null)
+    if (!child || child.exitCode !== null || child.signalCode !== null)
       return Promise.resolve();
     return Promise.race([
       new Promise<void>((resolve) => child.once("exit", () => resolve())),
       new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
     ]);
+  }
+
+  private killChild(child: ChildProcessWithoutNullStreams | undefined) {
+    stopChildProcess(
+      child,
+      this.processHooks.killProcessTree || killProcessTree,
+    );
+  }
+
+  private closeLineReader() {
+    try {
+      this.lineReader?.close();
+    } catch {
+      // 忽略：流可能已经销毁。
+    }
+    this.lineReader = undefined;
   }
 
   private send(message: RpcMessage) {

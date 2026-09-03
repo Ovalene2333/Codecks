@@ -1,6 +1,7 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
 import type {
   ApprovalKind,
@@ -59,24 +60,6 @@ function windowsCommand(command: string, args: string[]) {
     throw new Error("OPENCODE_BIN 包含 Windows cmd 不支持的字符");
   const values = [command, ...args];
   return `call ${values.map((value) => `"${value}"`).join(" ")}`;
-}
-
-/**
- * 默认的进程树结束：只有 Windows 需要。`pid` 一定是数字（调用方保证），
- * 以参数数组形式传给 `taskkill`，不经过 shell，不存在注入风险。
- * 非 Windows 上直接返回，调用方随后仍会 `child.kill()`。
- */
-function defaultKillProcessTree(pid: number) {
-  if (process.platform !== "win32") return;
-  try {
-    spawnSync(
-      process.env.ComSpec || "cmd.exe",
-      ["/d", "/s", "/c", `taskkill /PID ${pid} /T /F`],
-      { windowsHide: true, stdio: "ignore" },
-    );
-  } catch {
-    // taskkill 失败也不要紧：随后还会尝试 child.kill()。
-  }
 }
 
 type OpenCodeSession = {
@@ -762,29 +745,19 @@ export class OpenCodeAdapter extends EventEmitter {
     }
     this.killChild(child);
     if (this.process === child) this.process = undefined;
+    // 旧 server 已死，它上面的 SSE 流也要停掉，否则旧循环会把 error
+    // 写回 descriptor，覆盖新 server 的健康状态。
+    this.eventAbort?.abort();
+    this.eventAbort = undefined;
     this.online = false;
     return false;
   }
 
-  /**
-   * 先杀整棵进程树（Windows 上连带结束 cmd 身后的 opencode.exe），
-   * 再杀直接子进程兜底；一律吞错，绝不因为清理失败抛错。
-   */
   private killChild(child: ChildProcess | undefined) {
-    if (!child) return;
-    const pid = typeof child.pid === "number" ? child.pid : undefined;
-    if (pid != null) {
-      try {
-        (this.options.killProcessTree || defaultKillProcessTree)(pid);
-      } catch {
-        // 忽略，继续尝试 child.kill()。
-      }
-    }
-    try {
-      child.kill();
-    } catch {
-      // 忽略：进程可能已经退出。
-    }
+    stopChildProcess(
+      child,
+      this.options.killProcessTree || killProcessTree,
+    );
   }
 
   restart() {
@@ -1171,6 +1144,8 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   private async consumeEvents() {
+    // 先停掉上一条流：restart 漏调或并发 startAll 时不能有两条 SSE 循环。
+    this.eventAbort?.abort();
     const abort = new AbortController();
     this.eventAbort = abort;
     try {
@@ -1181,23 +1156,33 @@ export class OpenCodeAdapter extends EventEmitter {
       if (!response.ok || !response.body)
         throw new Error(`OpenCode 事件流不可用：${response.status}`);
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffered = "";
-      while (!abort.signal.aborted) {
-        const next = await reader.read();
-        if (next.done) break;
-        buffered += decoder.decode(next.value, { stream: true });
-        const chunks = buffered.split(/\n\n/);
-        buffered = chunks.pop() || "";
-        for (const chunk of chunks) {
-          const line = chunk
-            .split(/\r?\n/)
-            .find((item) => item.startsWith("data:"));
-          if (!line) continue;
-          try {
-            this.onEvent(JSON.parse(line.slice(5)));
-          } catch {}
+      try {
+        const decoder = new TextDecoder();
+        let buffered = "";
+        while (!abort.signal.aborted) {
+          const next = await reader.read();
+          if (next.done) break;
+          buffered += decoder.decode(next.value, { stream: true });
+          const chunks = buffered.split(/\n\n/);
+          buffered = chunks.pop() || "";
+          for (const chunk of chunks) {
+            const line = chunk
+              .split(/\r?\n/)
+              .find((item) => item.startsWith("data:"));
+            if (!line) continue;
+            try {
+              this.onEvent(JSON.parse(line.slice(5)));
+            } catch {}
+          }
         }
+      } finally {
+        // reader 不 cancel/release 会一直挂着 socket 和 read() promise。
+        try {
+          await reader.cancel();
+        } catch {}
+        try {
+          reader.releaseLock();
+        } catch {}
       }
     } catch (error: any) {
       if (!abort.signal.aborted) this.error = error?.message || String(error);

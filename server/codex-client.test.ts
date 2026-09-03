@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import {
+  CodexClient,
   codexLaunchSpec,
   codexRuntimeEnvironment,
   runtimeModelConfigArgs,
@@ -198,4 +201,66 @@ test("Windows npm shims launch through node so -c values are not re-quoted", asy
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+function fakeChild(pid: number) {
+  const child = new EventEmitter() as any;
+  child.pid = pid;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.stdin = {
+    writable: true,
+    write: () => true,
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new EventEmitter();
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+  return child;
+}
+
+test("CodexClient kills the spawned server when startup fails", async () => {
+  const treeKilled: number[] = [];
+  const child = fakeChild(5150);
+  const client = new CodexClient(
+    { id: "test", codexHome: "D:\\tmp\\codex-test-home" } as any,
+    "D:\\tmp\\codex-test-data",
+    "codex",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    {
+      spawnProcess: (() => child) as any,
+      killProcessTree: (pid: number) => {
+        treeKilled.push(pid);
+      },
+    },
+  );
+
+  // app-server 秒退：exit 先于 initialize 响应到达。
+  queueMicrotask(() => child.emit("exit", 1));
+  await assert.rejects(() => client.start(), /已退出|超时|未运行/);
+  try {
+    assert.deepEqual(treeKilled, [5150]);
+    assert.equal(child.killed, true);
+    assert.equal((client as any).child, undefined);
+    assert.equal((client as any).lineReader, undefined);
+    assert.equal(client.online, false);
+  } finally {
+    child.stdout.destroy();
+  }
+});
+
+test("CodexClient stop resolves without a child", async () => {
+  const client = new CodexClient(
+    { id: "test", codexHome: "D:\\tmp\\codex-test-home" } as any,
+    "D:\\tmp\\codex-test-data",
+  );
+  await client.stop();
+  assert.equal(client.online, false);
 });

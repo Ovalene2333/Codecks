@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { killProcessTree } from "./process-tree.js";
 
 export const RUNTIME_LOCK_FILE = "runtime-lock.json";
 
@@ -43,10 +43,9 @@ export function killRecordedPid(
 ) {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
+    // 同步 taskkill：旧的 fire-and-forget spawn 会留僵尸句柄，
+    // 且调用方无法确认残留子进程已被回收。
+    killProcessTree(pid);
     return;
   }
   try {
