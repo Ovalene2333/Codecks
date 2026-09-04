@@ -636,6 +636,8 @@
 .subagent-agent {
   margin-left: auto;
   max-width: 40%;
+  min-width: 0;
+  flex: none;
   overflow: hidden;
   padding-right: 8px;
   text-overflow: ellipsis;
@@ -649,6 +651,14 @@
   font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+/* 子代理卡片的输出嵌在 details 里，命中不了 `.tool-row > pre` 的直接子选择器，
+   在此补齐同样的溢出约束，否则长行会撑出边界。 */
+.timeline .subagent-row details > pre {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .tool-status {
   flex: none;
