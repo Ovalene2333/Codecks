@@ -247,6 +247,12 @@ export class CodexAdapter extends EventEmitter {
 
   restart(_providerId?: string) {
     this.clearCompactions();
+    // 先按 offline 语义解除进行中回合的占用：client 被 stop 后不会再触发
+    // offline 事件，若不在此处 markOffline，被杀的 turn 会从 state DB 的
+    // inProgress 记录复活为 running，永久挡住后续供应商配置变更。
+    // 无运行中会话时 markOffline 是空操作，只清理审批与文件变更缓存。
+    this.markOffline();
+    this.broadcast("runtime.status", this.runtimeStatus());
     const previous = this.client;
     this.client = undefined;
     const stopping = previous?.stop() || Promise.resolve();

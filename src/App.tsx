@@ -30,6 +30,7 @@ import {
 import { sessionKey } from "./format";
 import {
   hasSidebarData,
+  mergeStaleSnapshot,
   readSnapshotCache,
   readUiCache,
   reconcileSnapshot,
@@ -327,6 +328,12 @@ export function App() {
     });
   }, []);
 
+  // 快照竞态守卫：并发的 GET /snapshot 可能乱序返回；且请求在途时落地的
+  // WS 事件比响应更新。seq 丢弃被取代的旧请求，wsClock 区分“干净响应”
+  // （整体 reconcile）与“中途有 WS 事件”（保守合并，见 mergeStaleSnapshot）。
+  const refreshSeqRef = useRef(0);
+  const wsClockRef = useRef(0);
+
   const openSession = useCallback(
     (thread: ThreadSummary) => {
       const key = sessionKey(thread);
@@ -349,10 +356,17 @@ export function App() {
 
   const refresh = useCallback(() => {
     setLoading(true);
+    const seq = ++refreshSeqRef.current;
+    const startClock = wsClockRef.current;
     return getSnapshot()
       .then((next) => {
+        // 已有更新的刷新在途：旧响应直接丢弃，避免回退新状态。
+        if (seq !== refreshSeqRef.current) return;
         setSnapshot((current) => {
-          const reconciled = reconcileSnapshot(current, next);
+          const reconciled =
+            wsClockRef.current === startClock
+              ? reconcileSnapshot(current, next)
+              : mergeStaleSnapshot(current, next);
           writeSnapshotCache(reconciled);
           return reconciled;
         });
@@ -523,6 +537,9 @@ export function App() {
       socket = ws;
       ws.onmessage = ({ data }) => {
         const message = JSON.parse(data);
+        // 任何 WS 消息都可能携带比在途 HTTP 快照更新的状态，先推进时钟，
+        // 让 refresh 响应落地时能选择保守合并而非整体覆盖。
+        wsClockRef.current += 1;
         if (message.type === "snapshot")
           setSnapshot((current) => reconcileSnapshot(current, message.data));
         else if (message.type === "thread.updated") {
@@ -776,7 +793,9 @@ export function App() {
       cwd: project.cwd,
       ...patch,
     });
-    setSnapshot(next);
+    // PUT 返回的是服务端生成时点的全量快照：走 reconcile 合并而非整体替换，
+    // 避免覆盖响应生成后才到达的 WS 事件。
+    setSnapshot((current) => reconcileSnapshot(current, next));
     return next;
   };
 
@@ -902,7 +921,8 @@ export function App() {
           pushToast(`已删除 ${ok} 个会话，${failed} 个失败，项目未移除`);
           return;
         }
-        setSnapshot(await remove("/projects", { key: project.key }));
+        const afterRemove = await remove("/projects", { key: project.key });
+        setSnapshot((current) => reconcileSnapshot(current, afterRemove));
         if (selectedInProject(project.key)) setSelected(undefined);
         await refresh();
         pushToast(

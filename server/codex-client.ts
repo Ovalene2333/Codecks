@@ -251,6 +251,16 @@ export class CodexClient extends EventEmitter {
     });
     this.child = spawned;
     this.child.once("error", (error) => this.fail(error));
+    // stdin 写入在子进程死亡瞬间会触发 EPIPE/ECONNRESET 的 'error' 事件；
+    // 不挂监听即未捕获异常，会直接崩掉整个 Deck 进程（连带所有 adapter）。
+    const stdinEvents = this.child.stdin as unknown as {
+      on?: (event: string, listener: (error: Error) => void) => void;
+    };
+    if (typeof stdinEvents?.on === "function") {
+      stdinEvents.on("error", (error) => {
+        if (!this.stopping) this.fail(error);
+      });
+    }
     this.child.once("exit", (code) => {
       if (!this.stopping)
         this.fail(new Error(`Codex app-server 已退出 (${code ?? "unknown"})`));
@@ -311,7 +321,12 @@ export class CodexClient extends EventEmitter {
         reject(new Error(`${method} 请求超时`));
       }, timeout);
       this.pending.set(id, { resolve, reject, timer });
-      this.send({ id, method, params });
+      // send 失败（管道已断）时直接拒绝，不 hanging 等超时。
+      if (!this.send({ id, method, params })) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new Error("Codex app-server 未运行"));
+      }
     });
   }
 
@@ -362,10 +377,31 @@ export class CodexClient extends EventEmitter {
     this.lineReader = undefined;
   }
 
-  private send(message: RpcMessage) {
+  private send(message: RpcMessage): boolean {
     const data = JSON.stringify(message);
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(data);
-    else this.child?.stdin.write(`${data}\n`);
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      try {
+        this.socket.send(data);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    const stdin = this.child?.stdin;
+    if (
+      !stdin ||
+      stdin.destroyed ||
+      stdin.writableEnded ||
+      stdin.writable === false
+    )
+      return false;
+    try {
+      stdin.write(`${data}\n`);
+      return true;
+    } catch {
+      // 同步抛错时 'error' 事件随后也会触发走 fail()；这里只避免崩溃。
+      return false;
+    }
   }
 
   private canSend() {

@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   acquireRuntimeLock,
   clearRuntimeLock,
+  isPidAlive,
   readRuntimeLock,
   RUNTIME_LOCK_FILE,
   updateRuntimeLock,
@@ -52,6 +53,7 @@ test("a dead pid with a leftover child is killed then replaced", () => {
     {
       alive: (pid) => pid === 99,
       kill: (pid) => killed.push(pid),
+      verifyStaleChild: () => true,
     },
   );
   assert.equal(result.status, "acquired");
@@ -80,4 +82,32 @@ test("clear only removes the lock owned by the expected pid", () => {
       })(),
     false,
   );
+});
+
+test("skips killing the stale child when ownership cannot be verified", () => {
+  const dir = tempDir();
+  const killed: number[] = [];
+  acquireRuntimeLock(dir, { pid: 7, port: 4174, useWsl: true });
+  updateRuntimeLock(dir, { childPid: 99 }, 7);
+  const result = acquireRuntimeLock(
+    dir,
+    { pid: 8, port: 4174, useWsl: true },
+    {
+      alive: (pid) => pid === 99,
+      kill: (pid) => killed.push(pid),
+      verifyStaleChild: () => false,
+    },
+  );
+  assert.equal(result.status, "acquired");
+  if (result.status === "acquired")
+    assert.equal(result.staleChildKilled, undefined);
+  assert.deepEqual(killed, []);
+  assert.equal(readRuntimeLock(dir)?.pid, 8);
+});
+
+test("isPidAlive treats the current process as alive and rejects bad pids", () => {
+  assert.equal(isPidAlive(process.pid), true);
+  assert.equal(isPidAlive(0), false);
+  assert.equal(isPidAlive(-1), false);
+  assert.equal(isPidAlive(Number.NaN), false);
 });

@@ -211,6 +211,21 @@ const authorized = (value?: string) => {
   const b = Buffer.from(token);
   return a.length === b.length && timingSafeEqual(a, b);
 };
+/**
+ * 免 token 本地模式下 WS 握手不受 CORS 约束：浏览器里任意网页都能发起握手。
+ * 此时要求 Origin 与 Host 同源（空 Origin 的非浏览器客户端放行），
+ * 否则任意网站可订阅全量快照流。token 模式下 token 本身即鉴权，不额外限制。
+ */
+const sameOriginWs = (origin: unknown, host: unknown) => {
+  if (token) return true;
+  if (origin == null || origin === "") return true;
+  if (typeof origin !== "string" || typeof host !== "string") return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+};
 app.use("/api", (req, res, next) => {
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "");
   if (!authorized(bearer))
@@ -1125,37 +1140,54 @@ const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const toolWss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host}`);
-  if (!authorized(url.searchParams.get("token") || undefined))
-    return socket.destroy();
-  if (url.pathname === "/ws") {
-    wss.handleUpgrade(req, socket, head, (ws) =>
-      wss.emit("connection", ws, req),
-    );
-    return;
-  }
-  const match = url.pathname.match(/^\/ws\/tools\/([^/]+)$/);
-  if (!match) return socket.destroy();
-  const toolId = decodeURIComponent(match[1]);
-  toolWss.handleUpgrade(req, socket, head, (ws) => {
-    try {
-      tools.connect(toolId, ws);
-    } catch (error: any) {
-      ws.send(
-        JSON.stringify({
-          type: "error",
-          message: error?.message || "工具连接失败",
-        }),
+  // Host / URL / 路径解码全由客户端控制，任何一步抛异常都只能断开这条连接，
+  // 绝不能让异常逃出 listener 崩掉整个进程（此前为免鉴权远程 DoS）。
+  try {
+    const url = new URL(req.url || "/", `http://${req.headers.host || ""}`);
+    if (!authorized(url.searchParams.get("token") || undefined))
+      return socket.destroy();
+    if (!sameOriginWs(req.headers.origin, req.headers.host))
+      return socket.destroy();
+    if (url.pathname === "/ws") {
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        wss.emit("connection", ws, req),
       );
-      ws.close(1008, "tool unavailable");
+      return;
     }
-  });
+    const match = url.pathname.match(/^\/ws\/tools\/([^/]+)$/);
+    if (!match) return socket.destroy();
+    let toolId: string;
+    try {
+      toolId = decodeURIComponent(match[1]);
+    } catch {
+      return socket.destroy();
+    }
+    toolWss.handleUpgrade(req, socket, head, (ws) => {
+      try {
+        tools.connect(toolId, ws);
+      } catch (error: any) {
+        ws.send(
+          JSON.stringify({
+            type: "error",
+            message: error?.message || "工具连接失败",
+          }),
+        );
+        ws.close(1008, "tool unavailable");
+      }
+    });
+  } catch {
+    try {
+      socket.destroy();
+    } catch {}
+  }
 });
 wss.on("connection", (ws) =>
   ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
 );
 agents.on("event", (event) => {
   if (event.type === "runtime.process") {
+    // 关机流程中子进程退出事件不得重建已被清除的锁文件。
+    if (shuttingDown) return;
     updateRuntimeLock(dataDir, {
       childPid: event.data?.pid,
       listen: event.data?.remoteUrl,
@@ -1273,21 +1305,47 @@ setInterval(async () => {
 }, 5_000).unref();
 
 let shuttingDown = false;
-const shutdown = () => {
-  if (shuttingDown) return;
+const shutdown = (signal: string) => {
+  if (shuttingDown) {
+    // server.close 可能被存活连接卡住：二次信号不再等待，直接强退。
+    console.error(`收到 ${signal}，强制退出`);
+    process.exit(1);
+  }
   shuttingDown = true;
+  // 先断全部 WS：否则 server.close 会等浏览器长连接，process.exit 永远到不了。
+  for (const client of wss.clients) {
+    try {
+      client.terminate();
+    } catch {}
+  }
+  for (const client of toolWss.clients) {
+    try {
+      client.terminate();
+    } catch {}
+  }
+  try {
+    wss.close();
+  } catch {}
+  try {
+    toolWss.close();
+  } catch {}
   clearRuntimeLock(dataDir, process.pid);
   pairing?.stop();
   tunnel?.kill();
   agents.stopAll();
   tools.close();
   sessionSearch.close();
+  // 硬退出兜底：5 秒后无论如何结束进程。
+  const hardExit = setTimeout(() => process.exit(0), 5_000);
   void threadSummaries
     .flush()
     .catch(() => undefined)
-    .finally(() => server.close(() => process.exit(0)));
+    .finally(() => {
+      clearTimeout(hardExit);
+      server.close(() => process.exit(0));
+    });
 };
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 // Windows Ctrl+Break 只在 win32 上存在，其他平台注册会报错，故加守卫。
-if (process.platform === "win32") process.once("SIGBREAK", shutdown);
+if (process.platform === "win32") process.on("SIGBREAK", () => shutdown("SIGBREAK"));

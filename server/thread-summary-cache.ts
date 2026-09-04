@@ -67,7 +67,12 @@ export class ThreadSummaryCache {
       archivedThreads: archivedThreads.map(cachedThread),
     };
     if (this.timer) return;
-    this.timer = setTimeout(() => void this.flush(), 150);
+    // flush 自带 catch：timer 路径丢弃 promise，一次写失败即 unhandled rejection 崩进程。
+    this.timer = setTimeout(() => {
+      this.flush().catch((error) => {
+        console.error("线程摘要缓存写入失败:", error?.message || error);
+      });
+    }, 150);
     this.timer.unref();
   }
 
@@ -77,7 +82,9 @@ export class ThreadSummaryCache {
     const snapshot = this.pending;
     this.pending = undefined;
     if (!snapshot) return this.writes;
-    this.writes = this.writes.then(async () => {
+    // 写链自愈：一次失败后重置链，避免后续所有 flush 带着旧错误永久跳过。
+    // 失败的 snapshot 已无意义（更新的 schedule 会覆盖），直接丢弃并记录。
+    const attempt = this.writes.catch(() => undefined).then(async () => {
       await mkdir(this.dataDir, { recursive: true });
       const temporary = `${this.file}.${process.pid}.tmp`;
       await writeFile(temporary, JSON.stringify(snapshot), {
@@ -86,6 +93,7 @@ export class ThreadSummaryCache {
       });
       await rename(temporary, this.file);
     });
-    return this.writes;
+    this.writes = attempt.catch(() => undefined);
+    return attempt;
   }
 }

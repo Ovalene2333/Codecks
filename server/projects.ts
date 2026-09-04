@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ClaudePermissionMode,
@@ -12,6 +12,13 @@ import type {
 } from "./types.js";
 
 const emptyPrefs = (): DeckPreferences => ({ recentDirs: [] });
+
+/** 原子写 JSON：先落临时文件再 rename，避免崩溃写一半产生脏文件。 */
+async function writeJsonAtomic(file: string, content: string) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, file);
+}
 
 export function normalizeProjectPath(cwd: string) {
   let value = cwd.trim().replace(/\\/g, "/");
@@ -366,17 +373,14 @@ export class ProjectStore {
   }
 
   private async saveProjects() {
-    await writeFile(this.projectsFile, JSON.stringify(this.list(), null, 2), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeJsonAtomic(
+      this.projectsFile,
+      JSON.stringify(this.list(), null, 2),
+    );
   }
 
   private async savePrefs() {
-    await writeFile(this.prefsFile, JSON.stringify(this.prefs, null, 2), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeJsonAtomic(this.prefsFile, JSON.stringify(this.prefs, null, 2));
   }
 }
 
