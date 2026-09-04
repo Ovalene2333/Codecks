@@ -172,6 +172,41 @@ function configDefaultModel(config: unknown) {
   return providerID && modelID ? { providerID, modelID } : undefined;
 }
 
+type OpenCodeCommandInfo = { name: string; description?: string };
+
+function normalizeCommands(value: unknown): OpenCodeCommandInfo[] {
+  const list = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? ((value as { commands?: unknown; data?: unknown }).commands ??
+        (value as { data?: unknown }).data)
+      : undefined;
+  if (!Array.isArray(list)) return [];
+  const seen = new Set<string>();
+  const entries: OpenCodeCommandInfo[] = [];
+  for (const item of list) {
+    const raw =
+      typeof item === "string"
+        ? item
+        : String(
+            (item as any)?.name ??
+              (item as any)?.command ??
+              (item as any)?.id ??
+              "",
+          ).trim();
+    if (!raw) continue;
+    const name = raw.startsWith("/") ? raw.slice(1) : raw;
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const description =
+      item && typeof item === "object"
+        ? String((item as any)?.description ?? "").trim() || undefined
+        : undefined;
+    entries.push({ name, ...(description ? { description } : {}) });
+  }
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function requestUrl(baseUrl: string, pathname: string, directory?: string) {
   const url = new URL(pathname, baseUrl);
   if (directory) url.searchParams.set("directory", directory);
@@ -1145,6 +1180,107 @@ export class OpenCodeAdapter extends EventEmitter {
     this.threads.delete(threadId);
     this.sessionTitles.delete(threadId);
     this.broadcast("thread.deleted", { agentId: this.id, threadId });
+    return { ok: true };
+  }
+
+  /**
+   * P0 命令目录：`GET /command` 返回内置 + `.opencode/commands/*.md`
+   * 自定义命令，归一化为不带 `/` 的名字供 Deck 补全使用。
+   */
+  async listSessionCommands(_providerId: string, _threadId: string) {
+    this.requireThread(_threadId);
+    const raw = await this.request<unknown>("/command");
+    return normalizeCommands(raw);
+  }
+
+  /**
+   * P0 通用命令透传：`POST /session/:id/command { command, arguments }`。
+   * `command` 不带前导 `/`；`model/variant` 沿用会话当前选择，
+   * 与 `sendTurn` 一致，避免用默认模型执行命令。
+   */
+  async runSessionCommand(
+    _providerId: string,
+    threadId: string,
+    command: string,
+    args?: string,
+  ) {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
+    const name = String(command || "").trim().replace(/^\/+/, "");
+    if (!name) throw new Error("命令名称不能为空");
+    const parsed =
+      thread.model && thread.model !== "default"
+        ? this.modelInput(thread.model)
+        : undefined;
+    const variant = this.threadVariant(thread);
+    const turnId = randomUUID();
+    thread.status = "running";
+    thread.activeTurnId = turnId;
+    thread.lastError = undefined;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    this.emitAgentEvent(thread, "turn/started", {
+      threadId,
+      turn: { id: turnId, status: "inProgress" },
+    });
+    try {
+      await this.request(`/session/${encodeURIComponent(threadId)}/command`, {
+        method: "POST",
+        directory: thread.cwd,
+        body: {
+          command: name,
+          arguments: String(args ?? ""),
+          ...(parsed ? { model: parsed } : {}),
+          ...(variant ? { variant } : {}),
+        },
+      });
+    } catch (error: any) {
+      const detail = String(error?.message || error || "OpenCode 命令执行失败");
+      thread.status = "error";
+      thread.activeTurnId = undefined;
+      thread.lastError = detail;
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+      this.emitAgentEvent(thread, "turn/completed", {
+        threadId,
+        turn: { id: turnId, status: "failed", error: { message: detail } },
+      });
+      throw error;
+    }
+    return { turn: { id: turnId, status: "inProgress" } };
+  }
+
+  /**
+   * P0 `/compact`：`POST /session/:id/summarize { providerID, modelID }`。
+   * 模型解析与用量显示一致：会话模型 → 已解析模型 → OpenCode 默认模型。
+   */
+  async compactSession(_providerId: string, threadId: string) {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务结束后才能压缩 OpenCode 会话上下文");
+    const explicit =
+      thread.model && thread.model !== "default"
+        ? this.modelInput(thread.model)
+        : undefined;
+    const resolved = explicit || this.modelInput(thread.resolvedModel || "");
+    const target = resolved || this.configDefault;
+    if (!target)
+      throw new Error("当前没有可用模型用于压缩，请先在会话设置里选择模型");
+    thread.compacting = true;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    try {
+      await this.request(`/session/${encodeURIComponent(threadId)}/summarize`, {
+        method: "POST",
+        directory: thread.cwd,
+        body: { providerID: target.providerID, modelID: target.modelID },
+      });
+    } finally {
+      thread.compacting = undefined;
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+    }
     return { ok: true };
   }
 

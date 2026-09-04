@@ -551,6 +551,40 @@ app.post(
     );
   }),
 );
+app.get(
+  "/api/agents/:agentId/threads/:threadId/commands",
+  route(async (req) => ({
+    commands: await agents.listSessionCommands(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    ),
+  })),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/commands",
+  route(async (req) => {
+    const input = z
+      .object({
+        command: z.string().min(1).max(120),
+        arguments: z.string().max(10_000).optional().default(""),
+      })
+      .parse(req.body || {});
+    return agents.runSessionCommand(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      input.command,
+      input.arguments,
+    );
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/compact",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    if (id !== "opencode") throw new Error("该 Agent 暂不支持压缩上下文");
+    return agents.compactSession(id, param(req.params.threadId));
+  }),
+);
 app.post(
   "/api/agents/:agentId/approvals/:approvalId",
   route(async (req) => {

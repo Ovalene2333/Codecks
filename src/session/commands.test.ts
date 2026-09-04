@@ -89,3 +89,51 @@ test("matchingSlashCommands filters as the user types", () => {
   assert.match(incompleteCommandHint("/fast turbo"), /on\|off/);
   assert.match(incompleteCommandHint("/mcp all"), /verbose/);
 });
+
+test("opencode commands parse to native or passthrough kinds", () => {
+  assert.deepEqual(parseComposerCommand("/compact", "opencode"), {
+    kind: "compact",
+  });
+  assert.deepEqual(parseComposerCommand("/summarize", "opencode"), {
+    kind: "compact",
+  });
+  assert.deepEqual(parseComposerCommand("/models", "opencode"), {
+    kind: "model",
+  });
+  assert.deepEqual(parseComposerCommand("/new", "opencode"), {
+    kind: "new-session",
+  });
+  assert.deepEqual(parseComposerCommand("/sessions", "opencode"), {
+    kind: "sessions",
+  });
+  assert.deepEqual(parseComposerCommand("/init AGENTS.md", "opencode"), {
+    kind: "opencode-command",
+    command: "init",
+    args: "AGENTS.md",
+  });
+  assert.deepEqual(parseComposerCommand("/my-deploy prod", "opencode"), {
+    kind: "opencode-command",
+    command: "my-deploy",
+    args: "prod",
+  });
+  // Codex 解析不受影响：未知命令仍返回 undefined。
+  assert.equal(parseComposerCommand("/my-deploy prod"), undefined);
+});
+
+test("opencode slash menu merges builtins with server custom commands", () => {
+  const items = matchingSlashCommands("/", "opencode", [
+    { name: "deploy", hint: "发布" },
+    { name: "/compact", hint: "重复项不应出现两次" },
+  ]);
+  const names = items.map((item) => item.name);
+  assert.ok(names.includes("/compact"));
+  assert.ok(names.includes("/models"));
+  assert.ok(names.includes("/deploy"));
+  assert.equal(names.filter((name) => name === "/compact").length, 1);
+  assert.deepEqual(
+    matchingSlashCommands("/dep", "opencode", [{ name: "deploy" }]).map(
+      (item) => item.name,
+    ),
+    ["/deploy"],
+  );
+});

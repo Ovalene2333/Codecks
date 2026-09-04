@@ -18,12 +18,14 @@ export function Composer({
   onError,
   focusRequest = 0,
   sessionControls,
+  extraCommands = [],
 }: {
   thread: ThreadSummary;
   text: string;
   images: ComposerImage[];
   sending: boolean;
   imageWarning?: string;
+  extraCommands?: Array<{ name: string; hint?: string }>;
   onChange: (value: string) => void;
   onImages: (images: ComposerImage[]) => void;
   onSend: () => void;
@@ -41,7 +43,11 @@ export function Composer({
   const running =
     Boolean(thread.activeTurnId) &&
     (thread.status === "running" || thread.status === "waiting");
-  const suggestions = matchingSlashCommands(text, thread.agentId || "codex");
+  const suggestions = matchingSlashCommands(
+    text,
+    thread.agentId || "codex",
+    thread.agentId === "opencode" ? extraCommands : [],
+  );
   const canSend = Boolean(text.trim() || images.length);
   useEffect(() => {
     const node = area.current;
