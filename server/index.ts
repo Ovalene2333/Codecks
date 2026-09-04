@@ -586,6 +586,25 @@ app.post(
   }),
 );
 app.post(
+  "/api/agents/:agentId/threads/:threadId/revert",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    if (id !== "opencode") throw new Error("该 Agent 暂不支持撤回消息");
+    const input = z
+      .object({ messageID: z.string().min(1).max(200).optional() })
+      .parse(req.body || {});
+    return agents.revertSession(id, param(req.params.threadId), input.messageID);
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/unrevert",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    if (id !== "opencode") throw new Error("该 Agent 暂不支持恢复撤回");
+    return agents.unrevertSession(id, param(req.params.threadId));
+  }),
+);
+app.post(
   "/api/agents/:agentId/approvals/:approvalId",
   route(async (req) => {
     const input = z

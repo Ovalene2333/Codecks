@@ -10,6 +10,7 @@ import {
   Pencil,
   RotateCcw,
   ScanSearch,
+  Undo2,
   Wrench,
 } from "lucide-react";
 import { displayCommand, displayText, fmtTime } from "../format";
@@ -60,6 +61,7 @@ function TurnItemInner({
   onCopy,
   onEditUserMessage,
   onRetryUserMessage,
+  onRevertUserMessage,
   messageActionsDisabled,
   thread,
 }: {
@@ -70,6 +72,7 @@ function TurnItemInner({
   onCopy?: () => void;
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (item: any) => void;
+  onRevertUserMessage?: (item: any) => void;
   messageActionsDisabled?: boolean;
   thread: ThreadSummary;
 }) {
@@ -105,7 +108,7 @@ function TurnItemInner({
           )}
           {text}
         </div>
-        {(onEditUserMessage || onRetryUserMessage) && (
+        {(onEditUserMessage || onRetryUserMessage || onRevertUserMessage) && (
           <div className="message-actions" aria-label="消息操作">
             {onEditUserMessage && (
               <button
@@ -126,6 +129,17 @@ function TurnItemInner({
               >
                 <RotateCcw />
                 从此重试
+              </button>
+            )}
+            {onRevertUserMessage && (
+              <button
+                type="button"
+                title="撤回该消息及之后全部（需确认）"
+                disabled={messageActionsDisabled}
+                onClick={() => onRevertUserMessage(item)}
+              >
+                <Undo2 />
+                撤回
               </button>
             )}
           </div>
@@ -402,6 +416,7 @@ interface TurnBlockProps {
   onForkFrom?: (turnId: string) => void;
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
+  onRevertUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
 }
 
@@ -447,7 +462,8 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
     prev.onCopy !== next.onCopy ||
     prev.onForkFrom !== next.onForkFrom ||
     prev.onEditUserMessage !== next.onEditUserMessage ||
-    prev.onRetryUserMessage !== next.onRetryUserMessage
+    prev.onRetryUserMessage !== next.onRetryUserMessage ||
+    prev.onRevertUserMessage !== next.onRevertUserMessage
   )
     return false;
   return (
@@ -471,6 +487,7 @@ function TurnBlockInner({
   onForkFrom,
   onEditUserMessage,
   onRetryUserMessage,
+  onRevertUserMessage,
   messageActionsDisabled,
 }: TurnBlockProps) {
   const active =
@@ -561,6 +578,11 @@ function TurnBlockInner({
             onRetryUserMessage={
               onRetryUserMessage
                 ? (item) => onRetryUserMessage(String(turn.id), item)
+                : undefined
+            }
+            onRevertUserMessage={
+              onRevertUserMessage
+                ? (item) => onRevertUserMessage(String(turn.id), item)
                 : undefined
             }
             messageActionsDisabled={messageActionsDisabled}

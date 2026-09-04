@@ -116,8 +116,11 @@ test("opencode commands parse to native or passthrough kinds", () => {
     command: "my-deploy",
     args: "prod",
   });
+  assert.deepEqual(parseComposerCommand("/undo", "opencode"), { kind: "undo" });
+  assert.deepEqual(parseComposerCommand("/redo", "opencode"), { kind: "redo" });
   // Codex 解析不受影响：未知命令仍返回 undefined。
   assert.equal(parseComposerCommand("/my-deploy prod"), undefined);
+  assert.equal(parseComposerCommand("/undo"), undefined);
 });
 
 test("opencode slash menu merges builtins with server custom commands", () => {

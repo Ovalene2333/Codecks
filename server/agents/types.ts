@@ -86,6 +86,13 @@ export interface AgentCommand {
   description?: string;
 }
 
+export interface AgentRevertSummary {
+  messageID: string;
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
 export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   readonly id: AgentId;
   descriptor(): AgentDescriptor;
@@ -161,4 +168,13 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     args?: string,
   ): Promise<unknown>;
   compactSession?(providerId: string, threadId: string): Promise<unknown>;
+  revertSession?(
+    providerId: string,
+    threadId: string,
+    messageID?: string,
+  ): Promise<AgentRevertSummary>;
+  unrevertSession?(
+    providerId: string,
+    threadId: string,
+  ): Promise<{ ok: true }>;
 }

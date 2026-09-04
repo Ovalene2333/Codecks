@@ -23,6 +23,8 @@ export type ComposerCommand =
   | { kind: "sessions" }
   | { kind: "thinking" }
   | { kind: "details" }
+  | { kind: "undo" }
+  | { kind: "redo" }
   | { kind: "help" };
 
 export const SLASH_COMMANDS = [
@@ -132,6 +134,8 @@ const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
 /** P0 OpenCode 内置命令（`/` 补全用；自定义命令运行时从服务端追加）。 */
 export const OPENCODE_COMMANDS = [
   { name: "/compact", hint: "压缩上下文（summarize）" },
+  { name: "/undo", hint: "撤回最近一轮（含文件恢复，需确认）" },
+  { name: "/redo", hint: "恢复已撤回的内容（需确认）" },
   { name: "/init", hint: "生成或更新 AGENTS.md" },
   { name: "/models", hint: "选择模型" },
   { name: "/new", hint: "新建会话（回到列表创建）" },
@@ -148,6 +152,8 @@ export type SlashMenuItem = { name: string; hint: string };
 
 function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
   if (key === "compact" || key === "summarize") return { kind: "compact" };
+  if (key === "undo") return { kind: "undo" };
+  if (key === "redo") return { kind: "redo" };
   if (key === "model" || key === "models") return { kind: "model" };
   if (key === "status") return { kind: "status" };
   if (key === "ps") return { kind: "ps" };

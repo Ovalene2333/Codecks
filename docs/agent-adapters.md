@@ -161,7 +161,10 @@ serve 没有原生归档接口）：归档态写进 `thread-settings.json` 的 `
 不能只靠前端隐藏按钮。P0 命令透传（`listSessionCommands` /
 `runSessionCommand` 走 `GET /command` 与 `POST /session/:id/command`，
 `compactSession` 走 `POST /session/:id/summarize`）复用 `sessionSettings`
-门禁，不新增 capability 字段。没有实现的 fork、review、shell 和
+门禁，不新增 capability 字段。撤回（`revertSession` /
+`unrevertSession` 走 `POST /session/:id/revert|unrevert`，无参时以后端
+最后一条 user 消息为边界）是破坏性操作，同样只在 opencode 会话开放，
+前端强制二次确认并用服务端 `revert.summary` 核验展示。没有实现的 fork、review、shell 和
 MCP/Skills 枚举保持关闭。
 
 ## 新增 Adapter 的顺序

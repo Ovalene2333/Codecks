@@ -210,6 +210,18 @@ export class AgentRegistry extends EventEmitter {
     return adapter.compactSession!(thread.providerId, threadId);
   }
 
+  async revertSession(id: AgentId, threadId: string, messageID?: string) {
+    const adapter = this.operation(id, "revertSession");
+    const thread = this.thread(id, threadId);
+    return adapter.revertSession!(thread.providerId, threadId, messageID);
+  }
+
+  async unrevertSession(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "unrevertSession");
+    const thread = this.thread(id, threadId);
+    return adapter.unrevertSession!(thread.providerId, threadId);
+  }
+
   async listTasks() {
     const tasks = await Promise.all(
       [...this.adapters.values()].flatMap((adapter) =>

@@ -22,6 +22,7 @@ export function Timeline({
   onOpenOrigin,
   onEditUserMessage,
   onRetryUserMessage,
+  onRevertUserMessage,
   messageActionsDisabled,
 }: {
   thread: ThreadSummary;
@@ -39,6 +40,7 @@ export function Timeline({
   onOpenOrigin?: () => void;
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
+  onRevertUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
 }) {
   const timeline = useRef<HTMLDivElement>(null);
@@ -181,6 +183,7 @@ export function Timeline({
               onForkFrom={onForkFrom}
               onEditUserMessage={onEditUserMessage}
               onRetryUserMessage={onRetryUserMessage}
+              onRevertUserMessage={onRevertUserMessage}
               messageActionsDisabled={messageActionsDisabled}
             />
           </RenderErrorBoundary>
@@ -242,6 +245,7 @@ export function Timeline({
               onCopy={onCopy}
               onEditUserMessage={onEditUserMessage}
               onRetryUserMessage={onRetryUserMessage}
+              onRevertUserMessage={onRevertUserMessage}
               messageActionsDisabled={messageActionsDisabled}
             />
           )}
