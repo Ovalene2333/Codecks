@@ -77,22 +77,41 @@ function sameNativeUpdate(left: any, right: any) {
   );
 }
 
+const NON_DELTA_CAP = 149;
+
+// 尾部追加 + 非 delta 上限 149。调用方维持一条不变量：delta 事件恒在数组尾部
+// （合并时搬到末尾、新流追加到末尾），因此与旧实现“三次 filter + 两次 spread”
+// 的结果顺序完全一致，只是少 3～4 倍临时数组。
+function appendCapped(list: any[], event: any) {
+  let nonDelta = event?.method === "item/agentMessage/delta" ? 0 : 1;
+  let cut = -1;
+  for (let index = list.length - 1; index >= 0; index--) {
+    if (list[index]?.method === "item/agentMessage/delta") continue;
+    nonDelta++;
+    if (nonDelta > NON_DELTA_CAP) {
+      cut = index;
+      break;
+    }
+  }
+  if (cut < 0) return [...list, event];
+  const next = list.slice();
+  next.splice(cut, 1);
+  next.push(event);
+  return next;
+}
+
 export function appendCodexEvent(events: any[], event: any) {
-  const deduped =
-    event?.method === "item/updated"
-      ? events.filter((item) => !sameNativeUpdate(item, event))
-      : events;
+  const method = event?.method;
   if (
-    event?.method === "item/agentMessage/delta" ||
-    event?.method === "item/commandExecution/outputDelta"
+    method === "item/agentMessage/delta" ||
+    method === "item/commandExecution/outputDelta"
   ) {
-    const existingIndex = deduped.findIndex((item) =>
-      event.method === "item/agentMessage/delta"
-        ? sameStream(item, event)
-        : sameCommandOutput(item, event),
-    );
-    if (existingIndex >= 0) {
-      const current = deduped[existingIndex];
+    const same =
+      method === "item/agentMessage/delta" ? sameStream : sameCommandOutput;
+    // 合并后的 delta 恒在尾部，倒序扫命中即停；高频续写场景接近 O(1)。
+    for (let index = events.length - 1; index >= 0; index--) {
+      if (!same(events[index], event)) continue;
+      const current = events[index];
       const merged = {
         ...current,
         params: {
@@ -102,25 +121,34 @@ export function appendCodexEvent(events: any[], event: any) {
             displayText(event?.params?.delta),
         },
       };
-      return [
-        ...deduped.slice(0, existingIndex),
-        ...deduped.slice(existingIndex + 1),
-        merged,
-      ];
+      if (index === events.length - 1) {
+        const next = events.slice();
+        next[index] = merged;
+        return next;
+      }
+      return [...events.slice(0, index), ...events.slice(index + 1), merged];
     }
   }
 
+  if (method === "item/updated") {
+    // OpenCode 原生 part 快照：同 part 旧快照摘除后走统一尾部追加。
+    return appendCapped(
+      events.filter((item) => !sameNativeUpdate(item, event)),
+      event,
+    );
+  }
+
   const updatedEvents =
-    event?.method === "item/completed"
-      ? deduped.map((item) =>
+    method === "item/completed"
+      ? events.map((item) =>
           completedStream(event, item)
             ? { ...item, streamCompleted: true }
             : item,
         )
-      : deduped;
+      : events;
 
   const withoutPreviousTurn =
-    event?.method === "turn/started" && event?.params?.threadId
+    method === "turn/started" && event?.params?.threadId
       ? updatedEvents.filter(
           (item) =>
             item?.method !== "item/agentMessage/delta" ||
@@ -129,13 +157,7 @@ export function appendCodexEvent(events: any[], event: any) {
             item?.params?.threadId !== event?.params?.threadId,
         )
       : updatedEvents;
-  const streams = withoutPreviousTurn.filter(
-    (item) => item?.method === "item/agentMessage/delta",
-  );
-  const recentEvents = withoutPreviousTurn
-    .filter((item) => item?.method !== "item/agentMessage/delta")
-    .slice(-149);
-  return [...recentEvents, ...streams, event];
+  return appendCapped(withoutPreviousTurn, event);
 }
 
 export function activeStreamItemId(messages: StreamedAgentMessage[]) {
@@ -200,30 +222,8 @@ export function collectStreamedAgentMessages(
   activeTurnId?: string,
   agentId: "codex" | "claude" | "opencode" = "codex",
 ): StreamedAgentMessage[] {
-  const messages = new Map<string, StreamedAgentMessage>();
-
-  for (const event of events) {
-    if (event?.method !== "item/agentMessage/delta") continue;
-    if ((event?.agentId || "codex") !== agentId) continue;
-    if (event?.providerId && event.providerId !== providerId) continue;
-    if (event?.params?.threadId !== threadId) continue;
-    if (activeTurnId && event?.params?.turnId !== activeTurnId) continue;
-
-    const itemId = displayText(event?.params?.itemId) || "agent-message";
-    const delta = displayText(event?.params?.delta);
-    if (!delta) continue;
-
-    const current = messages.get(itemId);
-    if (current) current.text += delta;
-    else
-      messages.set(itemId, {
-        itemId,
-        text: delta,
-        ...(event?.streamCompleted ? { completed: true } : {}),
-      });
-  }
-
-  return [...messages.values()];
+  return collectStreamed(events, providerId, threadId, activeTurnId, agentId)
+    .messages;
 }
 
 export function collectStreamedTurnItems(
@@ -233,6 +233,20 @@ export function collectStreamedTurnItems(
   activeTurnId?: string,
   agentId: "codex" | "claude" | "opencode" = "codex",
 ): StreamedTurnItem[] {
+  return collectStreamed(events, providerId, threadId, activeTurnId, agentId)
+    .items;
+}
+
+// ChatWorkspace  previously 在每次 render 里把 events 全扫两遍
+// （messages 一遍 + items 一遍）。单遍联合收集，结果与两个旧函数逐项一致。
+export function collectStreamed(
+  events: any[],
+  providerId: string,
+  threadId: string,
+  activeTurnId?: string,
+  agentId: "codex" | "claude" | "opencode" = "codex",
+): { messages: StreamedAgentMessage[]; items: StreamedTurnItem[] } {
+  const messages = new Map<string, StreamedAgentMessage>();
   const items = new Map<string, StreamedTurnItem>();
 
   for (const event of events) {
@@ -242,6 +256,20 @@ export function collectStreamedTurnItems(
     if (activeTurnId && event?.params?.turnId !== activeTurnId) continue;
 
     const method = String(event?.method || "");
+    if (method === "item/agentMessage/delta") {
+      const itemId = displayText(event?.params?.itemId) || "agent-message";
+      const delta = displayText(event?.params?.delta);
+      if (!delta) continue;
+      const current = messages.get(itemId);
+      if (current) current.text += delta;
+      else
+        messages.set(itemId, {
+          itemId,
+          text: delta,
+          ...(event?.streamCompleted ? { completed: true } : {}),
+        });
+      continue;
+    }
     const eventItem = event?.params?.item;
     if (method === "item/updated") {
       // Native part snapshot (OpenCode): convert to the shared item shape.
@@ -282,7 +310,7 @@ export function collectStreamedTurnItems(
     }
   }
 
-  return [...items.values()];
+  return { messages: [...messages.values()], items: [...items.values()] };
 }
 
 export function mergeTurnItems(

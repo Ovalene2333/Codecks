@@ -49,6 +49,8 @@ export class CodexUsageStore {
   private loaded = false;
   private pending: Promise<void> = Promise.resolve();
   private file: string;
+  private timer?: NodeJS.Timeout;
+  private delayed?: { promise: Promise<void>; resolve: () => void };
 
   constructor(private dataDir: string) {
     this.file = path.join(dataDir, "codex-usage.json");
@@ -100,10 +102,43 @@ export class CodexUsageStore {
   }
 
   flush() {
-    return this.pending;
+    // 定时器未到但调用方要求落盘（如单测、重启前）：立即执行一次 persist，
+    // 语义与“所有已提交的 set 都已持久化”一致。
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    const delayed = this.delayed;
+    this.delayed = undefined;
+    if (!delayed) return this.pending;
+    void this.persist().finally(() => delayed.resolve());
+    return delayed.promise;
   }
 
   private save() {
+    // token 用量在 turn 事件里高频更新，每次全量 stringify + 写文件太贵。
+    // 300ms 窗口内多次 set/setMany/remove 只落一次盘；返回的 promise 在
+    // 实际写完后 resolve，老调用方 `await set()` 语义不变。
+    if (!this.delayed) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((runner) => {
+        resolve = runner;
+      });
+      this.delayed = { promise, resolve };
+    }
+    if (!this.timer) {
+      this.timer = setTimeout(() => {
+        this.timer = undefined;
+        const delayed = this.delayed;
+        this.delayed = undefined;
+        void this.persist().finally(() => delayed?.resolve());
+      }, 300);
+      this.timer.unref();
+    }
+    return this.delayed.promise;
+  }
+
+  private persist() {
     const snapshot = Object.fromEntries(this.usage);
     this.pending = this.pending
       .catch(() => undefined)

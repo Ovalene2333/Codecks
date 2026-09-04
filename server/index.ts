@@ -1,3 +1,4 @@
+import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -172,6 +173,25 @@ const fullSnapshot = () => ({
   preferences: projects.getPreferences(),
 });
 const app = express();
+// 快照/线程全文动辄数 MB，手机弱网下 gzip 是最便宜的收益：只压文本类，
+// 图片走 blob/octet-stream 不会被压缩中间件重复处理。
+app.use(
+  compression({
+    threshold: 1024,
+    filter: (req, res) => {
+      const type = String(res.getHeader("Content-Type") || "");
+      if (
+        type.startsWith("image/") ||
+        type.startsWith("video/") ||
+        type.startsWith("audio/") ||
+        type.includes("compressed") ||
+        type.includes("zip")
+      )
+        return false;
+      return compression.filter(req, res);
+    },
+  }),
+);
 app.use(express.json({ limit: "24mb" }));
 
 app.get("/api/health", (_req, res) =>
@@ -1131,13 +1151,29 @@ app.post(
 );
 
 const webDir = path.join(projectRoot, "dist-web");
-app.use(express.static(webDir));
-app.get("/{*path}", (_req, res) =>
-  res.sendFile(path.join(webDir, "index.html")),
+// vite 产物文件名自带 hash：长缓存一年 + immutable，二次打开只下 index.html。
+// index.html 本身走 no-store，保证发版后客户端立刻拿到新资源引用。
+app.use(
+  express.static(webDir, {
+    maxAge: "365d",
+    immutable: true,
+    index: false,
+  }),
 );
+app.get("/{*path}", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile(path.join(webDir, "index.html"));
+});
 
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({
+  noServer: true,
+  // 流式 delta 高频小包，permessage-deflate 省手机流量；服务端内存换带宽值得。
+  perMessageDeflate: {
+    zlibDeflateOptions: { level: 3, memLevel: 8 },
+    threshold: 512,
+  },
+});
 const toolWss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req, socket, head) => {
   // Host / URL / 路径解码全由客户端控制，任何一步抛异常都只能断开这条连接，
@@ -1184,6 +1220,37 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) =>
   ws.send(JSON.stringify({ type: "snapshot", data: fullSnapshot() })),
 );
+// 全量快照一次构建 + 序列化在 threads 上百时可达数十毫秒，而 snapshot 事件
+// 在刷新/批量操作时会连发。50ms 合并窗口内只保留最新一次，中间态直接跳过
+// （快照幂等，只关心最终态），上限 20 次/秒。
+const SNAPSHOT_WINDOW_MS = 50;
+// 慢客户端积压超过该阈值即跳过本次推送：单个手机弱网不应拖慢整机广播。
+const SLOW_CLIENT_BYTES = 1_000_000;
+let snapshotTimer: NodeJS.Timeout | undefined;
+let snapshotPending = false;
+function broadcast(payload: string) {
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (client.bufferedAmount > SLOW_CLIENT_BYTES) continue;
+    client.send(payload);
+  }
+}
+function broadcastSnapshotSoon() {
+  if (snapshotTimer) {
+    snapshotPending = true;
+    return;
+  }
+  // 落地时刻才构建：窗口内后到的变更天然包含在内，比事件携带的旧快照更新鲜。
+  broadcast(JSON.stringify({ type: "snapshot", data: fullSnapshot() }));
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = undefined;
+    if (snapshotPending) {
+      snapshotPending = false;
+      broadcastSnapshotSoon();
+    }
+  }, SNAPSHOT_WINDOW_MS);
+  snapshotTimer.unref();
+}
 agents.on("event", (event) => {
   if (event.type === "runtime.process") {
     // 关机流程中子进程退出事件不得重建已被清除的锁文件。
@@ -1208,13 +1275,13 @@ agents.on("event", (event) => {
       threadSummaries.schedule(snapshot.threads, archived);
     sessionSearch.reconcileSoon();
   }
-  const payload = JSON.stringify(
-    event.type === "snapshot"
-      ? { type: "snapshot", data: fullSnapshot() }
-      : event,
-  );
-  for (const client of wss.clients)
-    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  // snapshot 走合并窗口；thread.updated/deleted 与 codex.event 本就是增量小包，
+  // 直接透传，不进快照合并通道。
+  if (event.type === "snapshot") {
+    broadcastSnapshotSoon();
+    return;
+  }
+  broadcast(JSON.stringify(event));
 });
 
 let lock = acquireRuntimeLock(dataDir, {
