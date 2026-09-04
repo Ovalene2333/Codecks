@@ -25,11 +25,8 @@ import {
 } from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
-import { defaultAgentId, type AgentId } from "../agents";
+import { defaultAgentId, opencodeProviderId, type AgentId } from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
-import { SearchablePicker } from "../SearchablePicker";
-
-const SEARCHABLE_PROVIDERS = 12;
 
 export function NewThreadModal({
   providers,
@@ -48,11 +45,7 @@ export function NewThreadModal({
   preferences?: Snapshot["preferences"];
   runtimeWsl?: boolean;
   onClose: () => void;
-  onCreated: (
-    agentId: AgentId,
-    providerId: string,
-    id: string,
-  ) => void;
+  onCreated: (agentId: AgentId, providerId: string, id: string) => void;
 }) {
   const defaults = resolveNewThreadDefaults({
     cwd: initialCwd,
@@ -123,6 +116,7 @@ export function NewThreadModal({
         ...current,
         providerId: "",
         model: "default",
+        reasoningEffort: "",
       }));
   };
   const submit = async (e: React.FormEvent) => {
@@ -135,15 +129,23 @@ export function NewThreadModal({
       const payload = {
         ...form,
         providerId: form.providerId || undefined,
-        ...(agentId === "claude" || agentId === "opencode"
+        ...(agentId === "opencode"
           ? {
-              reasoningEffort: undefined,
+              reasoningEffort: form.reasoningEffort || undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
               approvalsReviewer: undefined,
             }
-          : { permissionMode: undefined }),
+          : agentId === "claude"
+            ? {
+                reasoningEffort: undefined,
+                personality: undefined,
+                sandbox: undefined,
+                approvalPolicy: undefined,
+                approvalsReviewer: undefined,
+              }
+            : { permissionMode: undefined }),
         personality: form.personality || undefined,
       };
       const thread = await post(`/agents/${agentId}/threads`, payload);
@@ -169,9 +171,7 @@ export function NewThreadModal({
           Agent
           <select
             value={agentId}
-            onChange={(event) =>
-              selectAgent(event.target.value as AgentId)
-            }
+            onChange={(event) => selectAgent(event.target.value as AgentId)}
           >
             {(agents.length
               ? agents
@@ -300,59 +300,24 @@ export function NewThreadModal({
             </label>
           </>
         ) : (
-          <>
-            <label>
-              OpenCode 供应商
-              {profiles.length > SEARCHABLE_PROVIDERS ? (
-                <SearchablePicker
-                  ariaLabel="OpenCode 供应商"
-                  value={form.providerId}
-                  disabled={profilesLoading}
-                  loading={profilesLoading}
-                  placeholder="搜索供应商"
-                  emptyText="没有匹配的供应商"
-                  options={profiles.map((profile) => ({
-                    value: profile.id,
-                    label: profile.name,
-                    hint: profile.id !== profile.name ? profile.id : undefined,
-                    meta: profile.current ? "默认" : undefined,
-                  }))}
-                  onChange={(providerId) =>
-                    setForm((current) => ({ ...current, providerId }))
-                  }
-                />
-              ) : (
-                <select
-                  value={form.providerId}
-                  disabled={profilesLoading || profiles.length === 0}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, providerId: event.target.value }))
-                  }
-                >
-                  {profilesLoading ? (
-                    <option value="">正在读取…</option>
-                  ) : profiles.length ? (
-                    profiles.map((profile) => (
-                      <option key={profile.id} value={profile.id}>
-                        {profile.name}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">使用 OpenCode 默认供应商</option>
-                  )}
-                </select>
-              )}
-            </label>
-            <ModelPicker
-              agentId="opencode"
-              providerId={form.providerId}
-              model={form.model}
-              reasoningEffort=""
-              onChange={({ model }) =>
-                setForm((current) => ({ ...current, model }))
-              }
-            />
-          </>
+          <ModelPicker
+            agentId="opencode"
+            providerId=""
+            model={form.model}
+            reasoningEffort={form.reasoningEffort}
+            onChange={(next) =>
+              setForm((current) => ({
+                ...current,
+                model: next.model,
+                reasoningEffort: next.reasoningEffort,
+                // The model id carries the provider, so the thread keeps
+                // pointing at the right one without a second picker.
+                ...(opencodeProviderId(next.model)
+                  ? { providerId: opencodeProviderId(next.model) }
+                  : {}),
+              }))
+            }
+          />
         )}
         <label>
           工作目录

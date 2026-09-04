@@ -6,6 +6,8 @@ export interface SearchableOption {
   value: string;
   label: string;
   group?: string;
+  /** Rendered next to the group heading, e.g. a provider connection state. */
+  groupMeta?: string;
   hint?: string;
   meta?: string;
 }
@@ -17,23 +19,37 @@ export function filterSearchableOptions(
   const needle = query.trim().toLowerCase();
   if (!needle) return options;
   return options.filter((option) =>
-    [option.label, option.value, option.group, option.hint, option.meta].some(
-      (field) => field?.toLowerCase().includes(needle),
-    ),
+    [
+      option.label,
+      option.value,
+      option.group,
+      option.groupMeta,
+      option.hint,
+      option.meta,
+    ].some((field) => field?.toLowerCase().includes(needle)),
   );
 }
 
 export function groupSearchableOptions(options: SearchableOption[]) {
   const plain: SearchableOption[] = [];
-  const groups: { name: string; items: SearchableOption[] }[] = [];
+  const groups: { name: string; meta?: string; items: SearchableOption[] }[] =
+    [];
   for (const option of options) {
     if (!option.group) {
       plain.push(option);
       continue;
     }
     const last = groups.at(-1);
-    if (last && last.name === option.group) last.items.push(option);
-    else groups.push({ name: option.group, items: [option] });
+    if (last && last.name === option.group) {
+      last.items.push(option);
+      if (!last.meta) last.meta = option.groupMeta;
+      continue;
+    }
+    groups.push({
+      name: option.group,
+      meta: option.groupMeta,
+      items: [option],
+    });
   }
   return { plain, groups };
 }
@@ -50,6 +66,8 @@ interface PickerAnchor {
 const SHEET_QUERY = "(max-width: 760px)";
 const DROPDOWN_MIN_SPACE = 240;
 const DROPDOWN_MIN_SPACE_ABOVE = 200;
+/** Rows rendered per chunk; long catalogs grow on scroll instead of up front. */
+const ROW_CHUNK = 60;
 
 function isSheetLayout() {
   return (
@@ -106,6 +124,7 @@ export function SearchablePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [limit, setLimit] = useState(ROW_CHUNK);
   const [anchor, setAnchor] = useState<PickerAnchor>();
   const [sheet, setSheet] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
@@ -121,6 +140,12 @@ export function SearchablePicker({
   const segments = useMemo(() => groupSearchableOptions(filtered), [filtered]);
   const selected = options.find((option) => option.value === value);
 
+  /* Long catalogs (OpenCode lists hundreds of models) only need the rows the
+     user can actually see; the rest arrive as they scroll. */
+  const showMore = () => setLimit((current) => current + ROW_CHUNK);
+  const resetLimit = (atLeast = 0) =>
+    setLimit(Math.max(ROW_CHUNK, atLeast + ROW_CHUNK));
+
   const refreshAnchor = () => {
     if (isSheetLayout()) {
       setSheet(true);
@@ -135,18 +160,20 @@ export function SearchablePicker({
     if (disabled || (loading && !options.length)) return;
     refreshAnchor();
     setQuery("");
-    setActive(
-      Math.max(
-        0,
-        options.findIndex((option) => option.value === value),
-      ),
+    const selectedIndex = Math.max(
+      0,
+      options.findIndex((option) => option.value === value),
     );
+    setActive(selectedIndex);
+    // Render far enough to show the current pick when the panel opens.
+    resetLimit(selectedIndex);
     setOpen(true);
   };
 
   const closePanel = (refocus = true) => {
     setOpen(false);
     setQuery("");
+    setLimit(ROW_CHUNK);
     if (refocus) triggerRef.current?.focus();
   };
 
@@ -194,6 +221,11 @@ export function SearchablePicker({
     if (open && active >= filtered.length) setActive(0);
   }, [filtered.length, active, open]);
 
+  // Keyboard navigation can walk past the rows rendered so far.
+  useEffect(() => {
+    if (open && active >= limit) resetLimit(active);
+  }, [active, limit, open]);
+
   const onSearchKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -216,9 +248,12 @@ export function SearchablePicker({
   };
 
   let flatIndex = -1;
+  let budget = limit;
   const renderOption = (option: SearchableOption) => {
     flatIndex += 1;
     const index = flatIndex;
+    if (budget <= 0) return null;
+    budget -= 1;
     return (
       <button
         type="button"
@@ -313,11 +348,23 @@ export function SearchablePicker({
                   onChange={(event) => {
                     setQuery(event.target.value);
                     setActive(0);
+                    setLimit(ROW_CHUNK);
                   }}
                   onKeyDown={onSearchKeyDown}
                 />
               </div>
-              <div className="search-picker-list" ref={listRef}>
+              <div
+                className="search-picker-list"
+                ref={listRef}
+                onScroll={(event) => {
+                  const list = event.currentTarget;
+                  if (
+                    list.scrollTop + list.clientHeight >=
+                    list.scrollHeight - 240
+                  )
+                    showMore();
+                }}
+              >
                 {loading && !options.length ? (
                   <p className="search-picker-empty">
                     {loadingText || "正在读取…"}
@@ -327,15 +374,28 @@ export function SearchablePicker({
                 ) : (
                   <>
                     {segments.plain.map(renderOption)}
-                    {segments.groups.map((group) => (
-                      <div
-                        key={group.name}
-                        className="search-picker-group-wrap"
-                      >
-                        <div className="search-picker-group">{group.name}</div>
-                        {group.items.map(renderOption)}
-                      </div>
-                    ))}
+                    {segments.groups.map(
+                      (group) =>
+                        // Group headings only appear while rows are still left.
+                        budget > 0 && (
+                          <div
+                            key={group.name}
+                            className="search-picker-group-wrap"
+                          >
+                            <div className="search-picker-group">
+                              <span>{group.name}</span>
+                              {group.meta && <em>{group.meta}</em>}
+                            </div>
+                            {group.items.map(renderOption)}
+                          </div>
+                        ),
+                    )}
+                    {filtered.length > limit && (
+                      <p className="search-picker-more">
+                        继续滚动查看剩余 {filtered.length - limit}{" "}
+                        项，或输入关键字筛选
+                      </p>
+                    )}
                   </>
                 )}
               </div>

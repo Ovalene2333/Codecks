@@ -767,6 +767,36 @@ test("OpenCode startAll reuses a healthy server instead of spawning again", asyn
   adapter.restart();
 });
 
+test("OpenCode crash does not taskkill a reused Windows PID", async () => {
+  const treeKilled: number[] = [];
+  const child = new EventEmitter() as any;
+  child.pid = 5050;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  const adapter = new OpenCodeAdapter({
+    platform: "win32",
+    port: 4096,
+    spawnProcess: () => child,
+    killProcessTree: (pid: number) => treeKilled.push(pid),
+    fetcher: (async (url) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/global/health") return Response.json({ healthy: true });
+      if (pathname === "/session") return Response.json([]);
+      if (pathname === "/provider") return Response.json({ all: {} });
+      return new Response("");
+    }) as typeof fetch,
+  });
+
+  await adapter.startAll();
+  child.exitCode = 1;
+  child.emit("exit", 1, null);
+
+  assert.equal(adapter.descriptor().online, false);
+  assert.deepEqual(treeKilled, []);
+});
+
 test("OpenCode replied/rejected events clear stale question cards", () => {
   const adapter = new OpenCodeAdapter({ fetcher: (async () => Response.json(true)) as typeof fetch });
   adapter.on("event", () => undefined);
@@ -827,16 +857,41 @@ test("OpenCode uses the first user message as title when OpenCode left title emp
   (untitled as any).baseUrl = "http://127.0.0.1:4096";
   await untitled.refreshAll();
   assert.equal(untitled.listThreads()[0].name, "curious-comet");
+  const originalUpdatedAt = untitled.listThreads()[0].updatedAt;
   await untitled.readThread("p", "s1");
   const renamed: any = untitled.listThreads().find((item) => item.id === "s1");
   assert.equal(renamed.preview, "修复登录闪退问题，点按钮没反应");
   assert.equal(renamed.name, "修复登录闪退问题，点按钮没反应".slice(0, 42));
+  assert.equal(renamed.updatedAt, originalUpdatedAt);
 
   const titled = makeAdapter({ id: "s1", directory: "/work", slug: "curious-comet", title: "手动标题" });
   (titled as any).baseUrl = "http://127.0.0.1:4096";
   await titled.refreshAll();
   await titled.readThread("p", "s1");
   assert.equal(titled.listThreads()[0].name, "手动标题");
+});
+
+test("OpenCode refresh keeps cached sessions when the list is partial", async () => {
+  let response: unknown = [
+    { id: "s1", directory: "D:/Code/HIT/RL", time: { updated: 10 } },
+    { id: "s2", directory: "D:/Code/HIT/Other", time: { updated: 20 } },
+  ];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider")) return Response.json([]);
+      if (value.includes("/config")) return Response.json({});
+      return Response.json(response);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await adapter.refreshAll();
+  response = [{ id: "s1", directory: "D:/Code/HIT/RL", time: { updated: 11 } }];
+  await adapter.refreshAll();
+
+  assert.deepEqual(adapter.listThreads().map((item) => item.id), ["s2", "s1"]);
+  assert.equal(adapter.listThreads().find((item) => item.id === "s2")?.updatedAt, 20);
 });
 
 test("OpenCode sendTurn names slug threads optimistically but keeps manual renames", async () => {
@@ -867,4 +922,87 @@ test("OpenCode sendTurn names slug threads optimistically but keeps manual renam
   await manual.renameThread("p", "s1", "我的构建优化");
   await manual.sendTurn("p", "s1", "换个话题聊聊别的");
   assert.equal(manual.listThreads().find((item) => item.id === "s1")?.name, "我的构建优化");
+});
+
+test("OpenCode archive moves sessions to the archived bucket and persists it", async () => {
+  const saved = new Map<string, any>();
+  const store = {
+    get: (_agent: string, id: string) => saved.get(id),
+    update: async (_agent: string, id: string, next: any) => {
+      const merged = { ...(saved.get(id) || {}), ...next };
+      if (next.archived === null || next.archived === false)
+        delete merged.archived;
+      saved.set(id, merged);
+      return merged;
+    },
+  };
+  const adapter = new OpenCodeAdapter({
+    threadSettings: store,
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/session"))
+        return Response.json([
+          { id: "s1", directory: "/work", slug: "neon-lagoon", title: "" },
+        ]);
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  assert.equal(adapter.descriptor().capabilities.archive, true);
+  await adapter.archiveThread("p", "s1");
+  assert.equal(adapter.listThreads().length, 0);
+  assert.equal(adapter.snapshot().archivedThreads?.[0]?.id, "s1");
+  assert.equal(saved.get("s1")?.archived, true);
+
+  // 服务端仍然列出该会话时，刷新不得把它复活回现有库。
+  await adapter.refreshAll();
+  assert.equal(adapter.listThreads().length, 0);
+  assert.equal(adapter.snapshot().archivedThreads?.[0]?.id, "s1");
+
+  await adapter.unarchiveThread("p", "s1");
+  assert.equal(adapter.listThreads()[0]?.id, "s1");
+  assert.equal(adapter.snapshot().archivedThreads?.length, 0);
+  assert.equal(saved.get("s1")?.archived, undefined);
+});
+
+test("OpenCode archive refuses running sessions and archived sessions refuse new turns", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async () => Response.json([])) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("busy", {
+    agentId: "opencode",
+    id: "busy",
+    providerId: "p",
+    name: "busy",
+    preview: "busy",
+    cwd: "/work",
+    model: "default",
+    status: "running",
+    updatedAt: 1,
+  });
+  (adapter as any).threads.set("done", {
+    agentId: "opencode",
+    id: "done",
+    providerId: "p",
+    name: "done",
+    preview: "done",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  await assert.rejects(adapter.archiveThread("p", "busy"), /不能归档/);
+  await adapter.archiveThread("p", "done");
+  await assert.rejects(adapter.sendTurn("p", "done", "hi"), /已归档/);
+  await assert.rejects(adapter.interrupt("p", "done", "t"), /已归档/);
+  // 归档会话仍然可以读历史和删除。
+  (adapter as any).fetcher = (async () => Response.json([])) as typeof fetch;
+  await adapter.unarchiveThread("p", "done");
+  assert.equal(adapter.listThreads()[0]?.id, "done");
 });

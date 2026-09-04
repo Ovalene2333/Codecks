@@ -236,6 +236,9 @@
   position: sticky;
   top: -4px;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 4px 0 2px;
   padding: 4px 8px 3px;
   background: var(--surface-2);
@@ -247,6 +250,24 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.search-picker-group > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-picker-group > em {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  line-height: 15px;
 }
 
 .search-picker-option {
@@ -326,6 +347,14 @@
   padding: 18px 12px;
   color: var(--text-faint);
   font-size: 12px;
+  text-align: center;
+}
+
+.search-picker-more {
+  margin: 0;
+  padding: 10px 12px 14px;
+  color: var(--text-faint);
+  font-size: 11px;
   text-align: center;
 }
 

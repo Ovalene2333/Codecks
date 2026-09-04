@@ -59,7 +59,9 @@ import {
   approvalPath,
   capabilitiesFor,
   providerForThread,
+  threadArchivePath,
   threadPath,
+  threadRemovePath,
 } from "./agents";
 import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
@@ -803,7 +805,7 @@ export function App() {
         (thread) => !capabilitiesFor(snapshot.agents, thread).archive,
       )
     ) {
-      pushToast("项目包含暂不支持归档的 Agent 会话，请逐个处理 Codex 会话");
+      pushToast("项目包含暂不支持归档的 Agent 会话，请逐个处理");
       return;
     }
     const running = targets.some(
@@ -821,9 +823,7 @@ export function App() {
       confirmLabel: "归档项目",
       run: async () => {
         const { ok, failed } = await runOnThreads(targets, (thread) =>
-          post(`/threads/${thread.providerId}/${thread.id}/archive`).then(
-            () => undefined,
-          ),
+          post(threadArchivePath(thread, "archive")).then(() => undefined),
         );
         await saveProject(project, { hidden: true });
         if (selectedInProject(project.key)) setSelected(undefined);
@@ -857,9 +857,7 @@ export function App() {
       confirmLabel: "恢复项目",
       run: async () => {
         const { ok, failed } = await runOnThreads(targets, (thread) =>
-          post(`/threads/${thread.providerId}/${thread.id}/unarchive`).then(
-            () => undefined,
-          ),
+          post(threadArchivePath(thread, "unarchive")).then(() => undefined),
         );
         await saveProject(project, { hidden: false });
         await refresh();
@@ -897,9 +895,7 @@ export function App() {
       danger: true,
       run: async () => {
         const { ok, failed } = await runOnThreads(targets, (thread) =>
-          remove(`/threads/${thread.providerId}/${thread.id}`).then(
-            () => undefined,
-          ),
+          remove(threadRemovePath(thread)).then(() => undefined),
         );
         if (failed) {
           await refresh();
@@ -1465,14 +1461,12 @@ export function App() {
                   ),
                   confirmLabel: sheet.archived ? "恢复" : "归档",
                   run: async () => {
-                    if (sheet.archived)
-                      await post(
-                        `/threads/${sheet.providerId}/${sheet.id}/unarchive`,
-                      );
-                    else
-                      await post(
-                        `/threads/${sheet.providerId}/${sheet.id}/archive`,
-                      );
+                    await post(
+                      threadArchivePath(
+                        sheet,
+                        sheet.archived ? "unarchive" : "archive",
+                      ),
+                    );
                     if (sessionKey(sheet) === selected) setSelected(undefined);
                     refresh();
                   },

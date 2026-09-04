@@ -55,6 +55,31 @@ test("resetting a service tier removes its saved override", async () => {
   assert.deepEqual(store.get("codex", "thread-1"), undefined);
 });
 
+test("archived flag persists until explicitly cleared", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-arch-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.update("opencode", "session-1", {
+    model: "openai/gpt-5",
+    archived: true,
+  });
+  assert.deepEqual(store.get("opencode", "session-1"), {
+    model: "openai/gpt-5",
+    archived: true,
+  });
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.deepEqual(restored.get("opencode", "session-1"), {
+    model: "openai/gpt-5",
+    archived: true,
+  });
+
+  await restored.update("opencode", "session-1", { archived: null });
+  assert.deepEqual(restored.get("opencode", "session-1"), {
+    model: "openai/gpt-5",
+  });
+});
+
 test("cached session summaries migrate without replacing an existing choice", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-cache-"));
   const store = new ThreadSettingsStore(dir);

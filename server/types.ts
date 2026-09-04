@@ -202,6 +202,11 @@ export interface ThreadSummary {
   forkedFromId?: string;
   sessionId?: string;
   tokenUsage?: TokenUsage;
+  /**
+   * Concrete model the agent actually ran with, resolved from its own history
+   * when `model` is a placeholder such as OpenCode's `default`.
+   */
+  resolvedModel?: string;
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";

@@ -108,6 +108,19 @@ class FakeAgent extends EventEmitter implements AgentAdapter {
     return { id: threadId };
   }
 
+  archived: string[] = [];
+  unarchived: string[] = [];
+
+  async archiveThread(providerId: string, threadId: string) {
+    this.archived.push(`${providerId}:${threadId}`);
+    return { id: threadId };
+  }
+
+  async unarchiveThread(providerId: string, threadId: string) {
+    this.unarchived.push(`${providerId}:${threadId}`);
+    return { id: threadId };
+  }
+
   restart() {
     this.stops += 1;
   }
@@ -192,4 +205,24 @@ test("registry reads archived sessions through the generic Agent route", async (
     providerId: "codex-profile",
     threadId: "codex-archived",
   });
+});
+
+test("registry dispatches archive calls and rejects unsupported agents", async () => {
+  const codex = new FakeAgent("codex");
+  const registry = new AgentRegistry([codex]);
+
+  await registry.archiveThread("codex", "codex-thread");
+  await registry.unarchiveThread("codex", "codex-thread");
+  assert.deepEqual(codex.archived, ["codex-profile:codex-thread"]);
+  assert.deepEqual(codex.unarchived, ["codex-profile:codex-thread"]);
+
+  const noArchive: any = new FakeAgent("claude");
+  // 方法在原型上：实例赋值遮蔽，模拟未实现归档的 adapter。
+  noArchive.archiveThread = undefined;
+  noArchive.unarchiveThread = undefined;
+  const bare = new AgentRegistry([noArchive]);
+  await assert.rejects(
+    bare.archiveThread("claude", "claude-thread"),
+    /不支持此操作/,
+  );
 });

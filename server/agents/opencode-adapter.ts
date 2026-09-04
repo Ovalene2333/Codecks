@@ -16,7 +16,9 @@ import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
 
 const OPENCODE_CAPABILITIES: AgentCapabilities = {
   approvals: true,
-  archive: false,
+  // Deck 侧软归档：OpenCode serve 没有原生归档接口，归档态由 Deck
+  // 持久化（thread-settings `archived`），服务端会话原样保留。
+  archive: true,
   delete: true,
   fork: false,
   images: true,
@@ -52,6 +54,7 @@ interface OpenCodeAdapterOptions {
    */
   killProcessTree?: (pid: number) => void;
   initialThreads?: ThreadSummary[];
+  initialDirectories?: string[];
   threadSettings?: ThreadSettingsStore;
 }
 
@@ -124,6 +127,17 @@ function normalizeProfiles(value: unknown): OpenCodeProfile[] {
         id: (profile as OpenCodeProfile).id || id,
         name: (profile as OpenCodeProfile).name || id,
       }));
+  }
+  return [];
+}
+
+function normalizeSessions(value: unknown): OpenCodeSession[] {
+  if (Array.isArray(value)) return value as OpenCodeSession[];
+  if (value && typeof value === "object") {
+    const sessions = (value as { data?: unknown; sessions?: unknown }).data;
+    if (Array.isArray(sessions)) return sessions as OpenCodeSession[];
+    const listed = (value as { sessions?: unknown }).sessions;
+    if (Array.isArray(listed)) return listed as OpenCodeSession[];
   }
   return [];
 }
@@ -460,8 +474,12 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   snapshot() {
+    const threads = this.listThreads();
     return {
-      threads: this.listThreads(),
+      threads,
+      archivedThreads: [...this.threads.values()]
+        .filter((thread) => thread.archived)
+        .sort((a, b) => b.updatedAt - a.updatedAt),
       approvals: [...this.approvals.values()],
     };
   }
@@ -597,8 +615,14 @@ export class OpenCodeAdapter extends EventEmitter {
       const failed = (error: Error) => {
         if (this.process !== child) return;
         const detail = this.processError(error);
-        if (ready) this.offline(detail);
-        else rejectProcessFailure(detail);
+        if (ready) {
+          // The process has already exited; do not run taskkill against its
+          // PID because Windows may have reused it for another OpenCode.
+          this.process = undefined;
+          this.eventAbort?.abort();
+          this.eventAbort = undefined;
+          this.offline(detail);
+        } else rejectProcessFailure(detail);
       };
       child.once("error", (error) => failed(error));
       child.once("exit", (code, signal) =>
@@ -672,7 +696,6 @@ export class OpenCodeAdapter extends EventEmitter {
         ...thread,
         name: preview.slice(0, 42),
         preview,
-        updatedAt: Math.max(thread.updatedAt || 0, Date.now()),
       };
       this.threads.set(next.id, next);
       this.broadcast("thread.updated", next);
@@ -682,8 +705,20 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   async refreshAll() {
-    const [sessions, providers, config] = await Promise.all([
-      this.request<OpenCodeSession[]>("/session"),
+    const directories = new Set(
+      [
+        ...(this.options.initialDirectories || []),
+        ...[...this.threads.values()].map((thread) => thread.cwd),
+      ].filter(Boolean),
+    );
+    const sessionResponses = await Promise.all([
+      this.request<unknown>("/session"),
+      ...[...directories].map((directory) =>
+        this.request<unknown>("/session", { directory }).catch(() => []),
+      ),
+    ]);
+    const sessions = sessionResponses.flatMap(normalizeSessions);
+    const [providers, config] = await Promise.all([
       this.request<unknown>("/provider").catch(() => []),
       this.request<unknown>("/config").catch(() => undefined),
     ]);
@@ -701,15 +736,6 @@ export class OpenCodeAdapter extends EventEmitter {
         this.mergeThread(session, this.threads.get(session.id)),
       );
     }
-    for (const [id, thread] of this.threads)
-      if (
-        !seen.has(id) &&
-        thread.status !== "running" &&
-        thread.status !== "waiting"
-      ) {
-        this.threads.delete(id);
-        this.sessionTitles.delete(id);
-      }
     this.broadcast("agent.status", this.descriptor());
     this.broadcast("snapshot", this.snapshot());
   }
@@ -722,7 +748,7 @@ export class OpenCodeAdapter extends EventEmitter {
 
   /**
    * 已有 server 且健康检查通过时复用它；事件流沿用旧的，不重复订阅。
-   * 不健康则把残留子进程连带结束，返回 false 让调用方重新拉起。
+   * 不健康则终止当前直接子进程，返回 false 让调用方重新拉起。
    */
   private async reuseHealthyServer(): Promise<boolean> {
     const child = this.process;
@@ -743,7 +769,9 @@ export class OpenCodeAdapter extends EventEmitter {
     } catch {
       // 走到下面按不健康处理。
     }
-    this.killChild(child);
+    // A failed health probe can race the child's `exit` notification.  Avoid
+    // taskkill /T here: a stale PID could already belong to another OpenCode.
+    this.killDirectChild(child);
     if (this.process === child) this.process = undefined;
     // 旧 server 已死，它上面的 SSE 流也要停掉，否则旧循环会把 error
     // 写回 descriptor，覆盖新 server 的健康状态。
@@ -754,10 +782,30 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   private killChild(child: ChildProcess | undefined) {
+    if (!child) return;
+    // Never taskkill a process that has already exited: on Windows the PID
+    // may have been reused by an unrelated OpenCode instance.
+    if (child.killed || child.exitCode != null || child.signalCode != null) {
+      try {
+        child.kill();
+      } catch {
+        // Ignore: the process may already be gone.
+      }
+      return;
+    }
     stopChildProcess(
       child,
       this.options.killProcessTree || killProcessTree,
     );
+  }
+
+  private killDirectChild(child: ChildProcess | undefined) {
+    if (!child) return;
+    try {
+      child.kill();
+    } catch {
+      // Ignore: the process may already be gone.
+    }
   }
 
   restart() {
@@ -773,13 +821,21 @@ export class OpenCodeAdapter extends EventEmitter {
     }
   }
 
+  /** 现有库：归档会话不在这里，在 `snapshot().archivedThreads` 里。 */
   listThreads() {
-    return [...this.threads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...this.threads.values()]
+      .filter((thread) => !thread.archived)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   async createThread(
     providerId: string,
-    input: { cwd: string; name?: string; model?: string },
+    input: {
+      cwd: string;
+      name?: string;
+      model?: string;
+      reasoningEffort?: string;
+    },
   ) {
     const session = await this.request<OpenCodeSession>("/session", {
       method: "POST",
@@ -788,21 +844,25 @@ export class OpenCodeAdapter extends EventEmitter {
     });
     const displayName = input.name || session.title || "新 OpenCode 会话";
     this.sessionTitles.set(session.id, String(input.name || session.title || "").trim());
+    const effort = input.reasoningEffort?.trim() || undefined;
     const thread = {
       ...sessionSummary(session),
       providerId: providerId || profileId(session),
       cwd: input.cwd,
       model: input.model || "default",
+      ...(effort ? { reasoningEffort: effort } : {}),
       // 新会话没有首条消息前不展示随机 slug，和 Codex 的“新会话”一致。
       name: displayName,
       preview: displayName,
     };
-    // Persist the picked model so the next refresh (or a Deck restart) keeps
-    // it instead of falling back to OpenCode's own default.
-    if (input.model)
-      await this.options.threadSettings?.update(this.id, thread.id, {
-        model: input.model,
-      });
+    // Persist the picked model/effort so the next refresh (or a Deck restart)
+    // keeps them instead of falling back to OpenCode's own default.
+    if (input.model || effort) {
+      const patch: { model?: string; reasoningEffort?: string } = {};
+      if (input.model) patch.model = input.model;
+      if (effort) patch.reasoningEffort = effort;
+      await this.options.threadSettings?.update(this.id, thread.id, patch);
+    }
     this.threads.set(thread.id, thread);
     this.broadcast("thread.updated", thread);
     return thread;
@@ -916,6 +976,36 @@ export class OpenCodeAdapter extends EventEmitter {
     return thread;
   }
 
+  /**
+   * Deck 侧软归档：OpenCode serve 没有归档接口，服务端会话原样保留，
+   * 只是不再出现在现有库；归档态写进 thread-settings，重启不丢失。
+   */
+  async archiveThread(_providerId: string, threadId: string) {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) return thread;
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("运行中的 OpenCode 会话不能归档");
+    thread.archived = true;
+    thread.updatedAt = Date.now();
+    await this.options.threadSettings?.update(this.id, threadId, {
+      archived: true,
+    });
+    this.broadcast("thread.updated", thread);
+    return thread;
+  }
+
+  async unarchiveThread(_providerId: string, threadId: string) {
+    const thread = this.requireThread(threadId);
+    if (!thread.archived) return thread;
+    thread.archived = false;
+    thread.updatedAt = Date.now();
+    await this.options.threadSettings?.update(this.id, threadId, {
+      archived: null,
+    });
+    this.broadcast("thread.updated", thread);
+    return thread;
+  }
+
   async updateThreadSettings(
     _providerId: string,
     threadId: string,
@@ -960,6 +1050,7 @@ export class OpenCodeAdapter extends EventEmitter {
   ) {
     const thread = this.requireThread(threadId);
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
+    if (thread.archived) throw new Error("会话已归档，请先恢复再发送");
     const parsed =
       thread.model && thread.model !== "default"
         ? this.modelInput(thread.model)
@@ -1022,6 +1113,7 @@ export class OpenCodeAdapter extends EventEmitter {
 
   async interrupt(_providerId: string, threadId: string, _turnId: string) {
     const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
     await this.request(`/session/${encodeURIComponent(threadId)}/abort`, {
       method: "POST",
       directory: thread.cwd,
@@ -1428,7 +1520,12 @@ export class OpenCodeAdapter extends EventEmitter {
   private offline(error: unknown) {
     this.online = false;
     this.error = error instanceof Error ? error.message : String(error);
+    for (const thread of this.busyThreads()) {
+      thread.status = "offline";
+      thread.activeTurnId = undefined;
+    }
     this.broadcast("agent.status", this.descriptor());
+    this.broadcast("snapshot", this.snapshot());
   }
 
   private processError(error: unknown) {

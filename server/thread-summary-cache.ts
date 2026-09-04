@@ -15,7 +15,9 @@ function validThread(value: unknown): value is ThreadSummary {
   return Boolean(
     thread.id &&
     thread.providerId &&
-    (thread.agentId === "codex" || thread.agentId === "claude"),
+    (thread.agentId === "codex" ||
+      thread.agentId === "claude" ||
+      thread.agentId === "opencode"),
   );
 }
 
