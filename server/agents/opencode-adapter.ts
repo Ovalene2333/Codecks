@@ -1284,6 +1284,70 @@ export class OpenCodeAdapter extends EventEmitter {
     return { ok: true };
   }
 
+  /**
+   * `/undo`：`POST /session/:id/revert { messageID }`。
+   * 不带 messageID 时以后端消息列表里最后一条 user 消息为边界，
+   * 与原生 TUI `/undo`（撤回最近一轮）一致；按条撤回时由调用方传入
+   * Deck turn.id（即 user message id）。
+   * revert 只是 staging：执行后回读 session 的 revert.summary 做核验，
+   * 上游曾出现返回成功但文件未恢复的情况，调用方应展示该摘要而非假设成功。
+   */
+  async revertSession(_providerId: string, threadId: string, messageID?: string) {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务运行中不能撤回，请先停止任务");
+    let target = String(messageID || "").trim();
+    if (!target) {
+      const records = await this.request<any[]>(
+        `/session/${encodeURIComponent(threadId)}/message`,
+        { directory: thread.cwd },
+      );
+      for (let index = (records || []).length - 1; index >= 0; index -= 1) {
+        const info =
+          records[index]?.info || records[index]?.message || records[index];
+        if (info?.role === "user" && info?.id) {
+          target = String(info.id);
+          break;
+        }
+      }
+      if (!target) throw new Error("没有可撤回的用户消息");
+    }
+    await this.request(`/session/${encodeURIComponent(threadId)}/revert`, {
+      method: "POST",
+      directory: thread.cwd,
+      body: { messageID: target },
+    });
+    const session = await this.request<any>(
+      `/session/${encodeURIComponent(threadId)}`,
+      { directory: thread.cwd },
+    ).catch(() => undefined);
+    const summary = session?.summary || {};
+    const number = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? value
+        : 0;
+    return {
+      messageID: String(session?.revert?.messageID || target),
+      files: number(summary.files),
+      additions: number(summary.additions),
+      deletions: number(summary.deletions),
+    };
+  }
+
+  /** `/redo`：`POST /session/:id/unrevert`，恢复撤回前的内容与文件。 */
+  async unrevertSession(_providerId: string, threadId: string) {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务运行中不能恢复撤回，请先停止任务");
+    await this.request(`/session/${encodeURIComponent(threadId)}/unrevert`, {
+      method: "POST",
+      directory: thread.cwd,
+    });
+    return { ok: true as const };
+  }
+
   async sendTurn(
     _providerId: string,
     threadId: string,

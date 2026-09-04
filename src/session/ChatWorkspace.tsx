@@ -27,7 +27,7 @@ import {
   settingsForApprovalMode,
   settingsForSandboxMode,
 } from "../codexLabels";
-import { RenderErrorBoundary } from "../ui";
+import { ConfirmDialog, RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
 import { CommandModal, type CommandModalKind } from "./CommandModal";
 import { Timeline } from "./Timeline";
@@ -48,7 +48,7 @@ import {
   shouldKeepLoadedThread,
   shouldSurfaceThreadLoadError,
 } from "./thread-load";
-import { draftFromUserMessage } from "./user-message";
+import { draftFromUserMessage, userMessageText } from "./user-message";
 
 export function ChatWorkspace({
   thread,
@@ -110,6 +110,10 @@ export function ChatWorkspace({
   const [opencodeCommands, setOpencodeCommands] = useState<
     Array<{ name: string; hint?: string }>
   >([]);
+  const [revertConfirm, setRevertConfirm] = useState<
+    { mode: "undo" | "redo" | "message"; messageID?: string; preview: string }
+  >();
+  const [reverting, setReverting] = useState(false);
   const fullRef = useRef(full);
   fullRef.current = full;
   const updateDraft = (next: typeof draft) => {
@@ -231,6 +235,16 @@ export function ChatWorkspace({
       throw new Error(`${agentName} 暂不支持 Shell 命令`);
     if (thread.agentId === "opencode") {
       if (command.kind === "compact") return compact();
+      if (command.kind === "undo") {
+        if (locked) throw new Error("任务运行中不能撤回，请先停止任务");
+        setRevertConfirm({ mode: "undo", preview: lastUserPreview() });
+        return;
+      }
+      if (command.kind === "redo") {
+        if (locked) throw new Error("任务运行中不能恢复撤回，请先停止任务");
+        setRevertConfirm({ mode: "redo", preview: "" });
+        return;
+      }
       if (command.kind === "opencode-command") {
         await post(`${threadPath(thread)}/commands`, {
           command: command.command,
@@ -260,9 +274,9 @@ export function ChatWorkspace({
       if (command.kind === "help") {
         setStatusNote(
           [
-            "OpenCode 命令：/compact /init /models /new /sessions /details /thinking",
+            "OpenCode 命令：/compact /undo /redo /init /models /new /sessions /details /thinking",
             "/status /ps /usage，以及服务端自定义命令（输入 / 后补全可见）。",
-            "破坏性与分享类命令（/undo /share 等）尚未接入，仍请用原生 TUI 执行。",
+            "分享类命令（/share 等）尚未接入，仍请用原生 TUI 执行。",
           ].join("\n"),
         );
         return;
@@ -533,6 +547,69 @@ export function ChatWorkspace({
       setError(err.message);
     }
   };
+  /** 确认框里展示的撤回目标：已加载历史里最后一条 user 消息，不足则兜底。 */
+  const lastUserPreview = () => {
+    const turns = Array.isArray(fullRef.current?.turns)
+      ? fullRef.current.turns
+      : [];
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      const items = Array.isArray(turns[index]?.items) ? turns[index].items : [];
+      const user = items.find((item: any) => item?.type === "userMessage");
+      const text = user ? displayText(userMessageText(user)).trim() : "";
+      if (text) return text.slice(0, 42);
+    }
+    return "最近一轮";
+  };
+  const executeRevert = async (messageID?: string) => {
+    setReverting(true);
+    try {
+      const result = await post<{ messageID: string; files: number; additions: number; deletions: number }>(
+        `${threadPath(thread)}/revert`,
+        messageID ? { messageID } : {},
+      );
+      const files = Number(result?.files || 0);
+      setStatusNote(
+        [
+          `已撤回${messageID ? "所选消息及之后" : "最近一轮"}的内容。`,
+          files > 0
+            ? `恢复 ${files} 个文件（+${result.additions} −${result.deletions}）。`
+            : "未发现可恢复的文件快照，仅回滚了对话（非 git 仓库时属正常）。",
+          "可用 /redo 恢复撤回前的内容（需确认）。",
+        ].join("\n"),
+      );
+      load();
+      onSnapshot();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setReverting(false);
+      setRevertConfirm(undefined);
+    }
+  };
+  const executeUnrevert = async () => {
+    setReverting(true);
+    try {
+      await post(`${threadPath(thread)}/unrevert`, {});
+      setStatusNote("已恢复撤回前的内容与文件。");
+      load();
+      onSnapshot();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setReverting(false);
+      setRevertConfirm(undefined);
+    }
+  };
+  /** Timeline 按条“撤回”按钮：opencode 专属，复用同一确认链路。 */
+  const openMessageRevert = (turnId: string, item: any) => {
+    if (locked || sending || thread.compacting) return;
+    const text = displayText(userMessageText(item)).trim().slice(0, 42);
+    setRevertConfirm({
+      mode: "message",
+      messageID: turnId,
+      preview: text || "所选消息",
+    });
+  };
   const saveSettings = async (settings: {
     model?: string;
     reasoningEffort?: string;
@@ -672,6 +749,11 @@ export function ChatWorkspace({
           onOpenOrigin={onOpenOrigin}
           onEditUserMessage={editUserMessage}
           onRetryUserMessage={capabilities.fork ? retryUserMessage : undefined}
+          onRevertUserMessage={
+            (thread.agentId || "codex") === "opencode"
+              ? openMessageRevert
+              : undefined
+          }
           messageActionsDisabled={
             locked || sending || Boolean(thread.compacting)
           }
@@ -746,6 +828,43 @@ export function ChatWorkspace({
             setComposerFocusRequest((current) => current + 1);
           }}
           onClose={() => setCommandModal(undefined)}
+        />
+      )}
+      {revertConfirm && (
+        <ConfirmDialog
+          title={
+            revertConfirm.mode === "redo" ? "恢复已撤回的内容？" : "撤回消息？"
+          }
+          confirmLabel={
+            reverting ? "执行中…" : revertConfirm.mode === "redo" ? "恢复" : "撤回"
+          }
+          danger={revertConfirm.mode !== "redo"}
+          onClose={() => {
+            if (!reverting) setRevertConfirm(undefined);
+          }}
+          onConfirm={() => {
+            if (reverting) return;
+            if (revertConfirm.mode === "redo") void executeUnrevert();
+            else void executeRevert(revertConfirm.messageID);
+          }}
+          body={
+            revertConfirm.mode === "redo" ? (
+              <p>
+                将恢复撤回前的内容与文件，当前对话中新增的内容可能被覆盖。继续吗？
+              </p>
+            ) : (
+              <div>
+                <p>
+                  将删除「{revertConfirm.preview}」
+                  {revertConfirm.mode === "message"
+                    ? "及之后全部回复"
+                    : "所在最近一轮及之后全部回复"}
+                  ，并恢复相关文件。提交过的重要改动请先自行备份。
+                </p>
+                <p>若项目不是 git 仓库，仅回滚对话、不恢复文件。</p>
+              </div>
+            )
+          }
         />
       )}
     </main>

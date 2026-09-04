@@ -37,7 +37,19 @@ OpenCode 会话的 `parse/matching` 按 `agentId` 分流，不复用 Codex 指�
 | `/status`、`/ps`、`/usage`、`/help`      | 状态只显示模型/状态/上下文/供应商/目录/Thread（不显示沙箱/Fast/性格）；`ps/usage` 走现有面板；`help` 列出可用命令 |
 | 命令补全                                 | 内置表 + `GET /api/agents/opencode/threads/:id/commands`（即 `GET /command`，含 `.opencode/commands/*.md` 自定义命令）合并去重后提示 |
 
-尚未接入（仍请用原生 TUI）：`/undo`、`/redo`、`/share`、`/unshare`、`/export`、`!cmd`、`/connect`、`/editor`、`/themes`、`/exit`。
+### 撤回（`/undo`、`/redo`，破坏性，需确认）
+
+OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边界、消息清理在后续提交点），与 Codex 的 fork 分支（非破坏性）不同，因此 Deck 侧强制二次确认：
+
+| 入口 | Deck 行为 |
+| ---- | --------- |
+| `/undo` | 以后端消息列表最后一条 user 消息为边界撤回最近一轮；先弹确认框（目标预览 + 非 git 仓库仅回滚对话的警告），执行后用服务端 `revert.summary{files,additions,deletions}` 核验并展示结果，提示可用 `/redo` 恢复 |
+| `/redo` | 同样先确认，再调 `POST /session/:id/unrevert` 恢复内容与文件 |
+| 时间线每条 user 消息旁「撤回」 | opencode 专属（补上 `fork:false` 导致缺失的按条操作位），以该 `turn.id` 为边界走同一确认链路 |
+
+门禁：运行中/待审批/已归档一律拒绝（服务端忙时同样拒绝，不只靠前端隐藏）。执行后重读历史并刷新快照；`files=0` 时明确提示"仅回滚了对话"。
+
+尚未接入（仍请用原生 TUI）：`/share`、`/unshare`、`/export`、`!cmd`、`/connect`、`/editor`、`/themes`、`/exit`。
 
 ## 建议下一批
 

@@ -1341,3 +1341,101 @@ test("OpenCode compact resolves the model and clears the compacting flag", async
   (adapter as any).threads.get("s1").status = "running";
   await assert.rejects(adapter.compactSession("p", "s1"), /任务结束后/);
 });
+
+test("OpenCode revert targets the last user message and reports the file summary", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && !init?.method)
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "第一轮" }],
+          },
+          {
+            info: { id: "m2", role: "assistant" },
+            parts: [{ id: "p2", type: "text", text: "好" }],
+          },
+          {
+            info: { id: "m3", role: "user", time: { created: 2 } },
+            parts: [{ id: "p3", type: "text", text: "第二轮" }],
+          },
+        ]);
+      if (value.includes("/revert") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json(true);
+      }
+      if (value.includes("/session/s1") && !init?.method)
+        return Response.json({
+          id: "s1",
+          revert: { messageID: "m3" },
+          summary: { files: 2, additions: 10, deletions: 3 },
+        });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  // 不带 messageID 时以后端最后一条 user 消息为边界。
+  const summary = await adapter.revertSession("p", "s1");
+  assert.deepEqual(JSON.parse(posts[0].body!), { messageID: "m3" });
+  assert.deepEqual(summary, {
+    messageID: "m3",
+    files: 2,
+    additions: 10,
+    deletions: 3,
+  });
+
+  // 按条撤回直接透传调用方传入的 turn.id。
+  await adapter.revertSession("p", "s1", "m1");
+  assert.deepEqual(JSON.parse(posts[1].body!), { messageID: "m1" });
+
+  (adapter as any).threads.get("s1").status = "waiting";
+  await assert.rejects(adapter.revertSession("p", "s1"), /运行中/);
+  (adapter as any).threads.get("s1").status = "idle";
+  (adapter as any).threads.get("s1").archived = true;
+  await assert.rejects(adapter.revertSession("p", "s1"), /归档/);
+});
+
+test("OpenCode unrevert posts once and refuses busy sessions", async () => {
+  const posts: string[] = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      if (String(url).includes("/unrevert") && init?.method === "POST") {
+        posts.push(String(url));
+        return Response.json(true);
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  assert.deepEqual(await adapter.unrevertSession("p", "s1"), { ok: true });
+  assert.equal(posts.length, 1);
+
+  (adapter as any).threads.get("s1").status = "running";
+  await assert.rejects(adapter.unrevertSession("p", "s1"), /运行中/);
+});
