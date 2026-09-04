@@ -425,6 +425,137 @@ test("OpenCode resolves the concrete model id and context usage from the last re
   assert.equal(thread.tokenUsage.used, 8_550);
 });
 
+test("OpenCode context usage skips aborted replies with zero tokens", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            anthropic: {
+              name: "Anthropic",
+              models: {
+                "claude-sonnet-4-5": {
+                  name: "Claude Sonnet 4.5",
+                  limit: { context: 200_000 },
+                },
+              },
+            },
+          },
+          connected: ["anthropic"],
+        });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "继续" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              tokens: {
+                input: 1_200,
+                output: 300,
+                reasoning: 0,
+                cache: { read: 7_000, write: 0 },
+              },
+            },
+            parts: [{ id: "p2", type: "text", text: "好" }],
+          },
+          // Aborted turn: assistant message with no token counts. This used
+          // to render as a bogus "0/200k" context chip.
+          {
+            info: {
+              id: "m3",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              tokens: {},
+            },
+            parts: [],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.resolvedModel, "anthropic/claude-sonnet-4-5");
+  assert.deepEqual(loaded.tokenUsage, {
+    input: 1_200,
+    cachedInput: 7_000,
+    output: 300,
+    reasoningOutput: 0,
+    used: 8_500,
+    limit: 200_000,
+  });
+});
+
+test("OpenCode sessions without any token records show no context usage", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            anthropic: {
+              name: "Anthropic",
+              models: {
+                "claude-sonnet-4-5": { limit: { context: 200_000 } },
+              },
+            },
+          },
+          connected: ["anthropic"],
+        });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "你好" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+              tokens: {},
+            },
+            parts: [],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  // 模拟旧版缓存里残留的 used=0 用量，刷新后必须被清掉。
+  (adapter as any).threads.set("s1", {
+    id: "s1",
+    providerId: "anthropic",
+    name: "s",
+    preview: "s",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+    tokenUsage: { used: 0, limit: 200_000 },
+  } as any);
+  await adapter.refreshAll();
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  // 旧缓存里的 used=0 残留被刷新清掉。
+  assert.equal(thread.tokenUsage, undefined);
+  const loaded: any = await adapter.readThread("p", "s1");
+  // 最新 assistant 消息没有任何 token 记录：不生成 0/xxx 用量。
+  assert.equal(loaded.resolvedModel, "anthropic/claude-sonnet-4-5");
+  assert.equal(loaded.tokenUsage, undefined);
+});
+
 test("OpenCode sessions fall back to the generated slug and expose effort variants", async () => {
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url) => {

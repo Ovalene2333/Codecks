@@ -324,6 +324,31 @@ function lastAssistantInfo(records: any[]) {
   return undefined;
 }
 
+/**
+ * Newest assistant message that actually carries token counts. Aborted or
+ * failed turns still leave an assistant message behind, but with all-zero
+ * tokens; using it would display a bogus "0/xxx" context chip.
+ */
+function lastAssistantWithUsage(records: any[]) {
+  for (let index = (records || []).length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    const info = record?.info || record?.message || record;
+    if (info?.role !== "assistant") continue;
+    const tokens = info.tokens || {};
+    const cache = tokens.cache || {};
+    if (
+      tokenNumber(tokens.input) +
+        tokenNumber(tokens.output) +
+        tokenNumber(tokens.reasoning) +
+        tokenNumber(cache.read) +
+        tokenNumber(cache.write) >
+      0
+    )
+      return info;
+  }
+  return undefined;
+}
+
 function tokenNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
@@ -664,7 +689,7 @@ export class OpenCodeAdapter extends EventEmitter {
     const settings = this.options.threadSettings?.get(this.id, session.id);
     const title = String(session.title || "").trim();
     this.sessionTitles.set(session.id, title);
-    return {
+    const merged: ThreadSummary = {
       ...summary,
       ...existing,
       ...settings,
@@ -675,6 +700,10 @@ export class OpenCodeAdapter extends EventEmitter {
       cwd: session.directory || existing?.cwd || summary.cwd,
       updatedAt: Math.max(summary.updatedAt, existing?.updatedAt || 0),
     };
+    // 旧版本会把“仅有上下文上限、没有 token 记录”的用量也存进缓存，
+    // 刷新时清掉这种 used=0 残留，避免侧栏一直显示 0/xxx。
+    if (!merged.tokenUsage?.used) delete merged.tokenUsage;
+    return merged;
   }
 
   /**
@@ -875,17 +904,20 @@ export class OpenCodeAdapter extends EventEmitter {
    */
   private applyThreadUsage(thread: ThreadSummary, records: any[]) {
     const info = lastAssistantInfo(records);
-    const providerID = String(info?.providerID || "").trim();
-    const modelID = String(info?.modelID || "").trim();
+    const usageInfo = lastAssistantWithUsage(records);
+    const infoProvider = String(info?.providerID || "").trim();
+    const infoModel = String(info?.modelID || "").trim();
     const resolved =
-      providerID && modelID
-        ? `${providerID}/${modelID}`
+      infoProvider && infoModel
+        ? `${infoProvider}/${infoModel}`
         : thread.model && thread.model !== "default"
           ? thread.model
           : this.configDefault
             ? `${this.configDefault.providerID}/${this.configDefault.modelID}`
             : undefined;
-    const tokens = info?.tokens || {};
+    const providerID = String(usageInfo?.providerID || "").trim();
+    const modelID = String(usageInfo?.modelID || "").trim();
+    const tokens = usageInfo?.tokens || {};
     const cache = tokens.cache || {};
     const input = tokenNumber(tokens.input);
     const output = tokenNumber(tokens.output);
@@ -896,10 +928,10 @@ export class OpenCodeAdapter extends EventEmitter {
       providerID && modelID
         ? this.modelContextLimit(providerID, modelID)
         : undefined;
+    // 只有拿到真实 token 记录才生成用量；仅有上限没有用量时会显示成
+    // 误导性的 “0/xxx”，不如不显示。
     const tokenUsage: TokenUsage | undefined =
-      used > 0 || limit
-        ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit }
-        : undefined;
+      used > 0 ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit } : undefined;
     const sameUsage =
       thread.tokenUsage?.used === tokenUsage?.used &&
       thread.tokenUsage?.limit === tokenUsage?.limit;
@@ -907,8 +939,9 @@ export class OpenCodeAdapter extends EventEmitter {
     const next: ThreadSummary = {
       ...thread,
       ...(resolved ? { resolvedModel: resolved } : {}),
-      ...(tokenUsage ? { tokenUsage } : {}),
     };
+    if (tokenUsage) next.tokenUsage = tokenUsage;
+    else delete next.tokenUsage;
     this.threads.set(next.id, next);
     this.broadcast("thread.updated", next);
     return next;
