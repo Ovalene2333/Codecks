@@ -199,3 +199,53 @@ test("TurnBlock renders read overview, collapsed updates, and expandable tools",
   assert.match(html, />检索</);
   assert.match(html, /src\/a\.ts:1:tool/);
 });
+
+test("TurnBlock renders subagent cards with status and expandable output", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      index: 1,
+      thread,
+      streamed: [],
+      turn: {
+        id: "turn",
+        status: "completed",
+        items: [
+          {
+            id: "task-running",
+            type: "subagent",
+            title: "探索代码库",
+            agent: "explore",
+            status: "inProgress",
+            activity: "正在读取 src 目录",
+            aggregatedOutput: "",
+          },
+          {
+            id: "task-done",
+            type: "subagent",
+            title: "审查改动",
+            agent: "general",
+            status: "completed",
+            aggregatedOutput: "共 3 处建议",
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /class="tool-row subagent-row running"/);
+  assert.match(html, /子代理执行中/);
+  assert.match(html, /class="subagent-activity"[^>]*>正在读取 src 目录</);
+  assert.match(html, /class="tool-row subagent-row ok"/);
+  assert.match(html, /审查改动/);
+  assert.match(html, /explore/);
+  assert.match(html, /共 3 处建议/);
+});

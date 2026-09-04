@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import {
   Activity,
   BookOpenText,
+  Bot,
   Command,
   Files,
   FolderSearch,
@@ -196,6 +197,48 @@ function TurnItem({
         <div>{reasoningText(item)}</div>
       </details>
     );
+  if (item.type === "subagent") {
+    const state =
+      item.status === "inProgress"
+        ? "running"
+        : item.status === "failed"
+          ? "failed"
+          : "ok";
+    const title = displayText(item.title) || "子代理";
+    const agent = displayText(item.agent);
+    const activity = displayText(item.activity);
+    const output = displayText(item.aggregatedOutput);
+    return (
+      <div className={`tool-row subagent-row ${state}`}>
+        <details>
+          <summary>
+            <Bot />
+            <span className="tool-action">
+              {state === "running"
+                ? "子代理执行中"
+                : state === "failed"
+                  ? "子代理失败"
+                  : "子代理"}
+            </span>
+            <code className="tool-command" title={title}>
+              {title}
+            </code>
+            {agent ? (
+              <span className="subagent-agent" title={agent}>
+                {agent}
+              </span>
+            ) : null}
+          </summary>
+          {output ? <pre>{output}</pre> : null}
+        </details>
+        {state === "running" && activity ? (
+          <div className="subagent-activity" title={activity}>
+            {activity}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
   if (item.type === "commandExecution") {
     const state =
       item.status === "inProgress"

@@ -42,6 +42,40 @@ test("OpenCode step metadata does not become an extension item", () => {
   );
 });
 
+test("OpenCode task tool parts become subagent cards with live activity", () => {
+  const item = openCodePartToItem({
+    id: "prt-task",
+    type: "tool",
+    tool: "task",
+    state: {
+      status: "running",
+      title: "Task tool",
+      input: { description: "探索代码库", subagent_type: "explore" },
+      metadata: { sessionId: "ses_child", deckActivity: "正在读取 src 目录" },
+    },
+  });
+  assert.equal(item.type, "subagent");
+  assert.equal(item.title, "探索代码库");
+  assert.equal(item.agent, "explore");
+  assert.equal(item.status, "inProgress");
+  assert.equal(item.activity, "正在读取 src 目录");
+  assert.equal(item.childSessionId, "ses_child");
+  assert.equal(item.aggregatedOutput, "");
+
+  const completed = openCodePartToItem({
+    id: "prt-task",
+    type: "tool",
+    tool: "task",
+    state: {
+      status: "error",
+      input: { description: "探索代码库" },
+      output: "done",
+    },
+  });
+  assert.equal(completed.status, "failed");
+  assert.equal(completed.aggregatedOutput, "done");
+});
+
 test("unknown OpenCode parts remain extension items with the raw payload", () => {
   const part = { id: "prt-3", type: "choice", options: ["a"] };
   const item = openCodePartToItem(part);

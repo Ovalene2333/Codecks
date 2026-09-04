@@ -44,6 +44,28 @@ export function openCodePartToItem(part: any): any | undefined {
     return { id: String(part.id), type: "reasoning", summary: part.text || "" };
   if (part.type === "tool") {
     const state = part.state || {};
+    if (part.tool === "task") {
+      const input =
+        state.input && typeof state.input === "object" ? state.input : {};
+      const childSessionId = String(state.metadata?.sessionId || "").trim();
+      return {
+        id: String(part.id),
+        type: "subagent",
+        title: String(input.description || state.title || part.tool).trim(),
+        agent: String(
+          input.subagent_type || input.agent || input.agentType || "",
+        ).trim(),
+        status:
+          state.status === "error"
+            ? "failed"
+            : state.status === "completed"
+              ? "completed"
+              : "inProgress",
+        activity: String(state.metadata?.deckActivity || ""),
+        aggregatedOutput: state.output || state.error || "",
+        ...(childSessionId ? { childSessionId } : {}),
+      };
+    }
     const item: any = {
       id: String(part.id),
       type: "commandExecution",

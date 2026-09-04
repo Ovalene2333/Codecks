@@ -618,6 +618,38 @@
 .command-row.failed {
   border-left-color: #fb7185;
 }
+.subagent-row {
+  border-left-color: #4b5565;
+}
+.subagent-row.running {
+  border-left-color: var(--wait);
+}
+.subagent-row.ok {
+  border-left-color: var(--green);
+}
+.subagent-row.failed {
+  border-left-color: #fb7185;
+}
+.subagent-row.running .tool-action {
+  color: var(--wait);
+}
+.subagent-agent {
+  margin-left: auto;
+  max-width: 40%;
+  overflow: hidden;
+  padding-right: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #5d6b7d;
+  font-size: 11px;
+}
+.subagent-activity {
+  overflow: hidden;
+  color: #e0a24b;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .tool-status {
   flex: none;
   color: #8b97a8;
