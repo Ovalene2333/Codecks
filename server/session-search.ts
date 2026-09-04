@@ -289,13 +289,24 @@ export class SessionSearchStore {
   }
 
   indexedCount(allowed: Set<string>) {
-    const rows = this.db
-      .prepare(
-        "SELECT agent_id, thread_id FROM session_search_thread WHERE last_error IS NULL",
-      )
-      .all() as any[];
-    return rows.filter((row) => allowed.has(`${row.agent_id}:${row.thread_id}`))
-      .length;
+    if (allowed.size === 0) return 0;
+    // 原实现全表 SELECT 后在 JS 里 filter：threads 上千时每次搜索都传输全量行。
+    // 改为库内 COUNT，分批 IN 避免超 SQLite 变量数上限。
+    const values = [...allowed];
+    let total = 0;
+    for (let offset = 0; offset < values.length; offset += 500) {
+      const batch = values.slice(offset, offset + 500);
+      const placeholders = batch.map(() => "?").join(", ");
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM session_search_thread
+           WHERE last_error IS NULL
+             AND (agent_id || ':' || thread_id) IN (${placeholders})`,
+        )
+        .get(...batch) as any;
+      total += Number(row?.count) || 0;
+    }
+    return total;
   }
 
   close() {

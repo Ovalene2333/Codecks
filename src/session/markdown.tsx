@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Image as ImageIcon, RotateCcw } from "lucide-react";
@@ -7,7 +7,11 @@ import { getBlob } from "../api";
 
 const LOCAL_IMAGE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 
-export function DeferredImage({
+// remarkPlugins / components 内联字面量每次 render 都是新引用，会逼 ReactMarkdown
+// 全量重解析。长会话流式场景下同一大 markdown 被反复 parse，提升为模块常量。
+const MARKDOWN_PLUGINS = [remarkGfm];
+
+export const DeferredImage = memo(function DeferredImage({
   src,
   alt,
   thread,
@@ -66,9 +70,9 @@ export function DeferredImage({
       onError={() => setFailed(true)}
     />
   );
-}
+});
 
-function CopyablePre({
+function CopyablePreInner({
   children,
   onCopy,
 }: {
@@ -94,29 +98,46 @@ function CopyablePre({
   );
 }
 
-export function AssistantMarkdown({
-  text,
-  onCopy,
-}: {
-  text: string;
-  onCopy?: () => void;
-}) {
-  return (
-    <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children }) => <span>{children}</span>,
-          img: ({ src, alt }) => <DeferredImage src={src} alt={alt} />,
-          pre: ({ children }) => (
-            <CopyablePre onCopy={onCopy}>{children}</CopyablePre>
-          ),
-          h1: ({ children }) => <h3>{children}</h3>,
-          h2: ({ children }) => <h3>{children}</h3>,
-        }}
-      >
-        {unwrapAssistantMarkup(text)}
-      </ReactMarkdown>
-    </div>
-  );
-}
+const CopyablePre = memo(CopyablePreInner);
+
+const MARKDOWN_BASE_COMPONENTS = {
+  a: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
+  img: ({ src, alt }: { src?: string; alt?: string }) => (
+    <DeferredImage src={src} alt={alt} />
+  ),
+  h1: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
+  h2: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
+};
+
+export const AssistantMarkdown = memo(
+  function AssistantMarkdown({
+    text,
+    onCopy,
+  }: {
+    text: string;
+    onCopy?: () => void;
+  }) {
+    // pre 需要捕获本实例的 onCopy（复制后 toast），但 a/img/h1/h2 与实例无关，
+    // 复用静态引用以减少子树重建。调用方多为内联箭头 onCopy，用 useMemo 固定引用。
+    const components = useMemo(
+      () => ({
+        ...MARKDOWN_BASE_COMPONENTS,
+        pre: ({ children }: { children?: React.ReactNode }) => (
+          <CopyablePre onCopy={onCopy}>{children}</CopyablePre>
+        ),
+      }),
+      [onCopy],
+    );
+    return (
+      <div className="markdown">
+        <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={components}>
+          {unwrapAssistantMarkup(text)}
+        </ReactMarkdown>
+      </div>
+    );
+  },
+  // 调用方常传内联 `onCopy={() => onToast(...)}`，语义恒等。只按 text 比较，
+  // 历史 turn 在流式/父级重渲染时可直接命中 memo；流式 active 文本每帧都变，
+  // 本来就需要重解析，不影响正确性。
+  (prev, next) => prev.text === next.text,
+);

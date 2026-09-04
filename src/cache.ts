@@ -1,4 +1,10 @@
-import type { ProjectRecord, Provider, Snapshot, ThreadSummary } from "./types";
+import type {
+  Approval,
+  ProjectRecord,
+  Provider,
+  Snapshot,
+  ThreadSummary,
+} from "./types";
 
 export const SNAPSHOT_KEY = "codex-deck:snapshot:v2";
 const SNAPSHOT_LEGACY_KEYS = ["codex-deck:snapshot:v1"];
@@ -192,6 +198,64 @@ export function reconcileSnapshot(
       incoming,
     ),
   };
+}
+
+/**
+ * 保守合并：HTTP 快照请求发出后、又有 WS 事件落地时使用。
+ * 此时响应可能是“旧的”（服务端先生成响应、WS 事件后到客户端），
+ * 不能整体覆盖，否则 WS 刚推送的审批/运行状态会被回退。
+ * - threads/archivedThreads：按 updatedAt 取新的一方；
+ * - approvals：取并集，冲突时 incoming 胜出；
+ * - 其余字段以 incoming 为准。
+ * 残留边缘：请求发出前已 resolve 的审批，若响应生成晚于 resolve 则正常消失；
+ * 若响应生成早于中途的 resolve/删除，被删条目会短暂复活，下次刷新自愈。
+ */
+export function mergeStaleSnapshot(
+  current: Snapshot,
+  incoming: Snapshot,
+): Snapshot {
+  return {
+    ...incoming,
+    threads: pickNewestThreads(incoming.threads, current.threads),
+    archivedThreads: pickNewestThreads(
+      incoming.archivedThreads,
+      current.archivedThreads,
+    ),
+    approvals: mergeApprovals(incoming.approvals, current.approvals),
+  };
+}
+
+function pickNewestThreads(
+  primary?: ThreadSummary[],
+  secondary?: ThreadSummary[],
+): ThreadSummary[] {
+  const merged = new Map<string, ThreadSummary>();
+  for (const thread of primary || [])
+    merged.set(cachedThreadKey(thread), thread);
+  for (const thread of secondary || []) {
+    const key = cachedThreadKey(thread);
+    const prev = merged.get(key);
+    if (!prev || (thread.updatedAt || 0) > (prev.updatedAt || 0))
+      merged.set(key, thread);
+  }
+  return [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function approvalKey(item: Approval) {
+  return `${item.agentId || "codex"}:${item.id}`;
+}
+
+function mergeApprovals(
+  incoming?: Approval[],
+  current?: Approval[],
+): Approval[] {
+  const merged = new Map<string, Approval>();
+  for (const item of incoming || []) merged.set(approvalKey(item), item);
+  for (const item of current || []) {
+    const key = approvalKey(item);
+    if (!merged.has(key)) merged.set(key, item);
+  }
+  return [...merged.values()];
 }
 
 function migrateLegacySnapshot(store: Storage): Snapshot | null {

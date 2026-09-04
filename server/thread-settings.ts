@@ -76,7 +76,13 @@ export class ThreadSettingsStore {
         },
       };
     } catch (error: any) {
-      if (error?.code !== "ENOENT") throw error;
+      // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
+      // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
+      if (error?.code !== "ENOENT")
+        console.error(
+          "线程设置文件损坏，已回退为空（原文件保留）:",
+          error?.message || error,
+        );
     }
   }
 
@@ -136,12 +142,14 @@ export class ThreadSettingsStore {
 
   private save() {
     const snapshot = JSON.stringify(this.data);
-    this.writes = this.writes.then(async () => {
+    // 写链自愈：一次瞬时 IO 错误后重置链，避免后续所有 save 带着旧错误永久失败。
+    const attempt = this.writes.catch(() => undefined).then(async () => {
       await mkdir(this.dataDir, { recursive: true });
       const temporary = `${this.file}.${process.pid}.tmp`;
       await writeFile(temporary, snapshot, { encoding: "utf8", mode: 0o600 });
       await rename(temporary, this.file);
     });
-    return this.writes;
+    this.writes = attempt.catch(() => undefined);
+    return attempt;
   }
 }

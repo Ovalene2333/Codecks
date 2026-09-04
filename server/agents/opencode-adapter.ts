@@ -845,7 +845,9 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   /**
-   * 已有 server 且健康检查通过时复用它；事件流沿用旧的，不重复订阅。
+   * 已有 server 且健康检查通过时复用它；事件流必须重建——旧 SSE 可能已静默
+   * 断开（服务端关流/网络闪断），不断即永久收不到审批与状态事件。
+   * consumeEvents 入口会先 abort 上一条流，不会重复订阅。
    * 不健康则终止当前直接子进程，返回 false 让调用方重新拉起。
    */
   private async reuseHealthyServer(): Promise<boolean> {
@@ -862,6 +864,8 @@ export class OpenCodeAdapter extends EventEmitter {
       ]);
       if (healthy) {
         await this.refreshAll();
+        this.error = undefined;
+        void this.consumeEvents();
         return true;
       }
     } catch {
@@ -1198,18 +1202,35 @@ export class OpenCodeAdapter extends EventEmitter {
     // The reasoning effort is a per-message variant; only send one the model
     // actually advertises, otherwise OpenCode rejects the request.
     const variant = this.threadVariant(thread);
-    await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
-      method: "POST",
-      directory: thread.cwd,
-      body: {
-        parts: [
-          ...(text ? [textPart(text)] : []),
-          ...(images || []).map(imagePart),
-        ],
-        ...(model ? { model } : {}),
-        ...(variant ? { variant } : {}),
-      },
-    });
+    try {
+      await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
+        method: "POST",
+        directory: thread.cwd,
+        body: {
+          parts: [
+            ...(text ? [textPart(text)] : []),
+            ...(images || []).map(imagePart),
+          ],
+          ...(model ? { model } : {}),
+          ...(variant ? { variant } : {}),
+        },
+      });
+    } catch (error: any) {
+      // POST 失败（模型被拒、server 重启中）时必须回滚上面的 running 标记，
+      // 否则没有任何 session.status 事件能纠正，线程永久卡 running。
+      // 若服务端实际已收下请求，后续 busy 事件会把它置回 running，自愈。
+      const detail = String(error?.message || error || "OpenCode 任务发送失败");
+      thread.status = "error";
+      thread.activeTurnId = undefined;
+      thread.lastError = detail;
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+      this.emitAgentEvent(thread, "turn/completed", {
+        threadId,
+        turn: { id: turnId, status: "failed", error: { message: detail } },
+      });
+      throw error;
+    }
     return { turn: { id: turnId, status: "inProgress" } };
   }
 

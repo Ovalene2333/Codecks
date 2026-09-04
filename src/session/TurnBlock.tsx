@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, memo } from "react";
 import {
   Activity,
   BookOpenText,
@@ -52,7 +52,7 @@ function UnknownItem({ item }: { item: any }) {
   );
 }
 
-function TurnItem({
+function TurnItemInner({
   item,
   streamed,
   streaming,
@@ -315,6 +315,10 @@ function TurnItem({
   return <UnknownItem item={item} />;
 }
 
+// 历史 item 对象引用稳定时可跳过重渲染；streamed/streaming/cwd 变化仍正常更新。
+// 回调多为父级内联箭头但语义稳定，默认浅比较已能过滤大部分无关重渲染。
+const TurnItem = memo(TurnItemInner);
+
 function FileChangeGroup({
   items,
   changes,
@@ -384,22 +388,7 @@ function OptimisticUserMessage({ message }: { message: PendingUserMessage }) {
   );
 }
 
-export function TurnBlock({
-  turn,
-  index,
-  thread,
-  highlighted,
-  targetItemId,
-  targetRequest,
-  streamed,
-  streamedItems = [],
-  pendingUsers = [],
-  onCopy,
-  onForkFrom,
-  onEditUserMessage,
-  onRetryUserMessage,
-  messageActionsDisabled,
-}: {
+interface TurnBlockProps {
   turn: any;
   index: number;
   thread: ThreadSummary;
@@ -414,7 +403,76 @@ export function TurnBlock({
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
-}) {
+}
+
+// Timeline 把全量 streamed/streamedItems 传给每一个 TurnBlock，而 ChatWorkspace
+// 每次 render 都重建这些数组（collectStreamed*）。默认浅比较 memo 永远命中不了。
+// 按内容签名比较：非活跃 turn 与流式无关，直接按引用快速通道跳过；活跃 turn
+// 只在流式文本/条目实质变化时重渲染。
+function streamSignature(messages: StreamedAgentMessage[]) {
+  if (messages.length === 0) return "0";
+  const last = messages[messages.length - 1];
+  return `${messages.length}:${last.itemId}:${last.completed ? 1 : 0}:${last.text.length}:${last.text.slice(-64)}`;
+}
+
+function streamItemsSignature(items: StreamedTurnItem[] | undefined) {
+  if (!items || items.length === 0) return "0";
+  return `${items.length}:${items.map((entry) => entry.itemId).join(",")}`;
+}
+
+function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
+  if (prev.turn !== next.turn) return false;
+  if (prev.thread !== next.thread) {
+    // thread 对象每轮都可能重建，只比较渲染实际使用的字段。
+    const a = prev.thread;
+    const b = next.thread;
+    if (
+      a.activeTurnId !== b.activeTurnId ||
+      a.status !== b.status ||
+      a.cwd !== b.cwd ||
+      a.model !== b.model ||
+      a.reasoningEffort !== b.reasoningEffort ||
+      a.agentId !== b.agentId ||
+      a.updatedAt !== b.updatedAt
+    )
+      return false;
+  }
+  if (
+    prev.index !== next.index ||
+    prev.highlighted !== next.highlighted ||
+    prev.targetItemId !== next.targetItemId ||
+    prev.targetRequest !== next.targetRequest ||
+    prev.messageActionsDisabled !== next.messageActionsDisabled ||
+    prev.pendingUsers !== next.pendingUsers ||
+    prev.onCopy !== next.onCopy ||
+    prev.onForkFrom !== next.onForkFrom ||
+    prev.onEditUserMessage !== next.onEditUserMessage ||
+    prev.onRetryUserMessage !== next.onRetryUserMessage
+  )
+    return false;
+  return (
+    streamSignature(prev.streamed) === streamSignature(next.streamed) &&
+    streamItemsSignature(prev.streamedItems) ===
+      streamItemsSignature(next.streamedItems)
+  );
+}
+
+function TurnBlockInner({
+  turn,
+  index,
+  thread,
+  highlighted,
+  targetItemId,
+  targetRequest,
+  streamed,
+  streamedItems = [],
+  pendingUsers = [],
+  onCopy,
+  onForkFrom,
+  onEditUserMessage,
+  onRetryUserMessage,
+  messageActionsDisabled,
+}: TurnBlockProps) {
   const active =
     turn.id === thread.activeTurnId ||
     turn.status === "inProgress" ||
@@ -553,3 +611,5 @@ export function TurnBlock({
     </section>
   );
 }
+
+export const TurnBlock = memo(TurnBlockInner, turnBlockEqual);

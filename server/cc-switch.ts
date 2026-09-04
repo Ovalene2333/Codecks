@@ -59,15 +59,29 @@ export class CcSwitchSource {
   constructor(readonly dbPath: string) {}
 
   readProviders(): Provider[] {
-    const db = new DatabaseSync(this.dbPath, { readOnly: true });
+    // SQL 层失败（表结构变化、库文件损坏）时降级为空列表：调用方只做内存同步，
+    // 文件不受影响，下次成功读取即恢复。绝不能因此中断整机启动。
     try {
+      const db = new DatabaseSync(this.dbPath, { readOnly: true });
+      try {
       const rows = db
         .prepare(
           "select id,name,settings_config,icon_color,is_current from providers where app_type='codex' order by sort_index",
         )
         .all() as unknown as Row[];
-      return rows.map((row, index) => {
-        const settings = JSON.parse(row.settings_config || "{}");
+      return rows.flatMap((row, index) => {
+        // 第三方 DB 的单行脏数据（崩溃写一半、手工改坏、未来 schema 变化）
+        // 只能跳过该行，绝不能抛错中断整机启动。
+        let settings: any;
+        try {
+          settings = JSON.parse(row.settings_config || "{}");
+        } catch (error) {
+          console.error(
+            `CC Switch 供应商行 ${row.id} 配置损坏，已跳过:`,
+            (error as Error)?.message || error,
+          );
+          return [];
+        }
         const config = String(settings.config || "");
         return {
           id: `cc-${row.id}`,
@@ -87,21 +101,38 @@ export class CcSwitchSource {
           apiKey: settings.auth?.OPENAI_API_KEY || undefined,
         };
       });
-    } finally {
-      db.close();
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      console.error(
+        "CC Switch 供应商读取失败，已跳过:",
+        (error as Error)?.message || error,
+      );
+      return [];
     }
   }
 
   readClaudeProfiles(): ClaudeProfile[] {
-    const db = new DatabaseSync(this.dbPath, { readOnly: true });
     try {
+      const db = new DatabaseSync(this.dbPath, { readOnly: true });
+      try {
       const rows = db
         .prepare(
           "select id,name,settings_config,icon_color,is_current from providers where app_type='claude' order by sort_index",
         )
         .all() as unknown as Row[];
-      return rows.map((row, index) => {
-        const settings = JSON.parse(row.settings_config || "{}");
+      return rows.flatMap((row, index) => {
+        let settings: any;
+        try {
+          settings = JSON.parse(row.settings_config || "{}");
+        } catch (error) {
+          console.error(
+            `CC Switch Claude 配置行 ${row.id} 配置损坏，已跳过:`,
+            (error as Error)?.message || error,
+          );
+          return [];
+        }
         const rawEnv =
           settings.env && typeof settings.env === "object" ? settings.env : {};
         const env = Object.fromEntries(
@@ -138,8 +169,15 @@ export class CcSwitchSource {
           env,
         };
       });
-    } finally {
-      db.close();
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      console.error(
+        "CC Switch Claude 配置读取失败，已跳过:",
+        (error as Error)?.message || error,
+      );
+      return [];
     }
   }
 }

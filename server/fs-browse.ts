@@ -5,6 +5,38 @@ import { listWslDirectories } from "./fs-browse-wsl.js";
 
 const MAX_ENTRIES = 200;
 const DRIVE_LETTERS = "CDEFGHIJKLMNOPQRSTUVWXYZAB";
+// 目录选择器高频往返同一路径（展开/回退/抖动），而 readdir+逐个stat 在
+// 大目录下偏贵、WSL 路径还要 spawn wsl.exe（约 300-800ms）。加小容量 TTL
+// 缓存：命中直接返回，3s 过期保证新建目录很快可见。
+const LISTING_TTL_MS = 3_000;
+const LISTING_CACHE_MAX = 100;
+const listingCache = new Map<string, { expires: number; value: DirListing }>();
+
+function readListingCache(key: string): DirListing | undefined {
+  const hit = listingCache.get(key);
+  if (!hit) return undefined;
+  if (hit.expires <= Date.now()) {
+    listingCache.delete(key);
+    return undefined;
+  }
+  // LRU：命中上浮到末尾。
+  listingCache.delete(key);
+  listingCache.set(key, hit);
+  return hit.value;
+}
+
+function writeListingCache(key: string, value: DirListing) {
+  listingCache.delete(key);
+  listingCache.set(key, { expires: Date.now() + LISTING_TTL_MS, value });
+  if (listingCache.size > LISTING_CACHE_MAX) {
+    const oldest = listingCache.keys().next().value;
+    if (oldest !== undefined) listingCache.delete(oldest);
+  }
+}
+
+export function clearDirListingCache() {
+  listingCache.clear();
+}
 
 export interface DirEntry {
   name: string;
@@ -31,7 +63,14 @@ export async function listDirectories(
 ): Promise<DirListing> {
   if (options.useWsl && isWslFsPath(target)) {
     const listWsl = options.listWsl ?? listWslDirectories;
-    return listWsl(target!);
+    // 自定义 listWsl 多为单测桩，不进缓存，避免桩结果污染真实缓存。
+    if (options.listWsl) return listWsl(target!);
+    const cacheKey = `wsl:${target}`;
+    const cached = readListingCache(cacheKey);
+    if (cached) return cached;
+    const listing = await listWsl(target!);
+    writeListingCache(cacheKey, listing);
+    return listing;
   }
   const home = os.homedir();
   if (!target) {
@@ -56,6 +95,9 @@ async function listWindowsRoots(home: string): Promise<DirListing> {
 async function readDir(target: string, home: string): Promise<DirListing> {
   if (target.includes("\0")) throw new Error("非法路径");
   const resolved = path.resolve(target);
+  const cacheKey = `fs:${resolved}`;
+  const cached = readListingCache(cacheKey);
+  if (cached) return cached;
   const info = await stat(resolved);
   if (!info.isDirectory()) throw new Error("不是目录");
   const names = await readdir(resolved, { withFileTypes: true });
@@ -73,7 +115,7 @@ async function readDir(target: string, home: string): Promise<DirListing> {
   }
   entries.sort((a, b) => a.name.localeCompare(b.name, "zh"));
   const parent = path.dirname(resolved);
-  return {
+  const listing: DirListing = {
     path: resolved,
     parent:
       parent === resolved
@@ -84,4 +126,6 @@ async function readDir(target: string, home: string): Promise<DirListing> {
     home,
     entries,
   };
+  writeListingCache(cacheKey, listing);
+  return listing;
 }

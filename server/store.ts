@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -37,20 +37,41 @@ export class ProviderStore {
       this.modelConfig = {};
     }
     try {
-      this.providers = JSON.parse(await readFile(this.file, "utf8"));
+      const parsed = JSON.parse(await readFile(this.file, "utf8"));
+      if (!Array.isArray(parsed)) throw new Error("供应商文件形状错误");
+      this.providers = parsed;
     } catch (error: any) {
-      if (error.code !== "ENOENT") throw error;
-      this.providers = [
-        {
-          id: "local",
-          name: "本机 Codex",
-          kind: "local-profile",
-          color: colors[0],
-          codexHome: this.inheritedCodexHome,
-          enabled: true,
-        },
-      ];
-      await this.save();
+      if (error?.code === "ENOENT") {
+        this.providers = [
+          {
+            id: "local",
+            name: "本机 Codex",
+            kind: "local-profile",
+            color: colors[0],
+            codexHome: this.inheritedCodexHome,
+            enabled: true,
+          },
+        ];
+        await this.save();
+      } else {
+        // 脏文件（写一半、手工改坏）：内存用默认 local 保证可启动，
+        // 但绝不回写覆盖源文件，否则永久丢失全部自定义供应商与 API Key。
+        // 文件保留待手工修复；下次正常 upsert/remove 会用好数据自愈。
+        console.error(
+          `providers.json 损坏，已用默认配置启动（原文件保留 ${this.file}）:`,
+          error?.message || error,
+        );
+        this.providers = [
+          {
+            id: "local",
+            name: "本机 Codex",
+            kind: "local-profile",
+            color: colors[0],
+            codexHome: this.inheritedCodexHome,
+            enabled: true,
+          },
+        ];
+      }
     }
     const db = await findCcSwitchDb(process.env.CC_SWITCH_DB);
     if (db) {
@@ -182,11 +203,7 @@ export class ProviderStore {
 
   async updateRuntimeModelConfig(config: RuntimeModelConfig) {
     const next = normalizeRuntimeModelConfig(config);
-    await writeFile(
-      this.runtimeConfigFile,
-      `${JSON.stringify(next, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
+    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
     this.modelConfig = next;
     return this.runtimeModelConfig();
   }
@@ -234,11 +251,15 @@ export class ProviderStore {
   }
 
   private async save() {
-    await writeFile(this.file, JSON.stringify(this.providers, null, 2), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await writeJsonAtomic(this.file, JSON.stringify(this.providers, null, 2));
   }
+}
+
+/** 原子写 JSON：先落临时文件再 rename，避免崩溃写一半产生脏文件。 */
+async function writeJsonAtomic(file: string, content: string) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+  await rename(temporary, file);
 }
 
 function normalizeRuntimeModelConfig(input: unknown): RuntimeModelConfig {
