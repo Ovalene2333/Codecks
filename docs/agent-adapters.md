@@ -150,6 +150,17 @@ Claude 当前声明 `approvals`、`images`、`interrupt`、`models`、`sessionSe
 和 `delete`。没有实现的 fork、archive、compact、review、shell 和 MCP/Skills 枚举
 保持关闭。网页接线时必须按该 capability matrix 隐藏并禁用对应操作。
 
+## OpenCode Adapter
+
+`OpenCodeAdapter` 通过本机 `opencode serve` 的 HTTP API 管理会话。
+OpenCode 当前声明 `approvals`、`archive`、`delete`、`images`、`interrupt`、
+`models` 和 `sessionSettings`。其中 `archive` 是 Deck 侧软归档（OpenCode
+serve 没有原生归档接口）：归档态写进 `thread-settings.json` 的 `archived`
+标记并在重启后保留，`snapshot()` 按该标记拆分现有库和归档箱，服务端会话
+原样保留；运行中的会话不能归档，归档会话的发送/中断在服务端同样拒绝，
+不能只靠前端隐藏按钮。没有实现的 fork、compact、review、shell 和
+MCP/Skills 枚举保持关闭。
+
 ## 新增 Adapter 的顺序
 
 1. 扩展 `AgentId`，定义保守的 capability matrix。

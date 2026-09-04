@@ -82,13 +82,28 @@ export function agentName(
 export function providerForThread(
   providers: Provider[],
   agentProfiles: AgentProfile[] | undefined,
-  thread: Pick<ThreadSummary, "agentId" | "providerId">,
+  thread: Pick<
+    ThreadSummary,
+    "agentId" | "providerId" | "model" | "resolvedModel"
+  >,
 ) {
   if (agentIdFor(thread) === "codex")
     return providers.find((provider) => provider.id === thread.providerId);
   const profiles = (agentProfiles || []).filter(
     (profile) => profile.agentId === agentIdFor(thread),
   );
+  // OpenCode model ids carry their provider, so the model a thread runs on is
+  // the truth even when the stored providerId predates a model switch.
+  if (agentIdFor(thread) === "opencode") {
+    const fromModel = opencodeProviderId(
+      (thread as { resolvedModel?: string }).resolvedModel || thread.model,
+    );
+    if (fromModel)
+      return (
+        profiles.find((profile) => profile.id === fromModel) ||
+        profiles.find((profile) => profile.id === thread.providerId)
+      );
+  }
   return (
     profiles.find((profile) => profile.id === thread.providerId) ||
     (thread.providerId === "claude-current"
@@ -97,8 +112,39 @@ export function providerForThread(
   );
 }
 
+/**
+ * OpenCode model ids are `providerID/modelID`, so the provider a thread runs
+ * on is implied by its model. Returns "" for placeholders like `default`.
+ */
+export function opencodeProviderId(model?: string) {
+  const separator = (model || "").indexOf("/");
+  return separator > 0 ? model!.slice(0, separator) : "";
+}
+
 export function threadPath(thread: Pick<ThreadSummary, "id" | "agentId">) {
   return `/agents/${agentIdFor(thread)}/threads/${encodeURIComponent(thread.id)}`;
+}
+
+/**
+ * 归档/恢复路径：Codex 沿用旧 manager 路由，其它 Agent 走通用 Agent API
+ *（`POST /api/agents/:agentId/threads/:threadId/archive|unarchive`）。
+ */
+export function threadArchivePath(
+  thread: Pick<ThreadSummary, "id" | "agentId" | "providerId">,
+  action: "archive" | "unarchive",
+) {
+  return agentIdFor(thread) === "codex"
+    ? `/threads/${thread.providerId}/${thread.id}/${action}`
+    : `${threadPath(thread)}/${action}`;
+}
+
+/** 删除路径：同上，Codex 走旧路由，其它 Agent 走通用删除接口。 */
+export function threadRemovePath(
+  thread: Pick<ThreadSummary, "id" | "agentId" | "providerId">,
+) {
+  return agentIdFor(thread) === "codex"
+    ? `/threads/${thread.providerId}/${thread.id}`
+    : threadPath(thread);
 }
 
 export function threadActionPath(

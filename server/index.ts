@@ -150,6 +150,11 @@ const claude = new ClaudeAdapter({
 const opencode = new OpenCodeAdapter({
   bin: process.env.OPENCODE_BIN || undefined,
   initialThreads,
+  initialDirectories: [
+    ...projects.list().map((project) => project.cwd),
+    ...projects.getPreferences().recentDirs,
+    ...initialThreads.map((thread) => thread.cwd),
+  ],
   threadSettings,
 });
 const agents = new AgentRegistry([manager, claude, opencode]);
@@ -452,6 +457,26 @@ app.delete(
     const threadId = param(req.params.threadId);
     await agents.deleteThread(id, threadId);
     await threadSettings.remove(id, threadId);
+    return fullSnapshot();
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/archive",
+  route(async (req) => {
+    await agents.archiveThread(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    );
+    return fullSnapshot();
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/unarchive",
+  route(async (req) => {
+    await agents.unarchiveThread(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    );
     return fullSnapshot();
   }),
 );

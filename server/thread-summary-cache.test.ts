@@ -31,6 +31,16 @@ test("thread summary cache atomically persists active and archived rows", async 
   );
 });
 
+test("thread summary cache persists OpenCode rows", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-cache-opencode-"));
+  const cache = new ThreadSummaryCache(dir);
+  cache.schedule([{ ...thread, agentId: "opencode", providerId: "opencode:/work" }]);
+  await cache.flush();
+
+  const loaded = await new ThreadSummaryCache(dir).load();
+  assert.equal(loaded.threads[0]?.agentId, "opencode");
+});
+
 test("thread summary cache ignores malformed rows", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-cache-bad-"));
   const cache = new ThreadSummaryCache(dir);

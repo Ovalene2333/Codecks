@@ -210,7 +210,7 @@ export function ChatWorkspace({
           : "未知";
       setStatusNote(
         [
-          `模型 ${thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
+          `模型 ${thread.resolvedModel || thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
           thread.agentId === "claude"
             ? `权限 ${thread.permissionMode || "default"}`
             : `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,

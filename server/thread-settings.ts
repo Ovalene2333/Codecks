@@ -20,10 +20,16 @@ export interface ThreadSettings {
   approvalsReviewer?: ApprovalsReviewer;
   permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
+  /**
+   * Deck 侧软归档标记（OpenCode serve 没有原生归档接口）。
+   * 只存 `true`；恢复时用 `null` 清除。
+   */
+  archived?: boolean;
 }
 
-type ThreadSettingsInput = Omit<ThreadSettings, "serviceTier"> & {
+type ThreadSettingsInput = Omit<ThreadSettings, "serviceTier" | "archived"> & {
   serviceTier?: string | null;
+  archived?: boolean | null;
 };
 
 interface StoredThreadSettings {
@@ -88,6 +94,8 @@ export class ThreadSettingsStore {
     const group = (this.data.settings[agentId] ||= {});
     const merged = { ...group[threadId], ...next };
     if (settings.serviceTier === null) delete merged.serviceTier;
+    if (settings.archived === null || settings.archived === false)
+      delete merged.archived;
     if (!Object.keys(merged).length) delete group[threadId];
     else group[threadId] = merged;
     await this.save();

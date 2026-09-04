@@ -62,6 +62,40 @@ test("group consecutive options sharing a group name", () => {
   );
 });
 
+test("grouping carries the group meta so provider state can be labelled", () => {
+  const grouped = groupSearchableOptions([
+    { value: "a", label: "A", group: "OpenAI" },
+    {
+      value: "b",
+      label: "B",
+      group: "Anthropic",
+      groupMeta: "已连接",
+    },
+    { value: "c", label: "C", group: "Anthropic" },
+  ]);
+  assert.deepEqual(
+    grouped.groups.map((group) => [group.name, group.meta]),
+    [
+      ["OpenAI", undefined],
+      ["Anthropic", "已连接"],
+    ],
+  );
+  assert.deepEqual(
+    filterSearchableOptions(
+      [
+        {
+          value: "b",
+          label: "Sonnet",
+          group: "Anthropic",
+          groupMeta: "已连接",
+        },
+      ],
+      "已连接",
+    ).map((option) => option.value),
+    ["b"],
+  );
+});
+
 test("picker trigger renders the selected label and closes by default", () => {
   const html = renderToStaticMarkup(
     <SearchablePicker

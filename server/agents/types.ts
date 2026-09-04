@@ -102,6 +102,8 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     threadId: string,
     name: string,
   ): Promise<unknown>;
+  archiveThread?(providerId: string, threadId: string): Promise<unknown>;
+  unarchiveThread?(providerId: string, threadId: string): Promise<unknown>;
   updateThreadSettings?(
     providerId: string,
     threadId: string,

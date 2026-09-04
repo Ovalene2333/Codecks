@@ -5,9 +5,12 @@ import {
   approvalPath,
   capabilitiesFor,
   defaultAgentId,
+  opencodeProviderId,
   providerForThread,
   threadActionPath,
+  threadArchivePath,
   threadPath,
+  threadRemovePath,
 } from "./agents.ts";
 
 test("old session data defaults to Codex Agent routes", () => {
@@ -84,5 +87,90 @@ test("Claude sessions resolve exact and current relay profiles", () => {
       providerId: "claude-cc-other",
     })?.name,
     "Other relay",
+  );
+});
+
+test("OpenCode archive and delete go through the generic Agent API", () => {
+  assert.equal(
+    threadArchivePath(
+      { id: "s1", agentId: "opencode", providerId: "opencode:/work" },
+      "archive",
+    ),
+    "/agents/opencode/threads/s1/archive",
+  );
+  assert.equal(
+    threadArchivePath(
+      { id: "s1", agentId: "opencode", providerId: "opencode:/work" },
+      "unarchive",
+    ),
+    "/agents/opencode/threads/s1/unarchive",
+  );
+  assert.equal(
+    threadRemovePath({
+      id: "s1",
+      agentId: "opencode",
+      providerId: "opencode:/work",
+    }),
+    "/agents/opencode/threads/s1",
+  );
+  // Codex keeps the legacy manager routes.
+  assert.equal(
+    threadArchivePath({ id: "t1", agentId: "codex", providerId: "deck_x" }, "archive"),
+    "/threads/deck_x/t1/archive",
+  );
+  assert.equal(
+    threadRemovePath({ id: "t1", agentId: "codex", providerId: "deck_x" }),
+    "/threads/deck_x/t1",
+  );
+});
+
+test("OpenCode model ids carry the provider they run on", () => {
+  assert.equal(opencodeProviderId("anthropic/claude-sonnet-4-5"), "anthropic");
+  assert.equal(opencodeProviderId("openai/gpt-5"), "openai");
+  assert.equal(opencodeProviderId("default"), "");
+  assert.equal(opencodeProviderId(""), "");
+  assert.equal(opencodeProviderId(undefined), "");
+});
+
+test("OpenCode sessions resolve their provider from the model in use", () => {
+  const profiles = [
+    {
+      id: "anthropic",
+      agentId: "opencode" as const,
+      name: "Anthropic",
+      connected: true,
+    },
+    {
+      id: "openai",
+      agentId: "opencode" as const,
+      name: "OpenAI",
+    },
+  ];
+  // The stored providerId predates a model switch; the model wins.
+  assert.equal(
+    providerForThread([], profiles, {
+      agentId: "opencode",
+      providerId: "openai",
+      model: "default",
+      resolvedModel: "anthropic/claude-sonnet-4-5",
+    })?.name,
+    "Anthropic",
+  );
+  assert.equal(
+    providerForThread([], profiles, {
+      agentId: "opencode",
+      providerId: "openai",
+      model: "openai/gpt-5",
+    })?.name,
+    "OpenAI",
+  );
+  // Without a concrete model the stored provider still applies.
+  assert.equal(
+    providerForThread([], profiles, {
+      agentId: "opencode",
+      providerId: "openai",
+      model: "default",
+    })?.name,
+    "OpenAI",
   );
 });

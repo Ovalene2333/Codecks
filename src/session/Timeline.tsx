@@ -120,7 +120,7 @@ export function Timeline({
       <div className="session-meta">
         <Folder />
         {thread.cwd}
-        <span>{thread.model}</span>
+        <span>{thread.resolvedModel || thread.model}</span>
       </div>
       {origin && (
         <button type="button" className="origin-chip" onClick={onOpenOrigin}>

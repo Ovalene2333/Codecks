@@ -119,6 +119,18 @@ export class AgentRegistry extends EventEmitter {
     return adapter.renameThread!(thread.providerId, threadId, name);
   }
 
+  async archiveThread(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "archiveThread");
+    const thread = this.thread(id, threadId);
+    return adapter.archiveThread!(thread.providerId, threadId);
+  }
+
+  async unarchiveThread(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "unarchiveThread");
+    const thread = this.thread(id, threadId);
+    return adapter.unarchiveThread!(thread.providerId, threadId);
+  }
+
   async updateThreadSettings(
     id: AgentId,
     threadId: string,
