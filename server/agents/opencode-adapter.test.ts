@@ -257,6 +257,119 @@ test("OpenCode keeps the created model, hides subagent sessions and drops replay
   assert.equal(items[0].data.params.item.id, "part-assistant");
 });
 
+test("OpenCode replays subagent activity onto the parent task card", async () => {
+  let sessions: any[] = [{ id: "parent", directory: "/work" }];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json(sessions);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+
+  // Child sessions stay hidden as threads but register their parent link.
+  (adapter as any).onEvent({
+    type: "session.created",
+    properties: {
+      info: { id: "child", parentID: "parent", directory: "/work" },
+    },
+  });
+  assert.deepEqual(
+    adapter.listThreads().map((item) => item.id),
+    ["parent"],
+  );
+
+  // Child activity arriving before the task part is buffered.
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "child",
+      part: {
+        id: "child-part-1",
+        sessionID: "child",
+        messageID: "child-msg",
+        type: "text",
+        text: "正在读取 src 目录",
+      },
+    },
+  });
+  assert.equal(
+    events.filter((event) => event.type === "agent.event").length,
+    0,
+  );
+
+  // …then flushed once the parent's task part carries the child sessionId.
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "parent",
+      part: {
+        id: "part-task",
+        sessionID: "parent",
+        messageID: "msg-1",
+        type: "tool",
+        tool: "task",
+        state: {
+          status: "running",
+          input: { description: "探索代码库", subagent_type: "explore" },
+          metadata: { sessionId: "child" },
+        },
+      },
+    },
+  });
+  const forwarded = events.filter(
+    (event) =>
+      event.type === "agent.event" && event.data.method === "item/updated",
+  );
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].data.params.item.id, "part-task");
+  assert.equal(
+    forwarded[0].data.params.item.state.metadata.deckActivity,
+    "正在读取 src 目录",
+  );
+
+  // Later child events replay onto the same parent item as live activity.
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "child",
+      part: {
+        id: "child-part-2",
+        sessionID: "child",
+        messageID: "child-msg-2",
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", title: "Read src/main.ts" },
+      },
+    },
+  });
+  const replayed = events.filter(
+    (event) =>
+      event.type === "agent.event" && event.data.method === "item/updated",
+  );
+  assert.equal(replayed.length, 2);
+  assert.equal(replayed[1].data.params.item.id, "part-task");
+  assert.equal(
+    replayed[1].data.params.item.state.metadata.deckActivity,
+    "Read src/main.ts",
+  );
+
+  // The forwarded part converts to the shared subagent card shape.
+  const converted = openCodePartToItem(replayed[1].data.params.item);
+  assert.equal(converted.type, "subagent");
+  assert.equal(converted.title, "探索代码库");
+  assert.equal(converted.agent, "explore");
+  assert.equal(converted.status, "inProgress");
+  assert.equal(converted.activity, "Read src/main.ts");
+  assert.equal(converted.childSessionId, "child");
+});
+
 test("OpenCode adapter launches the Windows npm shim through cmd", async () => {
   const calls: Array<{ command: string; args: string[]; options: any }> = [];
   const child = new EventEmitter() as any;

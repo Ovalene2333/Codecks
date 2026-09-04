@@ -375,6 +375,28 @@ export function openCodePartToItem(part: any): any | undefined {
     return { id: String(part.id), type: "reasoning", summary: part.text || "" };
   if (part.type === "tool") {
     const state = part.state || {};
+    if (part.tool === "task") {
+      const input =
+        state.input && typeof state.input === "object" ? state.input : {};
+      const childSessionId = String(state.metadata?.sessionId || "").trim();
+      return {
+        id: String(part.id),
+        type: "subagent",
+        title: String(input.description || state.title || part.tool).trim(),
+        agent: String(
+          input.subagent_type || input.agent || input.agentType || "",
+        ).trim(),
+        status:
+          state.status === "error"
+            ? "failed"
+            : state.status === "completed"
+              ? "completed"
+              : "inProgress",
+        activity: String(state.metadata?.deckActivity || ""),
+        aggregatedOutput: state.output || state.error || "",
+        ...(childSessionId ? { childSessionId } : {}),
+      };
+    }
     const item: any = {
       id: String(part.id),
       type: "commandExecution",
@@ -417,6 +439,32 @@ export function opencodeTodos(item: any): any[] {
   return [];
 }
 
+/** Readable one-line progress from a subagent session part, if any. */
+export function childActivityText(part: any): string | undefined {
+  if (part?.type === "tool") {
+    const title = String(part.state?.title || "").trim();
+    return title || undefined;
+  }
+  if (part?.type === "text") {
+    const text = String(part.text || "").replace(/\s+/g, " ").trim();
+    if (!text) return undefined;
+    return text.length > 160 ? `…${text.slice(-160)}` : text;
+  }
+  return undefined;
+}
+
+/** Replays a parent task part snapshot with the latest child activity attached. */
+export function withChildActivity(part: any, activity: string) {
+  const state = part?.state || {};
+  return {
+    ...part,
+    state: {
+      ...state,
+      metadata: { ...(state.metadata || {}), deckActivity: activity },
+    },
+  };
+}
+
 function permissionQuestions(permission: any): ApprovalQuestion[] | undefined {
   if (!/question|ask/i.test(String(permission?.type || ""))) return undefined;
   const meta = permission.metadata && typeof permission.metadata === "object" ? permission.metadata : {};
@@ -456,6 +504,14 @@ export class OpenCodeAdapter extends EventEmitter {
    * 不得覆盖用户起的名字；没它时才用首条消息对齐 Codex。
    */
   private sessionTitles = new Map<string, string>();
+  /** 子会话 → 父会话 ID：subagent 会话不是 Deck thread，但活动要挂回父会话。 */
+  private childParents = new Map<string, string>();
+  /** 子会话 ID → 父会话里派发它的 task 工具 part ID。 */
+  private childTaskParts = new Map<string, string>();
+  /** task part ID → 最近一次父会话 task part 快照，转发子代理活动时用它补全。 */
+  private taskPartSnapshots = new Map<string, any>();
+  /** 子代理活动先于 task part 的 sessionId 元数据到达时先缓冲。 */
+  private pendingChildActivity = new Map<string, string>();
   private online = false;
   private starting = false;
   private startingTask?: Promise<void>;
@@ -757,14 +813,27 @@ export class OpenCodeAdapter extends EventEmitter {
     const seen = new Set<string>();
     for (const session of sessions) {
       // Subagent sessions are children of the thread that spawned them and
-      // must not surface as separate Deck sessions.
-      if (session.parentID) continue;
+      // must not surface as separate Deck sessions. Still remember the
+      // parent link so their streamed activity can be attached to the
+      // parent's task card.
+      if (session.parentID) {
+        this.boundedPut(this.childParents, session.id, session.parentID);
+        continue;
+      }
       seen.add(session.id);
       this.threads.set(
         session.id,
         this.mergeThread(session, this.threads.get(session.id)),
       );
     }
+    for (const [child, parent] of this.childParents)
+      if (!this.threads.has(parent)) {
+        this.childParents.delete(child);
+        const partId = this.childTaskParts.get(child);
+        if (partId) this.taskPartSnapshots.delete(partId);
+        this.childTaskParts.delete(child);
+        this.pendingChildActivity.delete(child);
+      }
     this.broadcast("agent.status", this.descriptor());
     this.broadcast("snapshot", this.snapshot());
   }
@@ -1329,7 +1398,10 @@ export class OpenCodeAdapter extends EventEmitter {
     ) {
       const session = body.info as OpenCodeSession | undefined;
       if (!session?.id) return;
-      if (session.parentID) return;
+      if (session.parentID) {
+        this.boundedPut(this.childParents, session.id, session.parentID);
+        return;
+      }
       const next = this.mergeThread(session, this.threads.get(session.id));
       this.threads.set(next.id, next);
       this.broadcast("thread.updated", next);
@@ -1338,6 +1410,14 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "session.deleted" && sessionId) {
       this.threads.delete(sessionId);
       this.sessionTitles.delete(sessionId);
+      for (const [child, parent] of this.childParents) {
+        if (parent !== sessionId) continue;
+        this.childParents.delete(child);
+        const partId = this.childTaskParts.get(child);
+        if (partId) this.taskPartSnapshots.delete(partId);
+        this.childTaskParts.delete(child);
+        this.pendingChildActivity.delete(child);
+      }
       this.broadcast("thread.deleted", {
         agentId: this.id,
         threadId: sessionId,
@@ -1465,12 +1545,36 @@ export class OpenCodeAdapter extends EventEmitter {
       if (info?.id && info?.role) this.rememberRole(info.id, info.role);
       return;
     }
-    if (payload?.type === "message.part.updated" && thread) {
-      const part = body.part;
+    if (payload?.type === "message.part.updated") {
+      const childParent = sessionId
+        ? this.childParents.get(sessionId)
+        : undefined;
+      if (childParent) {
+        const parentThread = this.threads.get(childParent);
+        if (parentThread) this.forwardChildPart(parentThread, sessionId, body.part);
+        return;
+      }
+      if (!thread) return;
+      let part = body.part;
       // OpenCode replays the parts of the message the user just sent. The
       // turn history already renders that message, so forwarding it here
       // would show it a second time as if the assistant repeated it.
       if (this.isUserPart(part)) return;
+      // A task tool part is the parent-side anchor of a subagent run; its
+      // metadata.sessionId links the child session so later child events
+      // can be replayed onto this same item as live activity.
+      if (part?.type === "tool" && part?.tool === "task" && part?.id) {
+        const childId = String(part?.state?.metadata?.sessionId || "").trim();
+        if (childId) {
+          this.boundedPut(this.childTaskParts, childId, String(part.id));
+          const pending = this.pendingChildActivity.get(childId);
+          if (pending !== undefined) {
+            this.pendingChildActivity.delete(childId);
+            part = withChildActivity(part, pending);
+          }
+        }
+        this.boundedPut(this.taskPartSnapshots, String(part.id), part);
+      }
       if (part?.type === "text" && body.delta)
         this.emitAgentEvent(thread, "item/agentMessage/delta", {
           threadId: thread.id,
@@ -1495,6 +1599,36 @@ export class OpenCodeAdapter extends EventEmitter {
       this.messageRoles = new Map(
         [...this.messageRoles].slice(-200),
       );
+  }
+
+  /**
+   * 子会话的 part 不在 Deck threads 里；把可读的进展（工具调用标题、
+   * 文本尾部）作为实时活动挂回父会话的 task 卡片上。
+   */
+  private forwardChildPart(
+    thread: ThreadSummary,
+    childId: string,
+    part: any,
+  ) {
+    const activity = childActivityText(part);
+    if (!activity) return;
+    this.boundedPut(this.pendingChildActivity, childId, activity);
+    const partId = this.childTaskParts.get(childId);
+    const snapshot = partId ? this.taskPartSnapshots.get(partId) : undefined;
+    if (!snapshot) return;
+    this.pendingChildActivity.delete(childId);
+    this.emitAgentEvent(thread, "item/updated", {
+      threadId: thread.id,
+      turnId: thread.activeTurnId,
+      item: withChildActivity(snapshot, activity),
+    });
+  }
+
+  private boundedPut<T>(map: Map<string, T>, key: string, value: T) {
+    map.set(key, value);
+    if (map.size <= 400) return;
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
   }
 
   private isUserPart(part: any) {
