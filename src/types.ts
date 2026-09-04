@@ -203,6 +203,8 @@ export interface ThreadSummary {
   forkedFromId?: string;
   sessionId?: string;
   tokenUsage?: TokenUsage;
+  /** Turn that was in progress when the Codex runtime process died. */
+  interruptedTurnId?: string;
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";

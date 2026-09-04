@@ -207,6 +207,12 @@ export interface ThreadSummary {
    * when `model` is a placeholder such as OpenCode's `default`.
    */
   resolvedModel?: string;
+  /**
+   * Turn that was still in progress when the Codex runtime process died.
+   * Codex's own state DB has no completion record for it, so refreshes must
+   * not promote it back to `running`.
+   */
+  interruptedTurnId?: string;
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
