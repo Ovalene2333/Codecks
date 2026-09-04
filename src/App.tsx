@@ -675,13 +675,27 @@ export function App() {
     ),
   );
 
+  // 基础分组只依赖“库内容”：query/筛选条件变化时复用，不重跑归一化+排序。
+  const baseGroups = useMemo(
+    () => mergeProjectGroups(snapshot.projects || [], libraryThreads),
+    [snapshot.projects, libraryThreads],
+  );
+  // Welcome 页的最近项目永远看 active 库；切到归档库时才需另算一份。
+  const activeGroups = useMemo(
+    () =>
+      library === "active"
+        ? baseGroups
+        : mergeProjectGroups(snapshot.projects || [], snapshot.threads),
+    [library, baseGroups, snapshot.projects, snapshot.threads],
+  );
+
   const projects = useMemo(() => {
     const contentIds = new Set(
       (contentSearch?.results || []).map(
         (match) => `${match.agentId}:${match.threadId}`,
       ),
     );
-    const groups = mergeProjectGroups(snapshot.projects || [], libraryThreads);
+    const groups = baseGroups;
     const statusThreads = (threads: ThreadSummary[]) =>
       statusFilter === "active"
         ? threads.filter(
@@ -710,9 +724,8 @@ export function App() {
       },
     ).filter((group) => group.sessions.length > 0);
   }, [
-    snapshot.projects,
+    baseGroups,
     snapshot.providers,
-    libraryThreads,
     query,
     statusFilter,
     unseenSessions,
@@ -762,15 +775,14 @@ export function App() {
   const recentProjects = useMemo(() => {
     const fromPrefs = (snapshot.preferences?.recentDirs || [])
       .map((cwd) =>
-        mergeProjectGroups(snapshot.projects || [], snapshot.threads).find(
+        activeGroups.find(
           (group) => group.cwd === cwd || group.key.includes(cwd.toLowerCase()),
         ),
       )
       .filter(Boolean) as ProjectGroup[];
-    const fromSessions = mergeProjectGroups(
-      snapshot.projects || [],
-      snapshot.threads,
-    ).filter((group) => group.sessions.length);
+    const fromSessions = activeGroups.filter(
+      (group) => group.sessions.length,
+    );
     const seen = new Set<string>();
     const list: ProjectGroup[] = [];
     for (const group of [...fromPrefs, ...fromSessions]) {
@@ -780,7 +792,7 @@ export function App() {
       if (list.length === 3) break;
     }
     return list;
-  }, [snapshot.preferences, snapshot.projects, snapshot.threads]);
+  }, [snapshot.preferences, activeGroups]);
 
   const saveProject = async (
     project: { key: string; cwd: string },
@@ -1094,9 +1106,7 @@ export function App() {
       <Sidebar
         show={sidebar}
         hiddenOnMobile={Boolean(current)}
-        projectCount={
-          mergeProjectGroups(snapshot.projects || [], snapshot.threads).length
-        }
+        projectCount={activeGroups.length}
         sessionCount={snapshot.threads.length}
         archivedCount={(snapshot.archivedThreads || []).length}
         library={library}

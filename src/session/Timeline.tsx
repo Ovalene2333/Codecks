@@ -46,48 +46,66 @@ export function Timeline({
   const scrollTop = useRef(0);
   const activeThread = useRef(thread.id);
   const appliedTargetRequest = useRef<number | undefined>(undefined);
+  // 流式 delta 逐 token 触发本 effect：scrollTop/scrollIntoView 是同步布局操作，
+  // 用 rAF 把同帧多次触发合并成一次，避免打字机式布局抖动。
+  const pendingFrame = useRef(0);
+
+  useLayoutEffect(() => {
+    if (typeof cancelAnimationFrame !== "function") return;
+    return () => cancelAnimationFrame(pendingFrame.current);
+  }, []);
 
   useLayoutEffect(() => {
     const element = timeline.current;
     if (!element) return;
-
-    if (
-      targetRequest !== undefined &&
-      appliedTargetRequest.current !== targetRequest
-    ) {
-      const itemTarget = targetItemId
-        ? Array.from(
-            element.querySelectorAll<HTMLElement>("[data-item-id]"),
-          ).find((item) => item.dataset.itemId === targetItemId)
-        : undefined;
-      const turnTarget =
-        targetTurnId && (!targetItemId || targetFallbackReady)
+    const apply = () => {
+      pendingFrame.current = 0;
+      if (
+        targetRequest !== undefined &&
+        appliedTargetRequest.current !== targetRequest
+      ) {
+        const itemTarget = targetItemId
           ? Array.from(
-              element.querySelectorAll<HTMLElement>("[data-turn-id]"),
-            ).find((item) => item.dataset.turnId === targetTurnId)
+              element.querySelectorAll<HTMLElement>("[data-item-id]"),
+            ).find((item) => item.dataset.itemId === targetItemId)
           : undefined;
-      const target = itemTarget || turnTarget;
-      if (target) {
-        appliedTargetRequest.current = targetRequest;
+        const turnTarget =
+          targetTurnId && (!targetItemId || targetFallbackReady)
+            ? Array.from(
+                element.querySelectorAll<HTMLElement>("[data-turn-id]"),
+              ).find((item) => item.dataset.turnId === targetTurnId)
+            : undefined;
+        const target = itemTarget || turnTarget;
+        if (target) {
+          appliedTargetRequest.current = targetRequest;
+          activeThread.current = thread.id;
+          followOutput.current = false;
+          target.scrollIntoView({ block: "center" });
+          scrollTop.current = element.scrollTop;
+          return;
+        }
+      }
+
+      if (activeThread.current !== thread.id) {
         activeThread.current = thread.id;
-        followOutput.current = false;
-        target.scrollIntoView({ block: "center" });
+        followOutput.current = true;
+        element.scrollTop = element.scrollHeight;
         scrollTop.current = element.scrollTop;
         return;
       }
-    }
 
-    if (activeThread.current !== thread.id) {
-      activeThread.current = thread.id;
-      followOutput.current = true;
-      element.scrollTop = element.scrollHeight;
+      if (followOutput.current) element.scrollTop = element.scrollHeight;
+      else element.scrollTop = scrollTop.current;
       scrollTop.current = element.scrollTop;
-      return;
+    };
+    // 同帧多次 effect 只保留最后一次滚动应用；切会话/跳目标等首帧即生效，
+    // rAF 回调在下次绘制前执行，无可感知延迟。无 rAF 环境（单测/SSR）直接执行。
+    if (typeof requestAnimationFrame !== "function") {
+      apply();
+    } else {
+      cancelAnimationFrame(pendingFrame.current);
+      pendingFrame.current = requestAnimationFrame(apply);
     }
-
-    if (followOutput.current) element.scrollTop = element.scrollHeight;
-    else element.scrollTop = scrollTop.current;
-    scrollTop.current = element.scrollTop;
   }, [
     thread.id,
     turns,

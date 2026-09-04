@@ -18,6 +18,20 @@ export interface ProjectGroup {
 }
 
 export function normalizeProjectPath(cwd: string) {
+  // mergeProjectGroups/filterProjectGroups 在每次快照推送时对每条 thread 调多次
+  // （分组一次 + 归属判断 N 次），正则 + toLowerCase 虽小但架不住量大，加有界缓存。
+  const hit = normalizeCache.get(cwd);
+  if (hit !== undefined) return hit;
+  const normalized = normalizeProjectPathSlow(cwd);
+  normalizeCache.set(cwd, normalized);
+  if (normalizeCache.size > NORMALIZE_CACHE_MAX) normalizeCache.clear();
+  return normalized;
+}
+
+const NORMALIZE_CACHE_MAX = 2000;
+const normalizeCache = new Map<string, string>();
+
+function normalizeProjectPathSlow(cwd: string) {
   let value = cwd.trim().replace(/\\/g, "/");
   // Codex rollouts often persist Windows paths with the \\?\ prefix.
   value = value.replace(/^\/\/\?\/unc\//i, "//");

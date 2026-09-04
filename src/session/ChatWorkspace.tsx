@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { api, post } from "../api";
 import { dedupeThreadLoad, readThreadCache } from "../cache";
@@ -38,10 +38,7 @@ import {
 } from "./commands";
 import type { ComposerImage } from "./images";
 import { readComposerDraft, writeComposerDraft } from "./drafts";
-import {
-  collectStreamedAgentMessages,
-  collectStreamedTurnItems,
-} from "./streaming";
+import { collectStreamed } from "./streaming";
 import {
   loadedUserMessages,
   reconcilePendingUserMessages,
@@ -490,26 +487,27 @@ export function ChatWorkspace({
       setError(err.message);
     }
   };
-  const streamed =
-    thread.status === "running" || thread.status === "waiting"
-      ? collectStreamedAgentMessages(
-          events,
-          thread.providerId,
-          thread.id,
-          thread.activeTurnId,
-          thread.agentId || "codex",
-        )
-      : [];
-  const streamedItems =
-    thread.status === "running" || thread.status === "waiting"
-      ? collectStreamedTurnItems(
-          events,
-          thread.providerId,
-          thread.id,
-          thread.activeTurnId,
-          thread.agentId || "codex",
-        )
-      : [];
+  // events 全扫从每 render 两遍降为一遍；非 running/waiting 直接给空数组，
+  // 与旧逻辑一致（旧代码同样按 status 短路）。
+  const { streamed, streamedItems } = useMemo(() => {
+    if (thread.status !== "running" && thread.status !== "waiting")
+      return { streamed: [], streamedItems: [] };
+    const live = collectStreamed(
+      events,
+      thread.providerId,
+      thread.id,
+      thread.activeTurnId,
+      thread.agentId || "codex",
+    );
+    return { streamed: live.messages, streamedItems: live.items };
+  }, [
+    events,
+    thread.status,
+    thread.providerId,
+    thread.id,
+    thread.activeTurnId,
+    thread.agentId,
+  ]);
   const threadApprovals = approvals.filter((approval) =>
     approvalBelongsToThread(approval, thread),
   );
