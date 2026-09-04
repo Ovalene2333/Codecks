@@ -102,6 +102,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
 - 「供应商设置 → Codex 上下文」可分别设置 `model_context_window` 与 `model_auto_compact_token_limit`；留空沿用模型 / Runtime 默认值。设置保存在 `.data/runtime-config.json`，不会改写 `~/.codex/config.toml`。保存前会说明并重启共享 Codex Runtime；有任务运行或等待审批时会拒绝保存
+- Codex runtime 进程在外部被结束（如在后台 ctrl+C）时，正在运行或等待审批的 session 会被标记为「运行时中断」并解除占用，可以继续分支、重试或修改配置；刷新不会把被中断的任务恢复成“正在运行”
 
 ### 远程值守
 

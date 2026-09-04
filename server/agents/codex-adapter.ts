@@ -225,6 +225,7 @@ export class CodexAdapter extends EventEmitter {
     });
     client.on("offline", (error) => {
       this.clearCompactions();
+      this.markOffline();
       this.broadcast("runtime.status", { online: false, error });
     });
     await client.start();
@@ -1314,6 +1315,30 @@ export class CodexAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * app-server 被外部结束（如后台 ctrl+C）后不会再有 turn/completed 通知，
+   * running/waiting 的会话必须在此处解除占用，否则分支、重试、供应商配置
+   * 变更都会被“会话正在运行”永久挡住，中断按钮也指向一个不存在的 turn。
+   * 被中断的 turn id 记进摘要（随 thread-summaries.json 持久化），刷新时
+   * 不会把它从 Codex state DB 的 inProgress 记录恢复成 running。
+   */
+  private markOffline() {
+    for (const [approvalId] of this.approvals)
+      this.broadcast("approval.resolved", { approvalId });
+    this.approvals.clear();
+    this.pendingFileChanges.clear();
+    for (const thread of this.threads.values()) {
+      if (thread.status !== "running" && thread.status !== "waiting") continue;
+      thread.status = "offline";
+      thread.interruptedTurnId = thread.activeTurnId;
+      thread.activeTurnId = undefined;
+      thread.lastError = "Codex 运行时已退出，该任务被中断";
+      thread.errorCode = undefined;
+      thread.updatedAt = Date.now();
+      this.broadcast("thread.updated", thread);
+    }
+  }
+
   async interrupt(providerId: string, threadId: string, turnId: string) {
     return (await this.ensure(providerId)).request("turn/interrupt", {
       threadId,
@@ -1449,6 +1474,12 @@ export class CodexAdapter extends EventEmitter {
     const old = this.threads.get(key);
     const latestTurn = thread.turns?.at?.(-1);
     const latestError = this.turnError(latestTurn?.error);
+    // 该 turn 在 runtime 崩溃时仍在进行，Codex state DB 不会再有它的完成
+    // 记录；不能让刷新把它恢复成 running，否则会话再次被“正在运行”挡住。
+    const staleRunning =
+      latestTurn?.status === "inProgress" &&
+      Boolean(old?.interruptedTurnId) &&
+      latestTurn.id === old?.interruptedTurnId;
     const latestStatus: ThreadSummary["status"] | undefined = latestTurn
       ? latestTurn.status === "inProgress"
         ? "running"
@@ -1469,7 +1500,11 @@ export class CodexAdapter extends EventEmitter {
       preview,
       cwd: thread.cwd || old?.cwd || "",
       model: thread.model || provider.model || old?.model || "default",
-      status: status || latestStatus || old?.status || "idle",
+      status: status
+        ? status
+        : staleRunning
+          ? "error"
+          : latestStatus || old?.status || "idle",
       updatedAt:
         parseTimestamp(
           thread.updatedAt,
@@ -1483,12 +1518,21 @@ export class CodexAdapter extends EventEmitter {
         timestampFromId(thread.id) ||
         Date.now(),
       activeTurnId: latestTurn
-        ? latestTurn.status === "inProgress"
+        ? latestTurn.status === "inProgress" && !staleRunning
           ? latestTurn.id
           : undefined
         : old?.activeTurnId,
-      lastError: latestTurn ? latestError?.message : old?.lastError,
-      errorCode: latestTurn ? latestError?.code : old?.errorCode,
+      lastError: staleRunning
+        ? "Codex 运行时已退出，该任务被中断"
+        : latestTurn
+          ? latestError?.message
+          : old?.lastError,
+      errorCode: staleRunning
+        ? undefined
+        : latestTurn
+          ? latestError?.code
+          : old?.errorCode,
+      interruptedTurnId: staleRunning ? old?.interruptedTurnId : undefined,
       archived: thread.archived ?? old?.archived,
       reasoningEffort: thread.reasoningEffort || old?.reasoningEffort,
       personality: thread.personality || old?.personality,
@@ -1615,6 +1659,7 @@ export class CodexAdapter extends EventEmitter {
         this.rememberRollout(existing.id);
         existing.status = "running";
         existing.activeTurnId = params.turn?.id;
+        existing.interruptedTurnId = undefined;
         existing.updatedAt = Date.now();
         existing.lastError = undefined;
         existing.errorCode = undefined;
