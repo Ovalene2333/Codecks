@@ -158,7 +158,10 @@ OpenCode 当前声明 `approvals`、`archive`、`delete`、`images`、`interrupt
 serve 没有原生归档接口）：归档态写进 `thread-settings.json` 的 `archived`
 标记并在重启后保留，`snapshot()` 按该标记拆分现有库和归档箱，服务端会话
 原样保留；运行中的会话不能归档，归档会话的发送/中断在服务端同样拒绝，
-不能只靠前端隐藏按钮。没有实现的 fork、compact、review、shell 和
+不能只靠前端隐藏按钮。P0 命令透传（`listSessionCommands` /
+`runSessionCommand` 走 `GET /command` 与 `POST /session/:id/command`，
+`compactSession` 走 `POST /session/:id/summarize`）复用 `sessionSettings`
+门禁，不新增 capability 字段。没有实现的 fork、review、shell 和
 MCP/Skills 枚举保持关闭。
 
 ## 新增 Adapter 的顺序

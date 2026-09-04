@@ -1250,3 +1250,94 @@ test("OpenCode archive refuses running sessions and archived sessions refuse new
   await adapter.unarchiveThread("p", "done");
   assert.equal(adapter.listThreads()[0]?.id, "done");
 });
+
+test("OpenCode lists server commands and runs one with the session model", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.endsWith("/command") && !init?.method)
+        return Response.json([
+          { name: "init", description: "Setup AGENTS.md" },
+          { command: "deploy" },
+          "plain",
+        ]);
+      if (value.includes("/command") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json({ info: { id: "m1" }, parts: [] });
+      }
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "openai/gpt-5",
+    reasoningEffort: "high",
+    status: "idle",
+    updatedAt: 1,
+  });
+  // variant 不在模型目录里时不发送，避免被服务端拒绝。
+  assert.deepEqual(await adapter.listSessionCommands("p", "s1"), [
+    { name: "deploy" },
+    { name: "init", description: "Setup AGENTS.md" },
+    { name: "plain" },
+  ]);
+
+  await adapter.runSessionCommand("p", "s1", "/init", "AGENTS.md");
+  assert.equal(posts.length, 1);
+  assert.match(posts[0].url, /\/session\/s1\/command/);
+  assert.deepEqual(JSON.parse(posts[0].body!), {
+    command: "init",
+    arguments: "AGENTS.md",
+    model: { providerID: "openai", modelID: "gpt-5" },
+  });
+  assert.equal(
+    (adapter.listThreads().find((item) => item.id === "s1") as any)?.status,
+    "running",
+  );
+});
+
+test("OpenCode compact resolves the model and clears the compacting flag", async () => {
+  const posts: Array<{ body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/summarize") && init?.method === "POST") {
+        posts.push({ body: init.body ? String(init.body) : undefined });
+        return Response.json(true);
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).configDefault = { providerID: "openai", modelID: "gpt-5" };
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  await adapter.compactSession("p", "s1");
+  assert.deepEqual(JSON.parse(posts[0].body!), {
+    providerID: "openai",
+    modelID: "gpt-5",
+  });
+  assert.equal((adapter.listThreads()[0] as any)?.compacting, undefined);
+
+  (adapter as any).threads.get("s1").status = "running";
+  await assert.rejects(adapter.compactSession("p", "s1"), /任务结束后/);
+});

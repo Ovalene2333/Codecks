@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type {
   AgentAdapter,
+  AgentCommand,
   AgentCreateThreadInput,
   AgentDescriptor,
   AgentId,
@@ -176,6 +177,37 @@ export class AgentRegistry extends EventEmitter {
   ) {
     const adapter = this.operation(id, "resolveApproval");
     return adapter.resolveApproval!(approvalId, body);
+  }
+
+  async listSessionCommands(
+    id: AgentId,
+    threadId: string,
+  ): Promise<AgentCommand[]> {
+    const adapter = this.operation(id, "listSessionCommands");
+    const thread = this.thread(id, threadId);
+    return adapter.listSessionCommands!(thread.providerId, threadId);
+  }
+
+  async runSessionCommand(
+    id: AgentId,
+    threadId: string,
+    command: string,
+    args?: string,
+  ) {
+    const adapter = this.operation(id, "runSessionCommand");
+    const thread = this.thread(id, threadId);
+    return adapter.runSessionCommand!(
+      thread.providerId,
+      threadId,
+      command,
+      args,
+    );
+  }
+
+  async compactSession(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "compactSession");
+    const thread = this.thread(id, threadId);
+    return adapter.compactSession!(thread.providerId, threadId);
   }
 
   async listTasks() {

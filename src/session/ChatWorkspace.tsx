@@ -107,6 +107,9 @@ export function ChatWorkspace({
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [commandModal, setCommandModal] = useState<CommandModalKind>();
   const [modelCatalog, setModelCatalog] = useState<ModelInfo[]>([]);
+  const [opencodeCommands, setOpencodeCommands] = useState<
+    Array<{ name: string; hint?: string }>
+  >([]);
   const fullRef = useRef(full);
   fullRef.current = full;
   const updateDraft = (next: typeof draft) => {
@@ -142,6 +145,34 @@ export function ChatWorkspace({
     setFull(cached || undefined);
     load();
   }, [load, threadCacheKey]);
+  useEffect(() => {
+    if ((thread.agentId || "codex") !== "opencode") {
+      setOpencodeCommands([]);
+      return;
+    }
+    let cancelled = false;
+    api<{ commands?: Array<{ name: string; description?: string }> }>(
+      `${threadPath(thread)}/commands`,
+    )
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data?.commands) ? data.commands : [];
+        setOpencodeCommands(
+          list
+            .map((item) => ({
+              name: String(item?.name || "").trim(),
+              hint: String(item?.description || "").trim() || undefined,
+            }))
+            .filter((item) => Boolean(item.name)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setOpencodeCommands([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [thread.agentId, thread.id, thread.providerId]);
   useEffect(() => {
     if ((thread.agentId || "codex") !== "opencode" || !thread.providerId) {
       setModelCatalog([]);
@@ -198,6 +229,45 @@ export function ChatWorkspace({
       throw new Error(`${agentName} 暂不支持代码审查命令`);
     if (command.kind === "shell" && !capabilities.shell)
       throw new Error(`${agentName} 暂不支持 Shell 命令`);
+    if (thread.agentId === "opencode") {
+      if (command.kind === "compact") return compact();
+      if (command.kind === "opencode-command") {
+        await post(`${threadPath(thread)}/commands`, {
+          command: command.command,
+          arguments: command.args,
+        });
+        onSnapshot();
+        return;
+      }
+      if (command.kind === "new-session") {
+        setStatusNote(
+          `当前目录 ${thread.cwd || "未知"}\n点击左上角「新建会话」可开新 OpenCode 会话，历史会话在左侧列表按目录分组。`,
+        );
+        return;
+      }
+      if (command.kind === "sessions") {
+        setStatusNote("左侧会话列表已按目录分组，直接点击即可切换 OpenCode 会话。");
+        return;
+      }
+      if (command.kind === "thinking") {
+        setStatusNote("思考过程默认折叠显示在时间线里，点击「思考过程」即可展开。");
+        return;
+      }
+      if (command.kind === "details") {
+        setStatusNote("工具执行细节保留在时间线里，点击对应工具卡即可展开查看入参与输出。");
+        return;
+      }
+      if (command.kind === "help") {
+        setStatusNote(
+          [
+            "OpenCode 命令：/compact /init /models /new /sessions /details /thinking",
+            "/status /ps /usage，以及服务端自定义命令（输入 / 后补全可见）。",
+            "破坏性与分享类命令（/undo /share 等）尚未接入，仍请用原生 TUI 执行。",
+          ].join("\n"),
+        );
+        return;
+      }
+    }
     if (command.kind === "compact") return compact();
     if (command.kind === "status") {
       const usage = thread.tokenUsage;
@@ -210,10 +280,16 @@ export function ChatWorkspace({
           `模型 ${thread.resolvedModel || thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
           thread.agentId === "claude"
             ? `权限 ${thread.permissionMode || "default"}`
-            : `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
+            : thread.agentId === "opencode"
+              ? ""
+              : `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
           `状态 ${thread.status}${thread.activeTurnId ? ` · Turn ${thread.activeTurnId}` : ""}`,
-          `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
-          thread.personality ? `性格 ${thread.personality}` : "",
+          thread.agentId === "opencode"
+            ? ""
+            : `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
+          thread.personality && thread.agentId !== "opencode"
+            ? `性格 ${thread.personality}`
+            : "",
           `上下文 ${used}`,
           provider?.name ? `供应商 ${provider.name}` : "",
           `目录 ${thread.cwd || "未知"}`,
@@ -334,7 +410,7 @@ export function ChatWorkspace({
   const submit = async (candidate: typeof draft, restoreOnFailure: boolean) => {
     const value = candidate.text.trim();
     if (sending || thread.compacting) return;
-    const command = parseComposerCommand(value);
+    const command = parseComposerCommand(value, thread.agentId || "codex");
     const hint = incompleteCommandHint(value);
     if (!command && hint) {
       setError(hint);
@@ -447,7 +523,11 @@ export function ChatWorkspace({
   };
   const compact = async () => {
     try {
-      await post(`/threads/${thread.providerId}/${thread.id}/compact`);
+      if ((thread.agentId || "codex") === "opencode") {
+        await post(`${threadPath(thread)}/compact`);
+      } else {
+        await post(`/threads/${thread.providerId}/${thread.id}/compact`);
+      }
       onSnapshot();
     } catch (err: any) {
       setError(err.message);
@@ -629,6 +709,7 @@ export function ChatWorkspace({
         images={draft.images}
         sending={sending}
         imageWarning={imageWarning}
+        extraCommands={opencodeCommands}
         onChange={(text) => updateDraft({ ...draft, text })}
         onImages={(images) => updateDraft({ ...draft, images })}
         onSend={send}

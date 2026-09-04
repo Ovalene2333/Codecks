@@ -17,7 +17,13 @@ export type ComposerCommand =
   | { kind: "goal"; objective: string }
   | { kind: "goal-clear" }
   | { kind: "review"; target: ReviewTarget }
-  | { kind: "shell"; command: string };
+  | { kind: "shell"; command: string }
+  | { kind: "opencode-command"; command: string; args: string }
+  | { kind: "new-session" }
+  | { kind: "sessions" }
+  | { kind: "thinking" }
+  | { kind: "details" }
+  | { kind: "help" };
 
 export const SLASH_COMMANDS = [
   { name: "/model", hint: "选择模型与推理强度" },
@@ -40,6 +46,7 @@ export const SLASH_COMMANDS = [
 
 const PANEL_COMMANDS = new Set([
   "/model",
+  "/models",
   "/permissions",
   "/skills",
   "/mention",
@@ -50,7 +57,10 @@ export function opensCommandPanel(name: string) {
   return PANEL_COMMANDS.has(name.toLowerCase());
 }
 
-export function parseComposerCommand(raw: string): ComposerCommand | undefined {
+export function parseComposerCommand(
+  raw: string,
+  agentId: "codex" | "claude" | "opencode" = "codex",
+): ComposerCommand | undefined {
   const text = raw.trim();
   if (text.startsWith("!")) {
     const command = text.slice(1).trim();
@@ -61,6 +71,7 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
   if (!match) return undefined;
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
+  if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
   if (key === "compact") return { kind: "compact" };
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
@@ -118,15 +129,72 @@ export function parseComposerCommand(raw: string): ComposerCommand | undefined {
 
 const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
 
+/** P0 OpenCode 内置命令（`/` 补全用；自定义命令运行时从服务端追加）。 */
+export const OPENCODE_COMMANDS = [
+  { name: "/compact", hint: "压缩上下文（summarize）" },
+  { name: "/init", hint: "生成或更新 AGENTS.md" },
+  { name: "/models", hint: "选择模型" },
+  { name: "/new", hint: "新建会话（回到列表创建）" },
+  { name: "/sessions", hint: "在左侧列表切换会话" },
+  { name: "/details", hint: "工具执行细节（可展开查看）" },
+  { name: "/thinking", hint: "思考过程（默认折叠显示）" },
+  { name: "/status", hint: "查看完整会话状态" },
+  { name: "/ps", hint: "查看运行任务" },
+  { name: "/usage", hint: "查看用量统计" },
+  { name: "/help", hint: "查看 OpenCode 命令帮助" },
+] as const;
+
+export type SlashMenuItem = { name: string; hint: string };
+
+function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
+  if (key === "compact" || key === "summarize") return { kind: "compact" };
+  if (key === "model" || key === "models") return { kind: "model" };
+  if (key === "status") return { kind: "status" };
+  if (key === "ps") return { kind: "ps" };
+  if (key === "usage") return { kind: "usage" };
+  if (key === "new" || key === "clear") return { kind: "new-session" };
+  if (key === "sessions" || key === "resume" || key === "continue")
+    return { kind: "sessions" };
+  if (key === "thinking") return { kind: "thinking" };
+  if (key === "details") return { kind: "details" };
+  if (key === "help") return { kind: "help" };
+  // 其余一律透传给 `POST /session/:id/command`（内置 init/share 等与
+  // `.opencode/commands/*.md` 自定义命令），服务端会校验是否存在。
+  return { kind: "opencode-command", command: key, args: arg };
+}
+
 export function matchingSlashCommands(
   text: string,
   agentId: "codex" | "claude" | "opencode" = "codex",
+  extraCommands: Array<{ name: string; hint?: string }> = [],
 ) {
   const value = text.trim();
   if (!value) return [];
   if (value === "!") return SLASH_COMMANDS.filter((item) => item.name === "!");
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
+  if (agentId === "opencode") {
+    const seen = new Set<string>();
+    const items: SlashMenuItem[] = [];
+    for (const item of [...OPENCODE_COMMANDS]) {
+      if (item.name.startsWith(query) && !seen.has(item.name)) {
+        seen.add(item.name);
+        items.push({ name: item.name, hint: item.hint });
+      }
+    }
+    for (const extra of extraCommands) {
+      const raw = String(extra?.name || "").trim();
+      if (!raw) continue;
+      const name = raw.startsWith("/") ? raw : `/${raw}`;
+      if (!name.toLowerCase().startsWith(query) || seen.has(name)) continue;
+      seen.add(name);
+      items.push({
+        name,
+        hint: String(extra?.hint || "自定义命令").slice(0, 80),
+      });
+    }
+    return items;
+  }
   const items = SLASH_COMMANDS.filter(
     (item) =>
       item.name.startsWith(query) &&

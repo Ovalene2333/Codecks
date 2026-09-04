@@ -2,7 +2,7 @@
 
 本文记录 Codex Deck 的 Slash 指令优先级、当前行为和后续兼容策略，便于开发与使用时查阅。指令清单以本机 `codex-cli 0.147.0` 的 TUI 和 app-server 协议为基线；Codex 的 app-server 仍是实验接口，Deck 会按 Runtime 实际能力调用，不支持的 RPC 会给出明确提示。
 
-## 已支持
+## 已支持（Codex）
 
 | 指令                                | Deck 行为                                                                              |
 | ----------------------------------- | -------------------------------------------------------------------------------------- |
@@ -22,6 +22,22 @@
 | `/plan`                             | 切换为只规划任务                                                                       |
 | `/goal <目标>`                      | 设置会话目标；`/goal clear` 清除目标                                                   |
 | `!command`                          | 按 Codex CLI 行为在无沙箱模式执行终端命令                                              |
+
+## 已支持（OpenCode，P0）
+
+OpenCode 会话的 `parse/matching` 按 `agentId` 分流，不复用 Codex 指令表：
+
+| 指令                                     | Deck 行为                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
+| `/compact`（别名 `/summarize`）          | `POST /api/agents/opencode/threads/:id/compact` → `POST /session/:id/summarize`，模型按会话模型/已解析模型/OpenCode 默认的顺序解析；运行中拒绝并提示 |
+| `/init [args]` 及其他自定义命令          | `POST /api/agents/opencode/threads/:id/commands` → `POST /session/:id/command { command, arguments }`，携带会话当前模型/variant；未知命令由服务端校验报错 |
+| `/models`（别名 `/model`）               | 打开现有模型选择器（`PATCH` 会话设置，逻辑与 Codex 共用）                  |
+| `/new`（别名 `/clear`）、`/sessions`（别名 `/resume`、`/continue`） | Deck 侧指引：新建去左上角，切换点左侧列表，不另调服务端 |
+| `/details`、`/thinking`                  | Deck 等价说明：工具细节/思考过程本就折叠在时间线里，点击展开即可           |
+| `/status`、`/ps`、`/usage`、`/help`      | 状态只显示模型/状态/上下文/供应商/目录/Thread（不显示沙箱/Fast/性格）；`ps/usage` 走现有面板；`help` 列出可用命令 |
+| 命令补全                                 | 内置表 + `GET /api/agents/opencode/threads/:id/commands`（即 `GET /command`，含 `.opencode/commands/*.md` 自定义命令）合并去重后提示 |
+
+尚未接入（仍请用原生 TUI）：`/undo`、`/redo`、`/share`、`/unshare`、`/export`、`!cmd`、`/connect`、`/editor`、`/themes`、`/exit`。
 
 ## 建议下一批
 

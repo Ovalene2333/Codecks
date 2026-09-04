@@ -81,6 +81,11 @@ export interface AgentPublicProfile {
   [key: string]: unknown;
 }
 
+export interface AgentCommand {
+  name: string;
+  description?: string;
+}
+
 export interface AgentAdapter extends Pick<EventEmitter, "on"> {
   readonly id: AgentId;
   descriptor(): AgentDescriptor;
@@ -145,4 +150,15 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     threadId: string,
     processId: string,
   ): Promise<unknown>;
+  listSessionCommands?(
+    providerId: string,
+    threadId: string,
+  ): Promise<AgentCommand[]>;
+  runSessionCommand?(
+    providerId: string,
+    threadId: string,
+    command: string,
+    args?: string,
+  ): Promise<unknown>;
+  compactSession?(providerId: string, threadId: string): Promise<unknown>;
 }
