@@ -679,19 +679,50 @@
 .tool-action.update,
 .tool-action.add,
 .tool-action.delete,
+.tool-action.edit,
 .tool-action.changes {
   color: #93c5fd;
 }
+.tool-group,
 .file-change-group {
   border-left-color: #3b82f6 !important;
 }
+.tool-group.running,
 .file-change-group.running,
 .tool-call-row.running {
   border-left-color: var(--wait) !important;
 }
+.tool-group.failed,
 .file-change-group.failed,
 .tool-call-row.failed {
   border-left-color: #fb7185 !important;
+}
+.timeline .tool-group > .tool-group-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 7px 10px 9px 30px;
+  border-top: 1px solid #1d2631;
+  list-style: none;
+}
+.tool-group-list li {
+  position: relative;
+  min-width: 0;
+}
+.tool-group-list li::before {
+  position: absolute;
+  left: -14px;
+  color: #526174;
+  content: "\2022";
+}
+.tool-group-list li code {
+  color: #d5deea;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tool-group-list li pre {
+  margin-top: 4px;
 }
 .file-change-count {
   min-width: 0;

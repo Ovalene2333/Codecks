@@ -30,6 +30,8 @@ import {
   commandPresentation,
   fileChangeGroupLabel,
   groupTurnItems,
+  isTrivialToolOutput,
+  openCodeFileTarget,
   reasoningText,
   toolCallPresentation,
   turnReadTargets,
@@ -263,12 +265,21 @@ function TurnItemInner({
     const command = displayCommand(displayText(item.command));
     const presentation = commandPresentation(item, cwd);
     const semantic = presentation.kind !== "command";
-    const detail = [
-      semantic && command ? `$ ${command}` : "",
-      displayText(item.aggregatedOutput),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const output = displayText(item.aggregatedOutput);
+    const trivialOutput = isTrivialToolOutput(output);
+    // 编辑类工具：summary 显示文件名，`Edit applied successfully.` 这类
+    // 无信息回执直接隐藏，点开只看有实际内容的输出。
+    const detail =
+      presentation.kind === "edit"
+        ? trivialOutput
+          ? ""
+          : output
+        : [
+            semantic && command ? `$ ${command}` : "",
+            trivialOutput && semantic ? "" : output,
+          ]
+            .filter(Boolean)
+            .join("\n\n");
     return (
       <details
         className={`tool-row command-row ${presentation.kind}-row ${state}`}
@@ -278,6 +289,8 @@ function TurnItemInner({
             <BookOpenText />
           ) : presentation.kind === "explore" ? (
             <FolderSearch />
+          ) : presentation.kind === "edit" ? (
+            <Pencil />
           ) : (
             <Command />
           )}
@@ -358,6 +371,69 @@ function FileChangeGroup({
       <div className="file-change-group-content">
         <FileDiff changes={changes} cwd={cwd} />
       </div>
+    </details>
+  );
+}
+
+/**
+ * OpenCode 连续编辑的收敛行：截图里 `已执行 docs/HANDOVER.md × 7`
+ * 会收成一行 `编辑 7 次 · docs/HANDOVER.md`，点开看每次的真实输出，
+ * `Edit applied successfully.` 这类回执不再逐条占一行。
+ */
+function ToolGroup({
+  items,
+  label,
+  files,
+  cwd,
+}: {
+  items: any[];
+  label: string;
+  files: string[];
+  cwd?: string;
+}) {
+  const state = items.some((item) => item?.status === "failed")
+    ? "failed"
+    : items.some((item) => item?.status === "inProgress")
+      ? "running"
+      : "ok";
+  const distinct = files.filter(Boolean);
+  const headline =
+    distinct.length <= 1
+      ? (distinct[0] || `${items.length} 次`)
+      : `${distinct.length} 个文件`;
+  return (
+    <details className={`tool-row tool-group edit-group ${state}`}>
+      <summary>
+        <Pencil />
+        <span className="tool-action edit">{label}</span>
+        <span className="file-change-count">
+          {items.length} 次 · {headline}
+        </span>
+      </summary>
+      <ul className="tool-group-list">
+        {items.map((item, index) => {
+          const file =
+            openCodeFileTarget(item, cwd) ||
+            displayCommand(displayText(item?.command)) ||
+            `第 ${index + 1} 次`;
+          const output = displayText(item?.aggregatedOutput);
+          const showOutput =
+            output && !isTrivialToolOutput(output) ? output : "";
+          const status =
+            item?.status === "failed"
+              ? "失败"
+              : item?.status === "inProgress"
+                ? "进行中"
+                : "";
+          return (
+            <li key={String(item?.id || `${file}-${index}`)}>
+              <code title={file}>{file}</code>
+              {status ? <span className="tool-status">{status}</span> : null}
+              {showOutput ? <pre>{showOutput}</pre> : null}
+            </li>
+          );
+        })}
+      </ul>
     </details>
   );
 }
@@ -517,7 +593,7 @@ function TurnBlockInner({
     const sentIds = new Set(message.liveItemIds || []);
     const index = renderEntries.findIndex((entry) => {
       const ids =
-        entry.kind === "fileChangeGroup"
+        entry.kind === "fileChangeGroup" || entry.kind === "toolGroup"
           ? entry.items.map((item) => String(item?.id || ""))
           : [String(entry.item?.id || "")];
       return ids.some((id) => newLiveIds.has(id) && !sentIds.has(id));
@@ -553,6 +629,18 @@ function TurnBlockInner({
               <FileChangeGroup
                 items={entry.items}
                 changes={entry.changes as FileChange[]}
+                cwd={thread.cwd}
+              />
+            </Fragment>
+          );
+        if (entry.kind === "toolGroup")
+          return (
+            <Fragment key={`tool-group-${entry.items[0]?.id || itemIndex}`}>
+              {pendingMarkup}
+              <ToolGroup
+                items={entry.items}
+                label={entry.label}
+                files={entry.files}
                 cwd={thread.cwd}
               />
             </Fragment>
