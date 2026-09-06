@@ -605,6 +605,49 @@ app.post(
   }),
 );
 app.post(
+  "/api/agents/:agentId/threads/:threadId/fork",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    if (id !== "opencode") throw new Error("该 Agent 请使用会话分支旧接口");
+    const input = z
+      .object({
+        messageID: z.string().min(1).max(200).optional(),
+        lastTurnId: z.string().min(1).max(200).optional(),
+      })
+      .parse(req.body || {});
+    return agents.forkThread(id, param(req.params.threadId), input);
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/retry",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    if (id !== "opencode") throw new Error("该 Agent 请使用会话重试旧接口");
+    const input = z
+      .object({
+        turnId: z.string().min(1).max(200),
+        text: z.string().max(100_000).optional().default(""),
+        images: z
+          .array(
+            z.object({
+              url: z.string().min(1).max(20_000_000),
+              name: z.string().max(200).optional(),
+            }),
+          )
+          .max(8)
+          .optional(),
+      })
+      .parse(req.body || {});
+    return agents.retryFromTurn(
+      id,
+      param(req.params.threadId),
+      input.turnId,
+      input.text,
+      input.images,
+    );
+  }),
+);
+app.post(
   "/api/agents/:agentId/approvals/:approvalId",
   route(async (req) => {
     const input = z

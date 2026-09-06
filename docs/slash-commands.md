@@ -39,7 +39,7 @@ OpenCode 会话的 `parse/matching` 按 `agentId` 分流，不复用 Codex 指�
 
 ### 撤回（`/undo`、`/redo`，破坏性，需确认）
 
-OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边界、消息清理在后续提交点），与 Codex 的 fork 分支（非破坏性）不同，因此 Deck 侧强制二次确认：
+OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边界、消息清理在后续提交点），因此 Deck 侧强制二次确认。只想换个说法重试、又不想丢历史时，请改用非破坏性的分支（`POST /session/:id/fork`，见下节），撤回确认框里也会提示这一点：
 
 | 入口 | Deck 行为 |
 | ---- | --------- |
@@ -48,6 +48,16 @@ OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边
 | 时间线每条 user 消息旁「撤回」 | opencode 专属（补上 `fork:false` 导致缺失的按条操作位），以该 `turn.id` 为边界走同一确认链路 |
 
 门禁：运行中/待审批/已归档一律拒绝（服务端忙时同样拒绝，不只靠前端隐藏）。执行后重读历史并刷新快照；`files=0` 时明确提示"仅回滚了对话"。
+
+### 分支与编辑后重发（非破坏性，OpenCode 原生 fork）
+
+| 入口 | Deck 行为 |
+| ---- | --------- |
+| 每轮下「从此处分支」 | `POST /api/agents/opencode/threads/:id/fork` → `POST /session/:id/fork { messageID }`，完整复制该轮之前（含该轮）的历史到新分支，原分支保留；分支名带「分支」后缀并记录来源，顶部可跳回源会话 |
+| 每条 user 消息旁「从此重试」 | 两步式：先把原文带回输入框并显示分支提示条，可编辑；按发送才真正 fork + 用新文本重发（直接发送即用原文重试）。目标为首轮时新建空分支再发，不复制历史、不做 revert |
+| 消息旁「编辑」 | 纯编辑：把原文带回输入框，发送后追加为新 turn，不分支 |
+
+实现只用 OpenCode 官方接口（fork / 新建会话 / 发消息 / 重命名），不动服务端原有会话存储结构；fork 子会话带 `parentID`，Deck 按 `fork` 字段与 fork 记录识别为可见分支，subagent 子会话仍隐藏并挂回父会话的任务卡片。旧版 OpenCode（无 `/session/:id/fork`，返回 404）会给出升级提示。
 
 尚未接入（仍请用原生 TUI）：`/share`、`/unshare`、`/export`、`!cmd`、`/connect`、`/editor`、`/themes`、`/exit`。
 

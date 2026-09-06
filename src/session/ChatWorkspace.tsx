@@ -114,6 +114,14 @@ export function ChatWorkspace({
     { mode: "undo" | "redo" | "message"; messageID?: string; preview: string }
   >();
   const [reverting, setReverting] = useState(false);
+  /**
+   * 编辑后分支重发：点「从此重试」后不立即发送，而是把原文带回输入框、
+   * 记住来源 turn；用户改完按发送才真正 fork + 重发，原分支完整保留。
+   * 直接按发送即用原文重试，所以只多一次确认，可兼顾编辑与快捷。
+   */
+  const [retrySource, setRetrySource] = useState<
+    { turnId: string; preview: string } | undefined
+  >();
   const fullRef = useRef(full);
   fullRef.current = full;
   const updateDraft = (next: typeof draft) => {
@@ -147,6 +155,8 @@ export function ChatWorkspace({
     const cached = readThreadCache(threadCacheKey);
     fullRef.current = cached || undefined;
     setFull(cached || undefined);
+    // 切会话时上一个会话的分支重发意图一并丢弃，避免串到新会话。
+    setRetrySource(undefined);
     load();
   }, [load, threadCacheKey]);
   useEffect(() => {
@@ -431,6 +441,9 @@ export function ChatWorkspace({
       return;
     }
     if (!command && !value && !candidate.images.length) return;
+    // 分支重发意图下只接受正文发送；斜杠命令走正常链路并丢弃分支意图。
+    const branchRetry = !command ? retrySource : undefined;
+    if (command && retrySource) setRetrySource(undefined);
     setSending(true);
     setError("");
     setStatusNote("");
@@ -442,6 +455,18 @@ export function ChatWorkspace({
     if (restoreOnFailure) {
       if (command) updateDraft({ text: "", images: pendingImages });
       else updateDraft({ text: "", images: [] });
+    }
+    if (branchRetry) {
+      try {
+        await executeRetrySend(branchRetry.turnId, candidate, pendingId);
+      } catch (err: any) {
+        if (restoreOnFailure)
+          updateDraft({ text: value, images: pendingImages });
+        setError(err.message);
+      } finally {
+        setSending(false);
+      }
+      return;
     }
     if (!command) {
       const pendingTurnId = thread.activeTurnId;
@@ -507,33 +532,47 @@ export function ChatWorkspace({
     if (result.skippedImages) onToast("历史图片来自本机路径，请重新选择后发送");
     return result.draft;
   };
+  /** 纯编辑：把原文带回输入框追加为新 turn，不改变分支意图之外的状态。 */
   const editUserMessage = (item: any) => {
+    setRetrySource(undefined);
     updateDraft(readHistoryDraft(item));
     setComposerFocusRequest((current) => current + 1);
   };
-  const retryUserMessage = async (turnId: string, item: any) => {
+  const retryPath = (thread.agentId || "codex") === "opencode"
+    ? `${threadPath(thread)}/retry`
+    : commandPath("retry");
+  /**
+   * 从历史消息分支重试（两步式）：先把原文带回输入框并记住来源 turn，
+   * 用户改完按发送才真正 fork + 重发；直接发送即用原文重试。
+   * 原分支完整保留， destructive 的撤回（undo）只留给真正想抹掉历史时用。
+   */
+  const retryUserMessage = (turnId: string, item: any) => {
     if (sending || locked || thread.compacting) return;
     const candidate = readHistoryDraft(item);
-    const value = candidate.text.trim();
-    if (!value && !candidate.images.length) return;
-    setSending(true);
-    setError("");
-    try {
-      const created = await post(commandPath("retry"), {
-        turnId,
-        text: value,
-        images: candidate.images.map((image) => ({
-          url: image.url,
-          name: image.name,
-        })),
-      });
-      onSelectThread(thread.providerId, created.id);
-      onSnapshot();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSending(false);
-    }
+    const preview = candidate.text.trim().slice(0, 42) || "所选消息";
+    setRetrySource({ turnId, preview });
+    updateDraft(candidate);
+    setComposerFocusRequest((current) => current + 1);
+  };
+  const executeRetrySend = async (
+    turnId: string,
+    candidate: typeof draft,
+    pendingId: string,
+  ) => {
+    const created = await post(retryPath, {
+      turnId,
+      text: candidate.text.trim(),
+      images: candidate.images.map((image) => ({
+        url: image.url,
+        name: image.name,
+      })),
+    });
+    setPendingUsers((current) =>
+      current.filter((message) => message.id !== pendingId),
+    );
+    setRetrySource(undefined);
+    onSelectThread(thread.providerId, created.id);
+    onSnapshot();
   };
   const compact = async () => {
     try {
@@ -634,9 +673,18 @@ export function ChatWorkspace({
   };
   const forkFrom = async (lastTurnId?: string) => {
     try {
+      const isOpenCode = (thread.agentId || "codex") === "opencode";
       const created = await post(
-        `/threads/${thread.providerId}/${thread.id}/fork`,
-        lastTurnId ? { lastTurnId } : {},
+        isOpenCode
+          ? `${threadPath(thread)}/fork`
+          : `/threads/${thread.providerId}/${thread.id}/fork`,
+        // OpenCode 原生 fork 用 messageID 做边界，Codex 用 lastTurnId；
+        // 通用路由两侧都接受，这里按 Agent 语义发送。
+        lastTurnId
+          ? isOpenCode
+            ? { messageID: lastTurnId }
+            : { lastTurnId }
+          : {},
       );
       onSelectThread(thread.providerId, created.id);
       onSnapshot();
@@ -792,6 +840,10 @@ export function ChatWorkspace({
         sending={sending}
         imageWarning={imageWarning}
         extraCommands={opencodeCommands}
+        branchHint={retrySource?.preview}
+        onCancelBranch={
+          retrySource ? () => setRetrySource(undefined) : undefined
+        }
         onChange={(text) => updateDraft({ ...draft, text })}
         onImages={(images) => updateDraft({ ...draft, images })}
         onSend={send}
@@ -862,6 +914,9 @@ export function ChatWorkspace({
                   ，并恢复相关文件。提交过的重要改动请先自行备份。
                 </p>
                 <p>若项目不是 git 仓库，仅回滚对话、不恢复文件。</p>
+                <p>
+                  只想换个说法重试、又不想丢历史时，请取消并改用消息旁的「从此重试」或每轮下的「从此处分支」。
+                </p>
               </div>
             )
           }

@@ -20,7 +20,9 @@ const OPENCODE_CAPABILITIES: AgentCapabilities = {
   // 持久化（thread-settings `archived`），服务端会话原样保留。
   archive: true,
   delete: true,
-  fork: false,
+  // 原生 `POST /session/:id/fork { messageID? }`：非破坏性分支，
+  // 与 Codex `thread/fork` 对齐；destructive 的 revert 仍保留为 undo。
+  fork: true,
   images: true,
   interrupt: true,
   mcp: false,
@@ -74,6 +76,12 @@ type OpenCodeSession = {
   model?: { id?: string; providerID?: string; variant?: string };
   /** Set on child sessions spawned by subagents; they are not Deck threads. */
   parentID?: string;
+  /**
+   * Present on sessions created by `POST /session/:id/fork`. Subagent
+   * children carry only `parentID`; fork children must stay visible as
+   * Deck threads instead of being hidden as subagent activity.
+   */
+  fork?: { sessionID?: string; boundary?: unknown } | unknown;
   time?: { created?: number; updated?: number };
 };
 
@@ -541,6 +549,11 @@ export class OpenCodeAdapter extends EventEmitter {
   private sessionTitles = new Map<string, string>();
   /** 子会话 → 父会话 ID：subagent 会话不是 Deck thread，但活动要挂回父会话。 */
   private childParents = new Map<string, string>();
+  /**
+   * Deck 发起的 fork 子会话 ID：服务端同样用 `parentID` 标记它们，
+   * 但它们是可见分支，必须保留在 threads 里，不能按 subagent 隐藏。
+   */
+  private forkChildren = new Set<string>();
   /** 子会话 ID → 父会话里派发它的 task 工具 part ID。 */
   private childTaskParts = new Map<string, string>();
   /** task part ID → 最近一次父会话 task part 快照，转发子代理活动时用它补全。 */
@@ -798,6 +811,19 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   /**
+   * fork 证据：服务端 `fork` 字段、Deck 发起的 fork 记录、或已可见分支。
+   * 三者任一成立即按分支保留，不按 subagent 隐藏。
+   */
+  private isForkChild(session: OpenCodeSession) {
+    if (!session.parentID) return false;
+    if (session.fork != null) return true;
+    if (this.forkChildren.has(session.id)) return true;
+    const known = this.threads.get(session.id);
+    if (known?.forkedFromId) return true;
+    return false;
+  }
+
+  /**
    * 和 Codex 一致：没有服务端 title 时，用首条用户消息做标题。
    * 有 title（新建时填了名 / 手动重命名）时绝不覆盖。
    */
@@ -850,11 +876,14 @@ export class OpenCodeAdapter extends EventEmitter {
       // Subagent sessions are children of the thread that spawned them and
       // must not surface as separate Deck sessions. Still remember the
       // parent link so their streamed activity can be attached to the
-      // parent's task card.
-      if (session.parentID) {
+      // parent's task card. Fork children also carry `parentID` but are
+      // real branches: keep them visible (fork field, Deck fork record, or
+      // an already-visible thread all count as fork evidence).
+      if (session.parentID && !this.isForkChild(session)) {
         this.boundedPut(this.childParents, session.id, session.parentID);
         continue;
       }
+      if (session.parentID) this.forkChildren.add(session.id);
       seen.add(session.id);
       this.threads.set(
         session.id,
@@ -1179,8 +1208,181 @@ export class OpenCodeAdapter extends EventEmitter {
     });
     this.threads.delete(threadId);
     this.sessionTitles.delete(threadId);
+    this.forkChildren.delete(threadId);
     this.broadcast("thread.deleted", { agentId: this.id, threadId });
     return { ok: true };
+  }
+
+  /**
+   * 非破坏性分支：`POST /session/:id/fork { messageID? }`。
+   * 与 Codex `thread/fork { lastTurnId }` 对齐：Deck turn.id 即 OpenCode
+   * user message id，可直接透传。不传 messageID 即完整复制当前历史。
+   * 这是 tree/分支的主入口；destructive 的 revert 仍保留为 undo。
+   */
+  async forkThread(
+    _providerId: string,
+    threadId: string,
+    options: { messageID?: string; lastTurnId?: string } = {},
+  ) {
+    const source = this.requireThread(threadId);
+    if (source.archived) throw new Error("会话已归档，请先恢复再分支");
+    if (source.status === "running" || source.status === "waiting")
+      throw new Error("会话正在运行或等待确认，无法分支");
+    const boundary = String(
+      options.messageID || options.lastTurnId || "",
+    ).trim();
+    let forked: OpenCodeSession;
+    try {
+      forked = await this.request<OpenCodeSession>(
+        `/session/${encodeURIComponent(threadId)}/fork`,
+        {
+          method: "POST",
+          directory: source.cwd,
+          ...(boundary ? { body: { messageID: boundary } } : {}),
+        },
+      );
+    } catch (error: any) {
+      const detail = String(error?.message || error || "OpenCode 分支失败");
+      if (/404/.test(detail))
+        throw new Error(
+          "当前 OpenCode server 不支持分支接口（POST /session/:id/fork 返回 404），请升级 OpenCode 后重试",
+        );
+      throw error instanceof Error ? error : new Error(detail);
+    }
+    if (!forked?.id) throw new Error("OpenCode 分支失败：服务端未返回新会话");
+    this.forkChildren.add(forked.id);
+    this.sessionTitles.set(forked.id, "");
+    const branchName = `${source.name || forked.title || forked.slug || "会话"} · 分支`;
+    try {
+      await this.request(`/session/${encodeURIComponent(forked.id)}`, {
+        method: "PATCH",
+        directory: forked.directory || source.cwd,
+        body: { title: branchName },
+      });
+      this.sessionTitles.set(forked.id, branchName);
+    } catch {
+      // 命名失败不影响分支本身，首条消息命名会再兜底。
+    }
+    const merged = this.mergeThread(
+      { ...forked, title: branchName, directory: forked.directory || source.cwd },
+      undefined,
+    );
+    const branch: ThreadSummary = {
+      ...merged,
+      agentId: this.id,
+      providerId: source.providerId,
+      cwd: forked.directory || source.cwd,
+      model: source.model || "default",
+      ...(source.reasoningEffort
+        ? { reasoningEffort: source.reasoningEffort }
+        : {}),
+      name: branchName,
+      preview: branchName,
+      status: "idle",
+      activeTurnId: undefined,
+      lastError: undefined,
+      forkedFromId: threadId,
+      updatedAt: Date.now(),
+    };
+    if (source.model || source.reasoningEffort) {
+      await this.options.threadSettings?.update(this.id, branch.id, {
+        model: branch.model,
+        reasoningEffort: source.reasoningEffort,
+      });
+    }
+    this.threads.set(branch.id, branch);
+    this.broadcast("thread.updated", branch);
+    return branch;
+  }
+
+  /**
+   * 从指定 user 消息分支并用新文本重试：与 Codex retryFromTurn 一致，
+   * 取目标 turn 的上一条 user 消息做 fork 边界（首轮则空分支），
+   * 再在新分支上 sendTurn。原分支完整保留，可随时回看。
+   */
+  async retryFromTurn(
+    _providerId: string,
+    threadId: string,
+    turnId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const source = this.requireThread(threadId);
+    if (source.archived) throw new Error("会话已归档，请先恢复再重试");
+    if (source.status === "running" || source.status === "waiting")
+      throw new Error("会话正在运行或等待确认，无法从历史消息重试");
+    const value = String(text || "").trim();
+    if (!value && !images?.length) throw new Error("请输入重试内容");
+    const records = await this.request<any[]>(
+      `/session/${encodeURIComponent(threadId)}/message`,
+      { directory: source.cwd },
+    );
+    const userIds: string[] = [];
+    for (const record of records || []) {
+      const info = record?.info || record?.message || record;
+      if (info?.role === "user" && info?.id) userIds.push(String(info.id));
+    }
+    const target = String(turnId || "").trim();
+    const targetIndex = target ? userIds.indexOf(target) : -1;
+    if (target && targetIndex < 0) throw new Error("找不到这条消息所属的回合");
+    const boundary = targetIndex > 0 ? userIds[targetIndex - 1] : "";
+    // 有边界用官方 fork 复制历史；首轮则新建空会话再发，不碰原会话的
+    // 任何历史与文件快照（不对新分支做 revert，避免副作用工作区文件）。
+    const branch = boundary
+      ? await this.forkThread(source.providerId, threadId, {
+          messageID: boundary,
+        })
+      : await this.createEmptyBranch(source);
+    await this.sendTurn(source.providerId, branch.id, value, images);
+    return this.threads.get(branch.id) || branch;
+  }
+
+  /**
+   * 空分支：只调官方 `POST /session` 新建会话，不复制历史、不改文件。
+   * 与 Codex `createEmptyFork` 对应，用于首轮重试。
+   */
+  private async createEmptyBranch(source: ThreadSummary) {
+    const session = await this.request<OpenCodeSession>("/session", {
+      method: "POST",
+      directory: source.cwd,
+      body: { title: `${source.name || "会话"} · 分支` },
+    });
+    if (!session?.id) throw new Error("OpenCode 分支失败：服务端未返回新会话");
+    this.forkChildren.add(session.id);
+    const merged = this.mergeThread(
+      {
+        ...session,
+        title: `${source.name || "会话"} · 分支`,
+        directory: session.directory || source.cwd,
+      },
+      undefined,
+    );
+    const branch: ThreadSummary = {
+      ...merged,
+      agentId: this.id,
+      providerId: source.providerId,
+      cwd: session.directory || source.cwd,
+      model: source.model || "default",
+      ...(source.reasoningEffort
+        ? { reasoningEffort: source.reasoningEffort }
+        : {}),
+      name: `${source.name || "会话"} · 分支`,
+      preview: `${source.name || "会话"} · 分支`,
+      status: "idle",
+      activeTurnId: undefined,
+      lastError: undefined,
+      forkedFromId: source.id,
+      updatedAt: Date.now(),
+    };
+    if (source.model || source.reasoningEffort) {
+      await this.options.threadSettings?.update(this.id, branch.id, {
+        model: branch.model,
+        reasoningEffort: source.reasoningEffort,
+      });
+    }
+    this.threads.set(branch.id, branch);
+    this.broadcast("thread.updated", branch);
+    return branch;
   }
 
   /**
@@ -1619,11 +1821,20 @@ export class OpenCodeAdapter extends EventEmitter {
     ) {
       const session = body.info as OpenCodeSession | undefined;
       if (!session?.id) return;
-      if (session.parentID) {
+      if (session.parentID && !this.isForkChild(session)) {
         this.boundedPut(this.childParents, session.id, session.parentID);
         return;
       }
+      if (session.parentID) this.forkChildren.add(session.id);
       const next = this.mergeThread(session, this.threads.get(session.id));
+      // 事件里的 fork 会话不带 forkedFromId 时，用 parentID 补上，
+      // 保证分支 chip / fork 计数 / origin 跳转可用。
+      if (session.parentID && !next.forkedFromId)
+        next.forkedFromId = session.fork &&
+        typeof session.fork === "object" &&
+        (session.fork as { sessionID?: string }).sessionID
+          ? String((session.fork as { sessionID?: string }).sessionID)
+          : session.parentID;
       this.threads.set(next.id, next);
       this.broadcast("thread.updated", next);
       return;
@@ -1631,6 +1842,7 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "session.deleted" && sessionId) {
       this.threads.delete(sessionId);
       this.sessionTitles.delete(sessionId);
+      this.forkChildren.delete(sessionId);
       for (const [child, parent] of this.childParents) {
         if (parent !== sessionId) continue;
         this.childParents.delete(child);

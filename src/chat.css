@@ -1046,6 +1046,28 @@
   font-size: 12px;
   line-height: 17px;
 }
+.composer-branch-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgb(96 165 250 / 40%);
+  background: rgb(96 165 250 / 10%);
+  color: #bcd7ff;
+  font-size: 12px;
+  line-height: 17px;
+}
+.composer-branch-hint span {
+  flex: 1;
+  min-width: 0;
+}
+.composer-branch-hint .icon-btn {
+  flex: none;
+  min-width: 28px;
+  min-height: 28px;
+}
 .message-images {
   display: flex;
   flex-wrap: wrap;

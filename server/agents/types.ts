@@ -168,6 +168,18 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     args?: string,
   ): Promise<unknown>;
   compactSession?(providerId: string, threadId: string): Promise<unknown>;
+  forkThread?(
+    providerId: string,
+    threadId: string,
+    options?: { messageID?: string; lastTurnId?: string },
+  ): Promise<unknown>;
+  retryFromTurn?(
+    providerId: string,
+    threadId: string,
+    turnId: string,
+    text: string,
+    images?: TurnImage[],
+  ): Promise<unknown>;
   revertSession?(
     providerId: string,
     threadId: string,
