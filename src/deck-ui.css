@@ -454,6 +454,31 @@ html[data-theme="light"] {
   margin: 0;
 }
 
+.composer-branch-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid rgb(96 165 250 / 40%);
+  border-radius: var(--radius-md);
+  background: rgb(96 165 250 / 10%);
+  color: #bcd7ff;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.composer-branch-hint span {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer-branch-hint .icon-btn {
+  flex: none;
+  min-width: 28px;
+  min-height: 28px;
+}
+
 .composer-session-controls .session-toolbar {
   min-height: 44px;
   padding: 5px 6px;

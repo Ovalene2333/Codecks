@@ -210,6 +210,34 @@ export class AgentRegistry extends EventEmitter {
     return adapter.compactSession!(thread.providerId, threadId);
   }
 
+  async forkThread(
+    id: AgentId,
+    threadId: string,
+    options: { messageID?: string; lastTurnId?: string } = {},
+  ) {
+    const adapter = this.operation(id, "forkThread");
+    const thread = this.thread(id, threadId);
+    return adapter.forkThread!(thread.providerId, threadId, options);
+  }
+
+  async retryFromTurn(
+    id: AgentId,
+    threadId: string,
+    turnId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const adapter = this.operation(id, "retryFromTurn");
+    const thread = this.thread(id, threadId);
+    return adapter.retryFromTurn!(
+      thread.providerId,
+      threadId,
+      turnId,
+      text,
+      images,
+    );
+  }
+
   async revertSession(id: AgentId, threadId: string, messageID?: string) {
     const adapter = this.operation(id, "revertSession");
     const thread = this.thread(id, threadId);

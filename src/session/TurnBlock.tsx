@@ -125,7 +125,7 @@ function TurnItemInner({
             {onRetryUserMessage && (
               <button
                 type="button"
-                title="从此处创建分支并重试"
+                title="从此处分支，可先在输入框编辑再发送；直接发送即用原文重试"
                 disabled={messageActionsDisabled}
                 onClick={() => onRetryUserMessage(item)}
               >

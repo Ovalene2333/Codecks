@@ -19,6 +19,8 @@ export function Composer({
   focusRequest = 0,
   sessionControls,
   extraCommands = [],
+  branchHint,
+  onCancelBranch,
 }: {
   thread: ThreadSummary;
   text: string;
@@ -34,6 +36,8 @@ export function Composer({
   onError?: (message: string) => void;
   focusRequest?: number;
   sessionControls?: ReactNode;
+  branchHint?: string;
+  onCancelBranch?: () => void;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -150,6 +154,21 @@ export function Composer({
       )}
       {sessionControls && (
         <div className="composer-session-controls">{sessionControls}</div>
+      )}
+      {branchHint && (
+        <div className="composer-branch-hint" role="status">
+          <span>将从「{branchHint}」分支重发，原分支保留；直接发送即用当前文字重试</span>
+          {onCancelBranch && (
+            <button
+              type="button"
+              className="icon-btn"
+              title="取消分支重发，改为普通发送"
+              onClick={onCancelBranch}
+            >
+              <X />
+            </button>
+          )}
+        </div>
       )}
       <div className="composer-box">
         <button

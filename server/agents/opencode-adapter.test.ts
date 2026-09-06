@@ -1439,3 +1439,188 @@ test("OpenCode unrevert posts once and refuses busy sessions", async () => {
   (adapter as any).threads.get("s1").status = "running";
   await assert.rejects(adapter.unrevertSession("p", "s1"), /运行中/);
 });
+
+test("OpenCode fork 能力已开启：原生 fork 接口，非破坏性分支", async () => {
+  const adapter = new OpenCodeAdapter({ fetcher: (async () =>
+    Response.json([])) as typeof fetch });
+  assert.equal(adapter.descriptor().capabilities.fork, true);
+});
+
+test("OpenCode forkThread 调原生 fork 接口并记录 forkedFromId", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/fork") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json({ id: "branch1", directory: "/work" });
+      }
+      if (value.includes("/session/branch1") && init?.method === "PATCH")
+        return Response.json({ id: "branch1" });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "原会话",
+    preview: "原会话",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  const branch: any = await adapter.forkThread("p", "s1", { messageID: "m1" });
+  assert.deepEqual(JSON.parse(posts[0].body!), { messageID: "m1" });
+  assert.equal(branch.id, "branch1");
+  assert.equal(branch.forkedFromId, "s1");
+  assert.match(branch.name, /分支/);
+  // 原会话原样保留。
+  assert.equal((adapter as any).threads.get("s1").name, "原会话");
+
+  (adapter as any).threads.get("s1").status = "running";
+  await assert.rejects(adapter.forkThread("p", "s1"), /运行/);
+});
+
+test("OpenCode retryFromTurn 从上一条 user 消息 fork 后在新分支发送", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && !init?.method)
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "第一轮" }],
+          },
+          {
+            info: { id: "m2", role: "user", time: { created: 2 } },
+            parts: [{ id: "p2", type: "text", text: "第二轮" }],
+          },
+        ]);
+      if (value.includes("/fork") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json({ id: "branch2", directory: "/work" });
+      }
+      if (value.includes("/session/branch2") && init?.method === "PATCH")
+        return Response.json({ id: "branch2" });
+      if (value.includes("/session/branch2/message") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json({ info: { id: "m3", role: "user" }, parts: [] });
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "原会话",
+    preview: "原会话",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  // 以 m2 为目标重试：fork 边界应为上一条 m1，再在新分支发送新文本。
+  const branch: any = await adapter.retryFromTurn("p", "s1", "m2", "改后的问法");
+  assert.deepEqual(JSON.parse(posts[0].body!), { messageID: "m1" });
+  assert.match(posts[1].body!, /改后的问法/);
+  assert.equal(branch.forkedFromId, "s1");
+
+  await assert.rejects(adapter.retryFromTurn("p", "s1", "mx", "x"), /找不到/);
+});
+
+test("OpenCode 首轮重试走空分支，不 revert、不碰原历史", async () => {
+  const posts: string[] = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && !init?.method)
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "第一轮" }],
+          },
+        ]);
+      if (value.includes("/revert")) {
+        posts.push(`revert:${value}`);
+        return Response.json(true);
+      }
+      // 空分支：POST /session（无 fork/message 后缀；注意带 ?directory 查询参数）。
+      if (
+        /\/session(\?|$)/.test(value) &&
+        !value.includes("/fork") &&
+        !value.includes("/message") &&
+        init?.method === "POST"
+      ) {
+        posts.push("create-empty-branch");
+        return Response.json({ id: "branch3", directory: "/work" });
+      }
+      if (value.includes("/fork") && init?.method === "POST") {
+        posts.push(`fork:${value}`);
+        return Response.json({ id: "should-not-happen", directory: "/work" });
+      }
+      if (value.includes("/message") && init?.method === "POST")
+        return Response.json({ info: { id: "m9", role: "user" }, parts: [] });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "原会话",
+    preview: "原会话",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  const branch: any = await adapter.retryFromTurn("p", "s1", "m1", "重问");
+  assert.ok(posts.includes("create-empty-branch"));
+  assert.ok(!posts.some((item) => item.startsWith("revert:")));
+  assert.ok(!posts.some((item) => item.startsWith("fork:")));
+  assert.equal(branch.forkedFromId, "s1");
+});
+
+test("OpenCode fork 子会话保持可见，subagent 子会话仍隐藏", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider") || value.includes("/config"))
+        return Response.json([]);
+      return Response.json([
+        { id: "s1", directory: "/work", title: "原会话", time: { updated: 2 } },
+        {
+          id: "fork1",
+          directory: "/work",
+          title: "原会话 · 分支",
+          parentID: "s1",
+          fork: { sessionID: "s1" },
+          time: { updated: 3 },
+        },
+        {
+          id: "child1",
+          directory: "/work",
+          parentID: "s1",
+          time: { updated: 3 },
+        },
+      ]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await adapter.refreshAll();
+  const ids = adapter.listThreads().map((thread) => thread.id);
+  assert.ok(ids.includes("s1"));
+  assert.ok(ids.includes("fork1"));
+  assert.ok(!ids.includes("child1"));
+});
