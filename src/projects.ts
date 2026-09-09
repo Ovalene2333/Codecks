@@ -247,10 +247,14 @@ export function resolveNewThreadDefaults(input: {
     preferredProvider?.id || online[0]?.id || input.providers[0]?.id || "";
   const provider = input.providers.find((item) => item.id === providerId);
   const cwd = input.cwd || input.project?.cwd || "";
+  // "default" 是 Claude/OpenCode 的占位写法，串到 Codex 会被当成真实模型 id。
+  // 这里提前过滤，留空=用供应商默认。
+  const rawModel = defaults?.model || prefs?.lastModel || provider?.model || "";
+  const model = rawModel.trim() === "default" ? "" : rawModel;
   return {
     providerId,
     cwd: input.runtimeWsl ? toWslCwd(cwd) : cwd,
-    model: defaults?.model || prefs?.lastModel || provider?.model || "",
+    model,
     reasoningEffort:
       defaults?.reasoningEffort || prefs?.lastReasoningEffort || "",
     sandbox: defaults?.sandbox || prefs?.lastSandbox || "workspace-write",

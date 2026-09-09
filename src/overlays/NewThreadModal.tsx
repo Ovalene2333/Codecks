@@ -110,7 +110,13 @@ export function NewThreadModal({
     setAgentId(next);
     setError("");
     if (next === "codex")
-      setForm((current) => ({ ...current, providerId: defaults.providerId }));
+      // 切回 Codex 时丢掉 Claude/OpenCode 留下的 "default" 占位，用 Codex 默认链重算。
+      setForm((current) => ({
+        ...current,
+        providerId: defaults.providerId,
+        model: defaults.model,
+        reasoningEffort: defaults.reasoningEffort,
+      }));
     else
       setForm((current) => ({
         ...current,
@@ -126,8 +132,16 @@ export function NewThreadModal({
     setSubmitting(true);
     setError("");
     try {
+      // Codex 的空/"default" 都视同未指定：让后端用供应商默认，而不是把字面量发给 runtime。
+      const codexModel =
+        agentId === "codex"
+          ? form.model.trim() === "" || form.model.trim() === "default"
+            ? undefined
+            : form.model.trim()
+          : form.model;
       const payload = {
         ...form,
+        model: codexModel,
         providerId: form.providerId || undefined,
         ...(agentId === "opencode"
           ? {
@@ -206,7 +220,14 @@ export function NewThreadModal({
               <select
                 value={form.providerId}
                 onChange={(e) =>
-                  setForm({ ...form, providerId: e.target.value })
+                  setForm((current) => ({
+                    ...current,
+                    providerId: e.target.value,
+                    // 换供应商时顺手丢掉占位，避免目录卡住时误提交。
+                    ...(current.model.trim() === "default"
+                      ? { model: "" }
+                      : {}),
+                  }))
                 }
               >
                 {providers.map((p) => (

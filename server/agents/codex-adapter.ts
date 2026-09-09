@@ -80,6 +80,15 @@ const CODEX_CAPABILITIES: AgentCapabilities = {
 };
 
 const COMPACTION_TIMEOUT_MS = 10 * 60_000;
+const MODEL_CATALOG_TTL_MS = 30_000;
+
+/** Codex 没有字面量 "default" 模型：空串与占位都视同未指定，走供应商默认。 */
+function normalizeCodexModel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "default") return undefined;
+  return trimmed;
+}
 
 function stateDbOnlyUnsupported(error: unknown) {
   const message = String((error as any)?.message || error);
@@ -118,6 +127,7 @@ export class CodexAdapter extends EventEmitter {
   private historyStatus: AgentHistoryStatus;
   private historyError?: string;
   private backgroundTerminalApi?: boolean;
+  private modelCatalog = new Map<string, { at: number; models: ModelInfo[] }>();
 
   constructor(
     private store: ProviderStore,
@@ -586,6 +596,8 @@ export class CodexAdapter extends EventEmitter {
     const client = await this.ensure(providerId);
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
+    const requestedModel = normalizeCodexModel(input.model);
+    const providerModel = normalizeCodexModel(runtimeProvider.model);
     const sandbox = (input.sandbox || "workspace-write") as SandboxMode;
     const approvalPolicy = (input.approvalPolicy ||
       "on-request") as ApprovalPolicy;
@@ -593,7 +605,7 @@ export class CodexAdapter extends EventEmitter {
       "auto_review") as ApprovalsReviewer;
     const start: Record<string, unknown> = {
       cwd: this.useWsl ? windowsPathToWsl(input.cwd) : input.cwd,
-      model: input.model || runtimeProvider.model || undefined,
+      model: requestedModel || providerModel || undefined,
       modelProvider: runtimeProvider.modelProvider,
       approvalPolicy,
       approvalsReviewer,
@@ -610,7 +622,7 @@ export class CodexAdapter extends EventEmitter {
     // The runtime history can report its provider default after creation.
     // Preserve Deck's explicit thread choices before the next list refresh.
     await this.threadSettings?.update(this.id, result.thread.id, {
-      model: input.model,
+      model: requestedModel,
       reasoningEffort: input.reasoningEffort,
       personality: input.personality,
       sandbox,
@@ -623,7 +635,7 @@ export class CodexAdapter extends EventEmitter {
       {
         ...result.thread,
         name: input.name || result.thread.name,
-        model: input.model || result.thread.model,
+        model: requestedModel || result.thread.model,
         reasoningEffort: input.reasoningEffort || result.reasoningEffort,
         personality: input.personality,
         sandbox:
@@ -644,31 +656,44 @@ export class CodexAdapter extends EventEmitter {
   }
 
   async listModels(providerId: string): Promise<ModelInfo[]> {
+    const cached = this.modelCatalog.get(providerId);
+    if (cached && Date.now() - cached.at < MODEL_CATALOG_TTL_MS)
+      return cached.models.map((model) => ({ ...model }));
     const client = await this.ensure(providerId);
     const models: ModelInfo[] = [];
-    let cursor: string | undefined;
-    do {
-      const result = await client.request("model/list", {
-        cursor,
-        limit: 50,
-        includeHidden: false,
-      });
-      for (const item of result.data || []) {
-        models.push({
-          id: item.id || item.model,
-          model: item.model || item.id,
-          displayName: item.displayName || item.model || item.id,
-          hidden: item.hidden,
-          isDefault: item.isDefault,
-          defaultReasoningEffort: item.defaultReasoningEffort,
-          supportedReasoningEfforts: item.supportedReasoningEfforts,
-          supportsPersonality: item.supportsPersonality,
-          serviceTiers: item.serviceTiers,
-          defaultServiceTier: item.defaultServiceTier,
+    try {
+      let cursor: string | undefined;
+      do {
+        const result = await client.request("model/list", {
+          cursor,
+          limit: 50,
+          includeHidden: false,
         });
-      }
-      cursor = result.nextCursor || undefined;
-    } while (cursor && models.length < 200);
+        for (const item of result.data || []) {
+          models.push({
+            id: item.id || item.model,
+            model: item.model || item.id,
+            displayName: item.displayName || item.model || item.id,
+            hidden: item.hidden,
+            isDefault: item.isDefault,
+            defaultReasoningEffort: item.defaultReasoningEffort,
+            supportedReasoningEfforts: item.supportedReasoningEfforts,
+            supportsPersonality: item.supportsPersonality,
+            serviceTiers: item.serviceTiers,
+            defaultServiceTier: item.defaultServiceTier,
+          });
+        }
+        cursor = result.nextCursor || undefined;
+      } while (cursor && models.length < 200);
+    } catch (error) {
+      // 目录偶发卡住时，用未过期的上次结果顶上，避免前端被迫手输/误提交脏值。
+      if (cached?.models.length) return cached.models.map((model) => ({ ...model }));
+      throw error;
+    }
+    this.modelCatalog.set(providerId, {
+      at: Date.now(),
+      models: models.map((model) => ({ ...model })),
+    });
     return models;
   }
 
@@ -792,7 +817,8 @@ export class CodexAdapter extends EventEmitter {
     await this.ensureLoaded(providerId, threadId);
     const client = await this.ensure(providerId);
     const params: Record<string, unknown> = { threadId };
-    if (settings.model) params.model = settings.model;
+    const nextModel = normalizeCodexModel(settings.model);
+    if (nextModel) params.model = nextModel;
     if (settings.reasoningEffort) params.effort = settings.reasoningEffort;
     if (settings.personality) params.personality = settings.personality;
     if (settings.approvalPolicy)
@@ -812,7 +838,7 @@ export class CodexAdapter extends EventEmitter {
     }
     const existing = this.threads.get(threadId);
     if (existing) {
-      if (settings.model) existing.model = settings.model;
+      if (nextModel) existing.model = nextModel;
       if (settings.reasoningEffort)
         existing.reasoningEffort = settings.reasoningEffort;
       if (settings.personality) existing.personality = settings.personality;
@@ -850,7 +876,10 @@ export class CodexAdapter extends EventEmitter {
     const runtimeProvider = compileRuntimeProvider(provider);
     const params: Record<string, unknown> = {
       threadId,
-      model: source?.model || runtimeProvider.model,
+      model:
+        normalizeCodexModel(source?.model) ||
+        normalizeCodexModel(runtimeProvider.model) ||
+        undefined,
       modelProvider: runtimeProvider.modelProvider,
     };
     if (source?.sandbox) params.sandbox = source.sandbox;
@@ -898,7 +927,7 @@ export class CodexAdapter extends EventEmitter {
             result.thread.approvalsReviewer,
           ) || source?.approvalsReviewer,
         reasoningEffort: source?.reasoningEffort,
-        model: source?.model || result.thread.model,
+        model: normalizeCodexModel(source?.model) || result.thread.model,
       },
       "idle",
     );
@@ -973,11 +1002,15 @@ export class CodexAdapter extends EventEmitter {
 
     const client = await this.ensure(targetProviderId);
     const runtimeProvider = compileRuntimeProvider(target);
+    const requestedModel =
+      normalizeCodexModel(options.model) ||
+      normalizeCodexModel(runtimeProvider.model) ||
+      undefined;
     let result: any;
     try {
       result = await client.request("thread/fork", {
         threadId: sourceThreadId,
-        model: options.model || runtimeProvider.model,
+        model: requestedModel,
         modelProvider: runtimeProvider.modelProvider,
         approvalPolicy: source.approvalPolicy || "on-request",
         approvalsReviewer: source.approvalsReviewer || "user",
@@ -998,7 +1031,7 @@ export class CodexAdapter extends EventEmitter {
       );
     this.upsertThread(target, {
       ...result.thread,
-      model: options.model || runtimeProvider.model,
+      model: requestedModel || result.thread.model,
       reasoningEffort: options.reasoningEffort || source.reasoningEffort,
       sandbox:
         parseSandboxMode(
@@ -1505,7 +1538,11 @@ export class CodexAdapter extends EventEmitter {
       name: thread.name || preview.slice(0, 42),
       preview,
       cwd: thread.cwd || old?.cwd || "",
-      model: thread.model || provider.model || old?.model || "default",
+      model:
+        normalizeCodexModel(thread.model) ||
+        normalizeCodexModel(provider.model) ||
+        normalizeCodexModel(old?.model) ||
+        "default",
       status: status
         ? status
         : staleRunning

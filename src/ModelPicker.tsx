@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { api } from "./api";
-import { reasoningEffortLabel } from "./codexLabels";
+import { FALLBACK_EFFORTS, reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
 import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
@@ -14,13 +14,27 @@ const SEARCHABLE_CATALOG = 12;
  * picker paints immediately, and refresh in the background once it goes stale.
  */
 const CATALOG_TTL = 60_000;
+const CATALOG_TIMEOUT_MS = 8_000;
 const catalogCache = new Map<string, { at: number; models: ModelInfo[] }>();
 const catalogInflight = new Map<string, Promise<ModelInfo[]>>();
+
+function withTimeout<T>(task: Promise<T>, ms: number, path: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`模型目录读取超时：${path}`)),
+      ms,
+    );
+  });
+  return Promise.race([task, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
 
 function loadCatalog(path: string) {
   const running = catalogInflight.get(path);
   if (running) return running;
-  const task = api<ModelInfo[]>(path)
+  const task = withTimeout(api<ModelInfo[]>(path), CATALOG_TIMEOUT_MS, path)
     .then((list) => {
       const models = Array.isArray(list) ? list : [];
       catalogCache.set(path, { at: Date.now(), models });
@@ -63,13 +77,18 @@ export function ModelPicker({
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [manual, setManual] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState("");
   /* OpenCode model ids already carry their provider (`providerID/modelID`), so
      picking a model is picking a provider too: every surface shows the whole
      catalog as one grouped, searchable list instead of a provider step first. */
   const combinedCatalog = agentId === "opencode";
-  const selected =
-    models.find((item) => item.model === model || item.id === model) ||
-    models.find((item) => item.isDefault);
+  const effortDatalistId = useId();
+  const matched = models.find(
+    (item) => item.model === model || item.id === model,
+  );
+  // 手填了目录里没有的模型时不要回退到默认模型的 effort，否则自定义
+  // 供应商的手输模型会显示错的下拉；此时走下面的 fallback 手填入口。
+  const selected = matched || (!model ? models.find((item) => item.isDefault) : undefined);
 
   useEffect(() => {
     if (!providerId && !combinedCatalog) return;
@@ -82,7 +101,8 @@ export function ModelPicker({
     const apply = (next: ModelInfo[]) => {
       if (cancelled) return;
       setModels(next);
-      setManual(!next.length);
+      setManual(next.length === 0);
+      setCatalogError("");
       if (!model) {
         const fallback = next.find((item) => item.isDefault) || next[0];
         if (fallback)
@@ -104,10 +124,15 @@ export function ModelPicker({
     setLoading(true);
     loadCatalog(path)
       .then(apply)
-      .catch(() => {
+      .catch((error: any) => {
         if (cancelled) return;
-        setModels([]);
-        setManual(true);
+        setCatalogError(String(error?.message || "模型目录读取失败"));
+        // 卡住/超时时沿用已渲染的旧列表（cached paint），只有真没列表才切手输，
+        // 避免把用户已选模型冲掉或被迫提交脏值。
+        if (!catalogCache.get(path)?.models.length) {
+          setModels([]);
+          setManual(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -152,15 +177,20 @@ export function ModelPicker({
     ? !manual && models.length > 1
     : !manual && models.length > SEARCHABLE_CATALOG;
   /* Switching models should not silently reset the effort the user picked, so
-     keep it whenever the new model offers the same variant. */
+     keep it whenever the new model offers the same variant. Models without a
+     catalog entry (custom providers / manual input) keep the current value;
+     the backend forwards it as-is. */
   const effortFor = (next: ModelInfo | undefined) => {
-    const efforts = next?.supportedReasoningEfforts || [];
-    if (efforts.some((item) => item.reasoningEffort === reasoningEffort))
+    const list = next?.supportedReasoningEfforts || [];
+    if (list.some((item) => item.reasoningEffort === reasoningEffort))
       return reasoningEffort;
-    return (
-      next?.defaultReasoningEffort || efforts[0]?.reasoningEffort || ""
-    );
+    if (list.length === 0) return reasoningEffort;
+    return next?.defaultReasoningEffort || list[0]?.reasoningEffort || "";
   };
+  // 目录无 effort 声明时 codex/opencode 补手填入口（自定义模型如
+  // dstest/deepseek-v4.1-flash-expires-on-0910 无 variants 元数据）；claude 无 effort。
+  const showFallbackEffort =
+    (agentId === "codex" || agentId === "opencode") && efforts.length === 0;
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
@@ -174,7 +204,7 @@ export function ModelPicker({
             onChange={(e) =>
               onChange({ model: e.target.value, reasoningEffort })
             }
-            placeholder={loading ? "正在读取模型目录…" : "模型 ID"}
+            placeholder={loading ? "正在读取模型目录…" : "模型 ID（目录不可用时可手填，留空用供应商默认）"}
           />
         ) : searchable ? (
           <SearchablePicker
@@ -245,7 +275,12 @@ export function ModelPicker({
           </button>
         )}
       </label>
-      {efforts.length > 0 && (
+      {catalogError && !compact && (
+        <small className="toolbar-hint" title={catalogError}>
+          模型目录暂不可用，已保留上次结果；可手填或留空用供应商默认
+        </small>
+      )}
+      {efforts.length > 0 ? (
         <label className={compact ? "toolbar-select" : undefined}>
           {compact ? (
             <span className="toolbar-field-label">推理</span>
@@ -272,6 +307,34 @@ export function ModelPicker({
             ))}
           </select>
         </label>
+      ) : (
+        showFallbackEffort && (
+          <label className={compact ? "toolbar-select" : undefined}>
+            {compact ? (
+              <span className="toolbar-field-label">推理</span>
+            ) : (
+              "Reasoning effort"
+            )}
+            <input
+              value={reasoningEffort}
+              disabled={disabled}
+              aria-label="Reasoning effort"
+              title="Reasoning effort（目录无声明时可手填，留空用默认）"
+              list={effortDatalistId}
+              onChange={(e) =>
+                onChange({ model, reasoningEffort: e.target.value })
+              }
+              placeholder="留空默认，可填 low/medium/high"
+            />
+            <datalist id={effortDatalistId}>
+              {FALLBACK_EFFORTS.map((value) => (
+                <option key={value} value={value}>
+                  {reasoningEffortLabel(value)}
+                </option>
+              ))}
+            </datalist>
+          </label>
+        )
       )}
     </>
   );

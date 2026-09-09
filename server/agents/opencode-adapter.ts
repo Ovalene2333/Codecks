@@ -58,6 +58,13 @@ interface OpenCodeAdapterOptions {
   initialThreads?: ThreadSummary[];
   initialDirectories?: string[];
   threadSettings?: ThreadSettingsStore;
+  /**
+   * `session.status` 的 idle 防抖时长（毫秒）。OpenCode 在一轮执行中会
+   * 短暂吐出 idle（步骤间隙/流间隙），直接翻转会导致侧栏在
+   * “运行中 / 有新回复 / 无状态”之间来回跳。idle 只做延迟落盘，
+   * 期间再有 busy 或消息活动就取消。测试可传 0 恢复成立即行为。
+   */
+  idleGraceMs?: number;
 }
 
 function windowsCommand(command: string, args: string[]) {
@@ -569,6 +576,8 @@ export class OpenCodeAdapter extends EventEmitter {
   private eventAbort?: AbortController;
   private fetcher: Fetcher;
   private processStderr = "";
+  /** sessionId → 待落盘的 idle 定时器：防抖窗口内仍算运行中。 */
+  private idleTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(private options: OpenCodeAdapterOptions = {}) {
     super();
@@ -600,6 +609,90 @@ export class OpenCodeAdapter extends EventEmitter {
           : "cached",
       capabilities: OPENCODE_CAPABILITIES,
     };
+  }
+
+  private idleGraceMs() {
+    const value = this.options.idleGraceMs;
+    if (value == null) return 2_500;
+    if (!Number.isFinite(value) || value < 0) return 0;
+    return value;
+  }
+
+  private clearIdleTimer(sessionId: string) {
+    const timer = this.idleTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.idleTimers.delete(sessionId);
+    }
+  }
+
+  private clearAllIdleTimers() {
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+  }
+
+  /** 测试用：不等防抖窗口，直接落盘所有待定的 idle。 */
+  flushIdleTimers() {
+    const pending = [...this.idleTimers.keys()];
+    for (const sessionId of pending) {
+      this.clearIdleTimer(sessionId);
+      const thread = this.threads.get(sessionId);
+      if (thread) this.applyIdle(thread);
+    }
+  }
+
+  private markBusy(thread: ThreadSummary) {
+    this.clearIdleTimer(thread.id);
+    thread.status = "running";
+    if (!thread.activeTurnId) {
+      thread.activeTurnId = randomUUID();
+      this.emitAgentEvent(thread, "turn/started", {
+        threadId: thread.id,
+        turn: { id: thread.activeTurnId, status: "inProgress" },
+      });
+    }
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+  }
+
+  private scheduleIdle(thread: ThreadSummary) {
+    // 审批等待态由 permission/question 事件驱动，idle 不得覆盖 waiting，
+    // 否则侧栏会在“待确认 / 运行中 / 有新回复”之间跳。
+    if (thread.status === "waiting") return;
+    if (thread.status === "error") return;
+    // 已是 idle 且没有残留 activeTurn 时无需再落盘；但残留 turn
+    // 说明前后端状态不一致（如重启后恢复），仍要补一次完成事件。
+    if (thread.status === "idle" && !thread.activeTurnId) return;
+    if (this.idleTimers.has(thread.id)) return;
+    const grace = this.idleGraceMs();
+    if (grace <= 0) {
+      this.applyIdle(thread);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(thread.id);
+      const current = this.threads.get(thread.id);
+      // 期间已有 busy/审批把状态搬走就不再覆盖；残留 activeTurn 除外。
+      if (!current || (current.status !== "running" && !current.activeTurnId))
+        return;
+      if (current.status === "waiting" || current.status === "error") return;
+      this.applyIdle(current);
+    }, grace);
+    // 定时器不应拖住进程退出。
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.idleTimers.set(thread.id, timer);
+  }
+
+  private applyIdle(thread: ThreadSummary) {
+    const completedTurnId = thread.activeTurnId || "opencode";
+    thread.status = "idle";
+    thread.activeTurnId = undefined;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    this.emitAgentEvent(thread, "turn/completed", {
+      threadId: thread.id,
+      turn: { id: completedTurnId, status: "completed" },
+    });
   }
 
   snapshot() {
@@ -981,6 +1074,7 @@ export class OpenCodeAdapter extends EventEmitter {
     this.process = undefined;
     this.killChild(child);
     this.online = false;
+    this.clearAllIdleTimers();
     for (const thread of this.busyThreads()) {
       thread.status = "offline";
       thread.activeTurnId = undefined;
@@ -1084,16 +1178,27 @@ export class OpenCodeAdapter extends EventEmitter {
     return next;
   }
 
-  /** Effort chosen in Deck, kept only when the model in use advertises it. */
+  /**
+   * Effort chosen in Deck. Models that advertise a variant list keep the
+   * allowlist (unknown effort is dropped, otherwise OpenCode rejects it);
+   * only custom `opencode.json` models known to the catalog but without any
+   * variant metadata pass through, so
+   * e.g. `dstest/deepseek-v4.1-flash-expires-on-0910 · medium` works.
+   * Unknown profiles/models still drop, avoiding variant sends before the
+   * provider catalog has loaded.
+   */
   private threadVariant(thread: ThreadSummary) {
     const effort = thread.reasoningEffort?.trim();
     if (!effort) return undefined;
     const parsed = this.modelInput(thread.model || thread.resolvedModel || "");
     if (!parsed) return undefined;
-    const model = this.profiles.find((item) => item.id === parsed.providerID)
-      ?.models?.[parsed.modelID];
+    const profile = this.profiles.find((item) => item.id === parsed.providerID);
+    if (!profile) return undefined;
+    const model = profile.models?.[parsed.modelID];
+    if (!model) return undefined;
     const supported = modelVariants(model);
-    if (!supported?.some((item) => item.reasoningEffort === effort))
+    if (!supported) return effort;
+    if (!supported.some((item) => item.reasoningEffort === effort))
       return undefined;
     return effort;
   }
@@ -1416,6 +1521,7 @@ export class OpenCodeAdapter extends EventEmitter {
         : undefined;
     const variant = this.threadVariant(thread);
     const turnId = randomUUID();
+    this.clearIdleTimer(thread.id);
     thread.status = "running";
     thread.activeTurnId = turnId;
     thread.lastError = undefined;
@@ -1438,6 +1544,7 @@ export class OpenCodeAdapter extends EventEmitter {
       });
     } catch (error: any) {
       const detail = String(error?.message || error || "OpenCode 命令执行失败");
+      this.clearIdleTimer(thread.id);
       thread.status = "error";
       thread.activeTurnId = undefined;
       thread.lastError = detail;
@@ -1573,6 +1680,7 @@ export class OpenCodeAdapter extends EventEmitter {
         );
     }
     const turnId = randomUUID();
+    this.clearIdleTimer(thread.id);
     thread.status = "running";
     thread.activeTurnId = turnId;
     thread.lastError = undefined;
@@ -1622,6 +1730,7 @@ export class OpenCodeAdapter extends EventEmitter {
       // 否则没有任何 session.status 事件能纠正，线程永久卡 running。
       // 若服务端实际已收下请求，后续 busy 事件会把它置回 running，自愈。
       const detail = String(error?.message || error || "OpenCode 任务发送失败");
+      this.clearIdleTimer(thread.id);
       thread.status = "error";
       thread.activeTurnId = undefined;
       thread.lastError = detail;
@@ -1840,6 +1949,7 @@ export class OpenCodeAdapter extends EventEmitter {
       return;
     }
     if (payload?.type === "session.deleted" && sessionId) {
+      this.clearIdleTimer(sessionId);
       this.threads.delete(sessionId);
       this.sessionTitles.delete(sessionId);
       this.forkChildren.delete(sessionId);
@@ -1858,26 +1968,15 @@ export class OpenCodeAdapter extends EventEmitter {
       return;
     }
     if (payload?.type === "session.status" && thread) {
-      thread.status = body.status?.type === "busy" ? "running" : "idle";
-      if (thread.status === "running" && !thread.activeTurnId) {
-        thread.activeTurnId = randomUUID();
-        this.emitAgentEvent(thread, "turn/started", {
-          threadId: thread.id,
-          turn: { id: thread.activeTurnId, status: "inProgress" },
-        });
+      if (body.status?.type === "busy") {
+        this.markBusy(thread);
+      } else {
+        this.scheduleIdle(thread);
       }
-      const completedTurnId = thread.activeTurnId || "opencode";
-      if (thread.status === "idle") thread.activeTurnId = undefined;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
-      if (thread.status === "idle")
-        this.emitAgentEvent(thread, "turn/completed", {
-          threadId: thread.id,
-          turn: { id: completedTurnId, status: "completed" },
-        });
       return;
     }
     if (payload?.type === "session.error" && thread) {
+      this.clearIdleTimer(thread.id);
       thread.status = "error";
       thread.activeTurnId = undefined;
       thread.lastError = String(
@@ -1929,6 +2028,7 @@ export class OpenCodeAdapter extends EventEmitter {
       };
       this.approvals.set(id, pending);
       if (thread) {
+        this.clearIdleTimer(thread.id);
         thread.status = "waiting";
         this.broadcast("thread.updated", thread);
       }
@@ -1967,6 +2067,7 @@ export class OpenCodeAdapter extends EventEmitter {
       };
       this.approvals.set(id, pending);
       if (thread) {
+        this.clearIdleTimer(thread.id);
         thread.status = "waiting";
         this.broadcast("thread.updated", thread);
       }
@@ -1993,6 +2094,9 @@ export class OpenCodeAdapter extends EventEmitter {
       // turn history already renders that message, so forwarding it here
       // would show it a second time as if the assistant repeated it.
       if (this.isUserPart(part)) return;
+      // 还有助手/工具活动就说明本轮没结束：取消待定的 idle，
+      // 避免步骤间隙的 idle 把侧栏先打成“有新回复/无状态”再跳回运行中。
+      if (sessionId) this.clearIdleTimer(sessionId);
       // A task tool part is the parent-side anchor of a subagent run; its
       // metadata.sessionId links the child session so later child events
       // can be replayed onto this same item as live activity.
@@ -2120,6 +2224,7 @@ export class OpenCodeAdapter extends EventEmitter {
   private offline(error: unknown) {
     this.online = false;
     this.error = error instanceof Error ? error.message : String(error);
+    this.clearAllIdleTimers();
     for (const thread of this.busyThreads()) {
       thread.status = "offline";
       thread.activeTurnId = undefined;

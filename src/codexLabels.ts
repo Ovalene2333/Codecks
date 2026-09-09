@@ -87,6 +87,19 @@ export function reasoningEffortLabel(value: string) {
   return EFFORT_LABELS[key] || value;
 }
 
+/**
+ * 目录没声明 `supportedReasoningEfforts` 时的手填候选（自定义供应商 /
+ * 手输模型）。后端本就透传 effort，这里只补 UI，不新增能力。
+ */
+export const FALLBACK_EFFORTS = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
 export function unwrapAssistantMarkup(text: string) {
   if (typeof text !== "string") return "";
   return text.replace(/<\/?(coding-cot|analysis|thinking|thought)>/gi, "");
