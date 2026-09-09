@@ -6,6 +6,7 @@ import { openCodePartToItem, OpenCodeAdapter } from "./opencode-adapter.js";
 test("OpenCode adapter binds provider models and preserves the completed turn id", async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const adapter = new OpenCodeAdapter({
+    idleGraceMs: 0,
     fetcher: (async (url, init) => {
       const value = String(url);
       calls.push({ url: value, init });
@@ -1623,4 +1624,111 @@ test("OpenCode fork 子会话保持可见，subagent 子会话仍隐藏", async 
   assert.ok(ids.includes("s1"));
   assert.ok(ids.includes("fork1"));
   assert.ok(!ids.includes("child1"));
+});
+
+test("OpenCode session.status idle 防抖：步骤间隙不闪断运行态", async () => {
+  const adapter = new OpenCodeAdapter({
+    idleGraceMs: 60_000,
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider") || value.includes("/config"))
+        return Response.json([]);
+      return Response.json([
+        { id: "s1", directory: "/work", title: "t", time: { updated: 1 } },
+      ]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "busy" } },
+  });
+  assert.equal(thread.status, "running");
+  const turnId = thread.activeTurnId;
+  assert.ok(turnId);
+
+  // 步骤间隙的单个 idle 不得直接翻成 idle / 发 turn/completed。
+  const before = events.length;
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "idle" } },
+  });
+  assert.equal(thread.status, "running");
+  assert.equal(thread.activeTurnId, turnId);
+  assert.equal(events.length, before);
+
+  // 紧接着的 busy / 消息活动会取消待定的 idle。
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "busy" } },
+  });
+  assert.equal(thread.status, "running");
+
+  // 真正结束时手动落盘，才允许 idle + turn/completed。
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "idle" } },
+  });
+  (adapter as any).flushIdleTimers();
+  assert.equal(thread.status, "idle");
+  assert.equal(thread.activeTurnId, undefined);
+  assert.deepEqual(events.at(-1)?.data?.params?.turn, {
+    id: turnId,
+    status: "completed",
+  });
+});
+
+test("OpenCode idle 不覆盖 waiting，消息活动取消待定 idle", async () => {
+  const adapter = new OpenCodeAdapter({
+    idleGraceMs: 60_000,
+    fetcher: (async () => Response.json([])) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "opencode:/work",
+    name: "t",
+    preview: "t",
+    cwd: "/work",
+    model: "default",
+    status: "running",
+    updatedAt: 1,
+    activeTurnId: "turn-1",
+  });
+  const thread: any = (adapter as any).threads.get("s1");
+
+  (adapter as any).onEvent({
+    type: "permission.updated",
+    properties: { sessionID: "s1", id: "p1", type: "edit", title: "改文件？" },
+  });
+  assert.equal(thread.status, "waiting");
+
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "idle" } },
+  });
+  assert.equal(thread.status, "waiting");
+
+  thread.status = "running";
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "idle" } },
+  });
+  assert.equal(thread.status, "running");
+  (adapter as any).onEvent({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "s1",
+      part: { id: "part-1", sessionID: "s1", type: "text", text: "hi" },
+    },
+  });
+  (adapter as any).flushIdleTimers();
+  // part 活动已取消 idle，flush 后仍保持运行中。
+  assert.equal(thread.status, "running");
 });

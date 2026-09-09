@@ -88,7 +88,13 @@ export class ThreadSettingsStore {
 
   get(agentId: AgentId, threadId: string): ThreadSettings | undefined {
     const settings = this.data.settings[agentId]?.[threadId];
-    return settings ? { ...settings } : undefined;
+    if (!settings) return undefined;
+    const next = { ...settings };
+    // 历史脏数据：Codex 没有字面量 "default" 模型，读出时直接丢掉，
+    // 避免覆盖 thread/list 回填的真实模型。
+    if (agentId === "codex" && next.model?.trim() === "default")
+      delete next.model;
+    return next;
   }
 
   async update(
@@ -99,6 +105,8 @@ export class ThreadSettingsStore {
     const next = clean(settings);
     const group = (this.data.settings[agentId] ||= {});
     const merged = { ...group[threadId], ...next };
+    if (agentId === "codex" && merged.model?.trim() === "default")
+      delete merged.model;
     if (settings.serviceTier === null) delete merged.serviceTier;
     if (settings.archived === null || settings.archived === false)
       delete merged.archived;
