@@ -29,6 +29,40 @@ export function openCodeTodos(item: any): any[] {
   return [];
 }
 
+/** Bash/shell 类工具的真实命令在 state.input.command 里，state.title 经常只是
+ * 泛称（甚至缺失），直接用它做 command 会展示成“正在执行 bash”且点开展示空。
+ * 与服务端 openCodePartToItem 保持一致：优先取 input 里的实际命令。 */
+export function openCodeShellCommand(input: unknown): string {
+  if (typeof input === "string") return input.trim();
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const row = input as Record<string, unknown>;
+  for (const key of ["command", "cmd", "script", "text", "commands"]) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      if (joined) return joined;
+    }
+  }
+  return "";
+}
+
+const OPENCODE_SHELL_TOOLS = new Set([
+  "bash",
+  "shell",
+  "exec",
+  "execute",
+  "command",
+  "run",
+  "sh",
+  "terminal",
+  "process",
+]);
+
 /** Converts a raw OpenCode message part into the shared turn item shape. */
 export function openCodePartToItem(part: any): any | undefined {
   if (!part?.type && !part?.tool) return undefined;
@@ -66,10 +100,21 @@ export function openCodePartToItem(part: any): any | undefined {
         ...(childSessionId ? { childSessionId } : {}),
       };
     }
+    const toolName = String(part.tool || "").toLowerCase();
+    const shellCommand = openCodeShellCommand(state.input);
+    const command =
+      (OPENCODE_SHELL_TOOLS.has(toolName) && shellCommand) ||
+      shellCommand ||
+      state.title ||
+      part.tool ||
+      "OpenCode 工具";
+    const description = String(
+      (state.input as any)?.description || "",
+    ).trim();
     const item: any = {
       id: String(part.id),
       type: "commandExecution",
-      command: state.title || part.tool || "OpenCode 工具",
+      command,
       status:
         state.status === "error"
           ? "failed"
@@ -80,6 +125,9 @@ export function openCodePartToItem(part: any): any | undefined {
       ...(part.tool ? { tool: part.tool } : {}),
       ...(state.input != null ? { input: state.input } : {}),
       ...(state.metadata != null ? { metadata: state.metadata } : {}),
+      ...(description && description !== String(command || "").trim()
+        ? { description }
+        : {}),
     };
     const todos = openCodeTodos(item);
     if (todos.length) item.todos = todos;
