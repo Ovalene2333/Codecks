@@ -1,6 +1,15 @@
-import { Monitor, Moon, Sparkles, Sun, ZapOff } from "lucide-react";
+import {
+  Feather,
+  Layers,
+  Monitor,
+  Moon,
+  Sparkles,
+  Sun,
+  ZapOff,
+} from "lucide-react";
 import type {
   AppearancePreferences,
+  EffectsPreference,
   MotionPreference,
   ResolvedAppearance,
   ThemePreference,
@@ -44,6 +53,26 @@ const motionOptions: {
   { value: "off", label: "关闭", detail: "停用非必要动画", icon: ZapOff },
 ];
 
+const effectsOptions: {
+  value: EffectsPreference;
+  label: string;
+  detail: string;
+  icon: typeof Monitor;
+}[] = [
+  {
+    value: "on",
+    label: "完整效果",
+    detail: "玻璃模糊、柔和阴影与环境光",
+    icon: Layers,
+  },
+  {
+    value: "off",
+    label: "省电简洁",
+    detail: "纯色表面，停用模糊与大阴影",
+    icon: Feather,
+  },
+];
+
 export function AppearanceSettingsModal({
   preferences,
   resolved,
@@ -76,9 +105,18 @@ export function AppearanceSettingsModal({
             onChange({ motion: motion as MotionPreference })
           }
         />
+        <SettingGroup
+          title="界面效果"
+          value={preferences.effects}
+          options={effectsOptions}
+          onChange={(effects) =>
+            onChange({ effects: effects as EffectsPreference })
+          }
+        />
         <p className="appearance-resolution" aria-live="polite">
           当前生效：{resolved.theme === "light" ? "浅色" : "深色"}主题 · 动画
-          {resolved.motion === "on" ? "开启" : "关闭"}
+          {resolved.motion === "on" ? "开启" : "关闭"} · 效果
+          {resolved.effects === "on" ? "完整" : "省电"}
         </p>
       </div>
     </Modal>
