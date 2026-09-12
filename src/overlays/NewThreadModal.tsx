@@ -143,23 +143,20 @@ export function NewThreadModal({
         ...form,
         model: codexModel,
         providerId: form.providerId || undefined,
-        ...(agentId === "opencode"
-          ? {
-              reasoningEffort: form.reasoningEffort || undefined,
+        ...(agentId === "codex"
+          ? { permissionMode: undefined }
+          : {
+              // 非 Codex agent 不使用 codex 的权限/沙箱/personality 字段。
+              reasoningEffort:
+                agentId === "opencode"
+                  ? form.reasoningEffort || undefined
+                  : undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
               approvalsReviewer: undefined,
-            }
-          : agentId === "claude"
-            ? {
-                reasoningEffort: undefined,
-                personality: undefined,
-                sandbox: undefined,
-                approvalPolicy: undefined,
-                approvalsReviewer: undefined,
-              }
-            : { permissionMode: undefined }),
+              ...(agentId === "claude" ? {} : { permissionMode: undefined }),
+            }),
         personality: form.personality || undefined,
       };
       const thread = await post(`/agents/${agentId}/threads`, payload);
@@ -321,24 +318,59 @@ export function NewThreadModal({
             </label>
           </>
         ) : (
-          <ModelPicker
-            agentId="opencode"
-            providerId=""
-            model={form.model}
-            reasoningEffort={form.reasoningEffort}
-            onChange={(next) =>
-              setForm((current) => ({
-                ...current,
-                model: next.model,
-                reasoningEffort: next.reasoningEffort,
-                // The model id carries the provider, so the thread keeps
-                // pointing at the right one without a second picker.
-                ...(opencodeProviderId(next.model)
-                  ? { providerId: opencodeProviderId(next.model) }
-                  : {}),
-              }))
-            }
-          />
+          <>
+            <ModelPicker
+              agentId={agentId}
+              providerId=""
+              model={form.model}
+              reasoningEffort={
+                agentId === "opencode" ? form.reasoningEffort : ""
+              }
+              onChange={(next) =>
+                setForm((current) => ({
+                  ...current,
+                  model: next.model,
+                  ...(agentId === "opencode"
+                    ? {
+                        reasoningEffort: next.reasoningEffort,
+                        // The model id carries the provider, so the thread keeps
+                        // pointing at the right one without a second picker.
+                        ...(opencodeProviderId(next.model)
+                          ? { providerId: opencodeProviderId(next.model) }
+                          : {}),
+                      }
+                    : {}),
+                }))
+              }
+            />
+            {agentId === "opencode" ? null : profilesLoading ||
+              profiles.length > 1 ? (
+              <label>
+                配置档
+                <select
+                  value={form.providerId}
+                  disabled={profilesLoading}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      providerId: event.target.value,
+                    }))
+                  }
+                >
+                  {profilesLoading ? (
+                    <option value="">正在读取…</option>
+                  ) : (
+                    profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                        {profile.current ? "（当前）" : ""}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+            ) : null}
+          </>
         )}
         <label>
           工作目录

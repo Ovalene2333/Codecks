@@ -95,8 +95,10 @@ export function ModelPicker({
     let cancelled = false;
     const path = combinedCatalog
       ? `/agents/${agentId}/models`
-      : agentId === "claude"
-        ? `/agents/${agentId}/models?providerId=${encodeURIComponent(providerId)}`
+      : agentId !== "codex"
+        ? // claude 的 providerId 是配置档 id，ACP agent 是 `${id}-current` 占位；
+          // 两者都查 agent 自己的模型目录。
+          `/agents/${agentId}/models?providerId=${encodeURIComponent(providerId)}`
         : `/providers/${providerId}/models`;
     const apply = (next: ModelInfo[]) => {
       if (cancelled) return;

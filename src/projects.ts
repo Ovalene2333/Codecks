@@ -200,7 +200,9 @@ export function filterProjectGroups(
                 ? "Claude Code"
                 : thread.agentId === "opencode"
                   ? "OpenCode"
-                  : "Codex";
+                  : !thread.agentId || thread.agentId === "codex"
+                    ? "Codex"
+                    : thread.agentId;
             return (
               Boolean(options?.matchingThread?.(thread)) ||
               thread.name.toLowerCase().includes(needle) ||

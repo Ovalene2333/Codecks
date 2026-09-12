@@ -11,7 +11,7 @@ import {
 import { api, post } from "../api";
 import { threadActionPath } from "../agents";
 import { basename } from "../format";
-import type { ActiveTask, ThreadSummary } from "../types";
+import type { ActiveTask, AgentId, ThreadSummary } from "../types";
 import { ConfirmDialog, Drawer } from "../ui";
 
 function elapsed(startedAt: number, now: number) {
@@ -37,7 +37,7 @@ export function TaskCenter({
 }: {
   scopeThreadId?: string;
   statusVersion: string;
-  onOpenThread: (agentId: "codex" | "claude" | "opencode", threadId: string) => void;
+  onOpenThread: (agentId: AgentId, threadId: string) => void;
   onToast: (message: string) => void;
   onClose: () => void;
 }) {

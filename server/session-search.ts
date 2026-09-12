@@ -1,13 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
-import type { ThreadSummary } from "./types.js";
+import type { AgentId, ThreadSummary } from "./types.js";
 
 const SCHEMA_VERSION = 1;
 const MAX_ITEM_CHARS = 100_000;
 const MAX_THREAD_CHARS = 2_000_000;
 
 export interface SessionSearchMatch {
-  agentId: "codex" | "claude" | "opencode";
+  agentId: AgentId;
   threadId: string;
   turnId?: string;
   itemId?: string;

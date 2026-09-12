@@ -7,6 +7,7 @@ import {
   Pin,
   Plus,
 } from "lucide-react";
+import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
 import type { Provider, SessionSearchMatch, ThreadSummary } from "../types";
@@ -122,15 +123,10 @@ export function ProjectGroupView({
         const searchMatch = searchMatches.get(
           `${thread.agentId || "codex"}:${thread.id}`,
         );
-        const agentLabel =
-          thread.agentId === "claude"
-            ? "Claude"
-            : thread.agentId === "opencode"
-              ? "OpenCode"
-              : "Codex";
+        const agentLabel = agentShortName(thread.agentId);
         const providerLabel =
           provider?.name ||
-          (thread.agentId === "claude" || thread.agentId === "opencode"
+          (thread.agentId && thread.agentId !== "codex"
             ? ""
             : thread.providerId);
         return (
