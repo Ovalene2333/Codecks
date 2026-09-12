@@ -7,7 +7,8 @@ import type {
   ThreadSummary,
 } from "./types";
 
-export type AgentId = "codex" | "claude" | "opencode";
+export type { AgentId } from "./types";
+import type { AgentId } from "./types";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -49,23 +50,37 @@ export function capabilitiesFor(
   value?: { agentId?: AgentId },
 ) {
   const id = agentIdFor(value);
-  return (
-    agents?.find((agent) => agent.id === id)?.capabilities ||
-    (id === "codex"
-      ? CODEX_CAPABILITIES
-      : {
-          ...CODEX_CAPABILITIES,
-          archive: false,
-          delete: false,
-          fork: false,
-          mcp: false,
-          models: false,
-          review: false,
-          sessionSettings: false,
-          shell: false,
-          skills: false,
-        })
-  );
+  if (agents?.find((agent) => agent.id === id)?.capabilities)
+    return agents.find((agent) => agent.id === id)!.capabilities;
+  if (id === "codex") return CODEX_CAPABILITIES;
+  if (id === "claude" || id === "opencode")
+    return {
+      ...CODEX_CAPABILITIES,
+      archive: false,
+      delete: false,
+      fork: false,
+      mcp: false,
+      models: false,
+      review: false,
+      sessionSettings: false,
+      shell: false,
+      skills: false,
+    };
+  // 未知/ACP agent：descriptor 未就绪前的保守能力集。
+  return {
+    approvals: true,
+    archive: true,
+    delete: false,
+    fork: false,
+    images: false,
+    interrupt: true,
+    mcp: false,
+    models: false,
+    review: false,
+    sessionSettings: false,
+    shell: false,
+    skills: false,
+  };
 }
 
 export function agentName(
@@ -75,8 +90,22 @@ export function agentName(
   const id = agentIdFor(value);
   return (
     agents?.find((agent) => agent.id === id)?.name ||
-    (id === "claude" ? "Claude Code" : id === "opencode" ? "OpenCode" : "Codex")
+    (id === "claude"
+      ? "Claude Code"
+      : id === "opencode"
+        ? "OpenCode"
+        : id === "codex"
+          ? "Codex"
+          : agentShortName(id))
   );
+}
+
+/** 没有 agents 列表可用的场景（侧栏 badge 等）：按 id 给可读短名。 */
+export function agentShortName(id: string | undefined) {
+  if (!id || id === "codex") return "Codex";
+  if (id === "claude") return "Claude";
+  if (id === "opencode") return "OpenCode";
+  return id.slice(0, 1).toUpperCase() + id.slice(1);
 }
 
 export function providerForThread(
