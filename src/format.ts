@@ -1,3 +1,5 @@
+import type { AgentId } from "./types";
+
 export const fmtTime = (time: number) => {
   if (!Number.isFinite(time)) return "";
   try {
@@ -83,7 +85,7 @@ export function formatTokens(value?: number) {
 }
 
 export function sessionKey(thread: {
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   providerId: string;
   id: string;
 }) {

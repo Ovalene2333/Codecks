@@ -15,6 +15,10 @@ Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入�
 | `server/agents/codex-adapter.ts`  | Codex app-server 协议、会话、审批和供应商隔离   |
 | `server/agents/claude-adapter.ts` | Claude Agent SDK 会话、流式事件、审批和生命周期 |
 | `server/agents/claude-history.ts` | Claude JSONL 消息树主链与通用 Turn 归一化       |
+| `server/agents/opencode-adapter.ts` | OpenCode serve HTTP API 会话与审批            |
+| `server/agents/acp-client.ts`     | ACP agent 子进程与 stdio JSON-RPC 传输          |
+| `server/agents/acp-adapter.ts`    | 通用 ACP adapter：一个实现驱动所有 ACP CLI      |
+| `server/agents/acp-agents.ts`     | ACP descriptor 内置表与用户配置加载             |
 | `server/manager.ts`               | 旧导入路径的兼容导出，不应再加入实现            |
 | `server/codex-client.ts`          | Codex app-server 子进程与 JSON-RPC 传输         |
 | `server/index.ts`                 | HTTP/WebSocket 边界和 adapter 组装              |
@@ -27,9 +31,14 @@ server/index.ts
     -> AgentAdapter
       -> CodexAdapter -> CodexClient
       -> ClaudeAdapter -> Claude Agent SDK
+      -> OpenCodeAdapter -> opencode serve
+      -> AcpAdapter -> AcpClient -> <cli> acp（任意 ACP 子进程）
 ```
 
 `AgentRegistry` 不应导入任何 Codex、Claude 或 OpenCode 私有类型。
+`AgentId` 是开放的 `string`：内置 adapter 固定用 `codex` / `claude` /
+`opencode`，ACP adapter 用 descriptor 声明的自定义 id（`devin`、`kimi`…）。
+路由层只允许 `^[a-z0-9][a-z0-9_-]*$` 形态的 id。
 
 ## AgentAdapter 契约
 
@@ -167,8 +176,86 @@ serve 没有原生归档接口）：归档态写进 `thread-settings.json` 的 `
 前端强制二次确认并用服务端 `revert.summary` 核验展示。没有实现的 fork、review、shell 和
 MCP/Skills 枚举保持关闭。
 
+## 通用 ACP Adapter
+
+[Agent Client Protocol](https://agentclientprotocol.com) 是 CLI agent 的
+标准 JSON-RPC over stdio 协议（`initialize`、`session/*`）。
+`AcpAdapter` 是它的通用 client 实现：任何支持 ACP 的 CLI 只需要一份
+descriptor，不需要再写专有 adapter。
+
+### Descriptor 格式
+
+内置表在 `server/agents/acp-agents.ts` 的 `BUILTIN_ACP_AGENTS`（devin、
+kimi、goose、copilot、droid 等）。用户可在 `DATA_DIR/acp-agents.json`
+里覆盖同 id 字段或注册新 agent（格式与 `AcpAgentSpec` 相同，
+`acp-agents.example.json` 是自动生成的样例）：
+
+```jsonc
+{
+  "agents": [
+    {
+      "id": "my-agent",          // ^[a-z0-9][a-z0-9_-]*$，不得占用内置 id
+      "name": "My Agent",        // UI 显示名
+      "command": "my-agent",     // 可执行文件（Windows .cmd shim 自动包装）
+      "args": ["acp"],
+      "env": { "MY_KEY": "…" },  // 附加子进程环境，不进快照/事件
+      "listSessions": {           // 可选：无 session/list 能力时的历史列举命令
+        "args": ["list", "--format", "json"],
+        "perDirectory": true      // 每个已知项目目录各执行一次（devin list）
+      },
+      "models": [{ "id": "sonnet", "name": "Sonnet" }]  // 可选静态模型目录
+    }
+  ]
+}
+```
+
+### 协议映射
+
+| ACP | Deck |
+| --- | --- |
+| `initialize` | 能力探测（`loadSession`、image、`sessionCapabilities`） |
+| `session/new`（cwd） | `createThread` |
+| `session/prompt` | `sendTurn`，异步长跑请求 |
+| `session/cancel` | `interrupt` |
+| `session/request_permission` | `approval.requested`；allow_once→`accept`、allow_always→`acceptForSession`、reject→`decline`、无选项/`cancel`→`cancelled` |
+| `session/update` | `agent.event`：`agent_message_chunk`→`item/agentMessage/delta`、`agent_thought_chunk`→reasoning item、`tool_call`/`tool_call_update`→commandExecution/fileChange/dynamicToolCall（`__raw` 保留原始 toolCall）、`plan`→`extension{kind:"todo"}`、`current_mode_update`→`thread.sessionMode`、`available_commands_update`→`listSessionCommands`、`session_info_update`→会话标题、`usage_update`→`tokenUsage` |
+| `session/set_mode` | `updateThreadSettings{sessionMode}` |
+| `session/set_config_option` | 模型切换（`category:"model"` 的 select 选项） |
+| `session/list` / `session/load` / `session/resume` | 历史列举与回放；不存在时降级到 `listSessions` 命令或仅保留缓存摘要 |
+| `session/delete` | `deleteThread`（有能力时才声明 `delete`） |
+
+`session/load` 的回放走同一套 `session/update` 归一化，但只累积
+`turns[]` 不发流式事件；`user_message_chunk` 开启新 turn。
+
+### 能力规则
+
+ACP 能力从 `initialize` 响应动态声明：approval/interrupt 恒开；
+`images` 看 `promptCapabilities.image`；`delete` 看
+`sessionCapabilities.delete`；`models` 看 model configOption 或静态
+`models[]`；`archive` 是 Deck 侧软归档。fork/review/shell/mcp/skills
+恒为 `false`。`fs/*` 与 `terminal/*` 反向请求未声明能力，一律回
+JSON-RPC `-32601`。
+
+### 进程生命周期
+
+`AcpClient` 与 `CodexClient` 同一套模式：Windows 下 `*.cmd` shim 经
+`cmd.exe /d /s /c` 包装、PATH 里找到 `.exe` 时直接 spawn；stderr 收成
+最近 8KB 附加到错误；进程退出把所有 pending request 判失败并把运行中
+会话标 `error`；`stop()` 先回 `cancelled` 再 `stopChildProcess` 杀整棵
+进程树。
+
+### 测试
+
+`server/agents/acp-adapter.test.ts` 用 PassThrough stdin/stdout 桩进程
+覆盖 initialize、session/new、流式 chunk、tool_call、permission 往返、
+cancel、load 回放、resume、无历史能力降级、畸形行和进程退出。新增
+descriptor 时若改变了启动参数形态，需同步补 `acpLaunchSpec` 测试。
+
 ## 新增 Adapter 的顺序
 
+0. **先检查目标 CLI 是否支持 ACP**。支持时只需在
+   `BUILTIN_ACP_AGENTS` 或 `DATA_DIR/acp-agents.json` 加 descriptor，
+   不需要实现 `AgentAdapter`。需要 CLI 私有协议时再走下面的完整流程。
 1. 扩展 `AgentId`，定义保守的 capability matrix。
 2. 新建独立 adapter 文件，不修改 Codex adapter 来兼容新协议。
 3. 为进程启动、历史解析、事件归一化和审批回包添加 fixture 测试。
@@ -191,7 +278,9 @@ MCP/Skills 枚举保持关闭。
 - 前端：`src/session/adapters/` 按 `agentId` 提供 `AgentUiAdapter`，
   `TurnItem` 渲染前先问适配器，未认领的条目回落到通用渲染与
   `UnknownItem` 兜底；`streaming.ts` 负责把 OpenCode 的
-  `item/updated` 原生 part 快照转成共享 item 形状。
+  `item/updated` 原生 part 快照转成共享 item 形状。没有注册过
+  `agentId` 的条目走 `acp.tsx` 兜底（渲染 ACP 的 `kind:"todo"`
+  计划面板），再往下才是 `UnknownItem`。
 - 纯转换逻辑放 `adapters/native-parts.ts`，供 streaming 与各适配器共用。
 
 ## 测试

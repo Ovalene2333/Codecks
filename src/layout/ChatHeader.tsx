@@ -9,6 +9,13 @@ import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
 
+function agentBadgeLabel(agentId: string | undefined, agentName: string) {
+  if (agentId === "claude") return "Claude";
+  if (agentId === "opencode") return "OpenCode";
+  if (!agentId || agentId === "codex") return "Codex";
+  return agentName;
+}
+
 export function ChatHeader({
   thread,
   provider,
@@ -50,7 +57,7 @@ export function ChatHeader({
               className={`mobile-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
               title={`${agentName} 任务`}
             >
-              {thread.agentId === "claude" ? "Claude" : thread.agentId === "opencode" ? "OpenCode" : "Codex"}
+              {agentBadgeLabel(thread.agentId, agentName)}
             </span>
             {pendingCount > 0 && (
               <mark className="pending-count">{pendingCount}</mark>
@@ -77,7 +84,7 @@ export function ChatHeader({
             className={`chat-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
             title={`${agentName} 任务`}
           >
-            {thread.agentId === "claude" ? "Claude" : thread.agentId === "opencode" ? "OpenCode" : "Codex"}
+            {agentBadgeLabel(thread.agentId, agentName)}
           </span>
           <div
             className="desktop-context"
@@ -91,7 +98,9 @@ export function ChatHeader({
               showUnknown
             />
           </div>
-          {thread.agentId !== "opencode" && (
+          {(!thread.agentId ||
+            thread.agentId === "codex" ||
+            thread.agentId === "claude") && (
             <button
               className="provider-switch secondary"
               onClick={onSwitchProvider}
@@ -145,7 +154,11 @@ export function ChatHeader({
           title={provider?.name || "供应商未知"}
         >
           {provider?.name ||
-            (thread.agentId === "claude" ? "Claude 中转" : thread.agentId === "opencode" ? "OpenCode" : "供应商未知")}
+            (thread.agentId === "claude"
+              ? "Claude 中转"
+              : (thread.agentId || "codex") === "codex"
+                ? "供应商未知"
+                : agentName)}
         </span>
       </div>
     </header>

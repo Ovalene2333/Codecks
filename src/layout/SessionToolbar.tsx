@@ -45,6 +45,7 @@ export function SessionToolbar({
     approvalsReviewer?: ApprovalsReviewer;
     permissionMode?: ClaudePermissionMode;
     personality?: Personality;
+    sessionMode?: string;
   }) => void;
   onCompact: () => void;
   variant?: "inline" | "panel";
@@ -84,7 +85,36 @@ export function SessionToolbar({
               ))}
             </select>
           </label>
-        ) : thread.agentId === "opencode" ? null : (
+        ) : thread.agentId === "opencode" ? null : thread.agentId &&
+            thread.agentId !== "codex" ? (
+          // ACP 等通用 agent：没有 codex 沙箱/审批语义；有 sessionModes 时给
+          // 模式切换（对应 ACP session/set_mode）。
+          thread.sessionModes?.length ? (
+            <label className="toolbar-select">
+              <span className="toolbar-field-label">模式</span>
+              <select
+                aria-label="Session mode"
+                title="Session mode"
+                disabled={locked}
+                value={thread.sessionMode || ""}
+                onChange={(event) =>
+                  onSettings({ sessionMode: event.target.value })
+                }
+              >
+                {!thread.sessionMode && <option value="">默认</option>}
+                {thread.sessionModes.map((mode) => (
+                  <option
+                    key={mode.id}
+                    value={mode.id}
+                    title={mode.description || undefined}
+                  >
+                    {mode.name || mode.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null
+        ) : (
           <>
             <label className="toolbar-select">
               <span className="toolbar-field-label">沙箱</span>
