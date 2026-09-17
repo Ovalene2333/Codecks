@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  AgentId,
   ClaudePermissionMode,
   ApprovalPolicy,
   ApprovalsReviewer,
@@ -287,7 +288,7 @@ export class ProjectStore {
   }
 
   async rememberCreate(input: {
-    agentId?: "codex" | "claude" | "opencode";
+    agentId?: AgentId;
     cwd: string;
     providerId?: string;
     model?: string;

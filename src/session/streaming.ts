@@ -1,4 +1,5 @@
 import { displayText } from "../format";
+import type { AgentId } from "../types";
 import { openCodePartToItem } from "./adapters/native-parts";
 
 export interface StreamedAgentMessage {
@@ -220,7 +221,7 @@ export function collectStreamedAgentMessages(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
 ): StreamedAgentMessage[] {
   return collectStreamed(events, providerId, threadId, activeTurnId, agentId)
     .messages;
@@ -231,7 +232,7 @@ export function collectStreamedTurnItems(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
 ): StreamedTurnItem[] {
   return collectStreamed(events, providerId, threadId, activeTurnId, agentId)
     .items;
@@ -244,7 +245,7 @@ export function collectStreamed(
   providerId: string,
   threadId: string,
   activeTurnId?: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
 ): { messages: StreamedAgentMessage[]; items: StreamedTurnItem[] } {
   const messages = new Map<string, StreamedAgentMessage>();
   const items = new Map<string, StreamedTurnItem>();

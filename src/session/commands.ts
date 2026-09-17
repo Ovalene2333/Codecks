@@ -1,4 +1,4 @@
-import type { ReviewTarget } from "../types";
+import type { AgentId, ReviewTarget } from "../types";
 
 export type ComposerCommand =
   | { kind: "compact" }
@@ -19,6 +19,7 @@ export type ComposerCommand =
   | { kind: "review"; target: ReviewTarget }
   | { kind: "shell"; command: string }
   | { kind: "opencode-command"; command: string; args: string }
+  | { kind: "agent-command"; command: string; args: string }
   | { kind: "new-session" }
   | { kind: "sessions" }
   | { kind: "thinking" }
@@ -61,7 +62,7 @@ export function opensCommandPanel(name: string) {
 
 export function parseComposerCommand(
   raw: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
 ): ComposerCommand | undefined {
   const text = raw.trim();
   if (text.startsWith("!")) {
@@ -74,6 +75,9 @@ export function parseComposerCommand(
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
   if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
+  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释。
+  if (agentId !== "codex" && agentId !== "claude")
+    return { kind: "agent-command", command: key, args: arg };
   if (key === "compact") return { kind: "compact" };
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
@@ -171,7 +175,7 @@ function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
 
 export function matchingSlashCommands(
   text: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
   extraCommands: Array<{ name: string; hint?: string }> = [],
 ) {
   const value = text.trim();
@@ -179,6 +183,23 @@ export function matchingSlashCommands(
   if (value === "!") return SLASH_COMMANDS.filter((item) => item.name === "!");
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
+  // ACP 等通用 agent：只补全 agent 自报的 availableCommands。
+  if (agentId !== "codex" && agentId !== "claude" && agentId !== "opencode") {
+    const seen = new Set<string>();
+    const items: SlashMenuItem[] = [];
+    for (const extra of extraCommands) {
+      const raw = String(extra?.name || "").trim();
+      if (!raw) continue;
+      const name = raw.startsWith("/") ? raw : `/${raw}`;
+      if (!name.toLowerCase().startsWith(query) || seen.has(name)) continue;
+      seen.add(name);
+      items.push({
+        name,
+        hint: String(extra?.hint || "Agent 命令").slice(0, 80),
+      });
+    }
+    return items;
+  }
   if (agentId === "opencode") {
     const seen = new Set<string>();
     const items: SlashMenuItem[] = [];

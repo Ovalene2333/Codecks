@@ -1437,11 +1437,15 @@ export function App() {
             },
             {
               label: "压缩上下文",
-              disabled: sheet.agentId === "claude",
+              disabled:
+                (sheet.agentId || "codex") !== "codex" &&
+                sheet.agentId !== "opencode",
               onClick: () =>
-                post(`/threads/${sheet.providerId}/${sheet.id}/compact`).then(
-                  refresh,
-                ),
+                post(
+                  sheet.agentId === "opencode"
+                    ? `${threadPath(sheet)}/compact`
+                    : `/threads/${sheet.providerId}/${sheet.id}/compact`,
+                ).then(refresh),
             },
             {
               label: "审查当前改动",
@@ -1475,7 +1479,10 @@ export function App() {
             {
               label: "切换供应商",
               disabled:
-                sheet.status === "running" || sheet.status === "waiting",
+                sheet.status === "running" ||
+                sheet.status === "waiting" ||
+                ((sheet.agentId || "codex") !== "codex" &&
+                  sheet.agentId !== "claude"),
               onClick: () => setSwitchThread(sheet),
             },
             {
