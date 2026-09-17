@@ -611,6 +611,47 @@ test("malformed JSON lines are logged and the protocol keeps working", async () 
   assert.ok(logs.some((line) => line.includes("无法解析")));
 });
 
+test("outbound JSON-RPC messages carry jsonrpc 2.0", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-j" }),
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "D:\\proj" });
+  assert.ok(fake.seen.length > 0);
+  assert.ok(fake.seen.every((msg) => msg.jsonrpc === "2.0"));
+});
+
+test("id:null error rejects the in-flight request instead of timing out", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": () => {
+        // 不响应：模拟严格 agent 拒绝解析后不回正常响应的场景。
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  const client = (adapter as any).client;
+  const logs: string[] = [];
+  client.on("log", (line: string) => logs.push(line));
+  await adapter.startAll();
+  const request = client.request("session/new", {
+    cwd: "D:\\proj",
+    mcpServers: [],
+  });
+  // 严格 agent 对畸形请求回 id:null 的 Parse error。
+  fake.child.stdout.write(
+    `${JSON.stringify({
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    })}\n`,
+  );
+  await assert.rejects(request, /Parse error/);
+  assert.ok(logs.some((line) => line.includes("Parse error")));
+});
+
 test("process exit mid-turn fails the turn and marks thread offline", async () => {
   const fake = fakeAcpProcess({
     routes: {
