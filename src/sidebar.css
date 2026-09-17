@@ -419,6 +419,16 @@
 .mode-badge {
   opacity: 0.8;
 }
+.thread-list .thread-meta .lock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+}
+.thread-list .lock-badge svg {
+  width: 10px;
+  height: 10px;
+}
 .thread-list .thread-meta,
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {

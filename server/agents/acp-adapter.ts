@@ -167,6 +167,22 @@ function itemStatus(status: string | undefined) {
   return "inProgress";
 }
 
+/**
+ * session/list 项的锁定标记。devin 放在 `_meta["cognition.ai/isLocked"]`；
+ * 直接给 locked/isLocked/is_locked 字段的 agent（或 listSessions 命令的
+ * JSON 行）一并识别。误配 `unlocked` 之类的键不会命中。
+ */
+function sessionLockedOf(info: Record<string, unknown>): boolean {
+  for (const key of ["locked", "isLocked", "is_locked"])
+    if (info[key] === true) return true;
+  const meta = info._meta;
+  if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+    for (const [key, value] of Object.entries(meta))
+      if (value === true && /(?:^|\/)(?:is)?locked$/i.test(key)) return true;
+  }
+  return false;
+}
+
 export class AcpAdapter extends EventEmitter {
   readonly id: AgentId;
   private client: AcpClient;
@@ -415,23 +431,31 @@ export class AcpAdapter extends EventEmitter {
       if (session.live) return;
       const caps = this.client.agentCapabilities;
       const canResume = Boolean(caps.sessionCapabilities?.resume);
-      if (canResume) {
-        const result = (await this.client.request("session/resume", {
-          sessionId: thread.id,
-          cwd: thread.cwd,
-          mcpServers: [],
-        })) as AcpNewSessionResult;
-        this.applySessionInfo(thread, session, result);
-        session.live = true;
-        return;
+      try {
+        if (canResume) {
+          const result = (await this.client.request("session/resume", {
+            sessionId: thread.id,
+            cwd: thread.cwd,
+            mcpServers: [],
+          })) as AcpNewSessionResult;
+          this.applySessionInfo(thread, session, result);
+          session.live = true;
+          if (thread.locked) {
+            thread.locked = undefined;
+            this.broadcast("thread.updated", thread);
+          }
+          return;
+        }
+        if (caps.loadSession) {
+          await this.loadSession(thread, session);
+          return;
+        }
+        throw new Error(
+          `${this.spec.name} 不支持恢复历史会话（缺少 loadSession/resume 能力）`,
+        );
+      } catch (error) {
+        throw this.translateSessionError(thread, error);
       }
-      if (caps.loadSession) {
-        await this.loadSession(thread, session);
-        return;
-      }
-      throw new Error(
-        `${this.spec.name} 不支持恢复历史会话（缺少 loadSession/resume 能力）`,
-      );
     })().finally(() => {
       this.liveLoading.delete(thread.id);
     });
@@ -458,6 +482,10 @@ export class AcpAdapter extends EventEmitter {
         session.turns = replay.turns;
         this.applySessionInfo(thread, session, result);
         session.live = true;
+        if (thread.locked) {
+          thread.locked = undefined;
+          this.broadcast("thread.updated", thread);
+        }
         return session.turns;
       } finally {
         session.replay = undefined;
@@ -553,8 +581,13 @@ export class AcpAdapter extends EventEmitter {
     if (!busy && this.client.online && this.client.agentCapabilities.loadSession) {
       try {
         await this.loadSession(thread, session);
-      } catch {
-        // 回放失败退回本地累积的 turn（进程内新建的会话在磁盘上可能还没历史）。
+      } catch (error) {
+        // 回放失败退回本地累积的 turn（进程内新建的会话在磁盘上可能还没
+        // 历史）；锁冲突顺带把标记打上，让 UI 显示「占用中」。
+        if (this.isSessionLockedError(error) && !thread.locked) {
+          thread.locked = true;
+          this.broadcast("thread.updated", thread);
+        }
       }
     }
     return {
@@ -612,7 +645,11 @@ export class AcpAdapter extends EventEmitter {
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("运行中的会话不能删除");
     if (this.client.online && this.client.agentCapabilities.sessionCapabilities?.delete)
-      await this.client.request("session/delete", { sessionId: threadId });
+      try {
+        await this.client.request("session/delete", { sessionId: threadId });
+      } catch (error) {
+        throw this.translateSessionError(thread, error);
+      }
     this.sessions.delete(threadId);
     this.threads.delete(threadId);
     await this.options.threadSettings?.remove(this.id, threadId);
@@ -779,7 +816,11 @@ export class AcpAdapter extends EventEmitter {
         this.failTurn(thread, turnId, `${this.spec.name} 拒绝了该请求`);
       else this.completeTurn(thread, turnId, "completed");
     } catch (error: any) {
-      this.failTurn(thread, turnId, error?.message || String(error));
+      this.failTurn(
+        thread,
+        turnId,
+        this.translateSessionError(thread, error).message,
+      );
     } finally {
       session.turnId = undefined;
       for (const [id, approval] of this.approvals)
@@ -1457,6 +1498,8 @@ export class AcpAdapter extends EventEmitter {
               Date.now(),
             sessionId: id,
             controlMode: live ? "managed" : "history",
+            // 本进程内已打开的会话，锁就在我们手里，不算被占用。
+            locked: live ? undefined : sessionLockedOf(info) || undefined,
             ...this.options.threadSettings?.get(this.id, id),
           });
         }
@@ -1551,6 +1594,7 @@ export class AcpAdapter extends EventEmitter {
         "created_at",
         "timestamp",
       ]),
+      locked: sessionLockedOf(row) || undefined,
     }));
   }
 
@@ -1560,6 +1604,34 @@ export class AcpAdapter extends EventEmitter {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error(`${this.spec.name} 会话不存在`);
     return thread;
+  }
+
+  /**
+   * agent 拒绝打开被占用会话的错误（devin：-32015 +
+   * data["cognition.ai/errorKind"]="session_locked"）。
+   */
+  private isSessionLockedError(error: any) {
+    if (error?.data?.["cognition.ai/errorKind"] === "session_locked")
+      return true;
+    return /already open in another process|session[_ ]locked/i.test(
+      String(error?.message || ""),
+    );
+  }
+
+  /**
+   * 把 agent 的会话级错误翻成可展示的版本。锁定冲突会顺带把
+   * `thread.locked` 置位并广播，让列表立刻显示「占用中」。
+   */
+  private translateSessionError(thread: ThreadSummary, error: any): Error {
+    if (!this.isSessionLockedError(error))
+      return error instanceof Error ? error : new Error(String(error));
+    if (!thread.locked) {
+      thread.locked = true;
+      this.broadcast("thread.updated", thread);
+    }
+    return new Error(
+      `${this.spec.name} 会话正被其它进程占用（锁定中）。请关闭打开它的另一个实例后重试，关闭后 Deck 会直接接管。`,
+    );
   }
 
   private withAuthHint(message: string) {
