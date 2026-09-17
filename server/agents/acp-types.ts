@@ -100,6 +100,8 @@ export interface AcpSessionInfo {
   cwd: string;
   title?: string | null;
   updatedAt?: string | null;
+  /** 会话被其它进程占用（如 devin `_meta["cognition.ai/isLocked"]`）。 */
+  locked?: boolean;
   [key: string]: unknown;
 }
 

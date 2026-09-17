@@ -796,6 +796,33 @@
   font-family: var(--font-mono);
   font-size: 11px;
 }
+/* ACP 会话被其它进程占用时的中性提示条（非错误）。 */
+.lock-banner {
+  display: flex;
+  gap: 11px;
+  margin: 18px 0;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+}
+.lock-banner > svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}
+.lock-banner b {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+}
+.lock-banner p {
+  margin: 5px 0;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
 .thread-list::-webkit-scrollbar,
 .timeline::-webkit-scrollbar {
   width: 6px;

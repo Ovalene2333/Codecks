@@ -216,6 +216,8 @@ export interface ThreadSummary {
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+  /** 会话被其它进程占用（ACP session lock），只能查看缓存历史。 */
+  locked?: boolean;
 }
 
 export interface SessionSearchMatch {

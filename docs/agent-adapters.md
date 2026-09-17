@@ -228,6 +228,13 @@ kimi、goose、copilot、droid 等）。用户可在 `DATA_DIR/acp-agents.json`
 `session/load` 的回放走同一套 `session/update` 归一化，但只累积
 `turns[]` 不发流式事件；`user_message_chunk` 开启新 turn。
 
+会话锁：`session/list` 项 `_meta` 里以 `*/isLocked` 结尾的布尔标记
+（devin 用 `cognition.ai/isLocked`），以及 `session/load`、`resume`、
+`delete`、`prompt` 返回的 `errorKind:"session_locked"` 错误，统一映射为
+`ThreadSummary.locked`。锁只是提示不硬拦：列表和会话内显示「占用中」，
+发送仍放行以便过期标记自愈，失败时翻成中文提示；本进程成功
+load/resume 或下次列举未锁定时自动清除。
+
 ### 能力规则
 
 ACP 能力从 `initialize` 响应动态声明：approval/interrupt 恒开；
