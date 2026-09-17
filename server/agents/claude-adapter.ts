@@ -375,6 +375,7 @@ export class ClaudeAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "Claude Code",
+      protocol: "native",
       available,
       online: this.online && available,
       starting: this.starting,

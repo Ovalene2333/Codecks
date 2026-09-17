@@ -672,6 +672,7 @@ export class OpenCodeAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "OpenCode",
+      protocol: "native",
       available: Boolean(
         this.options.bin || process.env.OPENCODE_BIN || "opencode",
       ),

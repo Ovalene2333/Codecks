@@ -253,6 +253,7 @@ export class AcpAdapter extends EventEmitter {
     return {
       id: this.id,
       name: this.spec.name,
+      protocol: "acp",
       available: true,
       online: this.online && this.client.online,
       starting: this.starting,

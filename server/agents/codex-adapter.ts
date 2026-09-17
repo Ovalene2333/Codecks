@@ -175,6 +175,7 @@ export class CodexAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "Codex",
+      protocol: "native",
       available: true,
       online: runtime.online,
       starting: runtime.starting,
