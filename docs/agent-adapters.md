@@ -45,7 +45,8 @@ server/index.ts
 每个 adapter 必须实现 `server/agents/types.ts` 中的 `AgentAdapter`：
 
 - `id`：稳定的 Agent 标识，写入会话和事件。
-- `descriptor()`：返回可用性、在线状态和 capability matrix。
+- `descriptor()`：返回可用性、在线状态、`protocol` 分组标记
+  （`native`/`acp`，前端用于 Agent 选择器分层）和 capability matrix。
 - `snapshot()`：返回该 Agent 的会话、归档会话和待处理审批。
 - `startAll()`：启动或连接该 Agent 所需的 runtime，并加载历史。
 - `refreshAll()`：重新读取该 Agent 的会话状态。

@@ -25,7 +25,13 @@ import {
 } from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
-import { defaultAgentId, opencodeProviderId, type AgentId } from "../agents";
+import {
+  agentProtocol,
+  defaultAgentId,
+  opencodeProviderId,
+  type AgentId,
+  type AgentProtocol,
+} from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 
 export function NewThreadModal({
@@ -58,7 +64,38 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
+  const agentOptions: Pick<
+    AgentDescriptor,
+    "id" | "name" | "online" | "starting" | "protocol"
+  >[] = agents.length
+    ? agents
+    : [
+        {
+          id: "codex",
+          name: "Codex",
+          protocol: "native",
+          online: true,
+          starting: false,
+        },
+      ];
+  const nativeAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "native",
+  );
+  const acpAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "acp",
+  );
   const [agentId, setAgentId] = useState<AgentId>(preferredAgentId);
+  const [protocolTab, setProtocolTab] = useState<AgentProtocol>(() => {
+    const preferred = agentOptions.find(
+      (agent) => agent.id === preferredAgentId,
+    );
+    return preferred ? agentProtocol(preferred) : "native";
+  });
+  const listedAgents = acpAgents.length
+    ? protocolTab === "acp"
+      ? acpAgents
+      : nativeAgents
+    : agentOptions;
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [form, setForm] = useState({
@@ -106,6 +143,16 @@ export function NewThreadModal({
     };
   }, [agentId]);
 
+  const selectProtocol = (next: AgentProtocol) => {
+    setProtocolTab(next);
+    const group = next === "acp" ? acpAgents : nativeAgents;
+    if (group.some((agent) => agent.id === agentId)) return;
+    const pick =
+      group.find((agent) => agent.online) ||
+      group.find((agent) => agent.starting) ||
+      group[0];
+    if (pick) selectAgent(pick.id);
+  };
   const selectAgent = (next: AgentId) => {
     setAgentId(next);
     setError("");
@@ -180,21 +227,37 @@ export function NewThreadModal({
       <form className="form" onSubmit={submit}>
         <label>
           Agent
+          {acpAgents.length ? (
+            <div
+              className="library-segment"
+              role="tablist"
+              aria-label="启动方式"
+            >
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "native" ? "on" : ""}
+                aria-selected={protocolTab === "native"}
+                onClick={() => selectProtocol("native")}
+              >
+                原生
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "acp" ? "on" : ""}
+                aria-selected={protocolTab === "acp"}
+                onClick={() => selectProtocol("acp")}
+              >
+                ACP
+              </button>
+            </div>
+          ) : null}
           <select
             value={agentId}
             onChange={(event) => selectAgent(event.target.value as AgentId)}
           >
-            {(agents.length
-              ? agents
-              : [
-                  {
-                    id: "codex" as const,
-                    name: "Codex",
-                    online: true,
-                    starting: false,
-                  },
-                ]
-            ).map((agent) => (
+            {listedAgents.map((agent) => (
               <option
                 key={agent.id}
                 value={agent.id}
@@ -513,7 +576,12 @@ export function NewThreadModal({
         <button
           className="primary"
           type="submit"
-          disabled={submitting || !form.providerId || profilesLoading}
+          disabled={
+            submitting ||
+            !form.providerId ||
+            profilesLoading ||
+            !listedAgents.some((agent) => agent.id === agentId)
+          }
         >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}

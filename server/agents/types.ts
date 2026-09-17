@@ -31,6 +31,11 @@ export interface AgentCapabilities {
 export interface AgentDescriptor {
   id: AgentId;
   name: string;
+  /**
+   * 启动协议：`native` = CLI 私有协议 adapter（codex/claude/opencode），
+   * `acp` = Agent Client Protocol 通用接入。前端据此给 Agent 选择器分组。
+   */
+  protocol?: "native" | "acp";
   available: boolean;
   online: boolean;
   starting?: boolean;

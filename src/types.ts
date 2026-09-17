@@ -319,6 +319,8 @@ export interface AgentCapabilities {
 export interface AgentDescriptor {
   id: AgentId;
   name: string;
+  /** native=CLI 私有协议 adapter；acp=Agent Client Protocol 通用接入。 */
+  protocol?: "native" | "acp";
   available: boolean;
   online: boolean;
   starting?: boolean;
