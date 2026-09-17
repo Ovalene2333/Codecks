@@ -1729,6 +1729,120 @@ test("OpenCode idle 不覆盖 waiting，消息活动取消待定 idle", async ()
     },
   });
   (adapter as any).flushIdleTimers();
-  // part 活动已取消 idle，flush 后仍保持运行中。
+  // part ���ȡ�� idle��flush ���Ա��������С�
   assert.equal(thread.status, "running");
+});
+
+test("OpenCode GET retries transient fetch failures and then succeeds", async () => {
+  let sessionCalls = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (new URL(value).pathname === "/session" && !init?.method) {
+        sessionCalls += 1;
+        if (sessionCalls <= 2) {
+          const error = new TypeError("fetch failed") as any;
+          error.cause = { code: "ECONNRESET", message: "socket hang up" };
+          throw error;
+        }
+        return Response.json([{ id: "s1", directory: "/work" }]);
+      }
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await adapter.refreshAll();
+  assert.equal(sessionCalls, 3);
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "s1")?.id,
+    "s1",
+  );
+});
+
+test("OpenCode GET gives up with a readable error after repeated failures", async () => {
+  let sessionCalls = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (new URL(value).pathname === "/session" && !init?.method) {
+        sessionCalls += 1;
+        throw new TypeError("fetch failed");
+      }
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await assert.rejects(adapter.refreshAll(), /连接闪断/);
+  assert.equal(sessionCalls, 3);
+});
+
+test("OpenCode POST is never retried so turns cannot be sent twice", async () => {
+  let posts = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      if (String(url).includes("/message") && init?.method === "POST") {
+        posts += 1;
+        throw new TypeError("fetch failed");
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  await assert.rejects(adapter.sendTurn("p", "s1", "hi"), /连接闪断/);
+  assert.equal(posts, 1);
+});
+
+test("OpenCode HTTP status errors are not retried", async () => {
+  let sessionCalls = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (new URL(value).pathname === "/session" && !init?.method) {
+        sessionCalls += 1;
+        return new Response("boom", { status: 500 });
+      }
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await assert.rejects(adapter.refreshAll(), /OpenCode API 500/);
+  assert.equal(sessionCalls, 1);
+});
+
+test("OpenCode request aborts a hung connection instead of waiting forever", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: ((url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted", "AbortError")),
+        );
+      })) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await assert.rejects(
+    (adapter as any).request("/session", { retry: false, timeoutMs: 20 }),
+    /连接闪断/,
+  );
 });

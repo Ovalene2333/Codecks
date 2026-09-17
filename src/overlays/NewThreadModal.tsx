@@ -25,7 +25,13 @@ import {
 } from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
-import { defaultAgentId, opencodeProviderId, type AgentId } from "../agents";
+import {
+  agentProtocol,
+  defaultAgentId,
+  opencodeProviderId,
+  type AgentId,
+  type AgentProtocol,
+} from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 
 export function NewThreadModal({
@@ -58,7 +64,38 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
+  const agentOptions: Pick<
+    AgentDescriptor,
+    "id" | "name" | "online" | "starting" | "protocol"
+  >[] = agents.length
+    ? agents
+    : [
+        {
+          id: "codex",
+          name: "Codex",
+          protocol: "native",
+          online: true,
+          starting: false,
+        },
+      ];
+  const nativeAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "native",
+  );
+  const acpAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "acp",
+  );
   const [agentId, setAgentId] = useState<AgentId>(preferredAgentId);
+  const [protocolTab, setProtocolTab] = useState<AgentProtocol>(() => {
+    const preferred = agentOptions.find(
+      (agent) => agent.id === preferredAgentId,
+    );
+    return preferred ? agentProtocol(preferred) : "native";
+  });
+  const listedAgents = acpAgents.length
+    ? protocolTab === "acp"
+      ? acpAgents
+      : nativeAgents
+    : agentOptions;
   const [profiles, setProfiles] = useState<AgentProfile[]>([]);
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [form, setForm] = useState({
@@ -106,6 +143,16 @@ export function NewThreadModal({
     };
   }, [agentId]);
 
+  const selectProtocol = (next: AgentProtocol) => {
+    setProtocolTab(next);
+    const group = next === "acp" ? acpAgents : nativeAgents;
+    if (group.some((agent) => agent.id === agentId)) return;
+    const pick =
+      group.find((agent) => agent.online) ||
+      group.find((agent) => agent.starting) ||
+      group[0];
+    if (pick) selectAgent(pick.id);
+  };
   const selectAgent = (next: AgentId) => {
     setAgentId(next);
     setError("");
@@ -143,23 +190,20 @@ export function NewThreadModal({
         ...form,
         model: codexModel,
         providerId: form.providerId || undefined,
-        ...(agentId === "opencode"
-          ? {
-              reasoningEffort: form.reasoningEffort || undefined,
+        ...(agentId === "codex"
+          ? { permissionMode: undefined }
+          : {
+              // 非 Codex agent 不使用 codex 的权限/沙箱/personality 字段。
+              reasoningEffort:
+                agentId === "opencode"
+                  ? form.reasoningEffort || undefined
+                  : undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
               approvalsReviewer: undefined,
-            }
-          : agentId === "claude"
-            ? {
-                reasoningEffort: undefined,
-                personality: undefined,
-                sandbox: undefined,
-                approvalPolicy: undefined,
-                approvalsReviewer: undefined,
-              }
-            : { permissionMode: undefined }),
+              ...(agentId === "claude" ? {} : { permissionMode: undefined }),
+            }),
         personality: form.personality || undefined,
       };
       const thread = await post(`/agents/${agentId}/threads`, payload);
@@ -183,21 +227,37 @@ export function NewThreadModal({
       <form className="form" onSubmit={submit}>
         <label>
           Agent
+          {acpAgents.length ? (
+            <div
+              className="library-segment"
+              role="tablist"
+              aria-label="启动方式"
+            >
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "native" ? "on" : ""}
+                aria-selected={protocolTab === "native"}
+                onClick={() => selectProtocol("native")}
+              >
+                原生
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "acp" ? "on" : ""}
+                aria-selected={protocolTab === "acp"}
+                onClick={() => selectProtocol("acp")}
+              >
+                ACP
+              </button>
+            </div>
+          ) : null}
           <select
             value={agentId}
             onChange={(event) => selectAgent(event.target.value as AgentId)}
           >
-            {(agents.length
-              ? agents
-              : [
-                  {
-                    id: "codex" as const,
-                    name: "Codex",
-                    online: true,
-                    starting: false,
-                  },
-                ]
-            ).map((agent) => (
+            {listedAgents.map((agent) => (
               <option
                 key={agent.id}
                 value={agent.id}
@@ -321,24 +381,59 @@ export function NewThreadModal({
             </label>
           </>
         ) : (
-          <ModelPicker
-            agentId="opencode"
-            providerId=""
-            model={form.model}
-            reasoningEffort={form.reasoningEffort}
-            onChange={(next) =>
-              setForm((current) => ({
-                ...current,
-                model: next.model,
-                reasoningEffort: next.reasoningEffort,
-                // The model id carries the provider, so the thread keeps
-                // pointing at the right one without a second picker.
-                ...(opencodeProviderId(next.model)
-                  ? { providerId: opencodeProviderId(next.model) }
-                  : {}),
-              }))
-            }
-          />
+          <>
+            <ModelPicker
+              agentId={agentId}
+              providerId=""
+              model={form.model}
+              reasoningEffort={
+                agentId === "opencode" ? form.reasoningEffort : ""
+              }
+              onChange={(next) =>
+                setForm((current) => ({
+                  ...current,
+                  model: next.model,
+                  ...(agentId === "opencode"
+                    ? {
+                        reasoningEffort: next.reasoningEffort,
+                        // The model id carries the provider, so the thread keeps
+                        // pointing at the right one without a second picker.
+                        ...(opencodeProviderId(next.model)
+                          ? { providerId: opencodeProviderId(next.model) }
+                          : {}),
+                      }
+                    : {}),
+                }))
+              }
+            />
+            {agentId === "opencode" ? null : profilesLoading ||
+              profiles.length > 1 ? (
+              <label>
+                配置档
+                <select
+                  value={form.providerId}
+                  disabled={profilesLoading}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      providerId: event.target.value,
+                    }))
+                  }
+                >
+                  {profilesLoading ? (
+                    <option value="">正在读取…</option>
+                  ) : (
+                    profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                        {profile.current ? "（当前）" : ""}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+            ) : null}
+          </>
         )}
         <label>
           工作目录
@@ -481,7 +576,12 @@ export function NewThreadModal({
         <button
           className="primary"
           type="submit"
-          disabled={submitting || !form.providerId || profilesLoading}
+          disabled={
+            submitting ||
+            !form.providerId ||
+            profilesLoading ||
+            !listedAgents.some((agent) => agent.id === agentId)
+          }
         >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}

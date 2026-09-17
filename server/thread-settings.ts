@@ -8,7 +8,7 @@ import type {
   SandboxMode,
   ThreadSummary,
 } from "./types.js";
-import type { AgentId } from "./agents/types.js";
+import type { AgentId } from "./types.js";
 
 export interface ThreadSettings {
   providerId?: string;
@@ -20,6 +20,10 @@ export interface ThreadSettings {
   approvalsReviewer?: ApprovalsReviewer;
   permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
+  /** ACP `session/set_mode` 的 modeId（如 devin 的 normal/plan/bypass）。 */
+  sessionMode?: string;
+  /** Deck 侧重命名（ACP 会话没有原生 rename 接口）。 */
+  name?: string;
   /**
    * Deck 侧软归档标记（OpenCode serve 没有原生归档接口）。
    * 只存 `true`；恢复时用 `null` 清除。
@@ -63,18 +67,14 @@ export class ThreadSettingsStore {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       if (parsed?.version !== 1 || !parsed?.settings) return;
-      const group = (agentId: AgentId) =>
-        parsed.settings[agentId] && typeof parsed.settings[agentId] === "object"
-          ? (parsed.settings[agentId] as Record<string, ThreadSettings>)
-          : {};
-      this.data = {
-        version: 1,
-        settings: {
-          codex: group("codex"),
-          claude: group("claude"),
-          opencode: group("opencode"),
-        },
-      };
+      // agentId 是开放集合（ACP adapter 动态注册），按文件里的原样保留所有分组。
+      const settings: Partial<Record<AgentId, Record<string, ThreadSettings>>> =
+        {};
+      for (const [agentId, group] of Object.entries(parsed.settings)) {
+        if (group && typeof group === "object" && !Array.isArray(group))
+          settings[agentId] = group as Record<string, ThreadSettings>;
+      }
+      this.data = { version: 1, settings };
     } catch (error: any) {
       // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
       // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
@@ -131,6 +131,7 @@ export class ThreadSettingsStore {
         approvalPolicy: thread.approvalPolicy,
         approvalsReviewer: thread.approvalsReviewer,
         permissionMode: thread.permissionMode,
+        sessionMode: thread.sessionMode,
         serviceTier: thread.serviceTier,
       });
       if (!Object.keys(settings).length) continue;

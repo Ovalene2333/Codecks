@@ -167,7 +167,7 @@ aside,
 .new-session-btn:active:not(:disabled),
 .new-thread:active:not(:disabled),
 .send:active:not(:disabled) {
-  background: #d4d1cb;
+  background: var(--accent-active);
   box-shadow: none;
   transform: none;
 }
@@ -248,14 +248,14 @@ aside,
 }
 
 .send.stop {
-  border-color: #8a3d4e;
-  background: #6e2d3b;
-  color: #ffd6dd;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .send.stop:hover:not(:disabled) {
-  background: #7d3646;
-  border-color: #a24b5e;
+  background: var(--danger-bg);
+  border-color: var(--danger);
 }
 
 .confirm-actions button,
@@ -267,7 +267,7 @@ aside,
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control);
-  color: #dce3eb;
+  color: var(--text-soft);
   font-size: var(--fs-ui);
   font-weight: 600;
 }
@@ -294,20 +294,20 @@ aside,
 .confirm-actions button:hover:not(:disabled),
 .approval-actions button:hover:not(:disabled),
 .text-btn:hover:not(:disabled) {
-  border-color: #3d4652;
+  border-color: var(--line-strong);
   background: var(--control-hover);
-  color: #fff;
+  color: var(--text);
 }
 
 .danger-btn {
-  border-color: #814052;
-  background: #3d1923;
-  color: #ffbdc9;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 .danger-btn:hover:not(:disabled) {
-  border-color: #a95468;
-  background: #4b1d29;
+  border-color: var(--danger);
+  background: var(--danger-bg);
 }
 
 .library-segment {
@@ -328,7 +328,7 @@ aside,
 
 .library-segment > button:hover:not(.on) {
   background: var(--control-hover);
-  color: #dbe2eb;
+  color: var(--text);
 }
 
 .library-segment > button.on {
@@ -435,7 +435,7 @@ aside,
 .sidebar-footer button:hover,
 .action-sheet button:hover:not(:disabled) {
   background: var(--control-hover);
-  color: #fff;
+  color: var(--text);
 }
 
 .form input,
@@ -454,7 +454,7 @@ aside,
 .form select:focus,
 .auth-card input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgb(201 196 184 / 16%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
 }
 
 .session-search input:focus-visible {
@@ -475,7 +475,7 @@ aside,
 
 .composer.drag-over .composer-box {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px rgb(201 196 184 / 14%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
 }
 
 .message {
@@ -540,7 +540,7 @@ aside,
 }
 
 .chat-header {
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  background: var(--glass);
   border-bottom-color: var(--line);
 }
 
@@ -548,7 +548,7 @@ aside,
   background: var(--surface);
   border-color: var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: 0 24px 80px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-lg);
 }
 
 .auth-card {
@@ -616,10 +616,10 @@ aside,
 .approval-card {
   margin: 18px 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 18%);
+  box-shadow: var(--shadow-md);
 }
 
 .approval-title {
@@ -704,14 +704,14 @@ aside,
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--bg);
-  color: #c7ced8;
+  color: var(--text-soft);
 }
 
 .approval-command-wrap > svg {
   width: 15px;
   height: 15px;
   margin-top: 1px;
-  color: #667180;
+  color: var(--text-faint);
   stroke-width: 1.8;
 }
 

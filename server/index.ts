@@ -18,6 +18,11 @@ import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
 import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
+import { AcpAdapter } from "./agents/acp-adapter.js";
+import {
+  ensureAcpAgentsExample,
+  loadAcpAgentSpecs,
+} from "./agents/acp-agents.js";
 import { AgentRegistry } from "./agents/registry.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
@@ -158,7 +163,23 @@ const opencode = new OpenCodeAdapter({
   ],
   threadSettings,
 });
-const agents = new AgentRegistry([manager, claude, opencode]);
+// ACP agents（devin acp、kimi acp 等）：descriptor 驱动，启动失败的 agent
+// 只在 startAll 里表现为 offline，不影响其它 adapter。
+await ensureAcpAgentsExample(dataDir);
+const acpDirectories = [
+  ...projects.list().map((project) => project.cwd),
+  ...projects.getPreferences().recentDirs,
+  ...initialThreads.map((thread) => thread.cwd),
+].filter(Boolean);
+const acpAdapters = (await loadAcpAgentSpecs(dataDir)).map(
+  (spec) =>
+    new AcpAdapter(spec, {
+      threadSettings,
+      initialThreads,
+      directories: acpDirectories,
+    }),
+);
+const agents = new AgentRegistry([manager, claude, opencode, ...acpAdapters]);
 const sessionSearch = new SessionSearchIndexer(
   new SessionSearchStore(dataDir),
   agents,
@@ -277,8 +298,16 @@ const route =
   };
 const param = (value: string | string[]) =>
   Array.isArray(value) ? value[0] : value;
+// agentId 是路由与 JSON 字段里的资源标识符：小写字母数字加 -/_，
+// 与 acp-agents.ts 的 descriptor id 约束一致；具体合法性由 registry.get 校验。
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+const agentIdSchema = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(AGENT_ID_RE, "agentId 只能包含小写字母、数字、-、_");
 const agentId = (value: string | string[]) =>
-  z.enum(["codex", "claude", "opencode"]).parse(param(value)) as AgentId;
+  agentIdSchema.parse(param(value)) as AgentId;
 
 app.get(
   "/api/snapshot",
@@ -373,6 +402,7 @@ app.post(
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
+        sessionMode: z.string().max(100).optional(),
       })
       .parse(req.body);
     if (id === "codex" && !input.providerId)
@@ -456,6 +486,7 @@ app.patch(
                 "bypassPermissions",
               ])
               .optional(),
+            sessionMode: z.string().max(100).optional(),
           })
           .optional(),
       })
@@ -747,7 +778,7 @@ app.put(
         hidden: z.boolean().optional(),
         defaults: z
           .object({
-            agentId: z.enum(["codex", "claude", "opencode"]).optional(),
+            agentId: agentIdSchema.optional(),
             providerId: z.string().optional(),
             model: z.string().optional(),
             reasoningEffort: z.string().optional(),
@@ -809,7 +840,7 @@ app.put(
   route(async (req) => {
     const input = z
       .object({
-        lastAgentId: z.enum(["codex", "claude", "opencode"]).optional(),
+        lastAgentId: agentIdSchema.optional(),
         lastProviderId: z.string().optional(),
         lastModel: z.string().optional(),
         lastReasoningEffort: z.string().optional(),

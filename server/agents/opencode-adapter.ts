@@ -228,6 +228,34 @@ function requestUrl(baseUrl: string, pathname: string, directory?: string) {
   return url;
 }
 
+/** GET 类幂等请求的超时与重试配置：回环偶发闪断时自愈，不用用户手动刷新。 */
+const REQUEST_TIMEOUT_MS = 30_000;
+const REQUEST_POST_TIMEOUT_MS = 60_000;
+/** 重试次数（不含首次）：GET 最多 3 次，非幂等写操作只发 1 次，绝不重发。 */
+const REQUEST_RETRIES = 2;
+const REQUEST_RETRY_DELAYS_MS = [300, 800];
+
+/**
+ * 瞬时网络失败：回环 ECONNRESET/keep-alive 竞态、OpenCode 繁忙瞬间、
+ * 自身超时 abort 都算，可重试。HTTP 状态错误不算，由调用方按状态处理。
+ */
+function isTransientRequestError(error: unknown) {
+  const code = String(
+    (error as any)?.cause?.code || (error as any)?.code || "",
+  ).toUpperCase();
+  if (
+    /^(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ENETDOWN|ECONNABORTED|UND_ERR_SOCKET)$/.test(
+      code,
+    )
+  )
+    return true;
+  const name = String((error as any)?.name || "");
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  return /fetch failed|socket hang up|terminated|aborted|timeout|temporarily|try again/i.test(
+    String((error as any)?.message || error || ""),
+  );
+}
+
 function profileId(session: OpenCodeSession) {
   return `opencode:${session.directory || "current"}`;
 }
@@ -405,6 +433,40 @@ function tokenNumber(value: unknown) {
     : 0;
 }
 
+/** Bash/shell 类工具的真实命令在 state.input.command 里，state.title 经常只是
+ * 泛称（甚至缺失），直接用它做 command 会展示成“正在执行 bash”且点开展示空。
+ * 这里优先取 input 里的实际命令，标题里带不下、详情里必须有。 */
+function openCodeShellCommand(input: unknown): string {
+  if (typeof input === "string") return input.trim();
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const row = input as Record<string, unknown>;
+  for (const key of ["command", "cmd", "script", "text", "commands"]) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      if (joined) return joined;
+    }
+  }
+  return "";
+}
+
+const OPENCODE_SHELL_TOOLS = new Set([
+  "bash",
+  "shell",
+  "exec",
+  "execute",
+  "command",
+  "run",
+  "sh",
+  "terminal",
+  "process",
+]);
+
 /**
  * Maps a native OpenCode part to the shared Codex-shaped turn item. Tool
  * parts keep their structured input/metadata and unknown part types become
@@ -447,10 +509,21 @@ export function openCodePartToItem(part: any): any | undefined {
         ...(childSessionId ? { childSessionId } : {}),
       };
     }
+    const toolName = String(part.tool || "").toLowerCase();
+    const shellCommand = openCodeShellCommand(state.input);
+    const command =
+      (OPENCODE_SHELL_TOOLS.has(toolName) && shellCommand) ||
+      shellCommand ||
+      state.title ||
+      part.tool ||
+      "OpenCode 工具";
+    const description = String(
+      (state.input as any)?.description || "",
+    ).trim();
     const item: any = {
       id: String(part.id),
       type: "commandExecution",
-      command: state.title || part.tool || "OpenCode 工具",
+      command,
       status:
         state.status === "error"
           ? "failed"
@@ -461,6 +534,9 @@ export function openCodePartToItem(part: any): any | undefined {
       ...(part.tool ? { tool: part.tool } : {}),
       ...(state.input != null ? { input: state.input } : {}),
       ...(state.metadata != null ? { metadata: state.metadata } : {}),
+      ...(description && description !== String(command || "").trim()
+        ? { description }
+        : {}),
     };
     const todos = opencodeTodos(item);
     if (todos.length) item.todos = todos;
@@ -596,6 +672,7 @@ export class OpenCodeAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "OpenCode",
+      protocol: "native",
       available: Boolean(
         this.options.bin || process.env.OPENCODE_BIN || "opencode",
       ),
@@ -1859,7 +1936,8 @@ export class OpenCodeAdapter extends EventEmitter {
     let lastError: unknown;
     for (let attempt = 0; attempt < 150; attempt += 1) {
       try {
-        await this.request("/global/health");
+        // 本轮询自带重试，关闭 request 内层退避（否则启动探测被拖慢一个数量级）。
+        await this.request("/global/health", { retry: false, timeoutMs: 5_000 });
         return;
       } catch (error) {
         lastError = error;
@@ -2200,25 +2278,91 @@ export class OpenCodeAdapter extends EventEmitter {
 
   private async request<T = any>(
     pathname: string,
-    options: { method?: string; directory?: string; body?: unknown } = {},
+    options: {
+      method?: string;
+      directory?: string;
+      body?: unknown;
+      /**
+       * 传 false 关闭 GET 重试：waitForHealth 自带 150 次轮询，
+       * 内层再退避重试会把启动探测拖慢一个数量级。
+       */
+      retry?: boolean;
+      timeoutMs?: number;
+    } = {},
   ): Promise<T> {
     if (!this.baseUrl) throw new Error("OpenCode server 尚未启动");
-    const response = await this.fetcher(
-      requestUrl(this.baseUrl, pathname, options.directory),
-      {
-        method: options.method,
-        headers: options.body
-          ? { "content-type": "application/json" }
-          : undefined,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-      },
-    );
-    if (!response.ok)
-      throw new Error(
-        `OpenCode API ${response.status}: ${(await response.text()).slice(0, 500)}`,
-      );
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
+    const idempotent = !options.method || options.method === "GET";
+    const maxAttempts =
+      options.retry === false || !idempotent ? 1 : 1 + REQUEST_RETRIES;
+    const timeoutMs =
+      options.timeoutMs ??
+      (idempotent ? REQUEST_TIMEOUT_MS : REQUEST_POST_TIMEOUT_MS);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0)
+        await new Promise<void>((resolve) =>
+          setTimeout(
+            resolve,
+            REQUEST_RETRY_DELAYS_MS[
+              Math.min(attempt - 1, REQUEST_RETRY_DELAYS_MS.length - 1)
+            ],
+          ),
+        );
+      try {
+        const response = await this.fetcher(
+          requestUrl(this.baseUrl, pathname, options.directory),
+          {
+            method: options.method,
+            headers: options.body
+              ? { "content-type": "application/json" }
+              : undefined,
+            body: options.body ? JSON.stringify(options.body) : undefined,
+            signal: AbortSignal.timeout(timeoutMs),
+          },
+        );
+        if (!response.ok) {
+          if (
+            idempotent &&
+            attempt + 1 < maxAttempts &&
+            (response.status === 502 ||
+              response.status === 503 ||
+              response.status === 504)
+          )
+            continue;
+          throw new Error(
+            `OpenCode API ${response.status}: ${(await response.text()).slice(0, 500)}`,
+          );
+        }
+        if (response.status === 204) return undefined as T;
+        return response.json() as Promise<T>;
+      } catch (error: any) {
+        // HTTP 状态错误直接抛（fork 的 404 兜底依赖原文案），不重试。
+        if (String(error?.message || "").startsWith("OpenCode API "))
+          throw error;
+        lastError = error;
+        if (attempt + 1 >= maxAttempts || !isTransientRequestError(error))
+          throw this.requestError(error);
+      }
+    }
+    throw this.requestError(lastError);
+  }
+
+  /**
+   * Node fetch 网络失败原文就是 "fetch failed"，直接透到前端用户看不懂。
+   * 包一层中文说明并保留原文/原因码，方便排查。
+   */
+  private requestError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = (error as any)?.cause as
+      | { code?: unknown; message?: unknown }
+      | undefined;
+    const causeText =
+      cause &&
+      String(cause.message || "").trim() &&
+      String(cause.message) !== message
+        ? `（${String(cause.code || cause.message)}）`
+        : "";
+    return new Error(`OpenCode 连接闪断（${message}）${causeText}，重试即可恢复`);
   }
 
   private offline(error: unknown) {

@@ -267,16 +267,32 @@ function TurnItemInner({
     const semantic = presentation.kind !== "command";
     const output = displayText(item.aggregatedOutput);
     const trivialOutput = isTrivialToolOutput(output);
-    // 编辑类工具：summary 显示文件名，`Edit applied successfully.` 这类
-    // 无信息回执直接隐藏，点开只看有实际内容的输出。
+    // shell 长命令运行时 output 为空：详情至少要展示完整命令，否则
+    // <details> 点开展示空，看起来像“卡住且不能点开”。
+    const fullCommand = displayCommand(
+      displayText(presentation.target || command),
+    );
+    const description = displayText(
+      item.description ?? item?.input?.description,
+    ).trim();
     const detail =
       presentation.kind === "edit"
         ? trivialOutput
           ? ""
           : output
         : [
-            semantic && command ? `$ ${command}` : "",
-            trivialOutput && semantic ? "" : output,
+            // command 类 previously 只在 semantic 时展示 `$ 命令`，
+            // bash 正好是非 semantic，直接导致详情为空。
+            presentation.kind === "command" && fullCommand
+              ? `$ ${fullCommand}`
+              : semantic && command
+                ? `$ ${command}`
+                : "",
+            description && description !== fullCommand ? description : "",
+            output && !(trivialOutput && semantic) ? output : "",
+            !output && item.status === "inProgress"
+              ? "运行中，输出完成后显示…"
+              : "",
           ]
             .filter(Boolean)
             .join("\n\n");

@@ -38,23 +38,23 @@
 .danger-btn {
   min-height: 36px;
   padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #18202b;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-border);
+  background: var(--control);
   cursor: pointer;
 }
 .danger-btn {
-  border-color: #7a3144;
-  background: #3a1520;
-  color: #ffc0cb;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 .action-sheet {
   display: grid;
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #121821;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .action-sheet-modal {
   width: min(360px, 100%);
@@ -68,7 +68,7 @@
   min-height: 42px;
   padding: 0 12px;
   border: 0;
-  border-bottom: 1px solid #1c2430;
+  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
   color: var(--text);
@@ -80,7 +80,7 @@
   border-bottom: 0;
 }
 .action-sheet button:hover {
-  background: #1d2632;
+  background: var(--control-hover);
 }
 .action-sheet button:disabled {
   opacity: 0.38;
@@ -93,7 +93,7 @@
   position: fixed;
   inset: 0;
   z-index: 55;
-  background: #03050888;
+  background: var(--overlay-soft);
   overflow: hidden;
 }
 .usage-drawer {
@@ -106,7 +106,7 @@
   overflow: auto;
   padding: 18px;
   border-left: 1px solid var(--line);
-  background: #10161e;
+  background: var(--surface);
   transform: none;
   animation: drawer-in 200ms ease both;
 }
@@ -154,7 +154,7 @@
 }
 .usage-level em {
   margin-left: 4px;
-  color: var(--muted);
+  color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 10px;
   font-style: normal;
@@ -188,7 +188,7 @@
 }
 .usage-summary-grid small {
   margin-bottom: 3px;
-  color: var(--muted);
+  color: var(--text-faint);
   font-size: 10px;
 }
 .usage-summary-grid b {
@@ -243,7 +243,7 @@
   font-size: 12px;
 }
 .usage-rank-main small {
-  color: var(--muted);
+  color: var(--text-faint);
   font-size: 10px;
 }
 .usage-rank-main > strong {
@@ -272,7 +272,7 @@
 }
 .usage-rank-row > p {
   margin: 5px 0 0 34px;
-  color: var(--muted);
+  color: var(--text-faint);
   font-size: 10px;
 }
 .usage-empty {
@@ -302,7 +302,7 @@
   margin: 0 0 12px;
 }
 .usage-unavailable {
-  color: var(--warn);
+  color: var(--wait);
 }
 .usage-unavailable p {
   margin: 0;
@@ -328,11 +328,11 @@
 .usage-window {
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #0c1219;
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
 }
 .usage-window.hot {
-  border-color: #8a6a22;
+  border-color: var(--warning-border);
 }
 .usage-window > div {
   display: flex;

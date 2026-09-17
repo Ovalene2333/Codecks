@@ -1,5 +1,6 @@
 import type { EventEmitter } from "node:events";
 import type {
+  AgentId,
   ApprovalKind,
   BackgroundTerminal,
   ClaudePermissionMode,
@@ -9,7 +10,7 @@ import type {
   TurnImage,
 } from "../types.js";
 
-export type AgentId = "codex" | "claude" | "opencode";
+export type { AgentId };
 export type AgentHistoryStatus = "cached" | "loading" | "ready" | "error";
 
 export interface AgentCapabilities {
@@ -30,6 +31,11 @@ export interface AgentCapabilities {
 export interface AgentDescriptor {
   id: AgentId;
   name: string;
+  /**
+   * 启动协议：`native` = CLI 私有协议 adapter（codex/claude/opencode），
+   * `acp` = Agent Client Protocol 通用接入。前端据此给 Agent 选择器分组。
+   */
+  protocol?: "native" | "acp";
   available: boolean;
   online: boolean;
   starting?: boolean;
@@ -68,6 +74,8 @@ export interface AgentCreateThreadInput {
   approvalsReviewer?: string;
   permissionMode?: ClaudePermissionMode;
   sandbox?: string;
+  /** ACP `session/set_mode` 的 modeId（agent 自定义，非 Claude 枚举）。 */
+  sessionMode?: string;
 }
 
 export interface AgentPublicProfile {

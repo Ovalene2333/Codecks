@@ -52,7 +52,11 @@
       `Timeline.tsx:88-101`，`TurnBlock` 未 memo）。方向：memo 化 + useMemo + draft 下沉。
 - [ ] #14 `/api/pair` 按 `req.ip` 限流，隧道下全员同桶（锁死所有人）+ `attempts` Map 无界增长
      （`index.ts:191-193`，`pairing.ts:51-77`）。方向：隧道场景固定桶 + LRU。
-- [ ] #15 OpenCode `request()` 无超时（`opencode-adapter.ts:1530-1551`）。方向：AbortController 超时。
+- [x] #15 OpenCode `request()` 无超时（`opencode-adapter.ts`）。修复：`AbortSignal.timeout`
+     （GET 30s / 写操作 60s / 健康轮询 5s）+ 幂等 GET 瞬时网络失败重试 2 次（300/800ms 退避，
+      仅 ECONNRESET/超时等可重试错误；POST 等写操作绝不重发防重复；HTTP 状态错误不重试，
+      fork 的 404 兜底依赖原文案）；最终失败包中文“OpenCode 连接闪断…重试即可恢复”并保留原文。
+      健康轮询关闭内层重试（自带 150 次轮询，避免启动探测被拖慢）。
 - [ ] #16 OpenCode 审批 offline 不清理、失败响应跳过 delete（`:1553-1562,1157-1199`）。
 - [ ] #17 Claude 未跑首回合的内存线程被刷新删除、改名丢失（`claude-adapter.ts:549-581,606-629`）；
       `message.usage` 无守卫（`:950-965`）。

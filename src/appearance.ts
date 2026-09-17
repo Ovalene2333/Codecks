@@ -2,15 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type ThemePreference = "system" | "light" | "dark";
 export type MotionPreference = "system" | "on" | "off";
+export type EffectsPreference = "on" | "off";
 
 export interface AppearancePreferences {
   theme: ThemePreference;
   motion: MotionPreference;
+  effects: EffectsPreference;
 }
 
 export interface ResolvedAppearance {
   theme: "light" | "dark";
   motion: "on" | "off";
+  effects: "on" | "off";
 }
 
 export const APPEARANCE_STORAGE_KEY = "codex-deck:appearance:v1";
@@ -18,10 +21,12 @@ export const APPEARANCE_STORAGE_KEY = "codex-deck:appearance:v1";
 const defaults: AppearancePreferences = {
   theme: "system",
   motion: "system",
+  effects: "on",
 };
 
 const themeValues = new Set<ThemePreference>(["system", "light", "dark"]);
 const motionValues = new Set<MotionPreference>(["system", "on", "off"]);
+const effectsValues = new Set<EffectsPreference>(["on", "off"]);
 
 export function normalizeAppearancePreferences(
   value: unknown,
@@ -35,6 +40,9 @@ export function normalizeAppearancePreferences(
     motion: motionValues.has(candidate.motion as MotionPreference)
       ? (candidate.motion as MotionPreference)
       : defaults.motion,
+    effects: effectsValues.has(candidate.effects as EffectsPreference)
+      ? (candidate.effects as EffectsPreference)
+      : defaults.effects,
   };
 }
 
@@ -56,6 +64,7 @@ export function resolveAppearance(
           ? "off"
           : "on"
         : preferences.motion,
+    effects: preferences.effects,
   };
 }
 
@@ -80,12 +89,13 @@ function applyResolvedAppearance(resolved: ResolvedAppearance) {
   const root = document.documentElement;
   root.dataset.theme = resolved.theme;
   root.dataset.motion = resolved.motion;
+  root.dataset.effects = resolved.effects;
   root.style.colorScheme = resolved.theme;
   document
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute(
       "content",
-      resolved.theme === "light" ? "#f6f7f9" : "#0a0b0d",
+      resolved.theme === "light" ? "#f4f6f9" : "#10131a",
     );
 }
 

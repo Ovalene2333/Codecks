@@ -1,53 +1,7 @@
-/* Final product shell layer. Module styles own details; this file owns rhythm. */
+/* Final product shell layer. Palette lives in tokens.css; this file owns
+   layout rhythm and component geometry. */
 :root {
-  --bg: #0c0e11;
-  --sidebar: #101216;
-  --surface: #15181d;
-  --surface-2: #1b1f26;
-  --surface-muted: #111419;
-  --surface-raised: #1c2027;
-  --control: #171a20;
-  --control-hover: #20242c;
-  --control-border: #303640;
-  --line: #252a32;
-  --line-strong: #39414d;
-  --text: #f4f5f7;
-  --text-soft: #d6d9de;
-  --text-dim: #929aa6;
-  --text-faint: #68717f;
-  --accent: #f1f2f4;
-  --accent-text: #15171a;
-  --accent-hover: #ffffff;
-  --accent-active: #d7d9dd;
-  --focus-ring: #8b95a3;
-  --composer-fade: #0c0e11;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
   --shell-sidebar: 324px;
-}
-
-html[data-theme="light"] {
-  --bg: #f5f6f7;
-  --sidebar: #ffffff;
-  --surface: #ffffff;
-  --surface-2: #eceff2;
-  --surface-muted: #f6f7f8;
-  --surface-raised: #ffffff;
-  --control: #f4f5f6;
-  --control-hover: #e8ebee;
-  --control-border: #cfd5dc;
-  --line: #dde1e6;
-  --line-strong: #bcc4ce;
-  --text: #181b20;
-  --text-soft: #333941;
-  --text-dim: #626b77;
-  --text-faint: #7d8794;
-  --accent: #20242a;
-  --accent-text: #ffffff;
-  --accent-hover: #343a42;
-  --accent-active: #111317;
-  --composer-fade: #f5f6f7;
 }
 
 .app-shell {
@@ -118,6 +72,12 @@ html[data-theme="light"] {
 .library-segment {
   min-height: 38px;
   background: var(--surface-muted);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--shadow) 30%, transparent);
+}
+
+.library-segment > button.on {
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .sidebar-meta {
@@ -190,8 +150,9 @@ html[data-theme="light"] {
 }
 
 .session-row.selected {
-  border-left-color: var(--ok);
-  background: var(--surface-2);
+  border-left-color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .session-row strong {
@@ -280,10 +241,12 @@ html[data-theme="light"] {
   width: 286px;
   overflow: hidden;
   padding: 6px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: 0 18px 48px var(--shadow);
+  background: var(--glass-strong);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-tools-title {
@@ -359,8 +322,9 @@ html[data-theme="light"] {
 
 .chat-header {
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
-  backdrop-filter: blur(14px);
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .chat-header-row1 {
@@ -437,10 +401,11 @@ html[data-theme="light"] {
 
 .message.user {
   max-width: min(86%, 680px);
-  border-color: var(--control-border);
-  border-radius: 8px;
-  background: var(--surface-2);
-  box-shadow: none;
+  border-color: var(--line);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm)
+    var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .composer {
@@ -460,10 +425,10 @@ html[data-theme="light"] {
   gap: 8px;
   margin: 0 0 8px;
   padding: 6px 6px 6px 10px;
-  border: 1px solid rgb(96 165 250 / 40%);
+  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
   border-radius: var(--radius-md);
-  background: rgb(96 165 250 / 10%);
-  color: #bcd7ff;
+  background: color-mix(in srgb, var(--info) 10%, transparent);
+  color: var(--info);
   font-size: 12px;
   line-height: 17px;
 }
@@ -484,7 +449,7 @@ html[data-theme="light"] {
   padding: 5px 6px;
   border: 1px solid var(--line);
   border-bottom: 0;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--surface);
 }
 
@@ -583,9 +548,19 @@ html[data-theme="light"] {
   min-height: 58px;
   padding: 8px;
   border-color: var(--line-strong);
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 12px 34px color-mix(in srgb, var(--shadow) 30%, transparent);
+  box-shadow: var(--shadow-md);
+  transition:
+    border-color var(--ease),
+    box-shadow var(--ease);
+}
+
+.composer-box:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 3px color-mix(in srgb, var(--focus-ring) 16%, transparent);
 }
 
 .composer textarea {
@@ -621,7 +596,7 @@ html[data-theme="light"] {
 .modal,
 .usage-drawer,
 .action-sheet {
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
 }
 
 @media (max-width: 1100px) {

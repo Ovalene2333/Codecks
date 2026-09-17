@@ -9,8 +9,9 @@
   overflow: auto;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: 0 22px 64px rgb(0 0 0 / 48%);
+  background: var(--glass-strong);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-lg);
   animation: approval-inbox-in 160ms ease both;
 }
 
@@ -177,9 +178,10 @@
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--wait) 35%, var(--line));
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--glass-strong);
+  backdrop-filter: blur(14px);
   color: var(--wait);
-  box-shadow: 0 12px 36px rgb(0 0 0 / 40%);
+  box-shadow: var(--shadow-md);
   font-size: var(--fs-caption);
   font-weight: 600;
   cursor: pointer;
@@ -221,7 +223,7 @@
     height: 4px;
     margin: 7px auto 1px;
     border-radius: 999px;
-    background: #555d68;
+    background: var(--line-strong);
   }
 
   .approval-inbox-header {

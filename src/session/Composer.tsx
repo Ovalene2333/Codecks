@@ -47,10 +47,13 @@ export function Composer({
   const running =
     Boolean(thread.activeTurnId) &&
     (thread.status === "running" || thread.status === "waiting");
+  const composerAgentId = thread.agentId || "codex";
   const suggestions = matchingSlashCommands(
     text,
-    thread.agentId || "codex",
-    thread.agentId === "opencode" ? extraCommands : [],
+    composerAgentId,
+    composerAgentId === "codex" || composerAgentId === "claude"
+      ? []
+      : extraCommands,
   );
   const canSend = Boolean(text.trim() || images.length);
   useEffect(() => {
