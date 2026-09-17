@@ -184,7 +184,7 @@ OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新�
 
 > **实验性支持。** ACP（[Agent Client Protocol](https://agentclientprotocol.com)）是 CLI agent 的标准 JSON-RPC 协议，Devin、Kimi CLI、Goose、GitHub Copilot CLI、Factory Droid 等均已支持。Codecks 内置一个通用 ACP adapter：任何支持 ACP 的 CLI 只需一份启动描述符即可接入，不再需要为每家 CLI 编写专有 adapter。
 
-安装对应 CLI 并登录后，新建 Session 时即可在 Agent 列表中选择（CLI 未安装时显示为离线，不影响其它 Agent）。内置描述符覆盖 `devin`（`devin acp`）、`kimi`、`goose`、`copilot`、`droid` 等；接入其它 ACP CLI 或覆盖内置参数时，在 `DATA_DIR/acp-agents.json` 里声明（启动时会生成 `acp-agents.example.json` 样例）：
+安装对应 CLI 并登录后，新建 Session 时即可在 Agent 列表中选择（CLI 未安装时显示为离线，不影响其它 Agent）。Agent 选择器按启动协议分成「原生」与「ACP」两组标签页：Codex、Claude、OpenCode 等私有协议 adapter 归「原生」，所有经 ACP 接入的 CLI 归「ACP」。内置描述符覆盖 `devin`（`devin acp`）、`kimi`、`goose`、`copilot`、`droid` 等；接入其它 ACP CLI 或覆盖内置参数时，在 `DATA_DIR/acp-agents.json` 里声明（启动时会生成 `acp-agents.example.json` 样例）：
 
 ```jsonc
 {

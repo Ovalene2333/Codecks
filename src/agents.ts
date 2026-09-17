@@ -29,6 +29,25 @@ export function agentIdFor(value?: { agentId?: AgentId }): AgentId {
   return value?.agentId || "codex";
 }
 
+export type AgentProtocol = "native" | "acp";
+
+/**
+ * Agent 的启动协议分组。旧快照没有 protocol 字段时按 id 兜底：
+ * 内置 adapter 是原生协议，动态注册的 id 一律视作 ACP。
+ */
+export function agentProtocol(
+  agent: Pick<AgentDescriptor, "id"> &
+    Partial<Pick<AgentDescriptor, "protocol">>,
+): AgentProtocol {
+  if (agent.protocol === "acp" || agent.protocol === "native")
+    return agent.protocol;
+  return agent.id === "codex" ||
+    agent.id === "claude" ||
+    agent.id === "opencode"
+    ? "native"
+    : "acp";
+}
+
 export function defaultAgentId(
   agents: AgentDescriptor[],
   preferred?: AgentId,
