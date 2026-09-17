@@ -87,6 +87,37 @@ const OPENCODE_EXPLORE_TOOLS = new Set([
   "codesearch",
   "search",
 ]);
+const OPENCODE_SHELL_TOOLS = new Set([
+  "bash",
+  "shell",
+  "exec",
+  "execute",
+  "command",
+  "run",
+  "sh",
+  "terminal",
+  "process",
+]);
+
+/** input.command / cmd / script / commands（数组）都可能是真实 shell 命令。 */
+export function openCodeShellCommand(input: unknown): string {
+  if (typeof input === "string") return input.trim();
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+  const row = input as Record<string, unknown>;
+  for (const key of ["command", "cmd", "script", "text", "commands"]) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((entry) => String(entry ?? "").trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      if (joined) return joined;
+    }
+  }
+  return "";
+}
 
 function openCodeInputPath(input: unknown): string {
   if (!input || typeof input !== "object" || Array.isArray(input)) return "";
@@ -269,6 +300,23 @@ export function commandPresentation(item: any, cwd?: string) {
         target: [pattern, path].filter(Boolean).join(" · "),
       } as const;
     }
+    if (OPENCODE_SHELL_TOOLS.has(tool)) {
+      // bash 等 shell 工具：summary 直接展示真实命令，
+      // 而不是泛称 "bash"，否则长命令看起来像卡住。
+      const target =
+        openCodeShellCommand(item?.input) ||
+        openCodeShellCommand((item as any)?.arguments) ||
+        openCodeFileTarget(item, cwd);
+      if (target) return { kind: "command", label: "", target } as const;
+    }
+  }
+  // 兜底：未知工具但 input 里带了真实命令时同样展示命令，
+  // 兼容归一化之前的旧历史快照。
+  if (item?.type === "commandExecution" && !item?.commandActions) {
+    const target =
+      openCodeShellCommand(item?.input) ||
+      openCodeShellCommand((item as any)?.arguments);
+    if (target) return { kind: "command", label: "", target } as const;
   }
   return { kind: "command", label: "", target: "" } as const;
 }

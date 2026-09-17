@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ShieldAlert } from "lucide-react";
+import { Lock, ShieldAlert } from "lucide-react";
 import { api, post } from "../api";
 import { dedupeThreadLoad, readThreadCache } from "../cache";
 import { displayText, sessionKey } from "../format";
@@ -160,7 +160,10 @@ export function ChatWorkspace({
     load();
   }, [load, threadCacheKey]);
   useEffect(() => {
-    if ((thread.agentId || "codex") !== "opencode") {
+    const id = thread.agentId || "codex";
+    // codex 用内置 SLASH_COMMANDS，claude 无会话命令；其余 agent（opencode、
+    // ACP）都走 GET /commands 拉取 agent 自报的命令列表。
+    if (id === "codex" || id === "claude") {
       setOpencodeCommands([]);
       return;
     }
@@ -188,13 +191,16 @@ export function ChatWorkspace({
     };
   }, [thread.agentId, thread.id, thread.providerId]);
   useEffect(() => {
-    if ((thread.agentId || "codex") !== "opencode" || !thread.providerId) {
+    const id = thread.agentId || "codex";
+    // claude/codex 的模型目录走 ModelPicker 自己的链路；opencode 与 ACP
+    // agent 的目录用于 supportsImages 等提示。
+    if (id === "codex" || id === "claude" || !thread.providerId) {
       setModelCatalog([]);
       return;
     }
     let cancelled = false;
     api<ModelInfo[]>(
-      `/agents/opencode/models?providerId=${encodeURIComponent(thread.providerId)}`,
+      `/agents/${encodeURIComponent(id)}/models?providerId=${encodeURIComponent(thread.providerId)}`,
     )
       .then((list) => {
         if (!cancelled) setModelCatalog(Array.isArray(list) ? list : []);
@@ -291,6 +297,15 @@ export function ChatWorkspace({
         );
         return;
       }
+    }
+    // ACP 等通用 agent 的斜杠命令：原样交给 agent 的 runSessionCommand。
+    if (command.kind === "agent-command") {
+      await post(`${threadPath(thread)}/commands`, {
+        command: command.command,
+        arguments: command.args,
+      });
+      onSnapshot();
+      return;
     }
     if (command.kind === "compact") return compact();
     if (command.kind === "status") {
@@ -658,6 +673,7 @@ export function ChatWorkspace({
     permissionMode?: ClaudePermissionMode;
     personality?: Personality;
     serviceTier?: string | null;
+    sessionMode?: string;
   }) => {
     try {
       await api(threadPath(thread), {
@@ -824,6 +840,18 @@ export function ChatWorkspace({
                 查看额度
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {thread.locked && !locked && (
+        <div className="lock-banner" role="status">
+          <Lock />
+          <div>
+            <b>会话被其它进程占用</b>
+            <p>
+              该会话已在另一个进程中打开（{agentName} 的会话锁），此处仅展示缓存
+              历史。关闭另一方后可直接发送，Deck 会自动接管。
+            </p>
           </div>
         </div>
       )}

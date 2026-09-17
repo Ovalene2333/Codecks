@@ -1,5 +1,12 @@
 export type ProviderKind = "local-profile" | "custom" | "cc-switch";
 
+/**
+ * Stable agent identifier. Built-in adapters use codex/claude/opencode; ACP
+ * adapters register dynamic ids (devin, gemini, ...), so the type stays a
+ * plain string rather than a closed union.
+ */
+export type AgentId = string;
+
 export interface Provider {
   id: string;
   name: string;
@@ -41,7 +48,7 @@ export interface RuntimeModelConfig {
 }
 
 export interface ProjectDefaults extends ConnectionOverlay {
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -62,7 +69,7 @@ export interface ProjectRecord {
 }
 
 export interface DeckPreferences extends ConnectionOverlay {
-  lastAgentId?: "codex" | "claude" | "opencode";
+  lastAgentId?: AgentId;
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;
@@ -173,13 +180,13 @@ export interface TurnExtensionItem {
   id: string;
   type: "extension";
   kind: string;
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   status?: "inProgress" | "completed" | "failed";
   payload?: unknown;
 }
 
 export interface ThreadSummary {
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   id: string;
   providerId: string;
   name: string;
@@ -216,6 +223,18 @@ export interface ThreadSummary {
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+  /**
+   * 会话被其它进程占用（如 devin 的 session lock）。置位时 Deck 只能展示
+   * 缓存历史，load/resume/prompt 会被 agent 拒绝；下一次 session/list
+   * 报告未锁定或本进程成功接管后自动清除。
+   */
+  locked?: boolean;
+  /**
+   * ACP session mode state（`session/set_mode` 体系，如 devin 的
+   * normal/accept-edits/plan/bypass）。与 Claude 的 permissionMode 各自独立。
+   */
+  sessionMode?: string;
+  sessionModes?: { id: string; name?: string; description?: string }[];
 }
 
 export interface BackgroundTerminal {
@@ -234,7 +253,7 @@ export interface ActiveTaskCommand extends BackgroundTerminal {
 
 export interface ActiveTask {
   id: string;
-  agentId: "codex" | "claude" | "opencode";
+  agentId: AgentId;
   providerId: string;
   threadId: string;
   threadName: string;

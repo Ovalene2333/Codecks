@@ -3,10 +3,12 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  Lock,
   MoreHorizontal,
   Pin,
   Plus,
 } from "lucide-react";
+import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
 import type { Provider, SessionSearchMatch, ThreadSummary } from "../types";
@@ -122,15 +124,10 @@ export function ProjectGroupView({
         const searchMatch = searchMatches.get(
           `${thread.agentId || "codex"}:${thread.id}`,
         );
-        const agentLabel =
-          thread.agentId === "claude"
-            ? "Claude"
-            : thread.agentId === "opencode"
-              ? "OpenCode"
-              : "Codex";
+        const agentLabel = agentShortName(thread.agentId);
         const providerLabel =
           provider?.name ||
-          (thread.agentId === "claude" || thread.agentId === "opencode"
+          (thread.agentId && thread.agentId !== "codex"
             ? ""
             : thread.providerId);
         return (
@@ -220,6 +217,15 @@ export function ProjectGroupView({
               >
                 {thread.controlMode === "managed" ? "受管" : "历史"}
               </small>
+              {thread.locked ? (
+                <small
+                  className="lock-badge"
+                  title="会话正被其它进程占用，仅可查看历史"
+                >
+                  <Lock />
+                  占用中
+                </small>
+              ) : null}
               {forks > 0 && <small>{forks} 分支</small>}
             </div>
             {searchMatch && (

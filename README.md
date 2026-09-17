@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code 与 OpenCode adapter 后端。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
+[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code、OpenCode adapter 后端与 [ACP](https://agentclientprotocol.com) 通用适配（Devin、Kimi CLI、Goose、Copilot CLI 等）。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
 
 只用 OpenAI Official 时无需安装 CC Switch；如果已经在 [CC Switch](https://github.com/farion1231/cc-switch) 中配置了多家连接，Codecks 也可以让每个 Session 独立选择供应商和模型，不必反复切换当前项。会话列表、任务中心和审批入口会统一标记实际使用的 Agent。
 
@@ -25,6 +25,7 @@
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
     - 不支持 Claude 官方登录；仅支持带 relay 凭据的 CC Switch 配置
   - [OpenCode 后端适配（实验性）](#opencode-后端适配)
+  - [ACP 通用适配（实验性）](#acp-通用适配)
 - **部署与日常使用**
   - [远程访问](#远程访问)
     - [访问实例](#实例)
@@ -179,12 +180,37 @@ OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新�
 
 新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：因为模型 ID 就是 `providerID/modelID`，选模型即选供应商，所有入口（新建会话、会话设置、命令面板）都只用一个按 provider 分组的可搜索选择器，不再先挑供应商再挑模型；关键字会同时匹配供应商名、模型名和模型 ID，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定，OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的 `/provider` 里已连接（connected）的供应商会排在目录最前面并在分组标题上标记「已连接」，未登录的供应商仍然可以浏览和搜索，只是排在后面。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。会话命名与 Codex 对齐：OpenCode 原生的随机 `slug`（如 `curious-comet`）只在没有任何标题和消息时作为兜底展示，新建空会话显示「新 OpenCode 会话」，一旦有首条用户消息就用它（前 42 字）做标题；新建时填写的名称或手动重命名会写入 OpenCode 的 `title` 并始终优先，不会被首条消息覆盖。归档/恢复是 Deck 侧软归档：OpenCode serve 没有原生归档接口，归档后会话移入归档箱、服务端会话原样保留，归档态持久化后重启不丢失；运行中的会话不能归档，归档会话需要恢复后才能继续发送。分支（fork）走 OpenCode 原生 `POST /session/:id/fork`：每轮下的「从此处分支」完整复制历史到新分支，原分支保留；消息旁的「从此重试」先把原文带回输入框，改完再发送才真正分支重发（直接发送即用原文重试），首轮重试则新建空分支，不改动原会话历史与文件。fork 出来的分支带「分支」后缀与来源 chip，侧栏同样标记；fork 用的全是 OpenCode 官方接口，不动服务端原有会话存储结构。会话元信息与 `/status` 显示 OpenCode 实际使用的模型 ID：即使设置是「跟随 OpenCode 默认」，也会解析成最后一条回复里的 `providerID/modelID`，头部供应商名同样按这个解析结果走。上下文用量来自最后一条 assistant 回复的 tokens（input + output + reasoning + cache），上限取模型目录里的 `limit.context`，填进 `tokenUsage` 后头部上下文条、`/status` 与用量统计都会生效；该数值在打开会话或重新读取历史时刷新，不会在每一轮结束后实时回读。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其工作以父会话里的「子代理」卡片呈现：task 工具调用显示为专属卡片，运行中会在卡片下方实时滚动显示子代理的最新活动（当前执行的工具或回复文本尾部），结束后展开卡片可查看子代理的最终结果；子代理的过程性输出不会作为独立会话污染会话列表。输入框支持 OpenCode 原生 `/` 命令：`/compact`（别名 `/summarize`）压缩上下文，`/undo`、`/redo` 撤回/恢复最近一轮（含文件恢复，均需二次确认，也可在时间线每条用户消息旁按条撤回），`/init` 与 `.opencode/commands/*.md` 自定义命令透传执行，`/models` 打开模型选择器，`/new`、`/sessions` 指引到 Deck 的新建与列表切换，`/details`、`/thinking` 对应时间线里的可展开细节，完整行为见 [Slash 指令文档](docs/slash-commands.md)；`/share` 等分享类命令尚未接入，仍请用原生 TUI 执行。
 
+### ACP 通用适配
+
+> **实验性支持。** ACP（[Agent Client Protocol](https://agentclientprotocol.com)）是 CLI agent 的标准 JSON-RPC 协议，Devin、Kimi CLI、Goose、GitHub Copilot CLI、Factory Droid 等均已支持。Codecks 内置一个通用 ACP adapter：任何支持 ACP 的 CLI 只需一份启动描述符即可接入，不再需要为每家 CLI 编写专有 adapter。
+
+安装对应 CLI 并登录后，新建 Session 时即可在 Agent 列表中选择（CLI 未安装时显示为离线，不影响其它 Agent）。Agent 选择器按启动协议分成「原生」与「ACP」两组标签页：Codex、Claude、OpenCode 等私有协议 adapter 归「原生」，所有经 ACP 接入的 CLI 归「ACP」。内置描述符覆盖 `devin`（`devin acp`）、`kimi`、`goose`、`copilot`、`droid` 等；接入其它 ACP CLI 或覆盖内置参数时，在 `DATA_DIR/acp-agents.json` 里声明（启动时会生成 `acp-agents.example.json` 样例）：
+
+```jsonc
+{
+  "agents": [
+    {
+      "id": "my-agent",        // 小写字母/数字/中划线
+      "name": "My Agent",
+      "command": "my-agent",
+      "args": ["acp"],
+      "env": { "MY_API_KEY": "…" }
+    }
+  ]
+}
+```
+
+ACP 会话支持新建、续聊、流式输出、工具与文件改动展示、权限审批、取消、重命名（Deck 侧）、软归档和 `plan` 计划面板；Agent 通过 `session/set_mode` 暴露的模式（如 Devin 的 normal/plan）可在顶部栏切换，模型目录与斜杠命令按 Agent 实际通告的能力展示。历史会话优先走 `session/list` + `session/load` 回放；不支持时可用描述符声明外部列举命令（如 `devin list --format json`），或直接保留重启前的缓存摘要。供应商切换、fork、压缩、review、独立 shell、MCP/Skills 等深度能力不在 ACP 协议范围内，界面按能力矩阵自动隐藏。
+
+正被其它进程占用的会话（如 Devin 的 session lock，`session/list` 经 `_meta` 上报）在列表中标记「占用中」：可以打开查看缓存历史，但发送、删除等操作会被拒绝并提示占用方；另一方关闭后，下一次刷新自动解除标记，直接发送即可让 Deck 接管会话。
+
 ### Agent 专属内容展示
 
 会话时间线由通用的消息/命令/文件改动渲染器和每个 Agent 自己的前端适配器组成：Codex 形状的条目走通用渲染，Agent 原生特有条目（`extension` 条目）则交给对应适配器渲染。目前两条管线已打通：
 
 - **Claude**：`TodoWrite` 产生的任务清单以勾选面板显示（运行中实时出现，历史会话同样保留），未知选项折叠展示。
 - **OpenCode**：todo 工具的任务清单同样显示为勾选面板；工具事件保留结构化的入参与元数据。Agent 在任务中调用 OpenCode 的 question 工具提问时（新版 `question.asked` 事件），Deck 会弹出问题卡展示原生选项供选择回答或拒绝；旧的 question 类 permission 审批也兼容（携带原生问题时按问题卡渲染）。
+- **ACP Agent**：`plan` 更新以勾选面板显示；其余原生条目走通用兜底。
 
 没有专属适配器的 `extension` 条目回落为可展开的原始 JSON 视图，不会静默丢失。
 

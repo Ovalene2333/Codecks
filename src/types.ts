@@ -1,3 +1,9 @@
+/**
+ * Stable agent identifier. Built-in adapters use codex/claude/opencode; ACP
+ * agents get arbitrary ids from their descriptors.
+ */
+export type AgentId = string;
+
 export interface Provider {
   id: string;
   name: string;
@@ -93,7 +99,7 @@ export interface TurnExtensionItem {
   id: string;
   type: "extension";
   kind: string;
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   status?: "inProgress" | "completed" | "failed";
   payload?: unknown;
 }
@@ -121,7 +127,7 @@ export interface RuntimeModelConfig {
 }
 
 export interface ProjectDefaults extends ConnectionOverlay {
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   providerId?: string;
   model?: string;
   reasoningEffort?: string;
@@ -142,7 +148,7 @@ export interface ProjectRecord {
 }
 
 export interface DeckPreferences extends ConnectionOverlay {
-  lastAgentId?: "codex" | "claude" | "opencode";
+  lastAgentId?: AgentId;
   lastProviderId?: string;
   lastModel?: string;
   lastReasoningEffort?: string;
@@ -174,7 +180,7 @@ export interface ModelInfo {
 }
 
 export interface ThreadSummary {
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   id: string;
   providerId: string;
   name: string;
@@ -202,16 +208,20 @@ export interface ThreadSummary {
   serviceTier?: string;
   forkedFromId?: string;
   sessionId?: string;
+  sessionMode?: string;
+  sessionModes?: { id: string; name?: string; description?: string }[];
   tokenUsage?: TokenUsage;
   /** Turn that was in progress when the Codex runtime process died. */
   interruptedTurnId?: string;
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+  /** 会话被其它进程占用（ACP session lock），只能查看缓存历史。 */
+  locked?: boolean;
 }
 
 export interface SessionSearchMatch {
-  agentId: "codex" | "claude" | "opencode";
+  agentId: AgentId;
   threadId: string;
   turnId?: string;
   itemId?: string;
@@ -240,7 +250,7 @@ export interface ActiveTaskCommand {
 
 export interface ActiveTask {
   id: string;
-  agentId: "codex" | "claude" | "opencode";
+  agentId: AgentId;
   providerId: string;
   threadId: string;
   threadName: string;
@@ -263,7 +273,7 @@ export interface ApprovalResolveBody {
 
 export interface Approval {
   id: string;
-  agentId?: "codex" | "claude" | "opencode";
+  agentId?: AgentId;
   providerId: string;
   request: { method: string; params: any };
   kind?: ApprovalKind;
@@ -309,8 +319,10 @@ export interface AgentCapabilities {
 }
 
 export interface AgentDescriptor {
-  id: "codex" | "claude" | "opencode";
+  id: AgentId;
   name: string;
+  /** native=CLI 私有协议 adapter；acp=Agent Client Protocol 通用接入。 */
+  protocol?: "native" | "acp";
   available: boolean;
   online: boolean;
   starting?: boolean;
@@ -322,7 +334,7 @@ export interface AgentDescriptor {
 
 export interface AgentProfile {
   id: string;
-  agentId: "codex" | "claude" | "opencode";
+  agentId: AgentId;
   name: string;
   color?: string;
   current?: boolean;

@@ -18,7 +18,7 @@ aside {
 }
 
 .chat-header {
-  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  background: var(--glass);
   border-color: var(--line);
 }
 
@@ -192,7 +192,7 @@ select optgroup {
 
 .modal,
 .usage-drawer {
-  box-shadow: 0 24px 80px var(--shadow);
+  box-shadow: var(--shadow-lg);
 }
 
 .modal-backdrop {
@@ -211,7 +211,7 @@ select optgroup {
 .composer-box {
   border-color: var(--line);
   background: var(--surface);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--shadow) 40%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .composer textarea,
@@ -344,9 +344,9 @@ select optgroup {
 }
 
 .online {
-  border-color: var(--success-border, #24563c);
-  background: var(--success-bg, #10261a);
-  color: var(--ok, #56db94);
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--ok);
 }
 
 .offline-dot {
@@ -356,7 +356,7 @@ select optgroup {
 }
 
 .provider-group-label {
-  color: var(--text-faint, #6d7b8d);
+  color: var(--text-faint);
 }
 
 .provider-group-label::after {
@@ -397,7 +397,7 @@ select optgroup {
 }
 
 .thread-actions {
-  box-shadow: 0 18px 45px var(--shadow);
+  box-shadow: var(--shadow-md);
 }
 
 .thread-actions button {
@@ -472,9 +472,9 @@ select optgroup {
 .floating-menu,
 .appearance-trigger-home {
   border-color: var(--line);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--glass-strong);
   color: var(--text-dim);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 40%, transparent);
+  box-shadow: var(--shadow-md);
   backdrop-filter: blur(14px);
 }
 
@@ -516,7 +516,7 @@ select optgroup {
 
 .appearance-options {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
 }
 
@@ -742,6 +742,31 @@ html[data-motion="off"] *::after {
   animation: none !important;
   transition-duration: 0.01ms !important;
   transition-delay: 0ms !important;
+}
+
+.workspace {
+  background-image: var(--ambient);
+}
+
+/* Performance mode: solid surfaces, no backdrop blur, lighter shadows. */
+html[data-effects="off"] {
+  --ambient: none;
+  --glass: var(--bg);
+  --glass-strong: var(--surface);
+  --shadow-md: 0 2px 8px rgb(0 0 0 / 30%);
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 42%);
+}
+
+html[data-theme="light"][data-effects="off"] {
+  --shadow-md: 0 1px 4px rgb(16 24 40 / 9%);
+  --shadow-lg: 0 6px 24px rgb(16 24 40 / 14%);
+}
+
+html[data-effects="off"] *,
+html[data-effects="off"] *::before,
+html[data-effects="off"] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 @media (max-width: 760px) {
