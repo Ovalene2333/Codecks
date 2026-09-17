@@ -267,7 +267,11 @@ export class AcpClient extends EventEmitter {
     )
       return false;
     try {
-      stdin.write(`${JSON.stringify(message)}\n`);
+      // 严格的 ACP 实现（如 devin 的 Rust jsonrpc actor）会拒绝缺少
+      // jsonrpc:"2.0" 的消息，必须逐条带上。
+      stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
+      );
       return true;
     } catch {
       // 同步抛错时 'error' 事件随后也会触发走 fail()；这里只避免崩溃。
@@ -282,7 +286,22 @@ export class AcpClient extends EventEmitter {
   private handle(message: RpcMessage) {
     if (message.id !== undefined && !message.method) {
       const pending = this.pending.get(message.id);
-      if (!pending) return;
+      if (!pending) {
+        // 严格 agent 对无法解析的入站行回 id:null 的错误（如 -32700
+        // Parse error），无法按 id 关联到请求。只剩一个挂起请求时直接判
+        // 它失败，否则只能干等超时且错误毫无踪迹。
+        if (message.error) {
+          const detail = message.error.message || "JSON-RPC 错误";
+          this.emit("log", `agent 返回无法关联的错误: ${detail}`);
+          if (this.pending.size === 1) {
+            const [[key, item]] = this.pending;
+            clearTimeout(item.timer);
+            this.pending.delete(key);
+            item.reject(new Error(detail));
+          }
+        }
+        return;
+      }
       clearTimeout(pending.timer);
       this.pending.delete(message.id);
       if (message.error) {
