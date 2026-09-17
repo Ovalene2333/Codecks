@@ -224,6 +224,12 @@ export interface ThreadSummary {
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
   /**
+   * 会话被其它进程占用（如 devin 的 session lock）。置位时 Deck 只能展示
+   * 缓存历史，load/resume/prompt 会被 agent 拒绝；下一次 session/list
+   * 报告未锁定或本进程成功接管后自动清除。
+   */
+  locked?: boolean;
+  /**
    * ACP session mode state（`session/set_mode` 体系，如 devin 的
    * normal/accept-edits/plan/bypass）。与 Claude 的 permissionMode 各自独立。
    */

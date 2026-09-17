@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  Lock,
   MoreHorizontal,
   Pin,
   Plus,
@@ -216,6 +217,15 @@ export function ProjectGroupView({
               >
                 {thread.controlMode === "managed" ? "受管" : "历史"}
               </small>
+              {thread.locked ? (
+                <small
+                  className="lock-badge"
+                  title="会话正被其它进程占用，仅可查看历史"
+                >
+                  <Lock />
+                  占用中
+                </small>
+              ) : null}
               {forks > 0 && <small>{forks} 分支</small>}
             </div>
             {searchMatch && (

@@ -13,7 +13,7 @@ type Json = Record<string, any>;
 
 interface RouteContext {
   respond: (result: any) => void;
-  respondError: (code: number, message: string) => void;
+  respondError: (code: number, message: string, data?: any) => void;
   notify: (method: string, params?: any) => void;
   /** agent → client 方向的 JSON-RPC 请求（session/request_permission 等）。 */
   request: (
@@ -70,8 +70,11 @@ function fakeAcpProcess(options: {
       }
       route(msg.params, {
         respond: (result) => send({ id: msg.id, result }),
-        respondError: (code, message) =>
-          send({ id: msg.id, error: { code, message } }),
+        respondError: (code, message, data) =>
+          send({
+            id: msg.id,
+            error: { code, message, ...(data !== undefined ? { data } : {}) },
+          }),
         notify: (method, params) => send({ method, params }),
         request: (method, params, onResponse) => {
           const id = `srv-${++serverRequestId}`;
@@ -650,6 +653,81 @@ test("id:null error rejects the in-flight request instead of timing out", async 
   );
   await assert.rejects(request, /Parse error/);
   assert.ok(logs.some((line) => line.includes("Parse error")));
+});
+
+test("locked sessions are flagged from session/list and fail with a friendly error", async () => {
+  const fake = fakeAcpProcess({
+    // 去掉 resume 能力，ensureLive 才会走 session/load 路径命中锁错误。
+    initialize: {
+      protocolVersion: 1,
+      agentCapabilities: {
+        loadSession: true,
+        sessionCapabilities: { list: {} },
+      },
+    },
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({
+          sessions: [
+            {
+              sessionId: "busy-1",
+              cwd: "D:\\proj",
+              title: "被占用的会话",
+              _meta: { "cognition.ai/isLocked": true },
+            },
+            { sessionId: "free-1", cwd: "D:\\proj" },
+          ],
+        }),
+      "session/load": (params, ctx) => {
+        if (params.sessionId === "busy-1")
+          return ctx.respondError(
+            -32015,
+            "Session 'busy-1' is already open in another process.",
+            { "cognition.ai/errorKind": "session_locked" },
+          );
+        ctx.respond({});
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  const threads = adapter.snapshot().threads;
+  const busy = threads.find((t) => t.id === "busy-1")!;
+  const free = threads.find((t) => t.id === "free-1")!;
+  assert.equal(busy.locked, true);
+  assert.equal(free.locked, undefined);
+
+  await assert.rejects(adapter.sendTurn("", "busy-1", "hi"), /占用|锁定/);
+  assert.equal(
+    adapter.snapshot().threads.find((t) => t.id === "busy-1")!.locked,
+    true,
+  );
+});
+
+test("lock flag clears when a later session/list reports the session free", async () => {
+  let locked = true;
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({
+          sessions: [
+            {
+              sessionId: "s-lock",
+              cwd: "D:\\proj",
+              ...(locked
+                ? { _meta: { "cognition.ai/isLocked": true } }
+                : {}),
+            },
+          ],
+        }),
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  assert.equal(adapter.snapshot().threads[0].locked, true);
+  locked = false;
+  await adapter.refreshAll();
+  assert.equal(adapter.snapshot().threads[0].locked, undefined);
 });
 
 test("process exit mid-turn fails the turn and marks thread offline", async () => {

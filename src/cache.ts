@@ -102,6 +102,7 @@ function compactThread(thread: ThreadSummary): ThreadSummary {
     updatedAt: thread.updatedAt,
     archived: thread.archived,
     controlMode: thread.controlMode,
+    locked: thread.locked,
     forkedFromId: thread.forkedFromId,
   };
 }

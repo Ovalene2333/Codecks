@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ShieldAlert } from "lucide-react";
+import { Lock, ShieldAlert } from "lucide-react";
 import { api, post } from "../api";
 import { dedupeThreadLoad, readThreadCache } from "../cache";
 import { displayText, sessionKey } from "../format";
@@ -840,6 +840,18 @@ export function ChatWorkspace({
                 查看额度
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {thread.locked && !locked && (
+        <div className="lock-banner" role="status">
+          <Lock />
+          <div>
+            <b>会话被其它进程占用</b>
+            <p>
+              该会话已在另一个进程中打开（{agentName} 的会话锁），此处仅展示缓存
+              历史。关闭另一方后可直接发送，Deck 会自动接管。
+            </p>
           </div>
         </div>
       )}
