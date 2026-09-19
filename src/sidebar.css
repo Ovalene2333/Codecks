@@ -27,38 +27,6 @@
   min-width: 0;
   flex: 1;
 }
-.brand .usage-chip {
-  margin-left: auto;
-  flex: none;
-  max-width: 118px;
-  min-height: 28px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--fs-caption);
-  cursor: pointer;
-}
-.brand .usage-chip svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.brand .usage-chip.warn {
-  border-color: var(--warning-border);
-  color: var(--warn);
-}
-.brand .usage-chip.danger {
-  border-color: var(--danger-border);
-  color: var(--danger);
-}
-.brand .usage-chip.muted {
-  color: var(--text-dim);
-}
 .usage-chip-metric {
   overflow: hidden;
   white-space: nowrap;

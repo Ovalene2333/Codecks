@@ -383,18 +383,18 @@
 }
 
 .composer-session-controls .search-picker {
-  max-width: 156px;
+  max-width: 180px;
 }
 
 .composer-session-controls .search-picker-trigger {
   height: 32px;
   min-height: 32px;
-  max-width: 156px;
+  max-width: 180px;
   padding: 0 24px 0 8px;
   border: 0;
   border-radius: 6px;
   background: var(--surface-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .composer-session-controls
