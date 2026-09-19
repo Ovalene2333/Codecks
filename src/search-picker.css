@@ -129,7 +129,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -243,7 +243,7 @@
   padding: 4px 8px 3px;
   background: var(--surface-2);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -265,7 +265,7 @@
   border-radius: 999px;
   background: var(--surface);
   color: var(--accent);
-  font-size: 9px;
+  font-size: var(--fs-meta);
   font-style: normal;
   line-height: 15px;
 }
@@ -316,7 +316,7 @@
   white-space: nowrap;
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   line-height: 14px;
 }
 
@@ -331,7 +331,7 @@
   border-radius: 999px;
   background: var(--surface);
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   line-height: 16px;
 }
 
@@ -354,7 +354,7 @@
   margin: 0;
   padding: 10px 12px 14px;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   text-align: center;
 }
 
@@ -379,7 +379,7 @@
   padding: 0 24px 0 8px;
   border-color: var(--line);
   background: var(--surface-muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .composer-session-controls .search-picker {

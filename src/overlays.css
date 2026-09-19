@@ -156,7 +156,7 @@
   margin-left: 4px;
   color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-style: normal;
 }
 .usage-summary {
@@ -189,7 +189,7 @@
 .usage-summary-grid small {
   margin-bottom: 3px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 .usage-summary-grid b {
   overflow: hidden;
@@ -244,7 +244,7 @@
 }
 .usage-rank-main small {
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 .usage-rank-main > strong {
   flex: none;
@@ -254,7 +254,7 @@
 .usage-rank-main > em {
   flex: none;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-style: normal;
 }
 .usage-rank-track {
@@ -273,7 +273,7 @@
 .usage-rank-row > p {
   margin: 5px 0 0 34px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 .usage-empty {
   display: grid;
@@ -292,7 +292,7 @@
   font-size: 13px;
 }
 .usage-empty span {
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .usage-limits {
   padding-top: 2px;

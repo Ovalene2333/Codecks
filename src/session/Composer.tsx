@@ -173,7 +173,7 @@ export function Composer({
           )}
         </div>
       )}
-      <div className="composer-box">
+      <div className={`composer-box ${sessionControls ? "with-controls" : ""}`}>
         <button
           type="button"
           className="icon-btn attach"
