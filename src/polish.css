@@ -61,22 +61,10 @@ button:disabled {
   transform: none;
 }
 
-.app-shell {
-  background: var(--bg);
-}
-
 aside,
 .sidebar {
   background: var(--sidebar);
   border-right-color: var(--line);
-}
-
-.workspace {
-  background: var(--bg);
-}
-
-.brand {
-  border-bottom-color: var(--line);
 }
 
 .brand > span,
@@ -130,8 +118,7 @@ aside,
 
 .primary,
 .new-session-btn,
-.new-thread,
-.send {
+.new-thread {
   min-height: 36px;
   padding: 0 14px;
   border: 1px solid var(--accent);
@@ -215,19 +202,6 @@ aside,
   padding: 0;
 }
 
-.send {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  color: var(--accent-text);
-}
-
-.send svg {
-  color: var(--accent-text);
-}
-
 .recent-projects > button > svg,
 .recent-create svg {
   width: 16px;
@@ -238,17 +212,6 @@ aside,
 
 .recent-create svg {
   color: var(--text);
-}
-
-.send.stop {
-  border-color: var(--danger-border);
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
-
-.send.stop:hover:not(:disabled) {
-  background: var(--danger-bg);
-  border-color: var(--danger);
 }
 
 .confirm-actions button,
@@ -454,28 +417,6 @@ aside,
   outline: none;
 }
 
-.composer textarea {
-  font-size: var(--fs-body);
-  line-height: 1.55;
-}
-
-.composer-box {
-  border-color: var(--line);
-  background: var(--surface);
-  border-radius: 8px;
-  box-shadow: none;
-}
-
-.composer.drag-over .composer-box {
-  border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
-}
-
-.message {
-  font-size: var(--fs-title);
-  line-height: 1.55;
-}
-
 .message.streaming i {
   width: 2px;
   height: 1.2em;
@@ -485,12 +426,6 @@ aside,
   opacity: 0.78;
   vertical-align: -0.2em;
   animation: blink 1s steps(1, end) infinite;
-}
-
-.message.user {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 12px 12px 4px 12px;
 }
 
 .section-label,
@@ -516,8 +451,7 @@ aside,
 .text-btn,
 .task-error small,
 .terminal-connect small,
-.sync-note small,
-.composer > small {
+.sync-note small {
   font-size: var(--fs-meta);
 }
 
@@ -529,11 +463,6 @@ aside,
 .pill-btn {
   border-radius: 999px;
   padding: 6px 10px;
-}
-
-.chat-header {
-  background: var(--glass);
-  border-bottom-color: var(--line);
 }
 
 .modal {
@@ -788,7 +717,7 @@ aside,
   background: var(--surface-raised);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 
 .question-head > div {
@@ -977,7 +906,6 @@ aside,
     font-size: 22px;
   }
 
-  .message,
   .message.agent {
     font-size: var(--fs-body);
   }
@@ -992,8 +920,7 @@ aside,
   }
 
   .icon-btn,
-  .floating-menu,
-  .send {
+  .floating-menu {
     width: 42px;
     height: 42px;
     min-width: 42px;

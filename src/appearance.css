@@ -2,9 +2,6 @@
 html,
 body,
 #root,
-.app-shell,
-.workspace,
-.chat,
 .welcome,
 .auth-page {
   background: var(--bg);
@@ -14,11 +11,6 @@ body,
 .sidebar,
 aside {
   background: var(--sidebar);
-  border-color: var(--line);
-}
-
-.chat-header {
-  background: var(--glass);
   border-color: var(--line);
 }
 
@@ -204,17 +196,6 @@ select optgroup {
   background: var(--overlay-soft);
 }
 
-.composer {
-  background: linear-gradient(transparent, var(--composer-fade) 22%);
-}
-
-.composer-box {
-  border-color: var(--line);
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
-}
-
-.composer textarea,
 .message.agent,
 .message.user,
 .approval-command-wrap,
@@ -245,11 +226,6 @@ select optgroup {
 .slash-menu button:hover {
   background: var(--control-hover);
   color: var(--text);
-}
-
-.message.user {
-  border-color: var(--line);
-  background: var(--surface-2);
 }
 
 .tool-row,
@@ -742,10 +718,6 @@ html[data-motion="off"] *::after {
   animation: none !important;
   transition-duration: 0.01ms !important;
   transition-delay: 0ms !important;
-}
-
-.workspace {
-  background-image: var(--ambient);
 }
 
 /* Performance mode: solid surfaces, no backdrop blur, lighter shadows. */

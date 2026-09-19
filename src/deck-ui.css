@@ -4,9 +4,7 @@
   --shell-sidebar: 324px;
 }
 
-.app-shell {
-  isolation: isolate;
-}
+
 
 .sidebar {
   width: var(--shell-sidebar);
@@ -14,11 +12,7 @@
   box-shadow: none;
 }
 
-.brand {
-  height: 64px;
-  padding: 0 14px;
-  gap: 10px;
-}
+
 
 .brand-logo {
   width: 34px;
@@ -28,19 +22,6 @@
 .brand b {
   font-size: 15px;
   line-height: 20px;
-}
-
-.brand small {
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.brand .usage-chip {
-  max-width: 108px;
-  min-height: 30px;
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  font-size: 11px;
 }
 
 .sidebar-toolbar {
@@ -89,7 +70,7 @@
 
 .sidebar-meta > span {
   padding: 0 2px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-meta .watch-strip {
@@ -105,7 +86,7 @@
   border-color: var(--line);
   border-radius: var(--radius-sm);
   background: transparent;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-meta .watch-strip button.active {
@@ -114,7 +95,7 @@
 }
 
 .sidebar-meta .watch-strip button b {
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 
 .watch-dot {
@@ -164,7 +145,7 @@
 .thread-list .thread-meta,
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   line-height: 16px;
 }
 
@@ -172,16 +153,6 @@
 .thread-list .session-provider {
   border-radius: 4px;
   line-height: 15px;
-}
-
-.sidebar-footer {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  padding: 10px 12px max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--sidebar);
 }
 
 .sidebar-footer-actions {
@@ -245,7 +216,7 @@
   margin-left: auto;
   color: var(--wait);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-tools-wrap {
@@ -284,7 +255,7 @@
 
 .sidebar-tools-title small {
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-tools-popover > button {
@@ -329,23 +300,13 @@
 .sidebar-tools-popover > button small {
   overflow: hidden;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   line-height: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace,
-.chat {
-  min-width: 0;
-}
 
-.chat-header {
-  border-bottom: 1px solid var(--line);
-  background: var(--glass);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
 
 .chat-header-row1 {
   min-height: 64px;
@@ -366,7 +327,7 @@
 
 .chat-title p {
   margin-top: 3px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .chat-header-actions {
@@ -395,10 +356,7 @@
   background: var(--control-hover);
 }
 
-.timeline {
-  padding: 26px max(30px, calc((100% - 780px) / 2)) 28px;
-  scrollbar-gutter: stable;
-}
+
 
 .timeline-turns {
   width: 100%;
@@ -419,63 +377,7 @@
   line-height: 1.68;
 }
 
-.message.user {
-  max-width: min(86%, 680px);
-  border-color: var(--line);
-  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm)
-    var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
 
-.composer {
-  flex: none;
-  padding: 10px max(30px, calc((100% - 760px) / 2))
-    max(14px, env(safe-area-inset-bottom));
-  background: linear-gradient(transparent, var(--composer-fade) 16%);
-}
-
-.composer-session-controls {
-  margin: 0;
-}
-
-.composer-branch-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 6px 6px 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--info) 40%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--info) 10%, transparent);
-  color: var(--info);
-  font-size: 12px;
-  line-height: 17px;
-}
-
-.composer-branch-hint span {
-  flex: 1;
-  min-width: 0;
-}
-
-.composer-branch-hint .icon-btn {
-  flex: none;
-  min-width: 28px;
-  min-height: 28px;
-}
-
-.composer-session-controls .session-toolbar {
-  min-height: 42px;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  border-bottom: 0;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--surface-muted);
-}
-
-.composer-session-controls .toolbar-fields {
-  gap: 0;
-}
 
 .toolbar-select {
   min-height: 30px;
@@ -494,123 +396,6 @@
   color: var(--text-faint);
   font-size: var(--fs-meta);
   white-space: nowrap;
-}
-
-.composer-session-controls .toolbar-select select,
-.composer-session-controls .toolbar-select input {
-  width: auto;
-  max-width: 180px;
-  min-height: 32px;
-  padding: 0 20px 0 6px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-soft);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.composer-session-controls .toolbar-select {
-  min-height: 32px;
-  padding: 0 5px;
-  overflow: visible;
-  border: 0;
-  border-right: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  transition:
-    background-color var(--ease),
-    color var(--ease);
-}
-
-.composer-session-controls .toolbar-select:hover,
-.composer-session-controls .toolbar-select:focus-within {
-  background: var(--control-hover);
-}
-
-.composer-session-controls .toolbar-select:focus-within {
-  box-shadow: inset 0 -2px var(--focus-ring);
-}
-
-.composer-session-controls .toolbar-field-label {
-  padding: 0 5px 0 2px;
-}
-
-.composer-session-controls .toolbar-select select:focus-visible,
-.composer-session-controls .toolbar-select input:focus-visible {
-  outline: 0;
-}
-
-.composer-session-controls .compact-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 32px;
-  padding: 0 9px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-dim);
-}
-
-.composer-session-controls .compact-btn:hover:not(:disabled),
-.composer-session-controls .compact-btn:focus-visible {
-  border-color: transparent;
-  background: var(--control-hover);
-  color: var(--text);
-}
-
-.composer-session-controls .compact-btn svg {
-  width: 14px;
-  height: 14px;
-}
-
-.composer-box {
-  min-height: 58px;
-  padding: 8px;
-  border-color: var(--line-strong);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
-  transition:
-    border-color var(--ease),
-    box-shadow var(--ease);
-}
-
-.composer-box:focus-within {
-  border-color: var(--focus-ring);
-  box-shadow:
-    var(--shadow-md),
-    0 0 0 3px color-mix(in srgb, var(--focus-ring) 16%, transparent);
-}
-
-.composer textarea {
-  min-height: 40px;
-  max-height: 180px;
-  padding: 9px 8px 10px;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.composer-box .attach,
-.send {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-}
-
-.composer-box .attach {
-  align-self: flex-start;
-}
-
-.composer-box .attach svg {
-  width: 18px;
-  height: 18px;
-  transform: translateY(-1px);
-}
-
-.send {
-  border-radius: var(--radius-sm);
 }
 
 .modal,
@@ -680,7 +465,7 @@
   align-self: auto;
   padding: 0;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 16px;
 }
 
@@ -743,15 +528,6 @@
     min-width: 0;
   }
 
-  .brand {
-    height: 60px;
-    padding-inline: 12px;
-  }
-
-  .brand .usage-chip {
-    max-width: 102px;
-  }
-
   .sidebar-toolbar {
     padding-top: 10px;
   }
@@ -810,10 +586,6 @@
     display: none;
   }
 
-  .timeline {
-    padding: 20px 14px 18px;
-  }
-
   .turn-block {
     margin-bottom: 18px;
   }
@@ -822,25 +594,8 @@
     font-size: 14px;
   }
 
-  .message.user {
-    max-width: 92%;
-  }
-
-  .composer {
-    padding: 8px 10px max(10px, env(safe-area-inset-bottom));
-  }
-
   .composer-session-controls {
     display: none;
-  }
-
-  .composer-box {
-    min-height: 56px;
-    border-radius: var(--radius-md);
-  }
-
-  .composer textarea {
-    font-size: 16px;
   }
 
   .modal,

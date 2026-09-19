@@ -109,7 +109,7 @@
   background: var(--surface-2);
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 11px !important;
+  font-size: var(--fs-meta) !important;
   line-height: 16px;
   text-align: center;
   flex: none;
@@ -145,7 +145,7 @@
   gap: 6px;
   min-width: 0;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .provider-dot-mini {
   width: 6px;
@@ -157,7 +157,7 @@
 .thread-meta time,
 .thread-meta small {
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
 .provider-badge {
@@ -168,7 +168,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 16px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -185,7 +185,7 @@
   background: var(--danger-bg);
   border-radius: var(--radius-md);
   color: var(--danger-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .source-error summary {
   display: flex;
@@ -258,7 +258,7 @@
 .runtime-context-form code {
   overflow-wrap: anywhere;
   color: var(--text-faint);
-  font-size: 9px;
+  font-size: var(--fs-meta);
 }
 
 .sync-note .runtime-context-warning {
@@ -348,7 +348,7 @@
 
 .terminal-connect small {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .terminal-connect button {
@@ -372,10 +372,10 @@
   flex: 1;
 }
 .sync-note b {
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .sync-note small {
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: color-mix(in srgb, var(--ok) 78%, var(--text-dim));
 }
 .sync-note.offline small {
@@ -393,7 +393,7 @@
   align-items: center;
   gap: 8px;
   margin: 8px 0 2px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--text-faint);
   text-transform: uppercase;
@@ -457,7 +457,7 @@
 .online,
 .offline-dot {
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid;
@@ -482,7 +482,7 @@
   border-radius: 4px;
   background: var(--success-bg);
   color: var(--ok);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 * {
   scrollbar-width: thin;
@@ -661,7 +661,7 @@
 }
 .migration-note b {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .migration-note p {
   margin: 4px 0 0;
@@ -676,7 +676,7 @@
   width: fit-content;
   margin: -14px auto 24px;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .migration-origin svg {
   width: 13px;
@@ -787,14 +787,14 @@
 .task-error p {
   margin: 5px 0;
   color: var(--danger-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }
 .task-error small {
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 /* ACP 会话被其它进程占用时的中性提示条（非错误）。 */
 .lock-banner {
@@ -819,7 +819,7 @@
 }
 .lock-banner p {
   margin: 5px 0;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }
