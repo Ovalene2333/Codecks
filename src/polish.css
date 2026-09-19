@@ -98,13 +98,6 @@ aside,
   font-weight: 600;
 }
 
-.brand small {
-  margin-top: 1px;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-  font-size: var(--fs-meta);
-}
-
 .welcome h1,
 .welcome.work-entry h1 {
   margin: 0 0 8px;
@@ -501,7 +494,6 @@ aside,
 }
 
 .section-label,
-.brand small,
 .status,
 .system-pills span,
 .pill-btn,
@@ -1024,13 +1016,12 @@ aside,
   }
 
   .library-segment > button,
-  .brand .usage-chip,
+  .sidebar-footer .usage-chip,
   .pill-btn {
     min-height: 36px;
   }
 
-  .brand .usage-chip {
-    max-width: none;
+  .sidebar-footer .usage-chip {
     font-size: var(--fs-caption);
   }
 }

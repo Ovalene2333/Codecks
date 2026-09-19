@@ -802,6 +802,11 @@ export function ChatWorkspace({
           streamedItems={streamedItems}
           pendingUsers={pendingUsers}
           origin={origin}
+          agentName={agentName}
+          onQuickPrompt={(text) => {
+            updateDraft({ ...draft, text });
+            setComposerFocusRequest((current) => current + 1);
+          }}
           targetTurnId={searchTarget?.turnId}
           targetItemId={searchTarget?.itemId}
           targetRequest={searchTarget?.request}

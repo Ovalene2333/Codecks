@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
+  Minimize2,
   MoreHorizontal,
   SunMoon,
 } from "lucide-react";
@@ -43,6 +44,8 @@ export function ChatHeader({
     thread.tokenUsage?.used != null && thread.tokenUsage.limit != null
       ? `${formatTokens(thread.tokenUsage.used)}/${formatTokens(thread.tokenUsage.limit)}`
       : formatTokens(thread.tokenUsage?.used ?? thread.tokenUsage?.limit);
+  const hasUsage =
+    thread.tokenUsage?.used != null || thread.tokenUsage?.limit != null;
 
   return (
     <header className="chat-header">
@@ -80,24 +83,30 @@ export function ChatHeader({
           </p>
         </div>
         <div className="chat-header-actions">
-          <span
-            className={`chat-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
-            title={`${agentName} 任务`}
-          >
-            {agentBadgeLabel(thread.agentId, agentName)}
-          </span>
-          <div
-            className="desktop-context"
-            title={`上下文 ${contextLabel || "未知"}`}
-          >
-            <span className="desktop-context-label">上下文</span>
-            <ContextBar
-              usage={thread.tokenUsage}
-              compacting={thread.compacting}
-              onCompact={onCompact}
-              showUnknown
-            />
-          </div>
+          {hasUsage || thread.compacting ? (
+            <div
+              className="desktop-context"
+              title={`上下文 ${contextLabel || "未知"}`}
+            >
+              <span className="desktop-context-label">上下文</span>
+              <ContextBar
+                usage={thread.tokenUsage}
+                compacting={thread.compacting}
+                onCompact={onCompact}
+                showUnknown
+              />
+            </div>
+          ) : onCompact ? (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onCompact}
+              title="压缩上下文"
+              aria-label="压缩上下文"
+            >
+              <Minimize2 />
+            </button>
+          ) : null}
           {(!thread.agentId ||
             thread.agentId === "codex" ||
             thread.agentId === "claude") && (
@@ -140,12 +149,14 @@ export function ChatHeader({
           compact
           label={thread.compacting ? "正在运行" : undefined}
         />
-        <span
-          className="mobile-context"
-          title={`上下文 ${contextLabel || "未知"}`}
-        >
-          {contextLabel || "--/--"}
-        </span>
+        {contextLabel ? (
+          <span
+            className="mobile-context"
+            title={`上下文 ${contextLabel}`}
+          >
+            {contextLabel}
+          </span>
+        ) : null}
         <span className="mobile-project" title={thread.cwd || "项目未知"}>
           {basename(thread.cwd) || "项目未知"}
         </span>
