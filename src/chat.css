@@ -130,14 +130,10 @@
   border-radius: 4px;
   background: var(--control);
 }
-.chat-agent-badge {
-  margin-right: 2px;
-}
 .mobile-agent-badge {
   display: none;
 }
 @media (max-width: 1100px) and (min-width: 761px) {
-  .chat-agent-badge,
   .desktop-context-label,
   .desktop-context .context-track {
     display: none;
@@ -233,7 +229,7 @@
 .timeline {
   display: flex;
   flex-direction: column;
-  padding: 16px max(28px, calc((100% - 720px) / 2)) 148px;
+  padding: 16px max(28px, calc((100% - 760px) / 2)) 148px;
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
@@ -244,6 +240,92 @@
   order: 1;
   min-width: 0;
   max-width: 100%;
+}
+.session-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  padding: 24px 16px;
+  text-align: center;
+}
+.session-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text-dim);
+}
+.session-empty-icon svg {
+  width: 22px;
+}
+.session-empty h3 {
+  margin: 0;
+  font-size: var(--fs-heading);
+  font-weight: 600;
+}
+.session-empty-cwd {
+  max-width: 100%;
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-empty-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.session-empty-model {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+.session-empty-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 540px;
+  margin-top: 22px;
+}
+.session-empty-prompts button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: var(--fs-caption);
+  cursor: pointer;
+}
+.session-empty-prompts button:hover,
+.session-empty-prompts button:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.session-empty-prompts svg {
+  width: 14px;
+  color: var(--text-dim);
+}
+.session-empty-hint {
+  margin: 20px 0 0;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
 }
 .origin-chip {
   display: inline-flex;

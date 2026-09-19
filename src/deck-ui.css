@@ -191,7 +191,8 @@
 }
 
 .sidebar-footer-actions > button,
-.sidebar-tools-wrap > button {
+.sidebar-tools-wrap > button,
+.sidebar-footer > .usage-chip {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -209,16 +210,35 @@
 
 .sidebar-footer-actions > button:hover,
 .sidebar-tools-wrap > button:hover,
-.sidebar-tools-wrap > button.active {
+.sidebar-tools-wrap > button.active,
+.sidebar-footer > .usage-chip:hover {
   border-color: var(--control-border);
   background: var(--control-hover);
   color: var(--text);
 }
 
+.sidebar-footer > .usage-chip.warn {
+  border-color: var(--warning-border);
+  color: var(--warn);
+}
+
+.sidebar-footer > .usage-chip.danger {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.sidebar-footer > .usage-chip .usage-chip-metric {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
 .sidebar-footer-actions > button svg,
-.sidebar-tools-wrap > button svg {
+.sidebar-tools-wrap > button svg,
+.sidebar-footer > .usage-chip svg {
   width: 16px;
   height: 16px;
+  flex: none;
 }
 
 .sidebar-footer-actions > button > b {
@@ -410,7 +430,7 @@
 
 .composer {
   flex: none;
-  padding: 10px max(30px, calc((100% - 820px) / 2))
+  padding: 10px max(30px, calc((100% - 760px) / 2))
     max(14px, env(safe-area-inset-bottom));
   background: linear-gradient(transparent, var(--composer-fade) 16%);
 }
@@ -445,12 +465,12 @@
 }
 
 .composer-session-controls .session-toolbar {
-  min-height: 44px;
-  padding: 5px 6px;
+  min-height: 42px;
+  padding: 4px 6px;
   border: 1px solid var(--line);
   border-bottom: 0;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--surface);
+  background: var(--surface-muted);
 }
 
 .composer-session-controls .toolbar-fields {
@@ -470,18 +490,18 @@
   display: inline-flex;
   align-items: center;
   align-self: stretch;
-  padding: 0 6px 0 8px;
+  padding: 0 5px 0 9px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   white-space: nowrap;
 }
 
 .composer-session-controls .toolbar-select select,
 .composer-session-controls .toolbar-select input {
   width: auto;
-  max-width: 128px;
+  max-width: 180px;
   min-height: 32px;
-  padding: 0 24px 0 4px;
+  padding: 0 20px 0 6px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -610,7 +630,7 @@
 
   .composer-session-controls .toolbar-select select,
   .composer-session-controls .toolbar-select input {
-    max-width: 116px;
+    max-width: 150px;
     padding-left: 8px;
   }
 }

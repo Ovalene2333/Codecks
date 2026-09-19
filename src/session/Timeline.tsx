@@ -1,10 +1,23 @@
 import { useLayoutEffect, useRef } from "react";
-import { Folder, GitBranch, LoaderCircle } from "lucide-react";
+import {
+  Compass,
+  Folder,
+  GitBranch,
+  ListTree,
+  LoaderCircle,
+} from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { TurnBlock } from "./TurnBlock";
+import { basename } from "../format";
 import type { PendingUserMessage } from "./optimistic";
 import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
+
+const QUICK_PROMPTS = [
+  { icon: Compass, text: "这个项目是做什么的？先给我一个概览" },
+  { icon: ListTree, text: "帮我梳理一下代码结构" },
+  { icon: GitBranch, text: "检查当前 git 状态和最近的改动" },
+];
 
 export function Timeline({
   thread,
@@ -13,6 +26,7 @@ export function Timeline({
   streamedItems,
   pendingUsers,
   origin,
+  agentName,
   targetTurnId,
   targetItemId,
   targetRequest,
@@ -23,6 +37,7 @@ export function Timeline({
   onEditUserMessage,
   onRetryUserMessage,
   onRevertUserMessage,
+  onQuickPrompt,
   messageActionsDisabled,
 }: {
   thread: ThreadSummary;
@@ -31,6 +46,7 @@ export function Timeline({
   streamedItems: StreamedTurnItem[];
   pendingUsers: PendingUserMessage[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
+  agentName: string;
   targetTurnId?: string;
   targetItemId?: string;
   targetRequest?: number;
@@ -41,6 +57,7 @@ export function Timeline({
   onEditUserMessage?: (item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   onRevertUserMessage?: (turnId: string, item: any) => void;
+  onQuickPrompt?: (text: string) => void;
   messageActionsDisabled?: boolean;
 }) {
   const timeline = useRef<HTMLDivElement>(null);
@@ -135,13 +152,58 @@ export function Timeline({
       turn?.status === "running",
   );
   const hasActiveTurn = activeTurnIndex >= 0;
+  const isEmpty =
+    !turns.length && !pendingUsers.length && !streamed.length;
+  // 只在首次加载落定后展示 hero，避免缓存/请求在途时空态闪现后被内容替换。
+  const showEmpty = isEmpty && targetFallbackReady === true;
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
-      <div className="session-meta">
-        <Folder />
-        {thread.cwd}
-        <span>{thread.resolvedModel || thread.model}</span>
-      </div>
+      {showEmpty ? (
+        <div className="session-empty">
+          <span className="session-empty-icon">
+            <Folder />
+          </span>
+          <h3>{basename(thread.cwd) || thread.name}</h3>
+          {thread.cwd ? (
+            <p className="session-empty-cwd" title={thread.cwd}>
+              {thread.cwd}
+            </p>
+          ) : null}
+          <div className="session-empty-tags">
+            <span
+              className={`agent-badge agent-${thread.agentId || "codex"}`}
+            >
+              {agentName}
+            </span>
+            <span className="session-empty-model">
+              {thread.resolvedModel || thread.model}
+            </span>
+          </div>
+          {onQuickPrompt ? (
+            <div className="session-empty-prompts">
+              {QUICK_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt.text}
+                  type="button"
+                  onClick={() => onQuickPrompt(prompt.text)}
+                >
+                  <prompt.icon />
+                  {prompt.text}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <p className="session-empty-hint">
+            输入指令开始任务，输入 / 查看可用命令
+          </p>
+        </div>
+      ) : (
+        <div className="session-meta">
+          <Folder />
+          {thread.cwd}
+          <span>{thread.resolvedModel || thread.model}</span>
+        </div>
+      )}
       {origin && (
         <button type="button" className="origin-chip" onClick={onOpenOrigin}>
           <GitBranch />

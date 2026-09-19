@@ -181,9 +181,7 @@ export function Sidebar({
         <img className="brand-logo" src={deckLogo} alt="" />
         <div>
           <b>Codex Deck</b>
-          <small>REMOTE WORKSPACE</small>
         </div>
-        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <button className="icon-btn" onClick={onClose}>
           <X />
         </button>
@@ -356,6 +354,7 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-footer">
+        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <div className="sidebar-footer-actions">
           <button
             type="button"
