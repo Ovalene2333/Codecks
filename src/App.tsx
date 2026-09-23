@@ -12,6 +12,7 @@ import {
   setToken,
 } from "./api";
 import { useAppearance } from "./appearance";
+import { copyText } from "./clipboard";
 import type {
   ProjectRecord,
   RuntimeSnapshot,
@@ -345,9 +346,11 @@ export function App() {
     [markSessionSeen],
   );
 
-  const refreshOfficialUsage = useCallback(async () => {
+  const refreshOfficialUsage = useCallback(async (force = false) => {
     try {
-      const runtime = await post<RuntimeSnapshot>("/runtime/rate-limits");
+      const runtime = await post<RuntimeSnapshot>(
+        `/runtime/rate-limits${force ? "?force=1" : ""}`,
+      );
       setSnapshot((current) => ({ ...current, runtime }));
     } catch (error: any) {
       pushToast(error?.message || "Official 额度刷新失败");
@@ -1410,8 +1413,8 @@ export function App() {
               const result = await api<{ command: string }>(
                 `/runtime/terminal-command?cwd=${encodeURIComponent(historyHelp.cwd)}`,
               );
-              await navigator.clipboard.writeText(result.command);
-              pushToast("已复制");
+              if (await copyText(result.command)) pushToast("已复制");
+              else pushToast("复制失败");
             }}
           >
             复制 --remote 命令

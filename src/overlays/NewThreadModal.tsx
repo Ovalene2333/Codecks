@@ -195,9 +195,9 @@ export function NewThreadModal({
           : {
               // 非 Codex agent 不使用 codex 的权限/沙箱/personality 字段。
               reasoningEffort:
-                agentId === "opencode"
-                  ? form.reasoningEffort || undefined
-                  : undefined,
+                agentId === "claude"
+                  ? undefined
+                  : form.reasoningEffort || undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
@@ -386,22 +386,16 @@ export function NewThreadModal({
               agentId={agentId}
               providerId=""
               model={form.model}
-              reasoningEffort={
-                agentId === "opencode" ? form.reasoningEffort : ""
-              }
+              reasoningEffort={form.reasoningEffort}
               onChange={(next) =>
                 setForm((current) => ({
                   ...current,
                   model: next.model,
-                  ...(agentId === "opencode"
-                    ? {
-                        reasoningEffort: next.reasoningEffort,
-                        // The model id carries the provider, so the thread keeps
-                        // pointing at the right one without a second picker.
-                        ...(opencodeProviderId(next.model)
-                          ? { providerId: opencodeProviderId(next.model) }
-                          : {}),
-                      }
+                  reasoningEffort: next.reasoningEffort,
+                  ...(agentId === "opencode" && opencodeProviderId(next.model)
+                    ? // The model id carries the provider, so the thread keeps
+                      // pointing at the right one without a second picker.
+                      { providerId: opencodeProviderId(next.model) }
                     : {}),
                 }))
               }

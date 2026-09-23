@@ -123,6 +123,32 @@ test("opencode commands parse to native or passthrough kinds", () => {
   assert.equal(parseComposerCommand("/undo"), undefined);
 });
 
+test("acp agents parse /model natively and pass other commands through", () => {
+  assert.deepEqual(parseComposerCommand("/model", "devin"), {
+    kind: "model",
+    model: undefined,
+  });
+  assert.deepEqual(parseComposerCommand("/model opus", "devin"), {
+    kind: "model",
+    model: "opus",
+  });
+  assert.deepEqual(parseComposerCommand("/compact", "devin"), {
+    kind: "agent-command",
+    command: "compact",
+    args: "",
+  });
+});
+
+test("acp slash menu lists agent commands and dedupes deck /model", () => {
+  const items = matchingSlashCommands("/", "devin", [
+    { name: "/model", hint: "选择模型" },
+    { name: "plan", hint: "计划模式" },
+    { name: "model", hint: "agent 自报" },
+  ]);
+  const names = items.map((item) => item.name);
+  assert.deepEqual(names, ["/model", "/plan"]);
+});
+
 test("opencode slash menu merges builtins with server custom commands", () => {
   const items = matchingSlashCommands("/", "opencode", [
     { name: "deploy", hint: "发布" },

@@ -107,7 +107,7 @@ export function ChatWorkspace({
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [commandModal, setCommandModal] = useState<CommandModalKind>();
   const [modelCatalog, setModelCatalog] = useState<ModelInfo[]>([]);
-  const [opencodeCommands, setOpencodeCommands] = useState<
+  const [sessionCommands, setSessionCommands] = useState<
     Array<{ name: string; hint?: string }>
   >([]);
   const [revertConfirm, setRevertConfirm] = useState<
@@ -162,9 +162,10 @@ export function ChatWorkspace({
   useEffect(() => {
     const id = thread.agentId || "codex";
     // codex 用内置 SLASH_COMMANDS，claude 无会话命令；其余 agent（opencode、
-    // ACP）都走 GET /commands 拉取 agent 自报的命令列表。
+    // ACP）都走 GET /commands 拉取 agent 自报的命令列表，之后由
+    // agent.event 的 session/commands 推送增量刷新。
     if (id === "codex" || id === "claude") {
-      setOpencodeCommands([]);
+      setSessionCommands([]);
       return;
     }
     let cancelled = false;
@@ -174,7 +175,7 @@ export function ChatWorkspace({
       .then((data) => {
         if (cancelled) return;
         const list = Array.isArray(data?.commands) ? data.commands : [];
-        setOpencodeCommands(
+        setSessionCommands(
           list
             .map((item) => ({
               name: String(item?.name || "").trim(),
@@ -184,7 +185,7 @@ export function ChatWorkspace({
         );
       })
       .catch(() => {
-        if (!cancelled) setOpencodeCommands([]);
+        if (!cancelled) setSessionCommands([]);
       });
     return () => {
       cancelled = true;
@@ -219,6 +220,21 @@ export function ChatWorkspace({
     if (event?.providerId && event.providerId !== thread.providerId) return;
     if ((event?.agentId || "codex") !== (thread.agentId || "codex")) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
+    // ACP agent 推送的 availableCommands：实时刷新 `/` 补全。
+    if (method === "session/commands") {
+      const list = Array.isArray(event?.params?.commands)
+        ? event.params.commands
+        : [];
+      setSessionCommands(
+        list
+          .map((item: any) => ({
+            name: String(item?.name || "").trim(),
+            hint: String(item?.description || "").trim() || undefined,
+          }))
+          .filter((item: { name: string }) => Boolean(item.name)),
+      );
+      return;
+    }
     const immediate = method === "turn/completed" || method === "error";
     if (immediate) {
       load();
@@ -230,6 +246,20 @@ export function ChatWorkspace({
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
+    // ACP agent 没有暴露模型目录时，/model 当作普通斜杠命令原文透传，
+    // 由 agent 自己解释（devin acp 尚未把 /model 纳入 advertised commands）。
+    if (
+      command.kind === "model" &&
+      !capabilities.models &&
+      thread.agentId !== "codex" &&
+      thread.agentId !== "claude" &&
+      thread.agentId !== "opencode"
+    )
+      command = {
+        kind: "agent-command",
+        command: "model",
+        args: command.model || "",
+      };
     if (
       thread.agentId === "claude" &&
       !["status", "usage", "ps", "model", "permissions"].includes(command.kind)
@@ -872,7 +902,17 @@ export function ChatWorkspace({
         images={draft.images}
         sending={sending}
         imageWarning={imageWarning}
-        extraCommands={opencodeCommands}
+        extraCommands={[
+          // ACP agent 的 /model 走 Deck 模型面板（有目录时），其余命令来自
+          // agent 自报的 availableCommands。
+          ...(capabilities.models &&
+          thread.agentId !== "codex" &&
+          thread.agentId !== "claude" &&
+          thread.agentId !== "opencode"
+            ? [{ name: "/model", hint: "选择模型" }]
+            : []),
+          ...sessionCommands,
+        ]}
         branchHint={retrySource?.preview}
         onCancelBranch={
           retrySource ? () => setRetrySource(undefined) : undefined

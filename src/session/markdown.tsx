@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { Image as ImageIcon, RotateCcw } from "lucide-react";
 import { unwrapAssistantMarkup } from "../codexLabels";
 import { getBlob } from "../api";
+import { copyText } from "../clipboard";
 
 const LOCAL_IMAGE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 
@@ -87,8 +88,7 @@ function CopyablePreInner({
         className="copy-code"
         onClick={async () => {
           const text = ref.current?.innerText || "";
-          await navigator.clipboard.writeText(text);
-          onCopy?.();
+          if (await copyText(text)) onCopy?.();
         }}
       >
         复制

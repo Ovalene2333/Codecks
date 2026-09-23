@@ -11,6 +11,7 @@ import type {
   TurnImage,
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
+import { timestampFromId } from "../protocol.js";
 import { AcpClient } from "./acp-client.js";
 import type {
   AcpAgentCapabilities,
@@ -53,10 +54,42 @@ export interface AcpAgentSpec {
     args: string[];
     /** true → 在每个已知项目目录下各执行一次（devin list 按目录列会话）。 */
     perDirectory?: boolean;
+    /**
+     * 非标准输出字段映射：规范字段 → 该 CLI 输出里的键名。声明后优先于
+     * 内置别名表，适配新 CLI 只需改 spec 而不动 adapter。
+     */
+    fields?: Partial<
+      Record<"sessionId" | "cwd" | "title" | "updatedAt" | "locked", string>
+    >;
   };
   /** agent 不支持 configOptions 模型目录时的静态模型列表。 */
   models?: { id: string; name?: string; description?: string }[];
+  /** 认证类错误后附加的提示文案；缺省时用通用「请先完成登录认证」。 */
+  authHint?: string;
 }
+
+/** 规范字段 → listSessions 命令输出的常见别名。spec.fields 可覆盖/补充。 */
+const SESSION_FIELD_ALIASES = {
+  sessionId: ["sessionId", "session_id", "id", "sessionID"],
+  cwd: [
+    "cwd",
+    "directory",
+    "workingDirectory",
+    "working_directory",
+    "path",
+    "workspace",
+  ],
+  title: ["title", "name", "summary", "description"],
+  updatedAt: [
+    "updatedAt",
+    "updated_at",
+    "lastActivityAt",
+    "last_active_at",
+    "createdAt",
+    "created_at",
+    "timestamp",
+  ],
+} as const;
 
 interface PendingPermission {
   id: string;
@@ -88,6 +121,23 @@ interface AcpSessionState {
   thoughtItemId?: string;
   /** 进行中的 session/load。 */
   loading?: Promise<any[]>;
+}
+
+/**
+ * 活动时间优先级：agent 报告的时间戳 > 本地缓存 > sessionId 内嵌的
+ * UUIDv7 时间 > 当前时间。list 刷新/回放不得把「没有数据」刷成「刚刚」。
+ */
+function resolveUpdatedAt(
+  info: AcpSessionInfo,
+  existing: ThreadSummary | undefined,
+  sessionId: string,
+) {
+  return (
+    Date.parse(info.updatedAt || "") ||
+    existing?.updatedAt ||
+    timestampFromId(sessionId) ||
+    Date.now()
+  );
 }
 
 function pick(row: Record<string, unknown>, keys: string[]) {
@@ -513,6 +563,15 @@ export class AcpAdapter extends EventEmitter {
       thread.sessionMode = result.modes.currentModeId;
     if (Array.isArray(result?.configOptions))
       session.configOptions = result.configOptions;
+    // ACP 规范不在 new/resume/load 响应里带命令，但部分 agent 会顺带返回；
+    // 宽松接收 `commands.availableCommands` 或顶层 `availableCommands`。
+    const seeded =
+      (result as any)?.commands?.availableCommands ??
+      (result as any)?.availableCommands;
+    if (Array.isArray(seeded))
+      session.commands = seeded.filter(
+        (item: any) => typeof item?.name === "string",
+      );
     const model = this.currentModelOf(session);
     if (model) thread.resolvedModel = model;
   }
@@ -524,6 +583,24 @@ export class AcpAdapter extends EventEmitter {
     return typeof option?.currentValue === "string"
       ? option.currentValue
       : "";
+  }
+
+  /* ACP 没有标准 effort 字段；agent 若暴露了 effort 类 select
+     configOption（如 devin 的 thinking level），就当作推理强度来用。 */
+  private effortOptionOf(session: AcpSessionState) {
+    return (session.configOptions || []).find(
+      (item) =>
+        item?.type === "select" &&
+        item?.category !== "model" &&
+        /effort|reason|thought|think/i.test(
+          `${item?.category || ""} ${item?.id || ""} ${item?.name || ""}`,
+        ),
+    );
+  }
+
+  private currentEffortOf(session: AcpSessionState) {
+    const value = this.effortOptionOf(session)?.currentValue;
+    return typeof value === "string" ? value : "";
   }
 
   // ------------------------------------------------------------------ CRUD
@@ -562,10 +639,18 @@ export class AcpAdapter extends EventEmitter {
     };
     this.applySessionInfo(thread, session, result);
     this.threads.set(sessionId, thread);
+    const effort = this.currentEffortOf(session);
+    if (effort) thread.reasoningEffort = effort;
     if (input.model && input.model !== "default")
       await this.applyModel(thread, session, input.model).catch(() => {
         /* 模型应用失败不阻塞建会话 */
       });
+    if (input.reasoningEffort)
+      await this.applyEffort(thread, session, input.reasoningEffort).catch(
+        () => {
+          /* 同上 */
+        },
+      );
     if (input.sessionMode)
       await this.applyMode(thread, session, input.sessionMode).catch(() => {
         /* 同上 */
@@ -596,6 +681,7 @@ export class AcpAdapter extends EventEmitter {
       providerId: thread.providerId,
       cwd: thread.cwd,
       model: thread.resolvedModel || thread.model,
+      reasoningEffort: thread.reasoningEffort,
       sessionMode: thread.sessionMode,
       sessionModes: thread.sessionModes,
       turns: session.turns,
@@ -608,7 +694,7 @@ export class AcpAdapter extends EventEmitter {
     const next = name.trim();
     if (!next) throw new Error("会话名称不能为空");
     thread.name = next;
-    thread.updatedAt = Date.now();
+    this.touch(thread);
     await this.options.threadSettings?.update(this.id, threadId, {
       name: next,
     });
@@ -677,7 +763,13 @@ export class AcpAdapter extends EventEmitter {
         model: settings.model,
       });
     }
-    thread.updatedAt = Date.now();
+    if (settings.reasoningEffort !== undefined) {
+      await this.applyEffort(thread, session, settings.reasoningEffort);
+      await this.options.threadSettings?.update(this.id, threadId, {
+        reasoningEffort: settings.reasoningEffort,
+      });
+    }
+    this.touch(thread);
     this.broadcast("thread.updated", thread);
     return thread;
   }
@@ -713,6 +805,21 @@ export class AcpAdapter extends EventEmitter {
     thread.resolvedModel = model;
   }
 
+  private async applyEffort(
+    thread: ThreadSummary,
+    session: AcpSessionState,
+    effort: string,
+  ) {
+    const option = this.effortOptionOf(session);
+    if (!option || !session.live) return;
+    await this.client.request("session/set_config_option", {
+      sessionId: thread.id,
+      configId: option.id,
+      value: effort,
+    });
+    thread.reasoningEffort = effort;
+  }
+
   // ------------------------------------------------------------------- turn
 
   async sendTurn(
@@ -746,7 +853,7 @@ export class AcpAdapter extends EventEmitter {
     session.thoughtItemId = undefined;
     thread.status = "running";
     thread.activeTurnId = turnId;
-    thread.updatedAt = Date.now();
+    this.touch(thread);
     thread.lastError = undefined;
     thread.controlMode = "managed";
     const turn = {
@@ -863,7 +970,7 @@ export class AcpAdapter extends EventEmitter {
   ) {
     thread.status = "idle";
     thread.activeTurnId = undefined;
-    thread.updatedAt = Date.now();
+    this.touch(thread);
     const session = this.sessions.get(thread.id);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (turn) turn.status = status;
@@ -878,7 +985,7 @@ export class AcpAdapter extends EventEmitter {
     thread.status = "error";
     thread.activeTurnId = undefined;
     thread.lastError = detail || `${this.spec.name} 任务失败`;
-    thread.updatedAt = Date.now();
+    this.touch(thread);
     this.error = thread.lastError;
     const session = this.sessions.get(thread.id);
     const turn = session?.turns.find((item) => item.id === turnId);
@@ -1066,12 +1173,34 @@ export class AcpAdapter extends EventEmitter {
   // -------------------------------------------------------------- models
 
   async listModels(): Promise<ModelInfo[]> {
+    /* effort 是 agent 级的 configOption，不随模型变化；目录里有值时把同一组
+       选项挂到每个模型上，前端选择器就能渲染推理强度下拉。 */
+    const effortOption = [...this.sessions.values()]
+      .map((session) => this.effortOptionOf(session))
+      .find(Boolean);
+    const efforts = effortOption
+      ? flattenConfigOptions(effortOption.options).map((value) => ({
+          reasoningEffort: value.id,
+          description: value.name,
+        }))
+      : [];
+    const defaultEffort =
+      typeof effortOption?.currentValue === "string"
+        ? effortOption.currentValue
+        : undefined;
+    const effortMeta = efforts.length
+      ? {
+          supportedReasoningEfforts: efforts,
+          defaultReasoningEffort: defaultEffort,
+        }
+      : {};
     const catalog = new Map<string, ModelInfo>();
     for (const model of this.spec.models || [])
       catalog.set(model.id, {
         id: model.id,
         model: model.id,
         displayName: model.name || model.id,
+        ...effortMeta,
       });
     for (const session of this.sessions.values()) {
       for (const option of session.configOptions || []) {
@@ -1085,6 +1214,7 @@ export class AcpAdapter extends EventEmitter {
               displayName: value.name || value.id,
               groupName: value.group,
               isDefault: option.currentValue === value.id,
+              ...effortMeta,
             });
         }
       }
@@ -1114,11 +1244,73 @@ export class AcpAdapter extends EventEmitter {
     if (!sessionId || !update?.sessionUpdate) return;
     const thread = this.threads.get(sessionId);
     const session = this.sessionFor(sessionId);
+    // 会话级状态（命令/模式/配置/标题/用量）不属于任何 turn，在 load
+    // 回放期间也会推送，先单独处理再分流到回放或实时 turn。
+    if (this.applySessionMetaUpdate(thread, session, update)) return;
     if (session.replay) {
       this.applyReplayUpdate(session.replay, update);
       return;
     }
     if (thread) this.applyLiveUpdate(thread, session, update);
+  }
+
+  /** 不属于 turn 的 session/update：回放与实时阶段都要生效。 */
+  private applySessionMetaUpdate(
+    thread: ThreadSummary | undefined,
+    session: AcpSessionState,
+    update: AcpSessionUpdate,
+  ) {
+    switch (update.sessionUpdate) {
+      case "available_commands_update":
+        session.commands = Array.isArray(update.availableCommands)
+          ? update.availableCommands.filter(
+              (item: any) => typeof item?.name === "string",
+            )
+          : [];
+        // 推给前端刷新 `/` 补全：GET /commands 只在会话挂载时拉一次。
+        if (thread)
+          this.emitAgentEvent(thread, {
+            method: "session/commands",
+            params: { threadId: thread.id, commands: session.commands },
+          });
+        return true;
+      case "current_mode_update":
+        if (thread && update.currentModeId) {
+          thread.sessionMode = String(update.currentModeId);
+          this.broadcast("thread.updated", thread);
+        }
+        return true;
+      case "config_option_update":
+        if (Array.isArray(update.configOptions)) {
+          session.configOptions = update.configOptions;
+          const model = this.currentModelOf(session);
+          if (thread && model) thread.resolvedModel = model;
+          const effort = this.currentEffortOf(session);
+          if (thread && effort) thread.reasoningEffort = effort;
+          if (thread) this.broadcast("thread.updated", thread);
+        }
+        return true;
+      case "session_info_update":
+        if (thread && typeof update.title === "string" && update.title.trim()) {
+          thread.name = update.title.trim();
+          this.broadcast("thread.updated", thread);
+        }
+        return true;
+      case "usage_update":
+        if (thread) {
+          const used = Number(update.used) || 0;
+          const size = Number(update.size) || 0;
+          thread.tokenUsage = {
+            total: used,
+            used,
+            ...(size ? { limit: size } : {}),
+          };
+          this.broadcast("thread.updated", thread);
+        }
+        return true;
+      default:
+        return false;
+    }
   }
 
   /** 实时 turn 的 session/update：归一化后既进本地 turn 历史也发流式事件。 */
@@ -1218,43 +1410,6 @@ export class AcpAdapter extends EventEmitter {
         };
         upsertItem(item);
         emitItem("item/started", item);
-        return;
-      }
-      case "available_commands_update":
-        session.commands = Array.isArray(update.availableCommands)
-          ? update.availableCommands
-          : [];
-        return;
-      case "current_mode_update":
-        if (update.currentModeId) {
-          thread.sessionMode = String(update.currentModeId);
-          this.broadcast("thread.updated", thread);
-        }
-        return;
-      case "config_option_update":
-        if (Array.isArray(update.configOptions)) {
-          session.configOptions = update.configOptions;
-          const model = this.currentModelOf(session);
-          if (model) thread.resolvedModel = model;
-          this.broadcast("thread.updated", thread);
-        }
-        return;
-      case "session_info_update":
-        if (typeof update.title === "string" && update.title.trim()) {
-          thread.name = update.title.trim();
-          thread.updatedAt = Date.now();
-          this.broadcast("thread.updated", thread);
-        }
-        return;
-      case "usage_update": {
-        const used = Number(update.used) || 0;
-        const size = Number(update.size) || 0;
-        thread.tokenUsage = {
-          total: used,
-          used,
-          ...(size ? { limit: size } : {}),
-        };
-        this.broadcast("thread.updated", thread);
         return;
       }
       default:
@@ -1492,10 +1647,7 @@ export class AcpAdapter extends EventEmitter {
               live || session?.turnId
                 ? existing?.status || "running"
                 : "idle",
-            updatedAt:
-              Date.parse(info.updatedAt || "") ||
-              existing?.updatedAt ||
-              Date.now(),
+            updatedAt: resolveUpdatedAt(info, existing, id),
             sessionId: id,
             controlMode: live ? "managed" : "history",
             // 本进程内已打开的会话，锁就在我们手里，不算被占用。
@@ -1573,32 +1725,40 @@ export class AcpAdapter extends EventEmitter {
       }
       rows.push(...parseSessionListOutput(output, dir));
     }
-    return rows.map((row) => ({
-      sessionId: pick(row, ["sessionId", "session_id", "id", "sessionID"]),
-      cwd:
-        pick(row, [
-          "cwd",
-          "directory",
-          "workingDirectory",
-          "working_directory",
-          "path",
-          "workspace",
-        ]) || "",
-      title: pick(row, ["title", "name", "summary", "description"]),
-      updatedAt: pick(row, [
-        "updatedAt",
-        "updated_at",
-        "lastActivityAt",
-        "last_active_at",
-        "createdAt",
-        "created_at",
-        "timestamp",
-      ]),
-      locked: sessionLockedOf(row) || undefined,
-    }));
+    return rows.map((row) => {
+      const value = (key: keyof typeof SESSION_FIELD_ALIASES) => {
+        const custom = spec.fields?.[key];
+        return pick(
+          row,
+          custom
+            ? [custom, ...SESSION_FIELD_ALIASES[key]]
+            : [...SESSION_FIELD_ALIASES[key]],
+        );
+      };
+      const lockedKey = spec.fields?.locked;
+      const locked =
+        (lockedKey ? row[lockedKey] === true : false) ||
+        sessionLockedOf(row) ||
+        undefined;
+      return {
+        sessionId: value("sessionId"),
+        cwd: value("cwd"),
+        title: value("title"),
+        updatedAt: value("updatedAt"),
+        locked,
+      };
+    });
   }
 
   // ---------------------------------------------------------------- misc
+
+  /**
+   * 活动时间只能由 turn 生命周期和用户操作推进；session/list 刷新、
+   * meta 更新（title/mode/usage）与 load 回放都不得调用。
+   */
+  private touch(thread: ThreadSummary) {
+    thread.updatedAt = Date.now();
+  }
 
   private mustThread(threadId: string) {
     const thread = this.threads.get(threadId);
@@ -1639,9 +1799,7 @@ export class AcpAdapter extends EventEmitter {
     if (!/auth|login|credential|unauthorized|permission/i.test(message))
       return message;
     const hint =
-      this.spec.id === "devin"
-        ? `请先在终端运行 ${this.spec.command} auth login 完成登录`
-        : `请先完成 ${this.spec.name} 的登录认证`;
+      this.spec.authHint || `请先完成 ${this.spec.name} 的登录认证`;
     return `${message}\n${hint}`;
   }
 
