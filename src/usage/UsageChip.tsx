@@ -11,6 +11,7 @@ import {
 import { Drawer } from "../ui";
 import { formatTokens, relativeTime } from "../format";
 import { buildUsageStats, type UsageTotals } from "./stats";
+import { estimateCost, formatCost, planPrice } from "./cost";
 
 export type UsageView = "stats" | "limits";
 
@@ -50,19 +51,34 @@ export function UsageDrawer({
   projects?: ProjectRecord[];
   currentSessionKey?: string;
   initialView?: UsageView;
-  onRefreshLimits: () => Promise<void>;
+  onRefreshLimits: (force?: boolean) => Promise<void>;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<UsageView>(initialView);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
-  const refreshLimits = useCallback(async () => {
-    setRefreshingLimits(true);
-    try {
-      await onRefreshLimits();
-    } finally {
-      setRefreshingLimits(false);
-    }
-  }, [onRefreshLimits]);
+  const usageCost = useMemo(() => {
+    const stats = buildUsageStats(threads, projects);
+    return stats.sessions.reduce(
+      (sum, row) =>
+        sum +
+        estimateCost(
+          row.totals,
+          row.thread.resolvedModel || row.thread.model,
+        ),
+      0,
+    );
+  }, [threads, projects]);
+  const refreshLimits = useCallback(
+    async (force = false) => {
+      setRefreshingLimits(true);
+      try {
+        await onRefreshLimits(force);
+      } finally {
+        setRefreshingLimits(false);
+      }
+    },
+    [onRefreshLimits],
+  );
 
   useEffect(() => {
     if (tab === "limits") void refreshLimits();
@@ -99,6 +115,7 @@ export function UsageDrawer({
       ) : (
         <OfficialLimits
           runtime={runtime}
+          usageCost={usageCost}
           refreshing={refreshingLimits}
           onRefresh={refreshLimits}
         />
@@ -123,6 +140,15 @@ function UsageStats({
   );
   const rows = level === "projects" ? stats.projects : stats.sessions;
   const max = rows[0]?.totals.total || 0;
+  const cost = stats.sessions.reduce(
+    (sum, row) =>
+      sum +
+      estimateCost(
+        row.totals,
+        row.thread.resolvedModel || row.thread.model,
+      ),
+    0,
+  );
 
   return (
     <div className="usage-stats">
@@ -134,6 +160,13 @@ function UsageStats({
           <UsageMetric label="缓存输入" value={stats.totals.cachedInput} />
           <UsageMetric label="输出" value={stats.totals.output} />
         </div>
+      </section>
+      <section className="usage-summary usage-cost" aria-label="估算费用">
+        <span>估算费用</span>
+        <strong>{formatCost(cost)}</strong>
+        <p className="usage-note">
+          按社区 API 目录价（sub2api 口径）折算，仅供订阅用量参考。
+        </p>
       </section>
       <div className="usage-level" role="tablist" aria-label="统计层级">
         <button
@@ -248,22 +281,32 @@ function UsageRow({
 
 function OfficialLimits({
   runtime,
+  usageCost,
   refreshing,
   onRefresh,
 }: {
   runtime?: RuntimeSnapshot;
+  usageCost?: number;
   refreshing: boolean;
-  onRefresh: () => void;
+  onRefresh: (force?: boolean) => void;
 }) {
   const limits = runtime?.rateLimits;
   const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
   const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
+  const planName = limits?.planName || runtime?.account?.planType || "Official";
+  const price = planPrice(limits?.planName || runtime?.account?.planType);
   return (
     <div className="usage-limits">
       <p className="usage-plan">
-        {limits?.planName || runtime?.account?.planType || "Official"}
+        {planName}
+        {price != null ? ` · $${price}/月` : ""}
         {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
       </p>
+      {usageCost != null && usageCost > 0 ? (
+        <p className="usage-plan">
+          已消耗 token 折算 ≈ {formatCost(usageCost)}
+        </p>
+      ) : null}
       {runtime?.rateLimitsError || !limits ? (
         <div className="usage-unavailable" aria-live="polite">
           <p>
@@ -271,7 +314,11 @@ function OfficialLimits({
               ? "正在读取 Official 账号额度…"
               : runtime?.rateLimitsError || "额度不可用"}
           </p>
-          <button type="button" onClick={onRefresh} disabled={refreshing}>
+          <button
+            type="button"
+            onClick={() => onRefresh(true)}
+            disabled={refreshing}
+          >
             {refreshing ? "刷新中…" : "重新读取"}
           </button>
         </div>

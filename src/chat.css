@@ -222,7 +222,34 @@
   color: var(--text-dim);
 }
 .compact-btn {
+  min-height: 28px;
+  padding: 0 10px;
   font-size: var(--fs-meta);
+  font-weight: 500;
+}
+.model-manual-toggle {
+  align-self: center;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+.model-manual-toggle:hover:not(:disabled),
+.model-manual-toggle:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.toolbar-select .icon-btn.model-manual-toggle {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+}
+.toolbar-select .icon-btn.model-manual-toggle svg {
+  width: 14px;
+  height: 14px;
 }
 .mobile-header-compact {
   display: none;
@@ -1332,6 +1359,9 @@
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   box-shadow: var(--shadow-md);
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .slash-menu button {
   display: flex;
