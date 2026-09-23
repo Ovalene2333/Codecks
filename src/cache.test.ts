@@ -283,3 +283,14 @@ test("ui cache restores expanded projects but not the search box", () => {
     query: "",
   });
 });
+
+test("ui cache persists tiled view mode only when set", () => {
+  resetCacheForTests();
+  configureCacheStorage(new MemoryStorage());
+  writeUiCache({ expandedProjects: [], query: "", viewMode: "tiled" });
+  resetCacheForTests();
+  assert.equal(readUiCache().viewMode, "tiled");
+  writeUiCache({ expandedProjects: [], query: "", viewMode: "list" });
+  resetCacheForTests();
+  assert.equal(readUiCache().viewMode, undefined);
+});
