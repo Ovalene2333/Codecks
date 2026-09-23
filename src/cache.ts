@@ -16,6 +16,8 @@ const MAX_CACHED_THREADS = 24;
 export interface DeckUiCache {
   expandedProjects: string[];
   query: string;
+  /** 工作区视图：列表（默认）或平铺。 */
+  viewMode?: "list" | "tiled";
 }
 
 const memorySnapshot: { current: Snapshot | null } = { current: null };
@@ -381,6 +383,7 @@ export function readUiCache(): DeckUiCache {
       ? cached.expandedProjects.filter((item) => typeof item === "string")
       : [],
     query: "",
+    ...(cached?.viewMode === "tiled" ? { viewMode: "tiled" as const } : {}),
   };
   memoryUi.current = next;
   return next;
@@ -390,6 +393,7 @@ export function writeUiCache(state: DeckUiCache) {
   memoryUi.current = {
     expandedProjects: [...state.expandedProjects],
     query: "",
+    ...(state.viewMode === "tiled" ? { viewMode: "tiled" as const } : {}),
   };
   writeJson(UI_KEY, memoryUi.current);
 }

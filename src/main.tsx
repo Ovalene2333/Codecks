@@ -13,6 +13,7 @@ import "./polish.css";
 import "./appearance.css";
 import "./task-tools.css";
 import "./deck-ui.css";
+import "./tiled.css";
 import "./search-picker.css";
 
 initializeAppearance();

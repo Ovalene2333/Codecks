@@ -6,6 +6,7 @@ import {
   Bot,
   Gauge,
   GitBranch,
+  LayoutGrid,
   Plus,
   RefreshCw,
   Search,
@@ -59,6 +60,7 @@ export function Sidebar({
   onLibrary,
   onQuery,
   onStatusFilter,
+  onTiledMode,
   onToggleProject,
   onSelect,
   onAddInProject,
@@ -105,6 +107,7 @@ export function Sidebar({
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
   onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
+  onTiledMode: () => void;
   onToggleProject: (key: string) => void;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
@@ -234,6 +237,15 @@ export function Sidebar({
           title={loading ? "正在读取项目…" : "刷新"}
         >
           <RefreshCw />
+        </button>
+        <button
+          type="button"
+          className="icon-btn tiled-entry"
+          onClick={onTiledMode}
+          title="平铺模式"
+          aria-label="切换到平铺模式"
+        >
+          <LayoutGrid />
         </button>
       </div>
       <div className="sidebar-meta">

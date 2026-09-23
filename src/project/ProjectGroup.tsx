@@ -249,7 +249,13 @@ export function ProjectGroupView({
   );
 }
 
-function SearchHighlight({ text, query }: { text: string; query: string }) {
+export function SearchHighlight({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
   const needle = query.trim();
   const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
   if (!needle || index < 0) return <span>{text}</span>;

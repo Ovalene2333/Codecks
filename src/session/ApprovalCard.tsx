@@ -5,7 +5,7 @@ import { agentName } from "../agents";
 import { displayText } from "../format";
 import { FileDiff } from "./FileDiff";
 
-function defaultDecisions(approval: Approval) {
+export function defaultDecisions(approval: Approval) {
   const listed = approval.availableDecisions;
   if (listed?.length) return listed;
   if (approval.kind === "command" || approval.kind === "file" || !approval.kind)
@@ -294,7 +294,9 @@ function QuestionApproval({
       current.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
         if (!multiple)
-          return row.value === label ? { ...row, value: "" } : { ...row, value: label };
+          return row.value === label
+            ? { ...row, value: "" }
+            : { ...row, value: label };
         const picked = row.value.split(", ").filter(Boolean);
         const next = picked.includes(label)
           ? picked.filter((item) => item !== label)
@@ -313,7 +315,10 @@ function QuestionApproval({
         const selected = (question.options || []).filter((item: any) =>
           labels.includes(String(item.label ?? item.value)),
         );
-        if (selected.length === labels.length && !selected.some((item: any) => item.isOther))
+        if (
+          selected.length === labels.length &&
+          !selected.some((item: any) => item.isOther)
+        )
           return true;
         return Boolean(answer.other.trim());
       }),
@@ -351,7 +356,9 @@ function QuestionApproval({
                   <span className="question-index">{index + 1}</span>
                 )}
                 <div>
-                  <b>{question.header || question.prompt || `问题 ${index + 1}`}</b>
+                  <b>
+                    {question.header || question.prompt || `问题 ${index + 1}`}
+                  </b>
                   {question.header && (question.question || question.prompt) ? (
                     <small>{question.question || question.prompt}</small>
                   ) : null}
@@ -371,10 +378,14 @@ function QuestionApproval({
                         disabled={disabled}
                         onClick={() => pick(index, label, multiple)}
                       >
-                        <Check className={`question-check ${active ? "" : "hidden"}`} />
+                        <Check
+                          className={`question-check ${active ? "" : "hidden"}`}
+                        />
                         <span>
                           <b>{label}</b>
-                          {option.description ? <small>{option.description}</small> : null}
+                          {option.description ? (
+                            <small>{option.description}</small>
+                          ) : null}
                         </span>
                       </button>
                     );
