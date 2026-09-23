@@ -41,6 +41,7 @@ export function Composer({
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [activeCmd, setActiveCmd] = useState(0);
   const compacting = Boolean(thread.compacting);
@@ -63,6 +64,12 @@ export function Composer({
     node.style.height = text ? `${Math.min(node.scrollHeight, 160)}px` : "";
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
+  // 菜单限高后可滚动：键盘上下移动时让高亮项保持可见。
+  useEffect(() => {
+    menu.current
+      ?.querySelector("button.on")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeCmd, suggestions.length]);
   useEffect(() => {
     if (!focusRequest) return;
     const node = area.current;
@@ -114,7 +121,7 @@ export function Composer({
       }}
     >
       {suggestions.length > 0 && (
-        <div className="slash-menu" role="listbox">
+        <div className="slash-menu" role="listbox" ref={menu}>
           {suggestions.map((item, index) => (
             <button
               key={item.name}

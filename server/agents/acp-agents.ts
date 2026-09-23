@@ -18,6 +18,7 @@ export const BUILTIN_ACP_AGENTS: AcpAgentSpec[] = [
       args: ["list", "--format", "json"],
       perDirectory: true,
     },
+    authHint: "请先在终端运行 devin auth login 完成登录",
   },
   {
     id: "kimi",
@@ -74,12 +75,16 @@ function normalizeSpec(raw: unknown, source: string): AcpAgentSpec | undefined {
     args: Array.isArray(row.args) ? row.args.map(String) : undefined,
     env: envRecord(row.env),
     enabled: row.enabled !== false,
+    authHint:
+      typeof row.authHint === "string" && row.authHint.trim()
+        ? row.authHint.trim()
+        : undefined,
   };
   const list = row.listSessions;
   if (list && typeof list === "object" && !Array.isArray(list)) {
     const item = list as Record<string, unknown>;
     const args = Array.isArray(item.args) ? item.args.map(String) : [];
-    if (args.length)
+    if (args.length) {
       spec.listSessions = {
         command:
           typeof item.command === "string" && item.command.trim()
@@ -88,6 +93,25 @@ function normalizeSpec(raw: unknown, source: string): AcpAgentSpec | undefined {
         args,
         perDirectory: item.perDirectory === true,
       };
+      const fields = item.fields;
+      if (fields && typeof fields === "object" && !Array.isArray(fields)) {
+        const mapped: NonNullable<
+          NonNullable<AcpAgentSpec["listSessions"]>["fields"]
+        > = {};
+        for (const key of [
+          "sessionId",
+          "cwd",
+          "title",
+          "updatedAt",
+          "locked",
+        ] as const) {
+          const source = (fields as Record<string, unknown>)[key];
+          if (typeof source === "string" && source.trim())
+            mapped[key] = source.trim();
+        }
+        if (Object.keys(mapped).length) spec.listSessions.fields = mapped;
+      }
+    }
   }
   const models = Array.isArray(row.models) ? row.models : [];
   spec.models = models
@@ -153,7 +177,12 @@ export async function ensureAcpAgentsExample(dataDir: string) {
               listSessions: {
                 args: ["sessions", "--format", "json"],
                 perDirectory: true,
+                fields: {
+                  sessionId: "session_id",
+                  updatedAt: "last_active_at",
+                },
               },
+              authHint: "请先运行 my-agent login 完成登录",
             },
           ],
         },

@@ -134,8 +134,9 @@ const SPEC: AcpAgentSpec = {
 function adapterWith(
   fake: ReturnType<typeof fakeAcpProcess>,
   options?: ConstructorParameters<typeof AcpAdapter>[1],
+  spec: AcpAgentSpec = SPEC,
 ) {
-  return new AcpAdapter(SPEC, {
+  return new AcpAdapter(spec, {
     spawnProcess: (() => fake.child) as any,
     killProcessTree: () => {},
     requestTimeoutMs: 5_000,
@@ -238,6 +239,106 @@ test("AcpAdapter starts, lists history and keeps secrets out of snapshot", async
 
   await adapter.restart();
   assert.equal(adapter.descriptor().online, false);
+});
+
+const CACHED_THREAD = {
+  agentId: "devin",
+  id: "t1",
+  providerId: "devin-current",
+  name: "旧会话",
+  preview: "",
+  cwd: "/x",
+  model: "default",
+  status: "idle" as const,
+  updatedAt: 1_600_000_000_000,
+};
+
+test("session/list without timestamps keeps the cached updatedAt", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({
+          sessions: [{ sessionId: "t1", cwd: "/x", title: "旧会话" }],
+        }),
+    },
+  });
+  const adapter = adapterWith(fake, { initialThreads: [CACHED_THREAD] });
+  await adapter.startAll();
+
+  assert.equal(
+    adapter.snapshot().threads[0]?.updatedAt,
+    CACHED_THREAD.updatedAt,
+  );
+});
+
+test("load replay meta updates never refresh updatedAt", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({ sessions: [{ sessionId: "t1", cwd: "/x" }] }),
+      "session/load": (_params, ctx) => {
+        ctx.notify("session/update", {
+          sessionId: "t1",
+          update: { sessionUpdate: "session_info_update", title: "回放标题" },
+        });
+        ctx.notify("session/update", {
+          sessionId: "t1",
+          update: { sessionUpdate: "usage_update", used: 10, size: 100 },
+        });
+        ctx.respond({});
+      },
+    },
+  });
+  const adapter = adapterWith(fake, { initialThreads: [CACHED_THREAD] });
+  await adapter.startAll();
+  await adapter.readThread("devin-current", "t1");
+
+  const thread = adapter.snapshot().threads[0];
+  assert.equal(thread?.updatedAt, CACHED_THREAD.updatedAt);
+  assert.equal(thread?.name, "回放标题");
+});
+
+test("listSessions field mapping adapts non-standard CLI output", async () => {
+  const fake = fakeAcpProcess({
+    initialize: {
+      protocolVersion: 1,
+      agentInfo: { name: "fake", version: "0" },
+      agentCapabilities: { loadSession: false, sessionCapabilities: {} },
+      authMethods: [],
+    },
+  });
+  const spec: AcpAgentSpec = {
+    id: "myagent",
+    name: "My Agent",
+    command: "my-agent",
+    args: ["acp"],
+    listSessions: {
+      args: ["sessions", "--json"],
+      fields: { sessionId: "sid", updatedAt: "seen", locked: "held" },
+    },
+  };
+  const adapter = adapterWith(
+    fake,
+    {
+      execListCommand: async () =>
+        JSON.stringify([
+          {
+            sid: "a1",
+            directory: "/work",
+            seen: "2024-05-01T00:00:00Z",
+            held: true,
+          },
+        ]),
+    },
+    spec,
+  );
+  await adapter.startAll();
+
+  const thread = adapter.snapshot().threads[0];
+  assert.equal(thread?.id, "a1");
+  assert.equal(thread?.cwd, "/work");
+  assert.equal(thread?.updatedAt, Date.parse("2024-05-01T00:00:00Z"));
+  assert.equal(thread?.locked, true);
 });
 
 test("createThread maps session/new and carries modes", async () => {
@@ -749,4 +850,83 @@ test("process exit mid-turn fails the turn and marks thread offline", async () =
   const thread = adapter.snapshot().threads[0];
   assert.equal(thread.status, "error");
   assert.ok(thread.lastError);
+});
+
+test("availableCommands: replay updates apply, session/new seeds, runSessionCommand prompts", async () => {
+  const prompts: any[] = [];
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({ sessions: [{ sessionId: "hist-c", cwd: "D:\\proj" }] }),
+      "session/load": (params, ctx) => {
+        // 回放期间推 available_commands_update，此前会被 replay 吞掉。
+        ctx.notify("session/update", {
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "help", description: "帮助" },
+              { name: "context" },
+            ],
+          },
+        });
+        ctx.notify("session/update", {
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "旧消息" },
+          },
+        });
+        ctx.respond({});
+      },
+      "session/new": (_params, ctx) =>
+        ctx.respond({
+          sessionId: "s-cmd",
+          commands: {
+            availableCommands: [{ name: "btw", description: "旁支" }],
+          },
+        }),
+      "session/prompt": (params, ctx) => {
+        prompts.push(params);
+        ctx.respond({ stopReason: "end_turn" });
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  const events = collectEvents(adapter);
+  await adapter.startAll();
+
+  // load 回放中的 available_commands_update 要落进 session.commands。
+  await adapter.readThread("", "hist-c");
+  const loaded = await adapter.listSessionCommands("", "hist-c");
+  assert.deepEqual(
+    loaded.map((command) => command.name),
+    ["help", "context"],
+  );
+  // 同时推 agent.event 给前端刷新补全。
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "agent.event" &&
+        event.data.method === "session/commands" &&
+        event.data.params.threadId === "hist-c" &&
+        event.data.params.commands.length === 2,
+    ),
+  );
+
+  // session/new 响应里顺带的 commands 也接收。
+  await adapter.createThread("", { cwd: "D:\\proj" });
+  const created = await adapter.listSessionCommands("", "s-cmd");
+  assert.deepEqual(
+    created.map((command) => command.name),
+    ["btw"],
+  );
+
+  // 斜杠命令按 /cmd args 原样作为 prompt 发送。
+  await adapter.runSessionCommand("", "s-cmd", "/btw", "看看进度");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const prompt = prompts.find(
+    (params) => params.sessionId === "s-cmd",
+  );
+  assert.equal(prompt.prompt[0].text, "/btw 看看进度");
 });

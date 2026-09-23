@@ -119,6 +119,8 @@ export class CodexAdapter extends EventEmitter {
   private account?: AccountInfo;
   private rateLimits: RateLimits | null = null;
   private rateLimitsError?: string;
+  private usageFetchedAt = 0;
+  private usageLoading?: Promise<ReturnType<CodexAdapter["runtimeStatus"]>>;
   private archiveError?: string;
   private pendingFileChanges = new Map<string, FileChange[]>();
   private compactionTimers = new Map<string, NodeJS.Timeout>();
@@ -1474,9 +1476,30 @@ export class CodexAdapter extends EventEmitter {
     this.broadcast("approval.resolved", { approvalId });
   }
 
-  async loadOfficialUsage() {
+  // account/updated、turn 失败、前端手动刷新都会走到这里；rateLimits/read
+  // 上游会请求 wham/usage，不能裸奔。被动触发走 60s 冷却 + 在途去重，
+  // 只有用户点“重新读取”（force）才绕过冷却。
+  private static USAGE_REFRESH_COOLDOWN_MS = 60_000;
+
+  loadOfficialUsage(force = false) {
     const client = this.client;
-    if (!client?.online) return this.runtimeStatus();
+    if (!client?.online) return Promise.resolve(this.runtimeStatus());
+    if (
+      !force &&
+      this.usageFetchedAt &&
+      Date.now() - this.usageFetchedAt < CodexAdapter.USAGE_REFRESH_COOLDOWN_MS
+    )
+      return Promise.resolve(this.runtimeStatus());
+    if (this.usageLoading) return this.usageLoading;
+    this.usageFetchedAt = Date.now();
+    const loading = this.fetchOfficialUsage(client);
+    this.usageLoading = loading;
+    return loading.finally(() => {
+      if (this.usageLoading === loading) this.usageLoading = undefined;
+    });
+  }
+
+  private async fetchOfficialUsage(client: CodexClient) {
     try {
       const accountRaw = await client.request("account/read", {});
       this.account = parseAccount(accountRaw);

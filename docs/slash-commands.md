@@ -49,6 +49,17 @@ OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边
 
 门禁：运行中/待审批/已归档一律拒绝（服务端忙时同样拒绝，不只靠前端隐藏）。执行后重读历史并刷新快照；`files=0` 时明确提示"仅回滚了对话"。
 
+## 已支持（ACP 通用 agent）
+
+ACP 没有统一的命令执行接口：斜杠命令就是普通 prompt 文本，由 agent 自己解析。Deck 的行为：
+
+| 行为 | 实现 |
+| ---- | ---- |
+| `/cmd args` 透传 | `POST /api/agents/:id/threads/:tid/commands` → `session/prompt` 发送 `/cmd args` 原文，turn 正常流式渲染 |
+| 命令补全 | `GET /commands` 返回 agent 经 `available_commands_update` 自报的列表（name/description）；之后该通知增量到达时通过 `agent.event` 的 `session/commands` 推给前端刷新，无需重新进会话 |
+| 回放会话 | `session/load` 回放期间的 `available_commands_update`/`current_mode_update`/`config_option_update`/`session_info_update`/`usage_update` 同样生效，不被 turn 归一化吞掉 |
+| 兜底 | agent 在 `session/new`/`resume`/`load` 响应里顺带返回的 `commands.availableCommands`（或顶层 `availableCommands`）也会接收 |
+
 ### 分支与编辑后重发（非破坏性，OpenCode 原生 fork）
 
 | 入口 | Deck 行为 |

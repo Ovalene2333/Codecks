@@ -1274,7 +1274,7 @@ app.post(
 );
 app.post(
   "/api/runtime/rate-limits",
-  route(async () => manager.loadOfficialUsage()),
+  route(async (req) => manager.loadOfficialUsage(Boolean(req.query?.force))),
 );
 
 const webDir = path.join(projectRoot, "dist-web");

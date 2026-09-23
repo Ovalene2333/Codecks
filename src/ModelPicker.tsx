@@ -1,11 +1,10 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { Keyboard, List } from "lucide-react";
 import { api } from "./api";
 import { FALLBACK_EFFORTS, reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
 import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
-
-const SEARCHABLE_CATALOG = 12;
 
 /**
  * Model catalogs change rarely but are read every time a picker mounts (new
@@ -47,16 +46,6 @@ function loadCatalog(path: string) {
   return task;
 }
 
-function modelLabel(item: ModelInfo) {
-  const suffix =
-    item.isDefault && item.model !== "default"
-      ? "（默认）"
-      : item.supportsImages === false
-        ? "（不支持图片）"
-        : "";
-  return `${item.displayName}${suffix}`;
-}
-
 export function ModelPicker({
   agentId = "codex",
   providerId,
@@ -79,8 +68,8 @@ export function ModelPicker({
   const [loading, setLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   /* OpenCode model ids already carry their provider (`providerID/modelID`), so
-     picking a model is picking a provider too: every surface shows the whole
-     catalog as one grouped, searchable list instead of a provider step first. */
+     its catalog is agent-scoped and needs no providerId; every adapter still
+     renders the same grouped, searchable picker with a manual-entry escape. */
   const combinedCatalog = agentId === "opencode";
   const effortDatalistId = useId();
   const matched = models.find(
@@ -145,20 +134,6 @@ export function ModelPicker({
   }, [agentId, providerId, combinedCatalog]);
 
   const efforts = selected?.supportedReasoningEfforts || [];
-  const segments = useMemo(() => {
-    const plain: ModelInfo[] = [];
-    const groups: { name: string; items: ModelInfo[] }[] = [];
-    for (const item of models) {
-      if (!item.groupName) {
-        plain.push(item);
-        continue;
-      }
-      const last = groups.at(-1);
-      if (last && last.name === item.groupName) last.items.push(item);
-      else groups.push({ name: item.groupName, items: [item] });
-    }
-    return { plain, groups };
-  }, [models]);
   const searchOptions = useMemo<SearchableOption[]>(
     () =>
       models.map((item) => ({
@@ -175,9 +150,6 @@ export function ModelPicker({
       })),
     [models],
   );
-  const searchable = combinedCatalog
-    ? !manual && models.length > 1
-    : !manual && models.length > SEARCHABLE_CATALOG;
   /* Switching models should not silently reset the effort the user picked, so
      keep it whenever the new model offers the same variant. Models without a
      catalog entry (custom providers / manual input) keep the current value;
@@ -189,14 +161,16 @@ export function ModelPicker({
     if (list.length === 0) return reasoningEffort;
     return next?.defaultReasoningEffort || list[0]?.reasoningEffort || "";
   };
-  // 目录无 effort 声明时 codex/opencode 补手填入口（自定义模型如
-  // dstest/deepseek-v4.1-flash-expires-on-0910 无 variants 元数据）；claude 无 effort。
-  const showFallbackEffort =
-    (agentId === "codex" || agentId === "opencode") && efforts.length === 0;
+  // 目录无 effort 声明时补手填入口（自定义模型如
+  // dstest/deepseek-v4.1-flash-expires-on-0910 无 variants 元数据）；
+  // claude 无 effort 概念，ACP agent 没有声明时也可手填透传。
+  const showFallbackEffort = agentId !== "claude" && efforts.length === 0;
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
         {compact ? <span className="toolbar-field-label">模型</span> : "模型"}
+        {/* 所有 adapter 统一用 OpenCode 样式的分组可搜索列表；目录为空或点
+            「手动输入」时回退到裸 input 手填模型 ID。 */}
         {manual || !models.length ? (
           <input
             value={model}
@@ -208,7 +182,7 @@ export function ModelPicker({
             }
             placeholder={loading ? "正在读取模型目录…" : "模型 ID（目录不可用时可手填，留空用供应商默认）"}
           />
-        ) : searchable ? (
+        ) : (
           <SearchablePicker
             ariaLabel="模型"
             value={model}
@@ -225,55 +199,28 @@ export function ModelPicker({
               onChange({ model: next, reasoningEffort: effortFor(nextModel) });
             }}
           />
-        ) : (
-          <select
-            value={model}
-            disabled={disabled}
-            aria-label="模型"
-            title="模型"
-              onChange={(e) => {
-                const next = models.find(
-                  (item) =>
-                    item.model === e.target.value || item.id === e.target.value,
-                );
-                onChange({
-                  model: e.target.value,
-                  reasoningEffort: effortFor(next),
-                });
-              }}
-          >
-            {!model && <option value="">选择模型</option>}
-            {segments.plain.map((item) => (
-              <option
-                key={item.id || item.model}
-                value={item.model}
-                title={item.id}
-              >
-                {modelLabel(item)}
-              </option>
-            ))}
-            {segments.groups.map((group) => (
-              <optgroup key={group.name} label={group.name}>
-                {group.items.map((item) => (
-                  <option
-                    key={item.id || item.model}
-                    value={item.model}
-                    title={item.id}
-                  >
-                    {modelLabel(item)}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
         )}
-        {models.length > 0 && !compact && (
+        {models.length > 0 && (
           <button
             type="button"
-            className="text-btn"
+            className={
+              compact ? "icon-btn model-manual-toggle" : "model-manual-toggle"
+            }
+            title={manual ? "从目录选择" : "手动输入模型 ID"}
+            aria-label={manual ? "从目录选择" : "手动输入模型 ID"}
             onClick={() => setManual((value) => !value)}
           >
-            {manual ? "从目录选择" : "手动输入"}
+            {compact ? (
+              manual ? (
+                <List />
+              ) : (
+                <Keyboard />
+              )
+            ) : manual ? (
+              "从目录选择"
+            ) : (
+              "手动输入"
+            )}
           </button>
         )}
       </label>

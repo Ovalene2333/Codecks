@@ -75,9 +75,14 @@ export function parseComposerCommand(
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
   if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
-  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释。
-  if (agentId !== "codex" && agentId !== "claude")
+  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释；/model 例外，
+  // agent 暴露模型目录（configOptions/models spec）时走 Deck 的模型面板，
+  // 没有目录时再回落为透传文本。
+  if (agentId !== "codex" && agentId !== "claude") {
+    if (key === "model" || key === "models")
+      return { kind: "model", model: arg || undefined };
     return { kind: "agent-command", command: key, args: arg };
+  }
   if (key === "compact") return { kind: "compact" };
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };

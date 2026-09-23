@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, post, put, remove } from "../api";
+import { copyText } from "../clipboard";
 import type { AgentDescriptor, Provider, Snapshot } from "../types";
 import { Modal } from "../ui";
 
@@ -166,8 +167,8 @@ export function ProviderModal({
     const result = await api<{ command: string }>(
       `/runtime/terminal-command${suffix}`,
     );
-    await navigator.clipboard.writeText(result.command);
-    onToast("已复制");
+    if (await copyText(result.command)) onToast("已复制");
+    else onToast("复制失败");
   };
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
