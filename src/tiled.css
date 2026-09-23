@@ -1,97 +1,162 @@
-/* ===================== 平铺模式 ===================== */
+/* ===================== 平铺模式 =====================
+   结构：.tiled-shell（App 根，替代 .app-shell）> .tiled-view > 顶栏 +
+   .tiled-stage（卫星栏 + hero）/ .tiled-overview（总览网格）+ .tiled-dock。 */
 
 .tiled-shell {
   height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  isolation: isolate;
   background: var(--bg);
 }
+
+.tiled-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- 顶栏 ---- */
 
 .tiled-topbar {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 9px 16px;
+  gap: 10px;
+  flex: none;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--line);
-  background: var(--sidebar);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 20;
 }
-.tiled-topbar .brand {
+
+.tiled-brand {
   display: flex;
   align-items: center;
   gap: 9px;
-  min-width: 0;
+  flex: none;
+  border: 0;
+  background: transparent;
+  padding: 4px 7px;
+  margin: -4px 0;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  cursor: pointer;
 }
-.tiled-topbar .brand-logo {
-  width: 26px;
-  height: 26px;
+.tiled-brand:hover {
+  background: var(--control-hover);
 }
-.tiled-topbar .brand b {
-  font-size: 15px;
+.tiled-brand .brand-logo {
+  width: 24px;
+  height: 24px;
+}
+.tiled-brand b {
+  font-size: 14px;
   letter-spacing: -0.2px;
-}
-.demo-badge {
-  font-style: normal;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent);
-  border: 1px solid var(--info-border);
-  background: var(--info-bg);
-  border-radius: 99px;
-  padding: 1px 7px;
 }
 
 .mode-switch {
   flex: none;
-  width: 150px;
+  width: 132px;
 }
 .mode-switch > button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
 }
 .mode-switch svg {
   width: 13px;
   height: 13px;
 }
 
+.tiled-overview-btn {
+  flex: none;
+}
+
 .tiled-search {
   flex: 1;
-  max-width: 400px;
-  margin: 0 0 0 auto;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+.tiled-topbar .watch-strip {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.tiled-topbar .watch-strip button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tiled-topbar .watch-strip button:hover {
+  background: var(--control-hover);
+}
+.tiled-topbar .watch-strip button.active {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+.tiled-topbar .watch-strip button b {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 650;
+}
+.tiled-topbar .watch-strip button em {
+  margin-left: 0;
+  color: var(--danger);
+  font-style: normal;
+  font-size: var(--fs-meta);
+}
+
+.tiled-menu-wrap {
+  position: relative;
+  flex: none;
+}
+.tiled-menu {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
 
 /* ---- 舞台：左卫星栏 + 中央 hero + 右卫星栏 ---- */
-
-.tiled-main {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
 
 .tiled-stage {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(230px, 280px) minmax(0, 1fr) minmax(
-      230px,
-      280px
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(
+      240px,
+      300px
     );
   grid-template-areas: "left hero right";
   gap: 14px;
-  padding: 16px;
-  background: var(--ambient);
+  padding: 14px 16px;
+  background-image: var(--ambient);
 }
 
 .tiled-rail {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
   overflow-y: auto;
   padding: 2px;
+  scrollbar-width: thin;
 }
 .tiled-rail.left {
   grid-area: left;
@@ -100,233 +165,147 @@
   grid-area: right;
 }
 
-/* ---- 中央 hero：聚焦会话 ---- */
+/* ---- 中央 hero：聚焦会话，内嵌完整 ChatWorkspace ---- */
 
 .tile-hero {
   grid-area: hero;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: tile-hero-in 160ms var(--ease-out);
+  animation: tile-hero-in 180ms var(--ease-out);
 }
 @keyframes tile-hero-in {
   from {
     opacity: 0.3;
-    transform: scale(0.985);
+    transform: scale(0.99);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
+.tile-hero.status-running {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line-strong));
+}
 .tile-hero.status-waiting {
-  border-color: var(--warning-border);
+  border-color: color-mix(in srgb, var(--wait) 60%, var(--line-strong));
 }
 .tile-hero.status-error {
-  border-color: var(--danger-border);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line-strong));
 }
-
-.tile-hero-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 16px;
+.tile-hero > .chat {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.tile-hero .chat-header {
   border-bottom: 1px solid var(--line);
   background: var(--surface-2);
 }
-.tile-hero-title {
+/* 顶栏已有外观入口，hero 里藏掉重复的 */
+.tile-hero .chat-header .appearance-trigger {
+  display: none;
+}
+
+/* ---- 总览：无聚焦时全部会话等大平铺 ---- */
+
+.tiled-overview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+  gap: 14px;
+  padding: 18px;
+  align-content: start;
+  background-image: var(--ambient);
+}
+
+.tiled-empty {
+  grid-column: 1 / -1;
+  place-self: center;
+  text-align: center;
+  color: var(--text-dim);
+  padding: 48px 16px;
+}
+.tiled-empty > svg {
+  width: 26px;
+  height: 26px;
+  color: var(--text-faint);
+}
+.tiled-empty h1 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: var(--fs-heading);
+}
+.tiled-empty p {
+  margin: 0 0 16px;
+}
+.tiled-empty small {
+  color: var(--text-faint);
+}
+.tiled-empty-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 600px;
+}
+.tiled-empty-projects button {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
-  flex: 1;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 10px 14px;
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  text-align: left;
+  cursor: pointer;
 }
-.tile-hero-title .watch-dot {
-  width: 9px;
-  height: 9px;
-  margin: 0;
+.tiled-empty-projects button:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+.tiled-empty-projects button > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-faint);
   flex: none;
 }
-.tile-hero-title > div {
+.tiled-empty-projects button > div {
+  display: grid;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
-.tile-hero-title b {
-  font-size: var(--fs-title);
-}
-.tile-hero-title small {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.tiled-empty-projects small {
   color: var(--text-faint);
   font-size: var(--fs-meta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 240px;
 }
-.tile-hero-title small svg {
-  width: 11px;
-  height: 11px;
-  flex: none;
-}
-.tile-hero-side {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex: none;
-}
-.agent-tag {
-  font-family: var(--font-mono);
-  font-size: var(--fs-meta);
+.tiled-empty-projects .recent-create {
+  border-style: dashed;
   color: var(--text-dim);
-  border: 1px solid var(--line);
-  border-radius: 99px;
-  padding: 2px 8px;
 }
 
-.tile-hero-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.tl-line {
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  font-size: var(--fs-body);
-  line-height: 1.55;
-}
-.tl-line p {
-  margin: 0;
-  min-width: 0;
-}
-.tl-role {
-  flex: none;
-  margin-top: 3px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  color: var(--text-faint);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 1px 6px;
-}
-.tl-line.user .tl-role {
-  color: var(--accent);
-  border-color: var(--info-border);
-  background: var(--info-bg);
-}
-.tl-line.assistant {
-  color: var(--text-soft);
-}
-.tl-line.tool {
-  font-family: var(--font-mono);
-  font-size: var(--fs-small);
-  color: var(--text-dim);
-  align-items: center;
-}
-.tl-line.tool .tl-role {
-  color: var(--tool-read);
-}
-.tl-live {
-  color: var(--ok);
-}
-.tl-live svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
-}
-.spin {
-  animation: tile-spin 1s linear infinite;
-}
-@keyframes tile-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* hero 内的审批条 */
-.tile-approval {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 12px 16px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--warning-border);
-  background: var(--warning-bg);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-small);
-}
-.tile-approval > svg {
-  width: 15px;
-  height: 15px;
-  color: var(--wait);
-  flex: none;
-}
-.tile-approval code {
-  font-family: var(--font-mono);
-}
-.tile-approval .spacer {
-  flex: 1;
-}
-
-/* hero 底部输入条 */
-.tile-composer {
-  display: flex;
-  gap: 8px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
-}
-.tile-composer input {
-  flex: 1;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-md);
-  background: var(--control);
-  color: var(--text);
-  outline: 0;
-  font-size: var(--fs-ui);
-}
-.tile-composer input:focus {
-  border-color: var(--focus-ring);
-}
-.tile-composer button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 38px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: var(--radius-md);
-  font-size: var(--fs-ui);
-  cursor: pointer;
-}
-.tile-composer button svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* ---- 卫星 tile ---- */
+/* ---- 会话 tile（卫星栏与总览共用） ---- */
 
 .tile-card {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 12px 13px;
+  padding: 11px 12px;
   border: 1px solid var(--line);
+  border-left-width: 3px;
   border-radius: var(--radius-lg);
   background: var(--surface);
   cursor: pointer;
@@ -334,103 +313,134 @@
   transition:
     border-color var(--ease),
     transform var(--ease),
-    box-shadow var(--ease);
+    box-shadow var(--ease),
+    opacity var(--ease);
 }
 .tile-card:hover {
-  border-color: var(--line-strong);
+  border-top-color: var(--line-strong);
+  border-right-color: var(--line-strong);
+  border-bottom-color: var(--line-strong);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
 }
 .tile-card:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
+.tile-card.status-running {
+  border-left-color: var(--ok);
+}
 .tile-card.status-waiting {
-  border-color: var(--warning-border);
+  border-left-color: var(--wait);
 }
 .tile-card.status-error {
-  border-color: var(--danger-border);
+  border-left-color: var(--danger);
+}
+.tile-card.unseen:not(.status-running):not(.status-waiting):not(.status-error) {
+  border-left-color: var(--info);
+}
+.tiled-rail .tile-card.status-idle:not(.unseen) {
+  opacity: 0.78;
 }
 
-.tile-card-head {
+.tile-card-top {
   display: flex;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-.tile-card-head b {
+.tile-card-top .status {
+  flex: none;
+}
+.tile-card-name {
+  flex: 1;
+  min-width: 0;
   font-size: var(--fs-ui);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tile-unseen {
-  flex: none;
-  margin-left: auto;
-  font-style: normal;
-  font-size: 10px;
-  color: var(--info);
-  border: 1px solid var(--info-border);
-  background: var(--info-bg);
-  border-radius: 99px;
-  padding: 1px 6px;
+.tile-card .session-row-more {
+  opacity: 0;
+}
+.tile-card:hover .session-row-more,
+.tile-card:focus-within .session-row-more,
+.tile-card .session-row-more:focus-visible {
+  opacity: 1;
 }
 
-.tile-card-project {
+.tile-card-path {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--text-faint);
   font-size: var(--fs-meta);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tile-card-project svg {
+.tile-card-path svg {
   width: 11px;
   height: 11px;
   flex: none;
 }
 
 .tile-card-preview {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   margin: 0;
   font-size: var(--fs-small);
+  line-height: 1.45;
   color: var(--text-dim);
-  min-height: 1.6em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-}
-.tile-card-preview svg {
-  width: 12px;
-  height: 12px;
-  flex: none;
-}
-.tile-card.status-running .tile-card-preview {
-  color: var(--ok);
+  overflow-wrap: anywhere;
+  min-height: 2.7em;
 }
 
+.tile-card .session-search-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: 1.35;
+}
+
+/* tile 上的审批条 */
 .tile-card-approval {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
+  padding: 7px 8px;
+  border: 1px solid var(--warning-border);
+  background: var(--warning-bg);
+  border-radius: var(--radius-sm);
   font-size: var(--fs-meta);
-  color: var(--wait);
 }
 .tile-card-approval > svg {
   width: 13px;
   height: 13px;
   flex: none;
+  color: var(--wait);
 }
-.tile-card-approval .grow {
+.tile-card-approval-text {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
 }
 
 .tile-mini-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: none;
   border: 1px solid var(--control-border);
   background: var(--control);
   color: var(--text-soft);
@@ -452,29 +462,92 @@
   height: 12px;
 }
 
-/* ---- 底部 dock：空闲项目 ---- */
+/* tile 底部 meta 行：时间 + agent/provider/模式等 badge */
+.tile-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.tile-card-meta > time {
+  flex: none;
+}
+.tile-card-meta > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-card-meta .provider-badge {
+  display: inline-flex;
+  flex: 0 1 auto;
+  max-width: 42%;
+  min-width: 0;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-dim);
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-card-meta .lock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+}
+.tile-card-meta .lock-badge svg {
+  width: 10px;
+  height: 10px;
+}
+.tile-card-meta .history-badge {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tile-card-meta .mode-badge {
+  opacity: 0.8;
+}
+
+.tile-skeleton {
+  min-height: 108px;
+  cursor: default;
+  border-left-width: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-from) 0%,
+    var(--skeleton-mid) 45%,
+    var(--skeleton-from) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+.tile-skeleton:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* ---- 底部 dock：库切换 + 项目快捷新建 ---- */
 
 .tiled-dock {
   flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 16px;
+  padding: 8px 14px max(8px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--sidebar);
   overflow-x: auto;
+  scrollbar-width: thin;
 }
-.tiled-dock-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-faint);
-  font-size: var(--fs-meta);
+.dock-library {
   flex: none;
-}
-.tiled-dock-label svg {
-  width: 13px;
-  height: 13px;
+  width: 148px;
 }
 .dock-chip {
   display: inline-flex;
@@ -488,151 +561,104 @@
   color: var(--text-dim);
   font-size: var(--fs-small);
   cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .dock-chip:hover {
   border-color: var(--line-strong);
   color: var(--text);
 }
-.dock-chip small {
+.dock-chip > svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
   color: var(--text-faint);
+}
+.dock-chip.new {
+  border-style: dashed;
 }
 .tiled-dock-empty {
   color: var(--text-faint);
   font-size: var(--fs-meta);
-}
-.watch-dot.error {
-  background: var(--danger);
-}
-.watch-dot.idle {
-  background: var(--text-faint);
+  padding-left: 4px;
 }
 
-/* ---- 列表模式（现有交互的简化对照） ---- */
+/* ---- 响应式 ---- */
 
-.demo-list {
-  flex: 1;
-  display: flex;
-  min-height: 0;
+@media (max-width: 1100px) {
+  .tiled-stage {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(
+        200px,
+        240px
+      );
+    gap: 10px;
+    padding: 12px;
+  }
+  .tiled-topbar .watch-strip button {
+    padding: 0 7px;
+  }
 }
-.demo-list aside {
-  width: 320px;
-  min-width: 320px;
-}
-.demo-group {
-  margin: 2px 10px;
-}
-.demo-group-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 6px 4px;
-  font-size: var(--fs-meta);
-  font-weight: 600;
-  color: var(--text-faint);
-}
-.demo-group-head svg {
-  width: 13px;
-  height: 13px;
-}
-.demo-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 8px;
-  border: 0;
-  background: transparent;
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--fs-ui);
-  color: var(--text-soft);
-}
-.demo-row:hover {
-  background: var(--control-hover);
-}
-.demo-row.on {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.demo-row-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-}
-.demo-row em {
-  font-style: normal;
-  font-family: var(--font-mono);
-  font-size: var(--fs-meta);
-  color: var(--text-faint);
-}
-
-.demo-list-workspace {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--ambient);
-}
-.demo-list-chat {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-.demo-list-chat-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 13px 18px;
-  border-bottom: 1px solid var(--line);
-}
-.demo-list-lines {
-  flex: 1;
-  overflow-y: auto;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.demo-list-welcome {
-  flex: 1;
-  display: grid;
-  place-content: center;
-  text-align: center;
-  color: var(--text-dim);
-}
-.demo-list-welcome h1 {
-  color: var(--text);
-  margin-bottom: 4px;
-}
-
-/* ---- 窄屏：hero 在上，卫星横滑 ---- */
 
 @media (max-width: 900px) {
   .tiled-stage {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "hero"
-      "left"
-      "right";
-    overflow-y: auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr);
+    grid-template-areas: "left hero";
   }
-  .tile-hero {
-    min-height: 340px;
+  /* 中等宽度只留一栏卫星，右侧让位给 hero */
+  .tiled-rail.right {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .tiled-topbar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .tiled-brand b,
+  .tiled-topbar .watch-strip {
+    display: none;
+  }
+  .mode-switch {
+    width: auto;
+  }
+  .mode-switch > button {
+    font-size: 0;
+    gap: 0;
+    padding: 0 10px;
+  }
+  .mode-switch svg {
+    width: 15px;
+    height: 15px;
+  }
+  .new-session-btn {
+    font-size: 0;
+    gap: 0;
+    padding: 0 10px;
+  }
+  .new-session-btn svg {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+  }
+  /* 手机上不显示卫星栏：hero 全宽，浏览交给总览 */
+  .tiled-stage {
+    display: flex;
+    padding: 10px;
   }
   .tiled-rail {
-    flex-direction: row;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .tile-card {
-    min-width: 230px;
-    max-width: 260px;
-  }
-  .tiled-search {
     display: none;
+  }
+  .tile-hero {
+    flex: 1;
+  }
+  .tiled-overview {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 10px;
+  }
+  .tiled-dock {
+    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
   }
 }

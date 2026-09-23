@@ -45,6 +45,7 @@ import {
   ToastStack,
 } from "./ui";
 import { Sidebar } from "./layout/Sidebar";
+import { TiledStage } from "./tiled/TiledStage";
 import { ChatWorkspace } from "./session/ChatWorkspace";
 import { Welcome } from "./welcome/Welcome";
 import { NewThreadModal } from "./overlays/NewThreadModal";
@@ -172,6 +173,9 @@ export function App() {
     systemNotificationPermission,
   );
   const [sidebar, setSidebar] = useState(true);
+  const [viewMode, setViewMode] = useState<"list" | "tiled">(() =>
+    readUiCache().viewMode === "tiled" ? "tiled" : "list",
+  );
   const [authError, setAuthError] = useState(false);
   const [pairingAvailable, setPairingAvailable] = useState(false);
   const [pairMessage, setPairMessage] = useState("");
@@ -346,16 +350,19 @@ export function App() {
     [markSessionSeen],
   );
 
-  const refreshOfficialUsage = useCallback(async (force = false) => {
-    try {
-      const runtime = await post<RuntimeSnapshot>(
-        `/runtime/rate-limits${force ? "?force=1" : ""}`,
-      );
-      setSnapshot((current) => ({ ...current, runtime }));
-    } catch (error: any) {
-      pushToast(error?.message || "Official 额度刷新失败");
-    }
-  }, [pushToast]);
+  const refreshOfficialUsage = useCallback(
+    async (force = false) => {
+      try {
+        const runtime = await post<RuntimeSnapshot>(
+          `/runtime/rate-limits${force ? "?force=1" : ""}`,
+        );
+        setSnapshot((current) => ({ ...current, runtime }));
+      } catch (error: any) {
+        pushToast(error?.message || "Official 额度刷新失败");
+      }
+    },
+    [pushToast],
+  );
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -423,8 +430,9 @@ export function App() {
     writeUiCache({
       expandedProjects: [...expandedProjects],
       query: "",
+      viewMode,
     });
-  }, [expandedProjects]);
+  }, [expandedProjects, viewMode]);
 
   useEffect(() => {
     const value = query.trim();
@@ -783,9 +791,7 @@ export function App() {
         ),
       )
       .filter(Boolean) as ProjectGroup[];
-    const fromSessions = activeGroups.filter(
-      (group) => group.sessions.length,
-    );
+    const fromSessions = activeGroups.filter((group) => group.sessions.length);
     const seen = new Set<string>();
     const list: ProjectGroup[] = [];
     for (const group of [...fromPrefs, ...fromSessions]) {
@@ -796,6 +802,22 @@ export function App() {
     }
     return list;
   }, [snapshot.preferences, activeGroups]);
+
+  // 平铺模式 dock 的项目快捷入口：最近项目优先，置顶项目补齐。
+  const dockProjects = useMemo(() => {
+    const seen = new Set<string>();
+    const list: ProjectGroup[] = [];
+    for (const group of [
+      ...recentProjects,
+      ...activeGroups.filter((item) => item.pinned),
+    ]) {
+      if (seen.has(group.key)) continue;
+      seen.add(group.key);
+      list.push(group);
+      if (list.length >= 6) break;
+    }
+    return list;
+  }, [recentProjects, activeGroups]);
 
   const saveProject = async (
     project: { key: string; cwd: string },
@@ -1009,6 +1031,78 @@ export function App() {
       })()
     : undefined;
 
+  // 列表与平铺两种模式共用同一个会话工作区；平铺把它作为中央 hero。
+  const chatWorkspace = current ? (
+    <RenderErrorBoundary
+      resetKey={sessionKey(current)}
+      fallback={
+        <main className="chat">
+          <header className="chat-header">
+            <div className="chat-header-row1">
+              <button
+                className="icon-btn mobile-back"
+                onClick={() => {
+                  setSelected(undefined);
+                  setSidebar(true);
+                }}
+                title="返回"
+              >
+                <ArrowLeft />
+              </button>
+              <div className="chat-title">
+                <h2>会话无法显示</h2>
+              </div>
+            </div>
+          </header>
+          <p className="error-banner">
+            这个会话的内容触发了渲染错误。请返回列表，或刷新后再试。
+          </p>
+        </main>
+      }
+    >
+      <ChatWorkspace
+        key={sessionKey(current)}
+        thread={current}
+        provider={providerForThread(
+          snapshot.providers,
+          snapshot.agentProfiles,
+          current,
+        )}
+        agentName={agentName(snapshot.agents, current)}
+        capabilities={capabilitiesFor(snapshot.agents, current)}
+        approvals={snapshot.approvals}
+        events={events}
+        origin={origin}
+        searchTarget={
+          searchTarget?.session === sessionKey(current)
+            ? searchTarget
+            : undefined
+        }
+        onBack={() => {
+          setSelected(undefined);
+          setSidebar(true);
+        }}
+        onSnapshot={refresh}
+        onSwitchProvider={() => setSwitchThread(current)}
+        onMenu={() => setSheet(current)}
+        onSelectThread={(providerId, threadId) => {
+          const key = sessionKey({
+            agentId: current.agentId,
+            providerId,
+            id: threadId,
+          });
+          markSessionSeen(key);
+          setSelected(key);
+        }}
+        onToast={pushToast}
+        onUsage={() => setUsageOpen("stats")}
+        onTasks={() => setTaskScope(current.id)}
+        onAppearance={() => setAppearanceOpen(true)}
+        onOpenOrigin={() => openOrigin(current)}
+      />
+    </RenderErrorBoundary>
+  ) : undefined;
+
   if (authError)
     return (
       <div className="auth-page">
@@ -1072,11 +1166,7 @@ export function App() {
               refresh();
             }}
           >
-            <input
-              name="token"
-              type="password"
-              placeholder="访问令牌"
-            />
+            <input name="token" type="password" placeholder="访问令牌" />
             <button className="primary">连接</button>
           </form>
         </div>
@@ -1105,189 +1195,178 @@ export function App() {
     );
 
   return (
-    <div className="app-shell">
-      <Sidebar
-        show={sidebar}
-        hiddenOnMobile={Boolean(current)}
-        projectCount={activeGroups.length}
-        sessionCount={snapshot.threads.length}
-        archivedCount={(snapshot.archivedThreads || []).length}
-        library={library}
-        query={query}
-        searchMatches={contentMatches}
-        contentSearchPending={contentSearchPending}
-        contentSearchProgress={
-          contentSearch
-            ? {
-                indexed: contentSearch.indexed,
-                total: contentSearch.total,
-                building: contentSearch.building,
-              }
-            : undefined
-        }
-        statusFilter={statusFilter}
-        counts={counts}
-        projects={projects}
-        selected={selected}
-        unseenSessions={unseenSessions}
-        expandedProjects={expandedProjects}
-        forkCounts={forkCounts}
-        runtime={snapshot.runtime}
-        notificationPermission={notificationPermission}
-        archiveError={snapshot.runtime?.archiveError}
-        loading={loading || historySyncing}
-        onClose={() => setSidebar(false)}
-        onNew={() => openThreadModalFromSidebar({})}
-        onRefresh={refresh}
-        onProviders={() => setProviderModal(true)}
-        onUsage={setUsageOpen}
-        onTasks={() => setTaskScope(null)}
-        onTools={(pathname) => openPage(pathname || "/terminal")}
-        onNotifications={enableSystemNotifications}
-        onLibrary={setLibrary}
-        onQuery={setQuery}
-        onStatusFilter={setStatusFilter}
-        onToggleProject={(key) =>
-          setExpandedProjects((currentSet) => {
-            const next = new Set(currentSet);
-            next.has(key) ? next.delete(key) : next.add(key);
-            return next;
-          })
-        }
-        onSelect={selectThread}
-        onAddInProject={(project) =>
-          openThreadModalFromSidebar({
-            cwd: project.cwd,
-            project: snapshot.projects?.find(
-              (item) => item.key === project.key,
-            ),
-          })
-        }
-        onPin={(project) => saveProject(project, { pinned: !project.pinned })}
-        onHide={(project) => saveProject(project, { hidden: true })}
-        onRenameProject={(project) => setRename({ kind: "project", project })}
-        onDefaults={(project) =>
-          setProjectEdit(
-            snapshot.projects?.find((item) => item.key === project.key) || {
-              key: project.key,
+    <div className={viewMode === "tiled" ? "tiled-shell" : "app-shell"}>
+      {viewMode === "tiled" ? (
+        <TiledStage
+          groups={projects}
+          focused={current}
+          unseenSessions={unseenSessions}
+          approvals={snapshot.approvals}
+          providers={snapshot.providers}
+          forkCounts={forkCounts}
+          searchMatches={contentMatches}
+          query={query}
+          counts={counts}
+          statusFilter={statusFilter}
+          library={library}
+          sessionCount={snapshot.threads.length}
+          archivedCount={(snapshot.archivedThreads || []).length}
+          loading={loading || historySyncing}
+          notificationPermission={notificationPermission}
+          hero={chatWorkspace}
+          dockProjects={dockProjects}
+          onSelect={selectThread}
+          onExitFocus={() => setSelected(undefined)}
+          onSwitchToList={() => setViewMode("list")}
+          onQuery={setQuery}
+          onStatusFilter={setStatusFilter}
+          onLibrary={setLibrary}
+          onNew={() => setThreadModal({})}
+          onNewInProject={(project) =>
+            setThreadModal({
               cwd: project.cwd,
-              name: project.name,
-              defaults: project.defaults,
-              updatedAt: project.updatedAt,
-            },
-          )
-        }
-        onArchiveProject={archiveProject}
-        onRestoreProject={restoreProject}
-        onDeleteProject={deleteProject}
-        onHistory={setHistoryHelp}
-        onSessionMenu={setSheet}
-        providers={snapshot.providers}
-      />
-      <section className="workspace">
-        {!current && (
-          <button
-            type="button"
-            className="icon-btn appearance-trigger appearance-trigger-home"
-            onClick={() => setAppearanceOpen(true)}
-            title="外观设置"
-            aria-label="外观设置"
-          >
-            <SunMoon />
-          </button>
-        )}
-        {!sidebar && !current && (
-          <button className="floating-menu" onClick={() => setSidebar(true)}>
-            <Menu />
-          </button>
-        )}
-        {current ? (
-          <RenderErrorBoundary
-            resetKey={sessionKey(current)}
-            fallback={
-              <main className="chat">
-                <header className="chat-header">
-                  <div className="chat-header-row1">
-                    <button
-                      className="icon-btn mobile-back"
-                      onClick={() => {
-                        setSelected(undefined);
-                        setSidebar(true);
-                      }}
-                      title="返回"
-                    >
-                      <ArrowLeft />
-                    </button>
-                    <div className="chat-title">
-                      <h2>会话无法显示</h2>
-                    </div>
-                  </div>
-                </header>
-                <p className="error-banner">
-                  这个会话的内容触发了渲染错误。请返回列表，或刷新后再试。
-                </p>
-              </main>
+              project: snapshot.projects?.find(
+                (item) => item.key === project.key,
+              ),
+            })
+          }
+          onSessionMenu={setSheet}
+          onHistory={setHistoryHelp}
+          onResolveApproval={resolveApproval}
+          onTasks={() => setTaskScope(null)}
+          onTools={(pathname) => openPage(pathname || "/terminal")}
+          onProviders={() => setProviderModal(true)}
+          onUsage={setUsageOpen}
+          onAppearance={() => setAppearanceOpen(true)}
+          onNotifications={enableSystemNotifications}
+        />
+      ) : (
+        <>
+          <Sidebar
+            show={sidebar}
+            hiddenOnMobile={Boolean(current)}
+            projectCount={activeGroups.length}
+            sessionCount={snapshot.threads.length}
+            archivedCount={(snapshot.archivedThreads || []).length}
+            library={library}
+            query={query}
+            searchMatches={contentMatches}
+            contentSearchPending={contentSearchPending}
+            contentSearchProgress={
+              contentSearch
+                ? {
+                    indexed: contentSearch.indexed,
+                    total: contentSearch.total,
+                    building: contentSearch.building,
+                  }
+                : undefined
             }
-          >
-            <ChatWorkspace
-              key={sessionKey(current)}
-              thread={current}
-              provider={providerForThread(
-                snapshot.providers,
-                snapshot.agentProfiles,
-                current,
-              )}
-              agentName={agentName(snapshot.agents, current)}
-              capabilities={capabilitiesFor(snapshot.agents, current)}
-              approvals={snapshot.approvals}
-              events={events}
-              origin={origin}
-              searchTarget={
-                searchTarget?.session === sessionKey(current)
-                  ? searchTarget
-                  : undefined
-              }
-              onBack={() => {
-                setSelected(undefined);
-                setSidebar(true);
-              }}
-              onSnapshot={refresh}
-              onSwitchProvider={() => setSwitchThread(current)}
-              onMenu={() => setSheet(current)}
-              onSelectThread={(providerId, threadId) => {
-                const key = sessionKey({
-                  agentId: current.agentId,
-                  providerId,
-                  id: threadId,
-                });
-                markSessionSeen(key);
-                setSelected(key);
-              }}
-              onToast={pushToast}
-              onUsage={() => setUsageOpen("stats")}
-              onTasks={() => setTaskScope(current.id)}
-              onAppearance={() => setAppearanceOpen(true)}
-              onOpenOrigin={() => openOrigin(current)}
-            />
-          </RenderErrorBoundary>
-        ) : (
-          <Welcome
-            recent={recentProjects}
+            statusFilter={statusFilter}
+            counts={counts}
+            projects={projects}
+            selected={selected}
+            unseenSessions={unseenSessions}
+            expandedProjects={expandedProjects}
+            forkCounts={forkCounts}
             runtime={snapshot.runtime}
+            notificationPermission={notificationPermission}
+            archiveError={snapshot.runtime?.archiveError}
             loading={loading || historySyncing}
-            onNew={() => setThreadModal({})}
-            onOpenProject={(project) =>
-              setThreadModal({
+            onClose={() => setSidebar(false)}
+            onNew={() => openThreadModalFromSidebar({})}
+            onRefresh={refresh}
+            onProviders={() => setProviderModal(true)}
+            onUsage={setUsageOpen}
+            onTasks={() => setTaskScope(null)}
+            onTools={(pathname) => openPage(pathname || "/terminal")}
+            onNotifications={enableSystemNotifications}
+            onLibrary={setLibrary}
+            onQuery={setQuery}
+            onStatusFilter={setStatusFilter}
+            onTiledMode={() => setViewMode("tiled")}
+            onToggleProject={(key) =>
+              setExpandedProjects((currentSet) => {
+                const next = new Set(currentSet);
+                next.has(key) ? next.delete(key) : next.add(key);
+                return next;
+              })
+            }
+            onSelect={selectThread}
+            onAddInProject={(project) =>
+              openThreadModalFromSidebar({
                 cwd: project.cwd,
                 project: snapshot.projects?.find(
                   (item) => item.key === project.key,
                 ),
               })
             }
-            onUsage={() => setUsageOpen("stats")}
+            onPin={(project) =>
+              saveProject(project, { pinned: !project.pinned })
+            }
+            onHide={(project) => saveProject(project, { hidden: true })}
+            onRenameProject={(project) =>
+              setRename({ kind: "project", project })
+            }
+            onDefaults={(project) =>
+              setProjectEdit(
+                snapshot.projects?.find((item) => item.key === project.key) || {
+                  key: project.key,
+                  cwd: project.cwd,
+                  name: project.name,
+                  defaults: project.defaults,
+                  updatedAt: project.updatedAt,
+                },
+              )
+            }
+            onArchiveProject={archiveProject}
+            onRestoreProject={restoreProject}
+            onDeleteProject={deleteProject}
+            onHistory={setHistoryHelp}
+            onSessionMenu={setSheet}
+            providers={snapshot.providers}
           />
-        )}
-      </section>
+          <section className="workspace">
+            {!current && (
+              <button
+                type="button"
+                className="icon-btn appearance-trigger appearance-trigger-home"
+                onClick={() => setAppearanceOpen(true)}
+                title="外观设置"
+                aria-label="外观设置"
+              >
+                <SunMoon />
+              </button>
+            )}
+            {!sidebar && !current && (
+              <button
+                className="floating-menu"
+                onClick={() => setSidebar(true)}
+              >
+                <Menu />
+              </button>
+            )}
+            {current ? (
+              chatWorkspace
+            ) : (
+              <Welcome
+                recent={recentProjects}
+                runtime={snapshot.runtime}
+                loading={loading || historySyncing}
+                onNew={() => setThreadModal({})}
+                onOpenProject={(project) =>
+                  setThreadModal({
+                    cwd: project.cwd,
+                    project: snapshot.projects?.find(
+                      (item) => item.key === project.key,
+                    ),
+                  })
+                }
+                onUsage={() => setUsageOpen("stats")}
+              />
+            )}
+          </section>
+        </>
+      )}
       {providerModal && (
         <ProviderModal
           providers={snapshot.providers}
