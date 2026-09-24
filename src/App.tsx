@@ -45,7 +45,7 @@ import {
   ToastStack,
 } from "./ui";
 import { Sidebar } from "./layout/Sidebar";
-import { TiledStage } from "./tiled/TiledStage";
+import { TiledStage, runViewTransition } from "./tiled/TiledStage";
 import { ChatWorkspace } from "./session/ChatWorkspace";
 import { Welcome } from "./welcome/Welcome";
 import { NewThreadModal } from "./overlays/NewThreadModal";
@@ -1079,8 +1079,13 @@ export function App() {
             : undefined
         }
         onBack={() => {
-          setSelected(undefined);
-          setSidebar(true);
+          const exit = () => {
+            setSelected(undefined);
+            setSidebar(true);
+          };
+          // 平铺模式里 hero 内的返回按钮也走平滑过渡
+          if (viewMode === "tiled") runViewTransition(exit);
+          else exit();
         }}
         onSnapshot={refresh}
         onSwitchProvider={() => setSwitchThread(current)}

@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   Activity,
   Archive,
@@ -49,6 +50,31 @@ import { Status } from "../ui";
 import type { UsageView } from "../usage/UsageChip";
 
 type StatusFilter = "all" | "active" | "attention" | "unseen";
+
+/**
+ * 用 View Transitions 平滑切换平铺舞台的布局（tile 靠 view-transition-name
+ * 在新旧快照间自动 FLIP）。不支持或用户关掉动效时退化为直接执行。
+ */
+export function runViewTransition(update: () => void) {
+  const start = (
+    document as Document & {
+      startViewTransition?: (cb: () => void) => unknown;
+    }
+  ).startViewTransition;
+  const reduceMotion =
+    document.documentElement.dataset.motion === "off" ||
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!start || reduceMotion) {
+    update();
+    return;
+  }
+  document.startViewTransition(() => flushSync(update));
+}
+
+/** view-transition-name 只接受 custom-ident，会话 key 里的冒号等要清洗。 */
+function vtName(thread: ThreadSummary) {
+  return `tile-${sessionKey(thread).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
 
 /** 栏位：活跃中（运行/待确认/新回复）→ 近期（24h 内）→ 不活跃。 */
 type LaneId = "active" | "recent" | "idle";
@@ -295,9 +321,11 @@ export function TiledStage({
       )}
       searchQuery={query}
       onSelect={() =>
-        onSelect(
-          thread,
-          searchMatches.get(`${thread.agentId || "codex"}:${thread.id}`),
+        runViewTransition(() =>
+          onSelect(
+            thread,
+            searchMatches.get(`${thread.agentId || "codex"}:${thread.id}`),
+          ),
         )
       }
       onSessionMenu={() => onSessionMenu(thread)}
@@ -312,7 +340,7 @@ export function TiledStage({
         <button
           type="button"
           className="tiled-brand"
-          onClick={onExitFocus}
+          onClick={() => runViewTransition(onExitFocus)}
           title="会话总览"
         >
           <img className="brand-logo" src={deckLogo} alt="" />
@@ -323,7 +351,7 @@ export function TiledStage({
             type="button"
             role="tab"
             aria-selected={false}
-            onClick={onSwitchToList}
+            onClick={() => runViewTransition(onSwitchToList)}
           >
             <List />
             列表
@@ -333,7 +361,7 @@ export function TiledStage({
             role="tab"
             className="on"
             aria-selected
-            onClick={onExitFocus}
+            onClick={() => runViewTransition(onExitFocus)}
           >
             <LayoutGrid />
             平铺
@@ -343,7 +371,7 @@ export function TiledStage({
           <button
             type="button"
             className="icon-btn tiled-overview-btn"
-            onClick={onExitFocus}
+            onClick={() => runViewTransition(onExitFocus)}
             title="返回全部会话总览"
             aria-label="返回全部会话总览"
           >
@@ -798,6 +826,12 @@ function TileCard({
       role="button"
       tabIndex={0}
       aria-current={current || undefined}
+      style={
+        {
+          viewTransitionName: vtName(thread),
+          viewTransitionClass: "tile",
+        } as CSSProperties
+      }
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
