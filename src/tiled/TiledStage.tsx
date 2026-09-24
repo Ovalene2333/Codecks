@@ -265,30 +265,26 @@ export function TiledStage({
 
   const focusedKey = focused ? sessionKey(focused) : undefined;
   // 展开后左右栏分工：左栏 = 关注队列（审批/等待/异常/运行/新回复），
-  // 右栏 = 上下文（同项目兄弟会话优先，再补最近会话）。
-  const attention = lanes.active.filter(
-    (thread) => sessionKey(thread) !== focusedKey,
-  );
+  // 右栏 = 上下文（同项目兄弟会话优先，再补最近会话）。聚焦的会话留在
+  // 原本队列里并标为当前项，不会因为展开而从边栏消失。
+  const attention = lanes.active;
   const attentionKeys = new Set(attention.map((thread) => sessionKey(thread)));
   const focusedProject = focusedKey ? projectOf.get(focusedKey) : undefined;
   const siblings = focusedProject
     ? focusedProject.sessions.filter(
-        (thread) =>
-          sessionKey(thread) !== focusedKey &&
-          !attentionKeys.has(sessionKey(thread)),
+        (thread) => !attentionKeys.has(sessionKey(thread)),
       )
     : [];
   const contextRest = [...lanes.recent, ...lanes.idle].filter(
     (thread) =>
-      sessionKey(thread) !== focusedKey &&
-      !attentionKeys.has(sessionKey(thread)) &&
-      !siblings.includes(thread),
+      !attentionKeys.has(sessionKey(thread)) && !siblings.includes(thread),
   );
 
   const renderTile = (thread: ThreadSummary) => (
     <TileCard
       key={sessionKey(thread)}
       thread={thread}
+      current={sessionKey(thread) === focusedKey}
       project={projectOf.get(sessionKey(thread))}
       unseen={unseenSessions.has(sessionKey(thread))}
       pending={approvalsByThread.get(sessionKey(thread)) || []}
@@ -584,7 +580,7 @@ export function TiledStage({
 
       {focused ? (
         <main className="tiled-stage">
-          <aside className="tiled-rail left">
+          <div className="tiled-rail left">
             <header className="rail-head">
               <b>关注</b>
               <em>{attention.length}</em>
@@ -595,13 +591,13 @@ export function TiledStage({
                 <p className="rail-empty">没有需要关注的会话</p>
               )}
             </div>
-          </aside>
+          </div>
           <section
             className={`tile-hero status-${focused.compacting ? "running" : focused.status}`}
           >
             {hero}
           </section>
-          <aside className="tiled-rail right">
+          <div className="tiled-rail right">
             <header className="rail-head">
               <b>上下文</b>
               <em>{siblings.length + contextRest.length}</em>
@@ -625,7 +621,7 @@ export function TiledStage({
                 <p className="rail-empty">没有其它会话</p>
               )}
             </div>
-          </aside>
+          </div>
         </main>
       ) : (
         <main className="tiled-overview">
@@ -753,6 +749,7 @@ export function TiledStage({
 
 function TileCard({
   thread,
+  current,
   project,
   unseen,
   pending,
@@ -766,6 +763,7 @@ function TileCard({
   onResolveApproval,
 }: {
   thread: ThreadSummary;
+  current?: boolean;
   project?: ProjectGroup;
   unseen: boolean;
   pending: Approval[];
@@ -796,9 +794,10 @@ function TileCard({
 
   return (
     <div
-      className={`tile-card status-${thread.compacting ? "running" : thread.status} ${unseen ? "unseen" : ""} ${approval || searchMatch ? "dense" : ""}`}
+      className={`tile-card status-${thread.compacting ? "running" : thread.status} ${unseen ? "unseen" : ""} ${approval || searchMatch ? "dense" : ""} ${current ? "current" : ""}`}
       role="button"
       tabIndex={0}
+      aria-current={current || undefined}
       onClick={onSelect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {

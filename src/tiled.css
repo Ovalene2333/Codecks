@@ -153,6 +153,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* grid item 默认 min-width:auto 会被内容撑破列宽、盖住 hero */
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface) 55%, transparent);
@@ -187,6 +189,7 @@
 .rail-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -335,6 +338,7 @@
 .lane-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -429,6 +433,7 @@
   flex-direction: column;
   gap: 7px;
   flex: none;
+  min-width: 0;
   /* 固定高度保证所有 tile 等大；有审批条/搜索命中时预览压成一行补齐 */
   height: 158px;
   padding: 11px 12px;
@@ -455,6 +460,24 @@
 .tile-card:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+/* 聚焦中的会话仍留在边栏里，用 accent 圈出当前项 */
+.tile-card.current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.tile-card.current .tile-card-top::after {
+  content: "当前";
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 99px;
+  padding: 0 7px;
+  vertical-align: 1px;
 }
 .tile-card.status-running {
   border-left-color: var(--ok);
