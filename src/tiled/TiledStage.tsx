@@ -50,6 +50,28 @@ import type { UsageView } from "../usage/UsageChip";
 
 type StatusFilter = "all" | "active" | "attention" | "unseen";
 
+/** 栏位：活跃中（运行/待确认/新回复）→ 近期（24h 内）→ 不活跃。 */
+type LaneId = "active" | "recent" | "idle";
+const LANE_RANK: Record<LaneId, number> = { active: 0, recent: 1, idle: 2 };
+const RECENT_MS = 24 * 3600_000;
+const SETTLE_MS = 10 * 60_000;
+
+const LANE_META: {
+  id: LaneId;
+  title: string;
+  hint: string;
+  empty: string;
+}[] = [
+  {
+    id: "active",
+    title: "活跃中",
+    hint: "运行 · 待确认 · 新回复",
+    empty: "没有正在进行的会话",
+  },
+  { id: "recent", title: "近期", hint: "最近 24 小时", empty: "近期没有会话" },
+  { id: "idle", title: "不活跃", hint: "更早的会话", empty: "没有更早的会话" },
+];
+
 /**
  * 平铺舞台：聚焦会话以 hero 卡居中，其余会话按「需要关注程度」排进两侧
  * 卫星栏；无聚焦时是等大的会话总览网格。底部 dock 放库切换与项目快捷入口。
@@ -127,6 +149,7 @@ export function TiledStage({
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const laneMemory = useRef(new Map<string, LaneId>());
   const [menuOpen, setMenuOpen] = useState(false);
   const searching = Boolean(query.trim());
 
@@ -188,6 +211,7 @@ export function TiledStage({
     return map;
   }, [sessions, approvals]);
 
+  // 「活跃中」栏内按关注优先级排：待审批 > 待确认 > 异常 > 运行 > 新回复。
   const rankOf = (thread: ThreadSummary) => {
     if (approvalsByThread.get(sessionKey(thread))?.length) return 0;
     if (thread.status === "waiting") return 1;
@@ -196,21 +220,70 @@ export function TiledStage({
     if (unseenSessions.has(sessionKey(thread))) return 4;
     return 5;
   };
-  const ordered = useMemo(
-    () =>
-      [...sessions].sort(
-        (a, b) => rankOf(a) - rankOf(b) || b.updatedAt - a.updatedAt,
-      ),
+
+  // 栏位分配带粘性：有新动静立刻晋升到「活跃中」，但只有在会话静默
+  // SETTLE_MS 后才允许降栏——避免运行结束/已读瞬间在大区域间跳来跳去。
+  const lanes = useMemo(() => {
+    const mem = laneMemory.current;
+    const nowTs = Date.now();
+    const desiredLane = (thread: ThreadSummary): LaneId => {
+      if (approvalsByThread.get(sessionKey(thread))?.length) return "active";
+      if (thread.status !== "idle" && thread.status !== "offline")
+        return "active";
+      if (unseenSessions.has(sessionKey(thread))) return "active";
+      return nowTs - thread.updatedAt <= RECENT_MS ? "recent" : "idle";
+    };
+    const assigned = new Map<string, LaneId>();
+    for (const thread of sessions) {
+      const key = sessionKey(thread);
+      const want = desiredLane(thread);
+      const had = mem.get(key);
+      const settled = nowTs - thread.updatedAt >= SETTLE_MS;
+      const lane =
+        had && LANE_RANK[want] > LANE_RANK[had] && !settled ? had : want;
+      assigned.set(key, lane);
+      mem.set(key, lane);
+    }
+    for (const key of [...mem.keys()]) if (!assigned.has(key)) mem.delete(key);
+    const buckets: Record<LaneId, ThreadSummary[]> = {
+      active: [],
+      recent: [],
+      idle: [],
+    };
+    const byRecency = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const thread of byRecency) {
+      const lane = assigned.get(sessionKey(thread)) || "idle";
+      buckets[lane].push(thread);
+    }
+    // 活跃栏内再按关注优先级细分
+    buckets.active.sort(
+      (a, b) => rankOf(a) - rankOf(b) || b.updatedAt - a.updatedAt,
+    );
+    return buckets;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, approvalsByThread, unseenSessions],
-  );
+  }, [sessions, approvalsByThread, unseenSessions]);
 
   const focusedKey = focused ? sessionKey(focused) : undefined;
-  const satellites = focusedKey
-    ? ordered.filter((thread) => sessionKey(thread) !== focusedKey)
+  // 展开后左右栏分工：左栏 = 关注队列（审批/等待/异常/运行/新回复），
+  // 右栏 = 上下文（同项目兄弟会话优先，再补最近会话）。
+  const attention = lanes.active.filter(
+    (thread) => sessionKey(thread) !== focusedKey,
+  );
+  const attentionKeys = new Set(attention.map((thread) => sessionKey(thread)));
+  const focusedProject = focusedKey ? projectOf.get(focusedKey) : undefined;
+  const siblings = focusedProject
+    ? focusedProject.sessions.filter(
+        (thread) =>
+          sessionKey(thread) !== focusedKey &&
+          !attentionKeys.has(sessionKey(thread)),
+      )
     : [];
-  const railLeft = satellites.filter((_, index) => index % 2 === 0);
-  const railRight = satellites.filter((_, index) => index % 2 === 1);
+  const contextRest = [...lanes.recent, ...lanes.idle].filter(
+    (thread) =>
+      sessionKey(thread) !== focusedKey &&
+      !attentionKeys.has(sessionKey(thread)) &&
+      !siblings.includes(thread),
+  );
 
   const renderTile = (thread: ThreadSummary) => (
     <TileCard
@@ -511,25 +584,76 @@ export function TiledStage({
 
       {focused ? (
         <main className="tiled-stage">
-          <div className="tiled-rail left">{railLeft.map(renderTile)}</div>
+          <aside className="tiled-rail left">
+            <header className="rail-head">
+              <b>关注</b>
+              <em>{attention.length}</em>
+            </header>
+            <div className="rail-body">
+              {attention.map(renderTile)}
+              {!attention.length && (
+                <p className="rail-empty">没有需要关注的会话</p>
+              )}
+            </div>
+          </aside>
           <section
             className={`tile-hero status-${focused.compacting ? "running" : focused.status}`}
           >
             {hero}
           </section>
-          <div className="tiled-rail right">{railRight.map(renderTile)}</div>
+          <aside className="tiled-rail right">
+            <header className="rail-head">
+              <b>上下文</b>
+              <em>{siblings.length + contextRest.length}</em>
+            </header>
+            <div className="rail-body">
+              {siblings.length > 0 && (
+                <>
+                  <small className="rail-label">同项目</small>
+                  {siblings.map(renderTile)}
+                </>
+              )}
+              {contextRest.length > 0 && (
+                <>
+                  <small className="rail-label">
+                    {siblings.length ? "最近" : "最近会话"}
+                  </small>
+                  {contextRest.slice(0, 14).map(renderTile)}
+                </>
+              )}
+              {!siblings.length && !contextRest.length && (
+                <p className="rail-empty">没有其它会话</p>
+              )}
+            </div>
+          </aside>
         </main>
       ) : (
         <main className="tiled-overview">
-          {ordered.map(renderTile)}
-          {loading && !ordered.length && (
+          {sessions.length > 0 &&
+            LANE_META.map((lane) => (
+              <section className={`tiled-lane lane-${lane.id}`} key={lane.id}>
+                <header className="lane-head">
+                  <span className="lane-dot" />
+                  <b>{lane.title}</b>
+                  <small>{lane.hint}</small>
+                  <em>{lanes[lane.id].length}</em>
+                </header>
+                <div className="lane-body">
+                  {lanes[lane.id].map(renderTile)}
+                  {!lanes[lane.id].length && (
+                    <p className="lane-empty">{lane.empty}</p>
+                  )}
+                </div>
+              </section>
+            ))}
+          {loading && !sessions.length && (
             <>
               {Array.from({ length: 6 }, (_, index) => (
                 <div key={index} className="tile-card tile-skeleton" />
               ))}
             </>
           )}
-          {!loading && !ordered.length && (
+          {!loading && !sessions.length && (
             <div className="tiled-empty">
               {searching ? (
                 <>
@@ -672,7 +796,7 @@ function TileCard({
 
   return (
     <div
-      className={`tile-card status-${thread.compacting ? "running" : thread.status} ${unseen ? "unseen" : ""}`}
+      className={`tile-card status-${thread.compacting ? "running" : thread.status} ${unseen ? "unseen" : ""} ${approval || searchMatch ? "dense" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onSelect}
@@ -712,7 +836,9 @@ function TileCard({
         <Folder />
         {project?.name || thread.cwd || "未指定路径"}
       </div>
-      {preview && <p className="tile-card-preview">{preview}</p>}
+      <p className="tile-card-preview">
+        {preview || <span className="tile-preview-empty">无输出</span>}
+      </p>
       {searchMatch && (
         <p className="session-search-hit">
           <small>{searchMatch.role === "user" ? "你" : agentLabel}</small>
