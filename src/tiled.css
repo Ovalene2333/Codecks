@@ -152,17 +152,61 @@
 .tiled-rail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   min-height: 0;
-  overflow-y: auto;
-  padding: 2px;
-  scrollbar-width: thin;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  overflow: hidden;
 }
 .tiled-rail.left {
   grid-area: left;
 }
 .tiled-rail.right {
   grid-area: right;
+}
+.rail-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.rail-head b {
+  font-size: var(--fs-ui);
+}
+.rail-head em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+.tiled-rail.left .rail-head b {
+  color: var(--wait);
+}
+.rail-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  scrollbar-width: thin;
+}
+.rail-label {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  padding: 2px 2px 0;
+}
+.rail-empty {
+  margin: 18px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  text-align: center;
 }
 
 /* ---- 中央 hero：聚焦会话，内嵌完整 ChatWorkspace ---- */
@@ -213,18 +257,99 @@
   display: none;
 }
 
-/* ---- 总览：无聚焦时全部会话等大平铺 ---- */
+/* ---- 总览：无聚焦时的三栏泳道（活跃中 / 近期 / 不活跃） ---- */
 
 .tiled-overview {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  padding: 18px;
-  align-content: start;
+  padding: 14px 16px;
   background-image: var(--ambient);
+}
+
+.tiled-lane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  overflow: hidden;
+}
+.lane-active {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--line));
+}
+.lane-idle {
+  background: color-mix(in srgb, var(--surface) 38%, transparent);
+}
+
+.lane-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.lane-head .lane-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+  background: var(--text-faint);
+}
+.lane-active .lane-dot {
+  background: var(--ok);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 65%, transparent);
+}
+.lane-recent .lane-dot {
+  background: var(--accent, var(--info));
+}
+.lane-head b {
+  font-size: var(--fs-ui);
+  letter-spacing: -0.1px;
+}
+.lane-head small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lane-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--surface);
+}
+
+.lane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  scrollbar-width: thin;
+}
+.lane-empty {
+  margin: 22px 10px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  padding: 18px 10px;
 }
 
 .tiled-empty {
@@ -303,6 +428,9 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
+  flex: none;
+  /* 固定高度保证所有 tile 等大；有审批条/搜索命中时预览压成一行补齐 */
+  height: 158px;
   padding: 11px 12px;
   border: 1px solid var(--line);
   border-left-width: 3px;
@@ -310,6 +438,7 @@
   background: var(--surface);
   cursor: pointer;
   text-align: left;
+  overflow: hidden;
   transition:
     border-color var(--ease),
     transform var(--ease),
@@ -396,7 +525,16 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
-  min-height: 2.7em;
+  flex: none;
+  height: 2.9em;
+}
+.tile-card.dense .tile-card-preview {
+  -webkit-line-clamp: 1;
+  height: 1.45em;
+}
+.tile-preview-empty {
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .tile-card .session-search-hit {
@@ -515,7 +653,7 @@
 }
 
 .tile-skeleton {
-  min-height: 108px;
+  height: 158px;
   cursor: default;
   border-left-width: 1px;
   background: linear-gradient(
@@ -600,14 +738,35 @@
   }
 }
 
+@media (max-width: 1180px) {
+  /* 窄一点时三栏太挤：活跃栏收窄，整体仍可三列 */
+  .tiled-overview {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+}
+
 @media (max-width: 900px) {
   .tiled-stage {
     grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr);
     grid-template-areas: "left hero";
   }
-  /* 中等宽度只留一栏卫星，右侧让位给 hero */
+  /* 中等宽度只留关注栏，上下文栏让位给 hero */
   .tiled-rail.right {
     display: none;
+  }
+  /* 泳道改为纵向堆叠，整页滚动 */
+  .tiled-overview {
+    display: block;
+    overflow-y: auto;
+  }
+  .tiled-lane {
+    margin-bottom: 12px;
+    max-height: none;
+  }
+  .tiled-lane .lane-body {
+    overflow: visible;
   }
 }
 
@@ -654,9 +813,7 @@
     flex: 1;
   }
   .tiled-overview {
-    grid-template-columns: 1fr;
-    padding: 12px;
-    gap: 10px;
+    padding: 10px;
   }
   .tiled-dock {
     padding: 8px 10px max(8px, env(safe-area-inset-bottom));
