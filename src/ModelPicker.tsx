@@ -1,4 +1,11 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+} from "react";
 import { Keyboard, List } from "lucide-react";
 import { api } from "./api";
 import { FALLBACK_EFFORTS, reasoningEffortLabel } from "./codexLabels";
@@ -46,9 +53,52 @@ function loadCatalog(path: string) {
   return task;
 }
 
+/**
+ * 手填输入先用本地草稿承接按键：onChange 每次提交都走 PATCH + 快照回包，
+ * 受控值要等服务端确认才更新，期间任何重渲染（事件推送、错误提示）都会把
+ * 输入回顶成旧值。聚焦期间以草稿为准，停顿或失焦时才真正提交。
+ */
+function DraftInput({
+  value,
+  onCommit,
+  ...rest
+}: Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "value" | "onChange" | "onFocus" | "onBlur"
+> & {
+  value: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState<string>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const commit = (next: string) => {
+    clearTimeout(timer.current);
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      {...rest}
+      value={draft ?? value}
+      onFocus={() => setDraft(value)}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => commit(next), 350);
+      }}
+      onBlur={() => {
+        if (draft !== undefined) commit(draft);
+        setDraft(undefined);
+      }}
+    />
+  );
+}
+
 export function ModelPicker({
   agentId = "codex",
   providerId,
+  cwd,
   model,
   reasoningEffort,
   onChange,
@@ -57,6 +107,7 @@ export function ModelPicker({
 }: {
   agentId?: AgentId;
   providerId: string;
+  cwd?: string;
   model: string;
   reasoningEffort: string;
   onChange: (next: { model: string; reasoningEffort: string }) => void;
@@ -83,7 +134,7 @@ export function ModelPicker({
     if (!providerId && !combinedCatalog) return;
     let cancelled = false;
     const path = combinedCatalog
-      ? `/agents/${agentId}/models`
+      ? `/agents/${agentId}/models${cwd ? `?directory=${encodeURIComponent(cwd)}` : ""}`
       : agentId !== "codex"
         ? // claude 的 providerId 是配置档 id，ACP agent 是 `${id}-current` 占位；
           // 两者都查 agent 自己的模型目录。
@@ -131,7 +182,7 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [agentId, providerId, combinedCatalog]);
+  }, [agentId, providerId, combinedCatalog, cwd]);
 
   const efforts = selected?.supportedReasoningEfforts || [];
   const searchOptions = useMemo<SearchableOption[]>(
@@ -163,8 +214,8 @@ export function ModelPicker({
   };
   // 目录无 effort 声明时补手填入口（自定义模型如
   // dstest/deepseek-v4.1-flash-expires-on-0910 无 variants 元数据）；
-  // claude 无 effort 概念，ACP agent 没有声明时也可手填透传。
-  const showFallbackEffort = agentId !== "claude" && efforts.length === 0;
+  // claude/ACP 在 SDK 目录未加载前同样没有声明，手填透传由后端白名单兜底。
+  const showFallbackEffort = efforts.length === 0;
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
@@ -172,14 +223,12 @@ export function ModelPicker({
         {/* 所有 adapter 统一用 OpenCode 样式的分组可搜索列表；目录为空或点
             「手动输入」时回退到裸 input 手填模型 ID。 */}
         {manual || !models.length ? (
-          <input
+          <DraftInput
             value={model}
             disabled={disabled}
             aria-label="模型"
             title="模型"
-            onChange={(e) =>
-              onChange({ model: e.target.value, reasoningEffort })
-            }
+            onCommit={(next) => onChange({ model: next, reasoningEffort })}
             placeholder={loading ? "正在读取模型目录…" : "模型 ID（目录不可用时可手填，留空用供应商默认）"}
           />
         ) : (
@@ -245,6 +294,9 @@ export function ModelPicker({
               onChange({ model, reasoningEffort: e.target.value })
             }
           >
+            {/* 空值表示「跟随模型/CLI 默认」。claude、opencode 支持随时清除；
+                codex/acp 不能中途清空时后端会拒绝或回弹，用户能看到结果。 */}
+            <option value="">默认</option>
             {efforts.map((item) => (
               <option
                 key={item.reasoningEffort}
@@ -264,15 +316,13 @@ export function ModelPicker({
             ) : (
               "Reasoning effort"
             )}
-            <input
+            <DraftInput
               value={reasoningEffort}
               disabled={disabled}
               aria-label="Reasoning effort"
               title="Reasoning effort（目录无声明时可手填，留空用默认）"
               list={effortDatalistId}
-              onChange={(e) =>
-                onChange({ model, reasoningEffort: e.target.value })
-              }
+              onCommit={(next) => onChange({ model, reasoningEffort: next })}
               placeholder="留空默认，可填 low/medium/high"
             />
             <datalist id={effortDatalistId}>

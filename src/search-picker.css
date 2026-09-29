@@ -383,24 +383,26 @@
 }
 
 .composer-session-controls .search-picker {
-  max-width: 180px;
+  flex: 1;
+  width: 0;
+  max-width: none;
 }
 
 .composer-session-controls .search-picker-trigger {
-  height: 32px;
-  min-height: 32px;
-  max-width: 180px;
-  padding: 0 24px 0 8px;
+  height: 34px;
+  min-height: 34px;
+  max-width: none;
+  padding: 0 24px 0 2px;
   border: 0;
-  border-radius: 6px;
-  background: var(--surface-muted);
+  border-radius: 0;
+  background: transparent;
   font-size: 12px;
 }
 
 .composer-session-controls
   .toolbar-select:hover
   .search-picker-trigger:not(:disabled) {
-  background: var(--control-hover);
+  background: transparent;
 }
 
 .session-toolbar--panel .search-picker {
@@ -434,11 +436,16 @@
   .toolbar-select .search-picker-trigger {
     max-width: 142px;
   }
+
+  .composer-session-controls .toolbar-select .search-picker,
+  .composer-session-controls .toolbar-select .search-picker-trigger {
+    max-width: none;
+  }
 }
 
 @media (max-width: 760px) {
   .composer-session-controls .search-picker,
   .composer-session-controls .search-picker-trigger {
-    max-width: 146px;
+    max-width: none;
   }
 }

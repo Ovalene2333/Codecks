@@ -1,5 +1,5 @@
 * {
-  letter-spacing: 0 !important;
+  letter-spacing: 0;
 }
 body,
 button,
@@ -63,7 +63,13 @@ button:disabled {
 
 aside,
 .sidebar {
-  background: var(--sidebar);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 5%, transparent),
+      transparent 260px
+    ),
+    var(--sidebar);
   border-right-color: var(--line);
 }
 
@@ -93,6 +99,14 @@ aside,
   font-weight: 600;
   line-height: 1.18;
   letter-spacing: -0.03em;
+  background: linear-gradient(
+    115deg,
+    var(--text) 25%,
+    color-mix(in srgb, var(--accent) 72%, var(--text)) 105%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .welcome-lead {
@@ -102,7 +116,7 @@ aside,
 }
 
 .welcome-stack {
-  width: min(560px, 100%);
+  width: min(780px, 100%);
 }
 
 .chat-title h2,
@@ -121,11 +135,14 @@ aside,
 .new-thread {
   min-height: 36px;
   padding: 0 14px;
-  border: 1px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 82%, rgb(0 0 0 / 30%));
   border-radius: var(--radius-sm);
-  background: var(--accent);
+  background: var(--accent-grad);
   color: var(--accent-text);
-  box-shadow: none;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 20%),
+    0 1px 2px rgb(0 0 0 / 24%),
+    0 6px 18px -6px color-mix(in srgb, var(--accent) 55%, transparent);
   font-size: var(--fs-ui);
   font-weight: 600;
   line-height: 1;
@@ -136,9 +153,16 @@ aside,
 .new-session-btn:hover:not(:disabled),
 .new-thread:hover:not(:disabled),
 .send:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  box-shadow: none;
+  border-color: color-mix(in srgb, var(--accent-hover) 82%, rgb(0 0 0 / 30%));
+  background: linear-gradient(
+    180deg,
+    var(--accent-hover) 0%,
+    var(--accent) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 24%),
+    0 1px 2px rgb(0 0 0 / 24%),
+    0 8px 22px -6px color-mix(in srgb, var(--accent) 65%, transparent);
   filter: none;
   transform: none;
 }
@@ -148,7 +172,7 @@ aside,
 .new-thread:active:not(:disabled),
 .send:active:not(:disabled) {
   background: var(--accent-active);
-  box-shadow: none;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 22%);
   transform: none;
 }
 
@@ -202,16 +226,13 @@ aside,
   padding: 0;
 }
 
-.recent-projects > button > svg,
-.recent-create svg {
-  width: 16px;
-  height: 16px;
-  color: var(--text-dim);
-  flex: none;
-}
-
-.recent-create svg {
-  color: var(--text);
+.recent-projects > button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--card-face), var(--surface-raised);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 .confirm-actions button,
@@ -226,6 +247,7 @@ aside,
   color: var(--text-soft);
   font-size: var(--fs-ui);
   font-weight: 600;
+  box-shadow: inset 0 1px 0 var(--edge-hi);
 }
 
 .confirm-actions > button,
@@ -272,7 +294,7 @@ aside,
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--bg);
-  box-shadow: none;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 22%);
 }
 
 .library-segment > button {
@@ -288,9 +310,11 @@ aside,
 }
 
 .library-segment > button.on {
-  background: var(--surface-2);
+  background: var(--surface-raised);
   color: var(--text);
-  box-shadow: none;
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-sm);
 }
 
 .sidebar-meta .watch-strip button,
@@ -312,74 +336,22 @@ aside,
   color: var(--text);
 }
 
-.live-dot,
-.dead-dot,
-.watch-dot.running,
-.status.running i {
-  box-shadow: none;
-}
-
-.recent-projects {
-  width: min(560px, 100%);
-  display: grid;
-  gap: 0;
-  margin: 0 0 20px;
+.recent-projects > button {
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.recent-projects > button,
-.recent-create {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 56px;
-  padding: 10px 14px;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.recent-projects > button:last-of-type,
-.recent-create {
-  border-bottom: 0;
-}
-
-.recent-projects > button:hover,
-.recent-create:hover {
-  border-color: var(--line);
-  background: var(--surface-2);
-  transform: none;
-}
-
-.recent-projects b {
-  display: block;
-}
-
-.recent-projects small {
-  color: var(--text-dim);
-}
-
-.recent-create {
-  min-height: 48px;
-  border-top: 1px solid var(--line);
-  color: var(--text);
-  font-size: var(--fs-body);
-  font-weight: 600;
+  border-radius: var(--radius-lg);
+  background: var(--card-face), var(--surface);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+  transition:
+    border-color var(--ease),
+    background-color var(--ease),
+    box-shadow var(--ease),
+    transform var(--ease);
 }
 
 .skeleton-recent {
-  height: 56px;
+  height: 112px;
   width: 100%;
-  border-radius: 0;
+  border-radius: var(--radius-lg);
 }
 
 .sidebar-footer button,
@@ -413,6 +385,17 @@ aside,
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
 }
 
+.session-search {
+  transition:
+    border-color var(--ease),
+    box-shadow var(--ease),
+    background-color var(--ease);
+}
+.session-search:focus-within {
+  border-color: color-mix(in srgb, var(--focus-ring) 65%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 14%, transparent);
+}
+
 .session-search input:focus-visible {
   outline: none;
 }
@@ -439,8 +422,6 @@ aside,
 .approval-title small,
 .approval-actions button,
 .form label,
-.provider-row small,
-.provider-row b,
 .toolbar-hint,
 .context-bar span,
 .pending-count,
@@ -449,9 +430,7 @@ aside,
 .migration-note p,
 .migration-origin,
 .text-btn,
-.task-error small,
-.terminal-connect small,
-.sync-note small {
+.task-error small {
   font-size: var(--fs-meta);
 }
 
@@ -466,15 +445,26 @@ aside,
 }
 
 .modal {
-  background: var(--surface);
+  background: var(--card-face), var(--surface);
   border-color: var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-lg);
 }
 
 .auth-card {
-  background: var(--surface);
+  background: var(--card-face), var(--surface);
   border-color: var(--line);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-lg);
+}
+
+.auth-card > span {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
 }
 
 .auth-card form + form {
@@ -507,7 +497,15 @@ aside,
 .session-row.selected,
 .thread-list > button.selected {
   border-left-color: transparent;
-  background: var(--surface-2);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      color-mix(in srgb, var(--accent) 4%, transparent) 58%,
+      transparent
+    ),
+    var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .context-track i {
@@ -675,6 +673,18 @@ aside,
 .approval-actions svg {
   width: 15px;
   height: 15px;
+}
+
+/* ACP 逐档选项（devin 一次给多档）：长文案纵排，左对齐。 */
+.approval-actions.option-list {
+  flex-direction: column;
+  align-items: stretch;
+}
+.approval-actions.option-list > button {
+  justify-content: flex-start;
+  min-width: 0;
+  text-align: left;
+  white-space: normal;
 }
 
 .permission-list,
@@ -863,25 +873,36 @@ aside,
   color: var(--text);
 }
 
-.sync-note.pending {
-  border-color: var(--line);
+/* 细滚动条：让长列表看起来像桌面应用而不是网页 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--line-strong);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-.sync-note.pending .primary {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-.terminal-connect > svg,
-.terminal-connect button,
 .provider-switch:hover,
 .wsl-cwd-btn.is-wsl,
 .text-btn {
   color: var(--text-dim);
 }
 
-.terminal-connect button,
 .wsl-cwd-btn.is-wsl {
   border-color: var(--line);
   background: var(--surface);

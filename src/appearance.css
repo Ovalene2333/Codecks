@@ -52,13 +52,8 @@ select optgroup {
   color: var(--text-faint);
 }
 
-.library-segment > button.on,
-.sidebar-meta .watch-strip button.active,
-.session-row.selected,
-.thread-list > button.selected,
-.session-row:hover,
-.recent-projects > button:hover,
-.recent-create:hover,
+/* 注意：.session-row/.library-segment/watch-strip 的选中与 hover 态由
+   sidebar.css/deck-ui.css 定义（含 accent 染色），不要在这里压平。 */
 .project-heading:hover,
 .command-list button:hover,
 .command-list button:focus-visible,
@@ -98,8 +93,6 @@ select optgroup {
   color: var(--text-dim);
 }
 
-.sync-note small,
-.sync-note.offline small,
 .task-error p,
 .task-error small {
   color: currentColor;
@@ -109,24 +102,26 @@ select optgroup {
   color: var(--danger-text);
 }
 
-.project-heading b,
 .pending-count {
   background: var(--surface-2);
   color: var(--text-dim);
 }
 
-.recent-projects,
+/* 项目计数回归纯文字，不再套 chip */
+.project-heading b {
+  background: transparent;
+  color: var(--text-faint);
+}
+
 .modal,
 .auth-card,
 .usage-drawer,
 .action-sheet,
-.provider-row,
 .command-list button,
 .mcp-list details,
 .approval-card,
 .usage-window,
 .migration-note,
-.terminal-connect,
 .slash-menu,
 .tool-row,
 .unknown-item,
@@ -137,16 +132,10 @@ select optgroup {
 }
 
 .pill-btn,
-.system-pills span,
-.provider-row mark {
+.system-pills span {
   border-color: var(--line);
   background: var(--surface-muted);
   color: var(--text-dim);
-}
-
-.provider-logo {
-  background: color-mix(in srgb, var(--color) 14%, var(--surface));
-  border-color: color-mix(in srgb, var(--color) 34%, var(--line));
 }
 
 .timeline .tool-item,
@@ -295,48 +284,14 @@ select optgroup {
   color: var(--danger-text);
 }
 
-.sync-note {
-  border-color: var(--success-border);
-  background: var(--success-bg);
-  color: var(--ok);
-}
-
-.sync-note.offline,
-.sync-note.pending {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text-dim);
-}
-
 .approval-icon {
   border-color: color-mix(in srgb, var(--wait) 35%, var(--line));
   background: color-mix(in srgb, var(--wait) 10%, var(--surface));
 }
 
 .command-list button,
-.mcp-list details,
-.provider-row {
+.mcp-list details {
   background: var(--surface-raised);
-}
-
-.online {
-  border-color: var(--success-border);
-  background: var(--success-bg);
-  color: var(--ok);
-}
-
-.offline-dot {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text-dim);
-}
-
-.provider-group-label {
-  color: var(--text-faint);
-}
-
-.provider-group-label::after {
-  background: var(--line);
 }
 
 .permission-list,

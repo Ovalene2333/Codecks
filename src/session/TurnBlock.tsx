@@ -18,7 +18,11 @@ import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown, DeferredImage } from "./markdown";
 import { assistantImageParts, userImageParts } from "./images";
-import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
+import type {
+  StreamedAgentMessage,
+  StreamedEntry,
+  StreamedTurnItem,
+} from "./streaming";
 import {
   activeStreamItemId,
   mergeTurnItems,
@@ -35,6 +39,7 @@ import {
   reasoningText,
   toolCallPresentation,
   turnReadTargets,
+  type TurnRenderEntry,
 } from "./turn-items";
 import { uiAdapterFor } from "./adapters";
 
@@ -115,7 +120,10 @@ function TurnItemInner({
             {onEditUserMessage && (
               <button
                 type="button"
-                title="编辑后重发"
+                title={(thread.agentId || "codex") === "codex"
+                  ? "回退此条及之后的对话，工作区文件不变"
+                  : "撤回此条及之后，在当前会话编辑"}
+                disabled={messageActionsDisabled}
                 onClick={() => onEditUserMessage(item)}
               >
                 <Pencil />
@@ -503,10 +511,11 @@ interface TurnBlockProps {
   targetRequest?: number;
   streamed: StreamedAgentMessage[];
   streamedItems?: StreamedTurnItem[];
+  streamedEntries?: StreamedEntry[];
   pendingUsers?: PendingUserMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
-  onEditUserMessage?: (item: any) => void;
+  onEditUserMessage?: (turnId: string, item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   onRevertUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
@@ -527,6 +536,13 @@ function streamItemsSignature(items: StreamedTurnItem[] | undefined) {
   return `${items.length}:${items.map((entry) => entry.itemId).join(",")}`;
 }
 
+function streamEntriesSignature(entries: StreamedEntry[] | undefined) {
+  if (!entries || entries.length === 0) return "0";
+  return `${entries.length}:${entries
+    .map((entry) => `${entry.kind === "item" ? "i" : "m"}${entry.itemId}`)
+    .join(",")}`;
+}
+
 function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
   if (prev.turn !== next.turn) return false;
   if (prev.thread !== next.thread) {
@@ -538,6 +554,7 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
       a.status !== b.status ||
       a.cwd !== b.cwd ||
       a.model !== b.model ||
+      a.resolvedModel !== b.resolvedModel ||
       a.reasoningEffort !== b.reasoningEffort ||
       a.agentId !== b.agentId ||
       a.updatedAt !== b.updatedAt
@@ -561,7 +578,9 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
   return (
     streamSignature(prev.streamed) === streamSignature(next.streamed) &&
     streamItemsSignature(prev.streamedItems) ===
-      streamItemsSignature(next.streamedItems)
+      streamItemsSignature(next.streamedItems) &&
+    streamEntriesSignature(prev.streamedEntries) ===
+      streamEntriesSignature(next.streamedEntries)
   );
 }
 
@@ -574,6 +593,7 @@ function TurnBlockInner({
   targetRequest,
   streamed,
   streamedItems = [],
+  streamedEntries,
   pendingUsers = [],
   onCopy,
   onForkFrom,
@@ -591,7 +611,6 @@ function TurnBlockInner({
   const turnItems = active
     ? mergeTurnItems(historyItems, streamedItems)
     : historyItems;
-  const renderEntries = groupTurnItems(turnItems);
   const readTargets = turnReadTargets(turnItems, thread.cwd);
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
@@ -600,6 +619,62 @@ function TurnBlockInner({
   const renderedStreamIds = active
     ? streamsCoveredByHistory(turnItems, streamed)
     : new Set<string>();
+  // mergeTurnItems 把未进历史的 live item 追加在末尾；它们应与「同样未进
+  // 历史」的 live 文本按 streamedEntries 的事件序交错渲染，否则运行中的
+  // 时间线会变成「先全部事件、再全部文本」两段式错序。
+  type LiveUnit =
+    | TurnRenderEntry
+    | { kind: "message"; message: StreamedAgentMessage };
+  const liveUnits: LiveUnit[] = [];
+  if (active) {
+    // 老调用方（测试）不传 streamedEntries：退回「item 在前、文本在后」的旧序。
+    const ordered: StreamedEntry[] = streamedEntries ?? [
+      ...streamedItems.map(
+        (entry): StreamedEntry => ({ kind: "item", itemId: entry.itemId }),
+      ),
+      ...streamed.map(
+        (message): StreamedEntry => ({
+          kind: "message",
+          itemId: message.itemId,
+        }),
+      ),
+    ];
+    const historyIds = new Set(
+      historyItems
+        .map((item: any) => String(item?.id || ""))
+        .filter(Boolean),
+    );
+    const itemById = new Map(
+      streamedItems.map((entry) => [entry.itemId, entry.item]),
+    );
+    const messageById = new Map(
+      streamed.map((message) => [message.itemId, message]),
+    );
+    let run: any[] = [];
+    const flushRun = () => {
+      if (!run.length) return;
+      liveUnits.push(...groupTurnItems(run));
+      run = [];
+    };
+    for (const entry of ordered) {
+      if (entry.kind === "item") {
+        if (historyIds.has(entry.itemId)) continue;
+        const item = itemById.get(entry.itemId);
+        if (item) run.push(item);
+        continue;
+      }
+      if (renderedStreamIds.has(entry.itemId)) continue;
+      const message = messageById.get(entry.itemId);
+      if (!message) continue;
+      flushRun();
+      liveUnits.push({ kind: "message", message });
+    }
+    flushRun();
+  }
+  const renderEntries: LiveUnit[] = [
+    ...groupTurnItems(turnItems.slice(0, historyItems.length)),
+    ...liveUnits,
+  ];
   const newLiveIds = new Set(
     streamedItems.map((entry) => String(entry.itemId || "")).filter(Boolean),
   );
@@ -608,11 +683,13 @@ function TurnBlockInner({
   for (const message of pendingUsers) {
     const sentIds = new Set(message.liveItemIds || []);
     const index = renderEntries.findIndex((entry) => {
-      const ids =
+      const ids: string[] =
         entry.kind === "fileChangeGroup" || entry.kind === "toolGroup"
-          ? entry.items.map((item) => String(item?.id || ""))
-          : [String(entry.item?.id || "")];
-      return ids.some((id) => newLiveIds.has(id) && !sentIds.has(id));
+          ? entry.items.map((item: any) => String(item?.id || ""))
+          : entry.kind === "item"
+            ? [String(entry.item?.id || "")]
+            : [];
+      return ids.some((id: string) => newLiveIds.has(id) && !sentIds.has(id));
     });
     if (index < 0) pendingAtEnd.push(message);
     else
@@ -621,6 +698,10 @@ function TurnBlockInner({
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
+  // 服务端按回合打标（历史或发送时快照）；没有打标的旧数据才回落到
+  // 会话当前设置。打标过的回合不回落 effort，「当时没设」就是没设。
+  const model = turn.model || thread.resolvedModel || thread.model;
+  const effort = turn.model ? turn.reasoningEffort : thread.reasoningEffort;
   return (
     <section
       className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
@@ -628,8 +709,8 @@ function TurnBlockInner({
     >
       <header className="turn-head">
         Turn {index} · {fmtTime(started)}
-        {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
-        {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
+        {model ? ` · ${model}` : ""}
+        {effort ? ` · ${effort}` : ""}
       </header>
       <ReadSummary targets={readTargets} />
       {renderEntries.map((entry, itemIndex) => {
@@ -638,6 +719,20 @@ function TurnBlockInner({
             <OptimisticUserMessage key={message.id} message={message} />
           ),
         );
+        if (entry.kind === "message") {
+          const message = entry.message;
+          return (
+            <Fragment key={`live-msg-${message.itemId}`}>
+              {pendingMarkup}
+              <div
+                className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
+              >
+                <AssistantMarkdown text={message.text} onCopy={onCopy} />
+                {message.itemId === streamingItemId && <i />}
+              </div>
+            </Fragment>
+          );
+        }
         if (entry.kind === "fileChangeGroup")
           return (
             <Fragment key={`file-group-${entry.items[0]?.id || itemIndex}`}>
@@ -678,7 +773,11 @@ function TurnBlockInner({
             streaming={String(item.id) === streamingItemId}
             cwd={thread.cwd}
             onCopy={onCopy}
-            onEditUserMessage={onEditUserMessage}
+            onEditUserMessage={
+              onEditUserMessage
+                ? (item) => onEditUserMessage(String(turn.id), item)
+                : undefined
+            }
             onRetryUserMessage={
               onRetryUserMessage
                 ? (item) => onRetryUserMessage(String(turn.id), item)
@@ -712,18 +811,6 @@ function TurnBlockInner({
       {pendingAtEnd.map((message) => (
         <OptimisticUserMessage key={message.id} message={message} />
       ))}
-      {active &&
-        streamed
-          .filter((message) => !renderedStreamIds.has(message.itemId))
-          .map((message) => (
-            <div
-              className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
-              key={message.itemId}
-            >
-              <AssistantMarkdown text={message.text} onCopy={onCopy} />
-              {message.itemId === streamingItemId && <i />}
-            </div>
-          ))}
       {completed && turn.id && onForkFrom && (
         <button
           type="button"

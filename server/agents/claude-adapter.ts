@@ -20,6 +20,8 @@ import { promisify } from "node:util";
 import {
   query as createQuery,
   type CanUseTool,
+  type EffortLevel,
+  type ModelInfo as SdkModelInfo,
   type PermissionResult,
   type PermissionMode,
   type PermissionUpdate,
@@ -45,18 +47,25 @@ import type {
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
 import {
-  claudeTodos,
+  branchClaudeHistory,
+  claudeToolItem,
   readClaudeHistory,
+  rewindAnchorUuid,
+  turnEndUuid,
   type ClaudeHistoryThread,
 } from "./claude-history.js";
-import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
-import { stopChildProcess } from "../process-tree.js";
+import type {
+  AgentCapabilities,
+  AgentDescriptor,
+  AgentId,
+  AgentSkill,
+} from "./types.js";
 
 const CLAUDE_CAPABILITIES: AgentCapabilities = {
   approvals: true,
   archive: false,
   delete: true,
-  fork: false,
+  fork: true,
   images: true,
   interrupt: true,
   mcp: false,
@@ -64,7 +73,9 @@ const CLAUDE_CAPABILITIES: AgentCapabilities = {
   review: false,
   sessionSettings: true,
   shell: false,
-  skills: false,
+  // 活跃会话走 SDK `reload_skills` 拿权威列表；未连接时按 Claude Code
+  // 发现规则扫 `.claude/skills`（项目 + 用户目录）的 SKILL.md。
+  skills: true,
 };
 
 const CLAUDE_MODELS: ModelInfo[] = [
@@ -78,6 +89,15 @@ const CLAUDE_MODELS: ModelInfo[] = [
   { id: "opus", model: "opus", displayName: "Opus" },
   { id: "haiku", model: "haiku", displayName: "Haiku" },
 ];
+
+/** claude `--effort`/flag settings 接受的水平；其他值一律不下发。 */
+const CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+/** 目录声明之外的输入（手填/旧数据）不下发给 CLI，避免 --effort 拒绝。 */
+function claudeEffortLevel(value: unknown) {
+  const effort = String(value || "").trim();
+  return CLAUDE_EFFORT_LEVELS.has(effort) ? effort : "";
+}
 
 type QueryFactory = typeof createQuery;
 const execFileAsync = promisify(execFile);
@@ -138,6 +158,51 @@ export function claudeRuntimePreference(
   );
 }
 
+/** SKILL.md 递归发现：skills 目录下每层子目录一个 skill，深度与数量设上限。 */
+async function findSkillFiles(
+  root: string,
+  depth = 0,
+  budget: { left: number } = { left: 200 },
+): Promise<string[]> {
+  if (depth > 4 || budget.left <= 0) return [];
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (budget.left <= 0) break;
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory())
+      files.push(...(await findSkillFiles(full, depth + 1, budget)));
+    else if (entry.isFile() && /^skill\.md$/i.test(entry.name)) {
+      files.push(full);
+      budget.left -= 1;
+    }
+  }
+  return files;
+}
+
+/** 读取 SKILL.md frontmatter 里的 name/description（单行 key:value）。 */
+async function skillFrontmatter(file: string) {
+  try {
+    const text = (await readFile(file, "utf8")).slice(0, 8192);
+    if (!text.startsWith("---")) return {};
+    const end = text.search(/\r?\n---(?:\r?\n|$)/);
+    if (end < 0) return {};
+    const block = text.slice(3, end);
+    const pick = (key: string) => {
+      const match = block.match(new RegExp(`^${key}\\s*:\\s*(.+?)\\s*$`, "m"));
+      return match ? match[1].replace(/^["']|["']$/g, "") : undefined;
+    };
+    return { name: pick("name"), description: pick("description") };
+  } catch {
+    return {};
+  }
+}
+
 interface ClaudeAdapterOptions {
   claudeHome?: string;
   claudeBin?: string;
@@ -172,15 +237,84 @@ interface PendingApproval {
 
 interface ActiveQuery {
   query: Query;
-  turnId: string;
+  input: ClaudeInputQueue;
+  turnId?: string;
+  interrupted?: boolean;
+  providerId: string;
+  model: string;
+  permissionMode: PermissionMode;
+  profileEnv: Record<string, string>;
   /** Claude gives each stream wrapper a new UUID; retain the raw response ID. */
   streamMessageId?: string;
+  streamBlocks: Map<number, "text" | "thinking" | "tool_use">;
+  toolItems: Map<string, any>;
+}
+
+/** Keep stdin open between turns so Claude retains its own background work. */
+class ClaudeInputQueue implements AsyncIterable<SDKUserMessage> {
+  private messages: SDKUserMessage[] = [];
+  private waiter?: (value: IteratorResult<SDKUserMessage>) => void;
+  private closed = false;
+
+  push(message: SDKUserMessage) {
+    if (this.closed) throw new Error("Claude Code 会话连接已关闭");
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = undefined;
+      waiter({ value: message, done: false });
+    } else this.messages.push(message);
+  }
+
+  close() {
+    this.closed = true;
+    this.messages.length = 0;
+    this.waiter?.({ value: undefined, done: true });
+    this.waiter = undefined;
+  }
+
+  async *[Symbol.asyncIterator]() {
+    while (true) {
+      const next = this.messages.length
+        ? { value: this.messages.shift()!, done: false as const }
+        : this.closed
+          ? { value: undefined, done: true as const }
+          : await new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+              this.waiter = resolve;
+            });
+      if (next.done) return;
+      yield next.value;
+    }
+  }
 }
 
 function approvalKind(toolName: string): ApprovalKind {
   if (["Edit", "Write", "NotebookEdit"].includes(toolName)) return "file";
   if (toolName === "AskUserQuestion") return "question";
   return "command";
+}
+
+function claudeQuestionAnswers(
+  input: Record<string, unknown>,
+  answers: unknown,
+) {
+  if (!Array.isArray(input.questions) || !Array.isArray(answers))
+    return answers;
+  const mapped: Record<string, string> = {};
+  for (const [index, question] of input.questions.entries()) {
+    const key = question?.question;
+    const answer = answers[index];
+    if (typeof key !== "string" || !key.trim() || !answer) continue;
+    const value =
+      typeof answer === "string"
+        ? answer
+        : typeof answer.other === "string" && answer.other.trim()
+          ? answer.other
+          : typeof answer.value === "string"
+            ? answer.value
+            : "";
+    if (value.trim()) mapped[key] = value.trim();
+  }
+  return mapped;
 }
 
 function publicProfile(profile: ClaudeProfile) {
@@ -192,6 +326,33 @@ function publicProfile(profile: ClaudeProfile) {
     current: profile.current,
     enabled: true,
   };
+}
+
+const CLAUDE_LOCAL_PROFILE_ID = "claude-local";
+
+/**
+ * 追加「本机 Claude」兜底配置档：不注入自有 env，直接沿用 claude CLI 的
+ * 当前登录态（~/.claude 凭据、settings.json 或环境变量）。CC Switch 没有
+ * 可用中转、或只有 Official 时它让 adapter 仍然可用；配置了中转时它也是
+ * 回退到官方登录的显式入口。仅在没有任何 supported+current 中转时承担
+ * current 角色。
+ */
+function withLocalProfile(profiles: ClaudeProfile[]): ClaudeProfile[] {
+  const rest = profiles.filter(
+    (profile) => profile.id !== CLAUDE_LOCAL_PROFILE_ID,
+  );
+  return [
+    ...rest,
+    {
+      id: CLAUDE_LOCAL_PROFILE_ID,
+      name: "本机 Claude",
+      color: "#d97757",
+      current: !rest.some((profile) => profile.current && profile.supported),
+      official: false,
+      supported: true,
+      env: {},
+    },
+  ];
 }
 
 function historyHome(file: string) {
@@ -213,24 +374,24 @@ function imagePart(image: TurnImage) {
   };
 }
 
-function promptStream(
+function inputMessage(
   sessionId: string,
   text: string,
   images: TurnImage[] | undefined,
-): AsyncIterable<SDKUserMessage> {
+  uuid?: string,
+): SDKUserMessage {
+  const content: any[] = [];
+  if (text) content.push({ type: "text", text });
+  for (const image of images || []) content.push(imagePart(image));
   return {
-    async *[Symbol.asyncIterator]() {
-      const content: any[] = [];
-      if (text) content.push({ type: "text", text });
-      for (const image of images || []) content.push(imagePart(image));
-      yield {
-        type: "user",
-        session_id: sessionId,
-        parent_tool_use_id: null,
-        message: { role: "user", content: content.length ? content : "" },
-      } as SDKUserMessage;
-    },
-  };
+    type: "user",
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    // uuid 会原样写进 JSONL 的 user 记录：历史回放时 turn.id 用它当键，
+    // 回合的模型/effort 快照才能按 id 对回来。
+    uuid,
+    message: { role: "user", content: content.length ? content : "" },
+  } as SDKUserMessage;
 }
 
 export function windowsClaudeLaunchSpec(
@@ -335,11 +496,16 @@ export class ClaudeAdapter extends EventEmitter {
   private history = new Map<string, string>();
   private historyHomes = new Map<string, string>();
   private active = new Map<string, ActiveQuery>();
+  private queryTasks = new Map<string, Promise<void>>();
+  private deleting = new Set<string>();
+  private startingTurns = new Map<
+    string,
+    { turnId: string; abort: AbortController }
+  >();
   private approvals = new Map<string, PendingApproval>();
   /**
-   * SDK 经自定义 spawn 拉起的 OS 进程。query 正常结束时 SDK 自己回收；
-   * restart / 退出时若还有残留（尤其 Windows cmd 包裹层身后的真身），
-   * 在这里连带结束，防止出现第二种孤儿。
+   * SDK 经自定义 spawn 拉起的包装进程。只记录存活状态；生命周期由
+   * SDK Query.close() 管理，绝不在 adapter 重载时杀外部 Claude 进程。
    */
   private spawnedClaude = new Set<SpawnedProcess>();
   private profiles: ClaudeProfile[] = [];
@@ -353,18 +519,26 @@ export class ClaudeAdapter extends EventEmitter {
   private historyIndex = new Map<string, ClaudeHistoryIndexEntry>();
   private historyIndexLoaded = false;
   private wslClaudeAvailable?: boolean;
+  /** 最近一次 query init 返回的官方模型目录（含逐模型 effort 档）。 */
+  private sdkModels?: ModelInfo[];
+  /**
+   * 本进程内新建、尚未落盘 JSONL 的会话。refreshAll 的清扫以磁盘文件为准，
+   * 没有它兜底，createThread 之后第一次写历史前遇到刷新就会把会话删掉。
+   */
+  private newThreads = new Set<string>();
 
   constructor(private options: ClaudeAdapterOptions = {}) {
     super();
     this.options.claudeBin = findClaudeExecutable(options.claudeBin);
     this.queryFactory = options.queryFactory || createQuery;
-    this.profiles = [...(options.initialProfiles || [])];
+    this.profiles = withLocalProfile(options.initialProfiles || []);
     for (const thread of options.initialThreads || []) {
       if (thread.agentId !== "claude") continue;
       this.threads.set(thread.id, {
         ...thread,
         ...options.threadSettings?.get(this.id, thread.id),
         agentId: "claude",
+        claudeConnected: false,
       });
     }
     this.historyStatus = this.threads.size ? "cached" : "loading";
@@ -406,7 +580,45 @@ export class ClaudeAdapter extends EventEmitter {
 
   listModels(providerId?: string) {
     this.resolveProfile(providerId);
-    return CLAUDE_MODELS.map((model) => ({ ...model }));
+    return (this.sdkModels || CLAUDE_MODELS).map((model) => ({ ...model }));
+  }
+
+  /**
+   * `initializationResult().models` 是 Claude Code 启动握手自带的权威模型
+   * 目录：value 同时接受别名（sonnet）和全量 id（claude-opus-4-7），还带
+   * supportedEffortLevels。缓存下来给选择器用；旧 CLI 没这个字段就继续用
+   * 静态别名表。
+   */
+  private captureModelCatalog(models: SdkModelInfo[] | undefined) {
+    if (!Array.isArray(models) || !models.length) return;
+    const catalog: ModelInfo[] = [];
+    for (const entry of models) {
+      const value = String(entry?.value || "").trim();
+      if (!value) continue;
+      const levels = (entry.supportedEffortLevels || [])
+        .map((level) => String(level))
+        .filter((level) => CLAUDE_EFFORT_LEVELS.has(level));
+      catalog.push({
+        id: value,
+        model: value,
+        displayName: String(entry.displayName || value),
+        ...(value === "default" ? { isDefault: true } : {}),
+        ...(levels.length
+          ? {
+              supportedReasoningEfforts: levels.map((level) => ({
+                reasoningEffort: level,
+              })),
+              ...(levels.includes("high")
+                ? { defaultReasoningEffort: "high" }
+                : {}),
+            }
+          : {}),
+      });
+    }
+    if (!catalog.length) return;
+    if (!catalog.some((model) => model.model === "default"))
+      catalog.unshift({ ...CLAUDE_MODELS[0] });
+    this.sdkModels = catalog;
   }
 
   startAll() {
@@ -433,6 +645,15 @@ export class ClaudeAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * 轻量重载：重新读取 CC Switch 配置档并重扫历史，不关闭任何已有的 Claude
+   * 连接（restart() 会终止后台任务，重载不该有这个副作用）。新配置档只
+   * 用于之后新建或分支的会话。
+   */
+  reload() {
+    return this.startAll();
+  }
+
   async refreshAll() {
     this.historyStatus = "loading";
     this.historyError = undefined;
@@ -455,25 +676,39 @@ export class ClaudeAdapter extends EventEmitter {
         }
         const parsed = result.value;
         seen.add(parsed.summary.id);
+        this.newThreads.delete(parsed.summary.id);
         this.history.set(parsed.summary.id, files[index]);
         const home = historyHome(files[index]);
         if (home) this.historyHomes.set(parsed.summary.id, home);
         const existing = this.threads.get(parsed.summary.id);
-        const active = this.active.has(parsed.summary.id);
+        const live = this.active.get(parsed.summary.id);
+        // 连接在但回合间隙（turnId 空）也是 managed；startingTurns 覆盖
+        // sendTurn 已置 running、SDK 进程尚未建连的窗口。activeTurnId 只认
+        // 活跃回合来源，existing 里的残留不往回带。
+        const busyTurnId =
+          live?.turnId || this.startingTurns.get(parsed.summary.id)?.turnId;
         this.threads.set(parsed.summary.id, {
           ...parsed.summary,
           providerId: existing?.providerId || parsed.summary.providerId,
+          model: existing?.model || parsed.summary.model,
           permissionMode: existing?.permissionMode || "default",
-          status: active
+          forkedFromId: existing?.forkedFromId,
+          resolvedModel: existing?.resolvedModel,
+          tokenUsage: existing?.tokenUsage,
+          status: live
             ? existing?.status || "running"
-            : parsed.summary.status,
-          activeTurnId: active ? existing?.activeTurnId : undefined,
-          controlMode: active ? "managed" : "history",
+            : busyTurnId
+              ? "running"
+              : parsed.summary.status,
+          activeTurnId: busyTurnId,
+          lastError: existing?.lastError,
+          controlMode: live || busyTurnId ? "managed" : "history",
+          claudeConnected: Boolean(live),
           ...this.options.threadSettings?.get(this.id, parsed.summary.id),
         });
       });
       for (const [id] of this.threads)
-        if (!seen.has(id) && !this.active.has(id)) {
+        if (!seen.has(id) && !this.active.has(id) && !this.newThreads.has(id)) {
           this.history.delete(id);
           this.historyHomes.delete(id);
           this.threads.delete(id);
@@ -497,16 +732,29 @@ export class ClaudeAdapter extends EventEmitter {
 
   busyThreads() {
     return this.listThreads().filter(
-      (thread) => thread.status === "running" || thread.status === "waiting",
+      (thread) =>
+        thread.status === "running" ||
+        thread.status === "waiting" ||
+        this.startingTurns.has(thread.id),
+    );
+  }
+
+  private isBusy(threadId: string) {
+    return (
+      Boolean(this.active.get(threadId)?.turnId) ||
+      this.startingTurns.has(threadId)
     );
   }
 
   restart() {
+    for (const pending of this.startingTurns.values()) pending.abort.abort();
+    this.startingTurns.clear();
     for (const current of this.active.values()) {
-      void current.query.interrupt().catch(() => undefined);
-      void current.query.return(undefined).catch(() => undefined);
+      current.input.close();
+      // Adapter shutdown is the only implicit process close. Never send a
+      // turn interrupt or kill an unrelated Claude/Agent View worker here.
+      current.query.close?.();
     }
-    for (const child of this.spawnedClaude) stopChildProcess(child);
     this.spawnedClaude.clear();
     for (const approval of this.approvals.values())
       approval.resolve({
@@ -521,6 +769,7 @@ export class ClaudeAdapter extends EventEmitter {
         thread.status = "offline";
         thread.activeTurnId = undefined;
       }
+    for (const thread of this.threads.values()) thread.claudeConnected = false;
     this.online = false;
   }
 
@@ -531,18 +780,17 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   /**
-   * 记录 SDK 拉起的子进程并在其退出时摘除；restart 时兜底整树结束。
-   * 只在 cmd/.bat 与 wsl 包裹路径上使用，直接 spawn 的由 SDK 自行管理。
+   * 记录 SDK 拉起的包装进程并在其退出时摘除。只在 cmd/.bat 与 WSL
+   * 包裹路径上使用；直接 spawn 的进程由 SDK 自行管理。
    */
   private trackClaudeProcess(child: SpawnedProcess): SpawnedProcess {
     this.spawnedClaude.add(child);
     try {
-      (child as { once?: (...args: any[]) => void }).once?.(
-        "exit",
-        () => this.spawnedClaude.delete(child),
+      (child as { once?: (...args: any[]) => void }).once?.("exit", () =>
+        this.spawnedClaude.delete(child),
       );
     } catch {
-      // 忽略：极端情况下兜底靠 restart 清空集合。
+      // 忽略不支持 exit 事件的自定义传输。
     }
     return child;
   }
@@ -553,6 +801,7 @@ export class ClaudeAdapter extends EventEmitter {
       cwd: string;
       name?: string;
       model?: string;
+      reasoningEffort?: string;
       approvalPolicy?: string;
       sandbox?: string;
       permissionMode?: ClaudePermissionMode;
@@ -575,8 +824,20 @@ export class ClaudeAdapter extends EventEmitter {
       approvalPolicy: input.approvalPolicy as ThreadSummary["approvalPolicy"],
       permissionMode: input.permissionMode || "default",
       controlMode: "managed",
+      claudeConnected: false,
     };
+    const effort = String(input.reasoningEffort || "").trim();
+    if (effort && !CLAUDE_EFFORT_LEVELS.has(effort))
+      throw new Error(`不支持的推理强度：${effort}`);
+    if (effort) thread.reasoningEffort = effort;
+    await this.options.threadSettings?.update?.(this.id, id, {
+      providerId: profile.id,
+      model: thread.model,
+      permissionMode: thread.permissionMode,
+      reasoningEffort: thread.reasoningEffort,
+    });
     this.threads.set(id, thread);
+    this.newThreads.add(id);
     this.broadcast("thread.updated", thread);
     return thread;
   }
@@ -587,16 +848,71 @@ export class ClaudeAdapter extends EventEmitter {
     const file = this.history.get(threadId);
     let parsed: ClaudeHistoryThread | undefined;
     if (file) parsed = await readClaudeHistory(file);
+    const thread = parsed?.thread || {
+      id: threadId,
+      cwd: summary.cwd,
+      model: summary.model,
+      turns: [],
+    };
+    this.stampTurnModels(threadId, thread.turns);
     return {
-      ...(parsed?.thread || {
-        id: threadId,
-        cwd: summary.cwd,
-        model: summary.model,
-        turns: [],
-      }),
+      ...thread,
       agentId: this.id,
       providerId: summary.providerId,
     };
+  }
+
+  /**
+   * 回填回合快照。turn.id 即该回合 user 消息的 JSONL uuid——sendTurn 把它
+   * 设进 SDKUserMessage.uuid，两者天然对齐。JSONL 自带真实 model 的回合
+   * 以 JSONL 为准；快照主要补 JSONL 里没有的 reasoningEffort。
+   */
+  private stampTurnModels(threadId: string, turns: any[] | undefined) {
+    if (!Array.isArray(turns) || !this.options.threadSettings) return;
+    for (const turn of turns) {
+      if (!turn) continue;
+      const stamp = this.options.threadSettings.turnModel(
+        this.id,
+        threadId,
+        String(turn.id || ""),
+      );
+      if (!stamp) continue;
+      if (stamp.model && !turn.model) turn.model = stamp.model;
+      if (stamp.reasoningEffort && !turn.reasoningEffort)
+        turn.reasoningEffort = stamp.reasoningEffort;
+    }
+  }
+
+  /**
+   * 同一 turn 的多次快照逐字段合并：sendTurn 先记发出时的意图，init /
+   * message_start 再拿实际下发的 model/effort 覆盖。patch.reasoningEffort
+   * 传 null 表示「SDK 报告无覆盖」，明确清掉；不传则保留先前值。
+   */
+  private stampTurnModel(
+    thread: ThreadSummary,
+    turnId: string,
+    patch: { model?: string; reasoningEffort?: string | null } = {},
+  ) {
+    const store = this.options.threadSettings;
+    if (!store) return;
+    const prev = store.turnModel(this.id, thread.id, turnId);
+    const model =
+      patch.model || prev?.model || thread.resolvedModel || thread.model;
+    const reasoningEffort =
+      patch.reasoningEffort === null
+        ? undefined
+        : patch.reasoningEffort ||
+          prev?.reasoningEffort ||
+          thread.reasoningEffort;
+    if (
+      prev &&
+      prev.model === model &&
+      (prev.reasoningEffort || undefined) === (reasoningEffort || undefined)
+    )
+      return;
+    void store
+      .recordTurnModel(this.id, thread.id, turnId, { model, reasoningEffort })
+      .catch(() => undefined);
   }
 
   async renameThread(_providerId: string, threadId: string, name: string) {
@@ -628,10 +944,11 @@ export class ClaudeAdapter extends EventEmitter {
       this.historyIndex.delete(file);
       await this.saveHistoryIndex();
     }
-    thread.name = nextName;
-    thread.updatedAt = Date.now();
-    this.broadcast("thread.updated", thread);
-    return thread;
+    const summary = this.currentSummary(thread);
+    summary.name = nextName;
+    summary.updatedAt = Date.now();
+    this.broadcast("thread.updated", summary);
+    return summary;
   }
 
   async updateThreadSettings(
@@ -640,41 +957,211 @@ export class ClaudeAdapter extends EventEmitter {
     settings: {
       providerId?: string;
       model?: string;
+      reasoningEffort?: string;
       permissionMode?: ClaudePermissionMode;
     },
   ) {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Claude Code 会话不存在");
-    if (this.active.has(threadId))
+    if (this.isBusy(threadId))
       throw new Error("任务结束后才能修改 Claude 会话设置");
+    const connected = this.active.get(threadId);
     if (settings.providerId) {
       const profile = this.resolveProfile(settings.providerId);
-      thread.providerId = profile.id;
+      if (connected && profile.id !== thread.providerId)
+        throw new Error(
+          "此 Claude 会话仍保持连接并可能有后台任务；请先创建分支，再为分支选择其他供应商",
+        );
+      this.currentSummary(thread).providerId = profile.id;
     }
-    if (settings.model) thread.model = settings.model;
-    if (settings.permissionMode)
-      thread.permissionMode = settings.permissionMode;
-    thread.updatedAt = Date.now();
-    this.broadcast("thread.updated", thread);
-    return thread;
+    if (settings.model) {
+      if (connected) await connected.query.setModel(settings.model);
+      this.currentSummary(thread).model = settings.model;
+      if (connected) connected.model = settings.model;
+    }
+    if (settings.reasoningEffort !== undefined) {
+      const effort = String(settings.reasoningEffort || "").trim();
+      if (effort && !CLAUDE_EFFORT_LEVELS.has(effort))
+        throw new Error(`不支持的推理强度：${effort}`);
+      // effortLevel 走 flag 层即时生效（空值=回模型默认），无需重连；
+      // 下个 runTurn 的 options.effort 也会带上，断线重连后不丢。
+      if (connected)
+        await connected.query.applyFlagSettings({
+          effortLevel: (effort || null) as EffortLevel | null,
+        });
+      this.currentSummary(thread).reasoningEffort = effort || undefined;
+    }
+    if (settings.permissionMode) {
+      if (connected)
+        await connected.query.setPermissionMode(settings.permissionMode);
+      this.currentSummary(thread).permissionMode = settings.permissionMode;
+      if (connected) connected.permissionMode = settings.permissionMode;
+    }
+    const summary = this.currentSummary(thread);
+    await this.options.threadSettings?.update?.(this.id, threadId, {
+      providerId: summary.providerId,
+      model: summary.model,
+      permissionMode: summary.permissionMode,
+      reasoningEffort: summary.reasoningEffort || "",
+    });
+    summary.updatedAt = Date.now();
+    this.broadcast("thread.updated", summary);
+    return summary;
   }
 
-  async deleteThread(_providerId: string, threadId: string) {
-    if (this.active.has(threadId))
-      throw new Error("运行中的 Claude 会话不能删除");
+  /**
+   * 分支会话：文件级 fork——把源 JSONL 复制成新会话文件（sessionId 重写），
+   * 传 lastTurnId 时截到该 turn 末尾。原文件完全不动，分支通过
+   * resume 新会话继续，与 Claude Code 自身的 fork/rewind 产物等价。
+   */
+  async forkThread(
+    _providerId: string,
+    threadId: string,
+    options: { lastTurnId?: string } = {},
+  ) {
+    const source = this.threads.get(threadId);
+    if (!source) throw new Error("Claude Code 会话不存在");
+    if (this.isBusy(threadId))
+      throw new Error("Claude Code 会话正在运行，无法分支");
+    const file = this.history.get(threadId);
+    if (!file) throw new Error("会话还没有写入历史记录，无法分支");
+    const content = await readFile(file, "utf8");
+    let anchor: string | undefined;
+    if (options.lastTurnId) {
+      anchor = turnEndUuid(content, options.lastTurnId);
+      if (!anchor)
+        throw new Error("找不到这条消息，它可能已被回退或不在当前分支上");
+    }
+    return this.branchThread(source, content, file, anchor);
+  }
+
+  /**
+   * 从历史 turn 回滚重试（中途编辑）：turnId 即该 turn 首条 user 消息的
+   * JSONL uuid。先按其前一条消息为界复制出分支会话（原会话保留），再
+   * 在分支上发送新文本——等价于 Claude Code 的 rewind+编辑重发。
+   * 目标是首条消息时回滚到会话开头，直接开同配置的新会话。
+   */
+  async retryFromTurn(
+    _providerId: string,
+    threadId: string,
+    turnId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    const source = this.threads.get(threadId);
+    if (!source) throw new Error("Claude Code 会话不存在");
+    if (this.isBusy(threadId))
+      throw new Error("Claude Code 会话正在运行，无法从历史消息重试");
+    const value = String(text || "").trim();
+    if (!value && !images?.length) throw new Error("请输入重试内容");
+    const file = this.history.get(threadId);
+    if (!file) throw new Error("会话还没有写入历史记录，无法回退重试");
+    const content = await readFile(file, "utf8");
+    const anchor = rewindAnchorUuid(content, turnId);
+    if (anchor === undefined)
+      throw new Error("找不到这条消息，它可能已被回退或不在当前分支上");
+    const branch =
+      anchor === null
+        ? await this.createThread(source.providerId, {
+            cwd: source.cwd,
+            name: `${source.name || "Claude 会话"} · 分支`,
+            model: source.model,
+            permissionMode: source.permissionMode,
+          })
+        : await this.branchThread(source, content, file, anchor);
+    if (!branch.forkedFromId) {
+      branch.forkedFromId = threadId;
+      this.broadcast("thread.updated", branch);
+    }
+    await this.sendTurn(source.providerId, branch.id, text, images);
+    return this.threads.get(branch.id) || branch;
+  }
+
+  private async branchThread(
+    source: ThreadSummary,
+    content: string,
+    file: string,
+    anchor?: string,
+  ) {
+    const id = randomUUID();
+    const branched = branchClaudeHistory(content, id, anchor);
+    if (branched === undefined) throw new Error("无法定位分支点");
+    const branchFile = path.join(path.dirname(file), `${id}.jsonl`);
+    await writeFile(branchFile, branched);
+    const branch: ThreadSummary = {
+      ...source,
+      id,
+      sessionId: id,
+      name: `${source.name || "Claude 会话"} · 分支`,
+      status: "idle",
+      activeTurnId: undefined,
+      controlMode: "history",
+      claudeConnected: false,
+      lastError: undefined,
+      forkedFromId: source.id,
+      updatedAt: Date.now(),
+    };
+    this.threads.set(id, branch);
+    this.history.set(id, branchFile);
+    const home = this.historyHomes.get(source.id);
+    if (home) this.historyHomes.set(id, home);
+    await this.options.threadSettings?.update?.(this.id, id, {
+      providerId: source.providerId,
+      model: source.model,
+      permissionMode: source.permissionMode,
+      reasoningEffort: source.reasoningEffort || "",
+    });
+    this.broadcast("thread.updated", branch);
+    return branch;
+  }
+
+  async deleteThread(
+    _providerId: string,
+    threadId: string,
+    options: { closeConnection?: boolean } = {},
+  ) {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Claude Code 会话不存在");
-    const file = this.history.get(threadId);
-    if (file) {
-      await unlink(file);
-      this.historyIndex.delete(file);
-      await this.saveHistoryIndex();
+    if (this.deleting.has(threadId))
+      throw new Error("Claude 会话正在删除，请稍后");
+    if (this.isBusy(threadId))
+      throw new Error(
+        "Claude 当前有正在执行的 turn，不能删除；请等待完成或先中断",
+      );
+    const connected = this.active.get(threadId);
+    if (connected && !options.closeConnection)
+      throw new Error(
+        "Deck 当前与此 Claude 会话保持 SDK 连接，且没有正在执行的 turn。请在删除确认中选择关闭连接并删除",
+      );
+    this.deleting.add(threadId);
+    try {
+      if (connected) {
+        connected.input.close();
+        connected.query.close();
+        await this.queryTasks.get(threadId);
+        if (this.active.has(threadId))
+          throw new Error("Deck 的 Claude 连接尚未关闭，请稍后重试删除");
+      }
+      const owner = await this.sessionLockOwner(threadId);
+      if (owner)
+        throw new Error(
+          `此 Claude 会话当前由外部进程 PID ${owner.pid}${owner.name ? `（${owner.name}）` : ""}占用。请在原终端或 Agent View 中关闭该会话后重试；也可以在 Deck 中创建分支。`,
+        );
+      const file = this.history.get(threadId);
+      if (file) {
+        await unlink(file);
+        this.historyIndex.delete(file);
+        await this.saveHistoryIndex();
+      }
+      this.newThreads.delete(threadId);
+      this.history.delete(threadId);
+      this.historyHomes.delete(threadId);
+      this.threads.delete(threadId);
+      this.broadcast("thread.deleted", { agentId: this.id, threadId });
+      return { ok: true };
+    } finally {
+      this.deleting.delete(threadId);
     }
-    this.history.delete(threadId);
-    this.historyHomes.delete(threadId);
-    this.threads.delete(threadId);
-    this.broadcast("thread.deleted", { agentId: this.id, threadId });
-    return { ok: true };
   }
 
   async sendTurn(
@@ -685,28 +1172,150 @@ export class ClaudeAdapter extends EventEmitter {
   ) {
     const thread = this.threads.get(threadId);
     if (!thread) throw new Error("Claude Code 会话不存在");
-    if (this.active.has(threadId)) throw new Error("Claude Code 会话正在运行");
+    if (this.deleting.has(threadId))
+      throw new Error("Claude 会话正在删除，不能发送新任务");
+    if (this.isBusy(threadId)) throw new Error("Claude Code 会话正在运行");
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
     const turnId = randomUUID();
-    thread.status = "running";
-    thread.activeTurnId = turnId;
-    thread.updatedAt = Date.now();
-    thread.lastError = undefined;
-    thread.controlMode = "managed";
-    this.broadcast("thread.updated", thread);
-    this.emitAgentEvent(thread, {
+    const pending = { turnId, abort: new AbortController() };
+    this.startingTurns.set(threadId, pending);
+    try {
+      const current = this.active.get(threadId);
+      if (current) {
+        if (
+          current.providerId !== thread.providerId ||
+          current.model !== (thread.model || "default") ||
+          current.permissionMode !== (thread.permissionMode || "default")
+        )
+          throw new Error(
+            "此 Claude 会话仍保持连接；更改供应商、模型或权限需新建分支会话",
+          );
+      } else if (this.history.has(thread.id)) {
+        const owner = await this.sessionLockOwner(thread.id);
+        if (owner)
+          throw new Error(
+            `该会话仍由 Claude 进程 pid ${owner.pid} 运行${owner.name ? `（${owner.name}）` : ""}。Deck 会保留它的后台任务；请返回原终端，或在 claude agents 中找到后台会话后 attach，也可在 Deck 中创建分支。原进程退出后可在此续聊。`,
+          );
+      }
+      if (this.startingTurns.get(threadId) !== pending)
+        throw new Error("Claude Code adapter 已停止");
+    } catch (error) {
+      if (this.startingTurns.get(threadId) === pending)
+        this.startingTurns.delete(threadId);
+      throw error;
+    }
+    // 上面的 await 之间 refreshAll 可能重建了摘要对象——写 map 当前这份。
+    const summary = this.threads.get(threadId) ?? thread;
+    summary.status = "running";
+    summary.activeTurnId = turnId;
+    summary.updatedAt = Date.now();
+    summary.lastError = undefined;
+    summary.controlMode = "managed";
+    this.broadcast("thread.updated", summary);
+    this.emitAgentEvent(summary, {
       method: "turn/started",
       params: { threadId, turn: { id: turnId, status: "inProgress" } },
     });
-    void this.runTurn(thread, turnId, text, images);
+    // 记下回合发出时的模型/effort 快照：uuid 会落到 JSONL user 记录上，
+    // readThread 靠它把快照对回历史 turn，切换模型后旧回合不会改标。
+    this.stampTurnModel(summary, turnId);
+    const current = this.active.get(threadId);
+    if (current) {
+      current.turnId = turnId;
+      current.interrupted = false;
+      current.input.push(inputMessage(thread.id, text, images, turnId));
+      this.startingTurns.delete(threadId);
+    } else {
+      const task = this.runTurn(summary, turnId, text, images, pending);
+      this.queryTasks.set(threadId, task);
+      void task.then(
+        () => {
+          if (this.queryTasks.get(threadId) === task)
+            this.queryTasks.delete(threadId);
+        },
+        () => {
+          if (this.queryTasks.get(threadId) === task)
+            this.queryTasks.delete(threadId);
+        },
+      );
+    }
     return { turn: { id: turnId, status: "inProgress" } };
   }
 
   async interrupt(_providerId: string, threadId: string, _turnId: string) {
     const current = this.active.get(threadId);
-    if (!current) throw new Error("Claude Code 会话没有正在运行的任务");
+    if (!current?.turnId) {
+      const pending = this.startingTurns.get(threadId);
+      if (!pending) throw new Error("Claude Code 会话没有正在运行的任务");
+      pending.abort.abort();
+      return { ok: true };
+    }
+    current.interrupted = true;
     await current.query.interrupt();
     return { ok: true };
+  }
+
+  /**
+   * Skill 目录：会话有活跃 SDK 连接时用 `reload_skills` 控制请求取权威
+   * 列表（同时刷新磁盘缓存）；未连接时按 Claude Code 发现规则扫
+   * `<cwd>/.claude/skills` 与 `<claudeHome>/skills` 的 SKILL.md。
+   */
+  async listSkills(_providerId: string, threadId: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    const connected = this.active.get(threadId);
+    if (connected && typeof connected.query.reloadSkills === "function") {
+      const result = await connected.query.reloadSkills();
+      const list = Array.isArray(result?.skills) ? result.skills : [];
+      return {
+        skills: list
+          .map((skill: any) => ({
+            name: String(skill?.name || ""),
+            description: String(skill?.description || ""),
+            scope: String(skill?.argumentHint || "").trim() || undefined,
+            enabled: true,
+          }))
+          .filter((skill: AgentSkill) => skill.name),
+      };
+    }
+    return { skills: await this.scanSkillRoots(thread) };
+  }
+
+  /** 无 SDK 连接时的磁盘兜底；WSL 会话的文件在另一侧，扫不到自然为空。 */
+  private async scanSkillRoots(thread: ThreadSummary) {
+    const roots = [
+      ...(thread.cwd
+        ? [
+            {
+              dir: path.join(thread.cwd, ".claude", "skills"),
+              scope: "project",
+            },
+          ]
+        : []),
+      {
+        dir: path.join(this.claudeConfigHome(thread.id), "skills"),
+        scope: "user",
+      },
+    ];
+    const skills: AgentSkill[] = [];
+    const seen = new Set<string>();
+    for (const root of roots) {
+      for (const file of await findSkillFiles(root.dir)) {
+        const meta = await skillFrontmatter(file);
+        const name = meta.name || path.basename(path.dirname(file));
+        const key = `${root.scope}:${name.toLowerCase()}`;
+        if (!name || seen.has(key)) continue;
+        seen.add(key);
+        skills.push({
+          name,
+          description: meta.description,
+          path: file,
+          scope: root.scope,
+          enabled: true,
+        });
+      }
+    }
+    return skills.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   async resolveApproval(
@@ -720,12 +1329,31 @@ export class ClaudeAdapter extends EventEmitter {
       payload.decision === "accept" ||
       payload.decision === "acceptForSession" ||
       (approval.kind === "question" && payload.answers != null);
+    const answers =
+      approval.kind === "question"
+        ? claudeQuestionAnswers(approval.input, payload.answers)
+        : undefined;
+    if (
+      allow &&
+      approval.kind === "question" &&
+      (!answers ||
+        typeof answers !== "object" ||
+        !Array.isArray(approval.input.questions) ||
+        approval.input.questions.some(
+          (question: any) =>
+            !question?.question ||
+            !String(
+              (answers as Record<string, unknown>)[question.question] || "",
+            ).trim(),
+        ))
+    )
+      throw new Error("请回答 Claude Code 提出的所有问题");
     if (allow) {
       approval.resolve({
         behavior: "allow",
         updatedInput:
           approval.kind === "question"
-            ? { ...approval.input, answers: payload.answers }
+            ? { ...approval.input, answers }
             : approval.input,
         ...(payload.decision === "acceptForSession" && approval.suggestions
           ? { updatedPermissions: approval.suggestions }
@@ -740,8 +1368,15 @@ export class ClaudeAdapter extends EventEmitter {
     }
     this.approvals.delete(approvalId);
     const thread = this.threads.get(approval.threadId);
-    if (thread) {
-      thread.status = "running";
+    if (
+      thread &&
+      (thread.status === "waiting" || thread.status === "running")
+    ) {
+      thread.status = [...this.approvals.values()].some(
+        (item) => item.threadId === approval.threadId,
+      )
+        ? "waiting"
+        : "running";
       this.broadcast("thread.updated", thread);
     }
     this.broadcast("approval.resolved", {
@@ -756,9 +1391,9 @@ export class ClaudeAdapter extends EventEmitter {
     turnId: string,
     text: string,
     images?: TurnImage[],
+    pending?: { turnId: string; abort: AbortController },
   ) {
     const materialized = this.history.has(thread.id);
-    const profile = this.resolveProfile(thread.providerId);
     const canUseTool: CanUseTool = (toolName, input, options) =>
       this.requestApproval(
         thread,
@@ -772,13 +1407,26 @@ export class ClaudeAdapter extends EventEmitter {
         ? "bypassPermissions"
         : "default")) as PermissionMode;
     let query: Query | undefined;
+    const input = new ClaudeInputQueue();
+    const stderrTail: string[] = [];
     try {
+      const profile = this.resolveProfile(thread.providerId);
       const runtime = await this.turnRuntime(thread.cwd);
+      if (pending?.abort.signal.aborted) {
+        this.completeTurn(thread, turnId);
+        return;
+      }
       const onStderr = (line: string) => {
-        if (line.trim()) this.error = this.redact(line.trim().slice(-500));
+        const text = this.redact(line.trim());
+        if (!text) return;
+        this.error = text.slice(-500);
+        stderrTail.push(text.slice(-300));
+        if (stderrTail.length > 8) stderrTail.shift();
       };
+      const effort = claudeEffortLevel(thread.reasoningEffort);
+      input.push(inputMessage(thread.id, text, images, turnId));
       query = this.queryFactory({
-        prompt: images?.length ? promptStream(thread.id, text, images) : text,
+        prompt: input,
         options: {
           cwd:
             runtime === "wsl"
@@ -794,6 +1442,7 @@ export class ClaudeAdapter extends EventEmitter {
           ...(thread.model && thread.model !== "default"
             ? { model: thread.model }
             : {}),
+          ...(effort ? { effort: effort as EffortLevel } : {}),
           includePartialMessages: true,
           canUseTool,
           permissionMode,
@@ -838,33 +1487,99 @@ export class ClaudeAdapter extends EventEmitter {
               : {}),
         },
       });
-      this.active.set(thread.id, { query, turnId });
-      for await (const message of query)
-        this.onMessage(thread, turnId, message);
-      if (thread.status === "running" || thread.status === "waiting")
-        this.completeTurn(thread, turnId);
-    } catch (error: any) {
-      this.failTurn(
-        thread,
+      this.active.set(thread.id, {
+        query,
+        input,
         turnId,
-        this.redact(error?.message || String(error)),
-      );
-    } finally {
-      this.active.delete(thread.id);
-      for (const [id, approval] of this.approvals)
-        if (approval.threadId === thread.id) {
-          approval.resolve({
-            behavior: "deny",
-            message: "Claude Code 任务已结束",
-          });
-          this.approvals.delete(id);
-          this.broadcast("approval.resolved", {
-            agentId: this.id,
-            approvalId: id,
-          });
+        providerId: thread.providerId,
+        model: thread.model || "default",
+        permissionMode,
+        profileEnv: profile.env,
+        streamBlocks: new Map(),
+        toolItems: new Map(),
+      });
+      void Promise.resolve()
+        .then(() => query?.initializationResult())
+        .then((result) => this.captureModelCatalog(result?.models))
+        .catch(() => undefined);
+      const summary = this.currentSummary(thread);
+      summary.claudeConnected = true;
+      this.broadcast("thread.updated", summary);
+      if (this.startingTurns.get(thread.id) === pending)
+        this.startingTurns.delete(thread.id);
+      for await (const message of query) {
+        const live = this.active.get(thread.id);
+        if (live?.query !== query) break;
+        const currentTurnId = live.turnId;
+        if (currentTurnId) {
+          this.onMessage(thread, currentTurnId, message);
+          if (message.type === "result")
+            await this.refreshThreadFromDisk(thread.id).catch(() => undefined);
         }
-      await this.refreshThreadFromDisk(thread.id).catch(() => undefined);
+      }
+      const live = this.active.get(thread.id);
+      if (live?.query === query && live.turnId) {
+        if (live.interrupted) this.completeTurn(thread, live.turnId);
+        else
+          this.failTurn(
+            thread,
+            live.turnId,
+            "Claude Code 连接在任务完成前退出",
+          );
+      }
+    } catch (error: any) {
+      const raw = this.redact(error?.message || String(error));
+      // claude 进程退出码之外的真实原因只出现在 stderr（如会话锁、
+      // resume 目标缺失）；带上尾部几行，不再只显示「exit code 1」。
+      const tail = stderrTail
+        .filter((line) => !raw.includes(line))
+        .slice(-2)
+        .join("\n");
+      const live = this.active.get(thread.id);
+      if (
+        (query && live?.query === query) ||
+        (!query && !live && this.startingTurns.get(thread.id) === pending)
+      )
+        this.failTurn(thread, turnId, tail ? `${raw}\n${tail}` : raw);
+    } finally {
+      input.close();
+      const ownsPending =
+        pending != null && this.startingTurns.get(thread.id) === pending;
+      const ownsConnection =
+        query != null && this.active.get(thread.id)?.query === query;
+      if (this.startingTurns.get(thread.id) === pending)
+        this.startingTurns.delete(thread.id);
+      if (ownsConnection) this.active.delete(thread.id);
+      // A replaced query may have started after restart. Its state and
+      // approvals belong to the replacement, not this closing query.
+      if (ownsConnection || ownsPending) {
+        const summary = this.currentSummary(thread);
+        summary.claudeConnected = false;
+        this.broadcast("thread.updated", summary);
+        for (const [id, approval] of this.approvals)
+          if (approval.threadId === thread.id) {
+            approval.resolve({
+              behavior: "deny",
+              message: "Claude Code 任务已结束",
+            });
+            this.approvals.delete(id);
+            this.broadcast("approval.resolved", {
+              agentId: this.id,
+              approvalId: id,
+            });
+          }
+        await this.refreshThreadFromDisk(thread.id).catch(() => undefined);
+      }
     }
+  }
+
+  /**
+   * 摘要对象会被 refreshAll/refreshThreadFromDisk 整体重建替换，回合闭包
+   * 里持有的旧引用写完 map 不可见、广播出去还会盖回新对象的字段。凡是
+   * 隔过 await 的线程字段写入，先取 map 当前对象再改。
+   */
+  private currentSummary(thread: ThreadSummary) {
+    return this.threads.get(thread.id) ?? thread;
   }
 
   private onMessage(
@@ -872,8 +1587,25 @@ export class ClaudeAdapter extends EventEmitter {
     turnId: string,
     message: SDKMessage,
   ) {
+    thread = this.currentSummary(thread);
     if (message.type === "system" && message.subtype === "init") {
-      thread.model = message.model || thread.model;
+      if (message.model) thread.resolvedModel = message.model;
+      // init 帧的 effort 是「实际下发」的水平（已过模型支持度降级），且只在
+      // 连接建立时出现一次；有 model 或 effort 字段就校正快照。effort 为
+      // null/缺失值表示该模型不接受覆盖，快照清掉，回合标签回模型默认。
+      const reportsEffort = "effort" in message;
+      if (message.model || reportsEffort)
+        this.stampTurnModel(thread, turnId, {
+          model: message.model || undefined,
+          ...(reportsEffort
+            ? {
+                reasoningEffort:
+                  typeof message.effort === "string" && message.effort
+                    ? message.effort
+                    : null,
+              }
+            : {}),
+        });
       thread.cwd = message.cwd || thread.cwd;
       return;
     }
@@ -881,18 +1613,39 @@ export class ClaudeAdapter extends EventEmitter {
       const event: any = message.event;
       if (event.type === "message_start") {
         const current = this.active.get(thread.id);
-        if (current?.turnId === turnId)
+        if (current?.turnId === turnId) {
           current.streamMessageId = event.message?.id || message.uuid;
+          current.streamBlocks.clear();
+        }
+        // 每回合第一条 API 消息带真实模型 ID——live 连接内换模型后 init
+        // 不会再来，靠它把回合快照修到实际模型。
+        const apiModel = event.message?.model;
+        if (typeof apiModel === "string" && apiModel) {
+          thread.resolvedModel = apiModel;
+          this.stampTurnModel(thread, turnId, { model: apiModel });
+        }
         return;
       }
       const current = this.active.get(thread.id);
+      if (event.type === "content_block_start") {
+        if (typeof event.index === "number" && current?.turnId === turnId)
+          current.streamBlocks.set(event.index, event.content_block?.type);
+        return;
+      }
+      const blockType = current?.streamBlocks.get(event.index);
       const itemId = `${
         current?.turnId === turnId && current.streamMessageId
           ? current.streamMessageId
           : message.uuid
       }:${event.index}`;
       if (event.type === "content_block_delta") {
-        const delta = event.delta?.text || event.delta?.thinking || "";
+        // Thinking and tool JSON are distinct Claude blocks. Showing either as
+        // answer text creates a duplicate or misleading assistant message.
+        const delta =
+          blockType === "text" ||
+          (blockType === undefined && event.delta?.type === "text_delta")
+            ? event.delta?.text || ""
+            : "";
         if (delta)
           this.emitAgentEvent(thread, {
             method: "item/agentMessage/delta",
@@ -904,7 +1657,7 @@ export class ClaudeAdapter extends EventEmitter {
             },
           });
       }
-      if (event.type === "content_block_stop")
+      if (event.type === "content_block_stop" && blockType === "text")
         this.emitAgentEvent(thread, {
           method: "item/completed",
           params: {
@@ -916,35 +1669,68 @@ export class ClaudeAdapter extends EventEmitter {
             },
           },
         });
+      if (event.type === "content_block_stop")
+        current?.streamBlocks.delete(event.index);
       return;
     }
-    // Complete assistant messages surface finished tool_use blocks (the
-    // block-level stream events above only carry text/thinking deltas).
-    // TodoWrite snapshots are forwarded as extension items so the frontend
-    // can render the live todo list before the history reload lands.
+    // Complete assistant messages carry the full tool input. Start a live
+    // item here; the later SDK user/tool_result completes the same item.
     if (message.type === "assistant") {
       const parts = Array.isArray(message.message?.content)
         ? message.message.content
         : [];
       for (const part of parts) {
         if (part?.type !== "tool_use") continue;
-        const todos = claudeTodos(part.input);
-        if (!todos.length) continue;
+        const item = claudeToolItem(part, message);
+        const current = this.active.get(thread.id);
+        if (current?.turnId === turnId) current.toolItems.set(item.id, item);
+        this.emitAgentEvent(thread, {
+          method: item.type === "extension" ? "item/completed" : "item/started",
+          params: {
+            threadId: thread.id,
+            turnId,
+            item:
+              item.type === "extension"
+                ? { ...item, status: "completed" }
+                : item,
+          },
+        });
+      }
+      return;
+    }
+    if (message.type === "user") {
+      const parts = Array.isArray(message.message?.content)
+        ? message.message.content
+        : [];
+      const current = this.active.get(thread.id);
+      for (const part of parts) {
+        if (part?.type !== "tool_result") continue;
+        const item = current?.toolItems.get(String(part.tool_use_id));
+        if (!item || item.type === "extension") continue;
+        const output =
+          typeof part.content === "string"
+            ? part.content
+            : Array.isArray(part.content)
+              ? part.content
+                  .filter((entry: any) => entry?.type === "text")
+                  .map((entry: any) => String(entry.text || ""))
+                  .join("\n")
+              : "";
         this.emitAgentEvent(thread, {
           method: "item/completed",
           params: {
             threadId: thread.id,
             turnId,
             item: {
-              id: String(part.id || `${turnId}:${parts.indexOf(part)}`),
-              type: "extension",
-              kind: "todo",
-              agentId: this.id,
-              status: "completed",
-              payload: { todos },
+              ...item,
+              status: part.is_error ? "failed" : "completed",
+              ...(item.type === "commandExecution"
+                ? { aggregatedOutput: output }
+                : {}),
             },
           },
         });
+        current?.toolItems.delete(String(part.tool_use_id));
       }
       return;
     }
@@ -964,7 +1750,9 @@ export class ClaudeAdapter extends EventEmitter {
         cachedInput: cached,
         output,
       };
-      if (message.is_error) {
+      if (this.active.get(thread.id)?.interrupted) {
+        this.completeTurn(thread, turnId);
+      } else if (message.is_error) {
         const detail =
           "errors" in message
             ? message.errors.join("; ")
@@ -975,6 +1763,14 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   private completeTurn(thread: ThreadSummary, turnId: string) {
+    thread = this.currentSummary(thread);
+    if (thread.activeTurnId !== turnId) return;
+    const live = this.active.get(thread.id);
+    if (live?.turnId === turnId) {
+      live.turnId = undefined;
+      live.interrupted = false;
+      live.toolItems.clear();
+    }
     thread.status = "idle";
     thread.activeTurnId = undefined;
     thread.updatedAt = Date.now();
@@ -989,7 +1785,27 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   private failTurn(thread: ThreadSummary, turnId: string, detail: string) {
+    thread = this.currentSummary(thread);
+    if (thread.activeTurnId !== turnId) return;
+    const live = this.active.get(thread.id);
+    if (live?.turnId === turnId) {
+      live.turnId = undefined;
+      live.interrupted = false;
+      live.toolItems.clear();
+    }
     detail = this.redact(detail);
+    if (/not logged in|please run \/login/i.test(detail)) {
+      const profile =
+        this.profiles.find((item) => item.id === thread.providerId) ||
+        (thread.providerId === "claude-current"
+          ? this.profiles.find((item) => item.current && item.supported)
+          : undefined);
+      const home = this.claudeConfigHome(thread.id);
+      detail +=
+        profile?.env && Object.keys(profile.env).length
+          ? `\n配置档「${profile.name}」的认证环境已注入 Claude 子进程（配置目录 ${home}）。请检查该配置档的凭据和 API 地址。`
+          : `\n本机 Claude 使用配置目录 ${home}。请在同一目录和运行用户下完成 Claude 登录。`;
+    }
     thread.status = "error";
     thread.activeTurnId = undefined;
     thread.lastError = detail || "Claude Code 任务失败";
@@ -1012,6 +1828,12 @@ export class ClaudeAdapter extends EventEmitter {
     suggestions?: PermissionUpdate[],
     signal?: AbortSignal,
   ) {
+    if (signal?.aborted)
+      return Promise.resolve({
+        behavior: "deny" as const,
+        message: "Claude Code 任务已取消",
+        interrupt: true,
+      });
     const id = `${thread.id}:${randomUUID()}`;
     return new Promise<PermissionResult>((resolve) => {
       const approval: PendingApproval = {
@@ -1033,6 +1855,13 @@ export class ClaudeAdapter extends EventEmitter {
             message: "Claude Code 任务已取消",
             interrupt: true,
           });
+          const summary = this.currentSummary(thread);
+          summary.status = [...this.approvals.values()].some(
+            (item) => item.threadId === thread.id,
+          )
+            ? "waiting"
+            : "running";
+          this.broadcast("thread.updated", summary);
           this.broadcast("approval.resolved", {
             agentId: this.id,
             approvalId: id,
@@ -1040,8 +1869,9 @@ export class ClaudeAdapter extends EventEmitter {
         },
         { once: true },
       );
-      thread.status = "waiting";
-      this.broadcast("thread.updated", thread);
+      const summary = this.currentSummary(thread);
+      summary.status = "waiting";
+      this.broadcast("thread.updated", summary);
       this.broadcast("approval.requested", this.approvalView(approval));
     });
   }
@@ -1119,12 +1949,12 @@ export class ClaudeAdapter extends EventEmitter {
     }
     const profile = this.profiles.find((item) => item.id === id);
     if (!profile) throw new Error("Claude Code 配置档不存在");
-    if (profile.official)
-      throw new Error(
-        "Claude Code 不支持 Official，请选择 CC Switch 中的 Claude 中转",
-      );
     if (!profile.supported)
-      throw new Error("Claude Code 中转配置缺少 API 地址或认证凭据");
+      throw new Error(
+        profile.official
+          ? "这个 CC Switch Official 配置没有独立凭据；请选本机 Claude 使用已有登录态"
+          : "Claude Code 配置缺少有效的地址或认证凭据",
+      );
     return profile;
   }
 
@@ -1145,13 +1975,22 @@ export class ClaudeAdapter extends EventEmitter {
     runtime: "native" | "wsl" = "native",
   ) {
     const env = { ...process.env };
-    delete env.ANTHROPIC_API_KEY;
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    delete env.ANTHROPIC_BASE_URL;
-    delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    Object.assign(env, profile?.env || {});
-    const claudeHome =
-      this.options.claudeHome || historyHome || defaultClaudeHome();
+    const profileEnv = profile?.env || {};
+    // 中转配置档自带凭据时先清掉进程环境里残留的 Anthropic 变量再注入，
+    // 避免两套凭据混用；本机配置档（env 为空）则原样透传当前 shell 环境，
+    // 让 CLI 用自己的 OAuth/env 登录态。
+    if (Object.keys(profileEnv).length) {
+      delete env.ANTHROPIC_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+      delete env.ANTHROPIC_BASE_URL;
+      delete env.ANTHROPIC_CUSTOM_HEADERS;
+      delete env.CLAUDE_CODE_OAUTH_TOKEN;
+      delete env.CLAUDE_CODE_USE_BEDROCK;
+      delete env.CLAUDE_CODE_USE_VERTEX;
+      delete env.CLAUDE_CODE_USE_FOUNDRY;
+    }
+    Object.assign(env, profileEnv);
+    const claudeHome = this.claudeConfigHome(undefined, historyHome);
     env.CLAUDE_CONFIG_DIR =
       runtime === "wsl" ? windowsPathToWsl(claudeHome) : claudeHome;
     return runtime === "wsl"
@@ -1164,6 +2003,17 @@ export class ClaudeAdapter extends EventEmitter {
           "CLAUDE_CONFIG_DIR",
         ])
       : env;
+  }
+
+  private claudeConfigHome(threadId?: string, historyHome?: string) {
+    return (
+      this.options.claudeHome ||
+      historyHome ||
+      (threadId ? this.historyHomes.get(threadId) : undefined) ||
+      process.env.CLAUDE_CONFIG_DIR ||
+      process.env.CLAUDE_HOME ||
+      defaultClaudeHome()
+    );
   }
 
   private async turnRuntime(cwd: string): Promise<"native" | "wsl"> {
@@ -1185,9 +2035,19 @@ export class ClaudeAdapter extends EventEmitter {
 
   private async loadProfiles() {
     if (!this.options.ccSwitchPath) return;
-    this.profiles = new CcSwitchSource(
-      this.options.ccSwitchPath,
-    ).readClaudeProfiles();
+    this.profiles = withLocalProfile(
+      new CcSwitchSource(this.options.ccSwitchPath).readClaudeProfiles(),
+    );
+  }
+
+  /** Reload CC Switch profiles after the shared provider source is refreshed. */
+  async reloadProfiles(ccSwitchPath?: string) {
+    this.options.ccSwitchPath = ccSwitchPath;
+    if (ccSwitchPath) await this.loadProfiles();
+    else this.profiles = withLocalProfile([]);
+    this.syncAvailability();
+    this.broadcast("agent.status", this.descriptor());
+    this.broadcast("snapshot", this.snapshot());
   }
 
   private async loadHistoryIndex() {
@@ -1198,7 +2058,7 @@ export class ClaudeAdapter extends EventEmitter {
       const parsed = JSON.parse(
         await readFile(this.options.historyIndexFile, "utf8"),
       );
-      if (parsed?.version !== 1 || !parsed.entries) return;
+      if (parsed?.version !== 3 || !parsed.entries) return;
       for (const [file, entry] of Object.entries(parsed.entries)) {
         const value = entry as ClaudeHistoryIndexEntry;
         if (
@@ -1250,7 +2110,7 @@ export class ClaudeAdapter extends EventEmitter {
     await writeFile(
       temporary,
       JSON.stringify({
-        version: 1,
+        version: 3,
         entries: Object.fromEntries(this.historyIndex),
       }),
       { encoding: "utf8", mode: 0o600 },
@@ -1307,6 +2167,46 @@ export class ClaudeAdapter extends EventEmitter {
     return available;
   }
 
+  /**
+   * Claude Code 会话锁：~/.claude/sessions/<pid>.json 登记每个活进程
+   * 持有的 sessionId。返回占用者的 pid/名字；进程已死的记录是残留锁，
+   * 跳过。无占用返回 undefined。
+   */
+  private async sessionLockOwner(threadId: string) {
+    const home =
+      this.historyHomes.get(threadId) ||
+      this.options.claudeHome ||
+      process.env.CLAUDE_CONFIG_DIR ||
+      path.join(os.homedir(), ".claude");
+    let names: string[] = [];
+    try {
+      names = await readdir(path.join(home, "sessions"));
+    } catch {
+      return undefined;
+    }
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const record = JSON.parse(
+          await readFile(path.join(home, "sessions", name), "utf8"),
+        );
+        if (String(record?.sessionId) !== threadId) continue;
+        const pid = Number(record?.pid);
+        if (!Number.isInteger(pid) || pid <= 0) continue;
+        try {
+          process.kill(pid, 0);
+        } catch (error: any) {
+          if (error?.code !== "EPERM") continue;
+        }
+        return {
+          pid,
+          name: typeof record?.name === "string" ? record.name : undefined,
+        };
+      } catch {}
+    }
+    return undefined;
+  }
+
   private async refreshThreadFromDisk(threadId: string) {
     if (!this.history.has(threadId)) {
       const files = this.options.historyFiles
@@ -1317,22 +2217,42 @@ export class ClaudeAdapter extends EventEmitter {
       );
       if (file) {
         this.history.set(threadId, file);
+        this.newThreads.delete(threadId);
         const home = historyHome(file);
         if (home) this.historyHomes.set(threadId, home);
       }
     }
     const file = this.history.get(threadId);
     if (!file) return;
-    const parsed = await readClaudeHistory(file);
+    const parsed = await (this.options.historyReader || readClaudeHistory)(
+      file,
+    );
     if (!parsed) return;
     const current = this.threads.get(threadId);
+    // 读盘 await 期间可能插进来新回合（result 后用户立刻续发），也可能
+    // 回合刚结束——以连接/待发回合为准，别把 activeTurnId 丢掉或留尸。
+    const busyTurnId =
+      this.active.get(threadId)?.turnId ||
+      this.startingTurns.get(threadId)?.turnId;
     this.threads.set(threadId, {
       ...parsed.summary,
       providerId: current?.providerId || parsed.summary.providerId,
-      status: current?.status || parsed.summary.status,
+      model: current?.model || parsed.summary.model,
+      status: busyTurnId
+        ? current?.status === "waiting"
+          ? "waiting"
+          : "running"
+        : current?.status === "running" || current?.status === "waiting"
+          ? "idle"
+          : current?.status || parsed.summary.status,
+      activeTurnId: busyTurnId,
       lastError: current?.lastError,
+      resolvedModel: current?.resolvedModel,
+      tokenUsage: current?.tokenUsage,
+      forkedFromId: current?.forkedFromId,
       permissionMode: current?.permissionMode || "default",
       controlMode: "managed",
+      claudeConnected: Boolean(this.active.get(threadId)),
       ...this.options.threadSettings?.get(this.id, threadId),
     });
     this.broadcast("thread.updated", this.threads.get(threadId));
@@ -1340,10 +2260,41 @@ export class ClaudeAdapter extends EventEmitter {
 
   private redact(value: string) {
     let redacted = value;
-    for (const profile of this.profiles)
-      for (const [key, secret] of Object.entries(profile.env))
-        if (/token|secret|api.?key|password/i.test(key) && secret)
-          redacted = redacted.split(secret).join("[REDACTED]");
+    const hide = (secret: string) => {
+      if (secret.length >= 8)
+        redacted = redacted.split(secret).join("[REDACTED]");
+    };
+    for (const profileEnv of [
+      ...this.profiles.map((profile) => profile.env),
+      ...[...this.active.values()].map((current) => current.profileEnv),
+    ])
+      for (const [key, secret] of Object.entries(profileEnv))
+        if (/token|secret|api.?key|password|headers/i.test(key) && secret) {
+          hide(secret);
+          if (/headers/i.test(key))
+            for (const line of secret.split(/[\r\n]+/)) {
+              const headerValue = line.slice(line.indexOf(":") + 1).trim();
+              if (line.includes(":")) hide(headerValue);
+            }
+        }
+    // 本机配置档透传 shell 环境：ambient Anthropic 凭据同样不能漏进
+    // 错误信息、快照或事件。
+    for (const key of [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+    ]) {
+      const secret = process.env[key];
+      if (secret) {
+        hide(secret);
+        if (key === "ANTHROPIC_CUSTOM_HEADERS")
+          for (const line of secret.split(/[\r\n]+/)) {
+            const headerValue = line.slice(line.indexOf(":") + 1).trim();
+            if (line.includes(":")) hide(headerValue);
+          }
+      }
+    }
     return redacted;
   }
 }

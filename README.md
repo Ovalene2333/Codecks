@@ -23,7 +23,7 @@
 - **开始使用**
   - [快速开始](#快速开始)
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
-    - 不支持 Claude 官方登录；仅支持带 relay 凭据的 CC Switch 配置
+    - 支持本机 Claude 登录态与 CC Switch 多配置档
   - [OpenCode 后端适配（实验性）](#opencode-后端适配)
   - [ACP 通用适配（实验性）](#acp-通用适配)
 - **部署与日常使用**
@@ -99,6 +99,7 @@ Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session�
 - 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
 - 侧栏「工具」使用 `plugin/<id>/` 下的独立模块提供可扩展小工具，前端视图与服务端能力分别通过注册表接入。Web Terminal 挂载在 `/terminal`，打开后不会自动创建连接，选好当前 Session、最近项目或自定义绝对目录后点击连接才会启动宿主机 Shell；它支持 ANSI、全屏 TUI、窗口尺寸同步和移动端快捷键，Windows `--wsl` 模式进入 WSL，其他模式进入宿主系统默认 Shell，关闭页面或连接会自动结束对应 PTY
 - Git 管理工具挂载在 `/git`，可选择项目目录查看工作区与暂存区改动、批量暂存或取消暂存、创建提交、切换或新建分支，以及获取、快进拉取和推送远端；非仓库目录可直接初始化。所有文件与分支参数均以独立 Git 参数传递，不拼接 Shell 命令
+- 文本编辑器挂载在 `/text-editor`（旧 `/text-files` 自动归一化），可逐级浏览宿主机目录（含隐藏文件与 WSL 路径），支持目录筛选、新建/重命名/删除条目，打开文本文件后在线编辑、查找并保存；超过 1MB 的文件只读预览开头部分，保存带 mtime 冲突检测，文件被外部修改时需确认后才能覆盖
 - 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
 - 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
 - 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
@@ -150,11 +151,11 @@ npm run dev
 
 ### Claude Code 后端适配
 
-> **实验性支持。** Claude Code adapter 尚未经过完整的环境与工作流测试，请先在非关键任务中验证。它不支持 Claude 官方登录（包括 Claude.ai / Anthropic 账号登录或订阅认证）；仅支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转服务。
+> **实验性支持。** Claude Code adapter 尚未经过完整的环境与工作流测试，请先在非关键任务中验证。默认使用「本机 Claude」配置档——直接复用 `claude` CLI 的当前登录态（官方订阅 / `~/.claude` 凭据 / 环境变量）；也可以改用 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转服务。
 
 Codecks 会同时注册 Codex 与 Claude Code adapter。新建 Session 时选择 Agent；同一实例和同一项目可以并存两种 Agent，会话创建后类型固定，项目会记住最近一次选择作为下次默认值。侧栏用 Agent 标签区分混合会话，不需要在启动 Codecks 时锁定类型。
 
-Claude adapter 使用官方 Agent SDK，读取原生 `~/.claude/projects` JSONL 会话，保留 Claude session ID，并支持新建、续聊、流式输出、工具审批、图片输入、取消任务、模型选择、权限模式、供应商切换、重命名和永久删除。模型可选 Default、Sonnet、Opus、Haiku，也可手动输入完整模型 ID；权限可选按需询问、自动接受编辑、Plan、拒绝权限询问和跳过权限检查。顶部栏会显示会话实际绑定的 Claude 中转；任务空闲时可以切换，原 Session ID 和完整历史保持不变，从下一轮开始使用新的 relay，且不会更改 CC Switch 当前项。模型与权限同样在任务空闲时修改，从下一个 turn 生效。Windows 自动模式只复用 `PATH` 中可直接执行的独立 `claude.exe`，不会误选 npm 生成的无扩展名、`.cmd` 或包内 shim；没有独立安装时使用 SDK 随附 CLI。显式设置 `CLAUDE_BIN` 仍可指定 `.cmd`，并通过 `cmd.exe` 启动。Linux 优先发现系统 Claude，同时跳过 `/mnt/<盘符>` 下的 Windows shim。Windows `--wsl` 模式优先使用 WSL 中安装的 Claude，并共享 Windows 用户的 Claude 配置与历史；若 WSL 未安装 Claude，`/mnt/<盘符>` 项目会自动回退到 Windows SDK CLI，`/home/...` 项目则会给出明确的安装提示。Codecks 只支持 CC Switch 中配置了自定义 `ANTHROPIC_BASE_URL` 和 relay 凭据的 Claude 中转配置，明确不支持 Claude Official；认证环境变量只注入服务端子进程，不会进入快照、事件或浏览器缓存。
+Claude adapter 使用官方 Agent SDK，读取原生 `~/.claude/projects` JSONL 会话并保留 session ID。Deck 管理的会话会保持一条长期 SDK 连接，后续消息直接进入同一 Claude 进程；关闭浏览器不结束后台任务。会话头部显示 Deck 是否仍持有连接。永久删除已连接的空闲会话时，确认框会明确提示先关闭连接以及终止其中的后台任务；正在执行 turn 或被外部进程占用时不能删除，外部占用会显示 PID。支持流式输出、工具审批、图片输入、中断当前 turn、模型和权限调整、重命名、分支与删除。模型可选 Default、Sonnet、Opus、Haiku 或完整模型 ID。Windows 自动模式优先复用独立的 `claude.exe`，否则使用 SDK 随附 CLI；Windows `--wsl` 模式优先使用 WSL 中的 Claude。供应商可选「本机 Claude」（CLI 当前登录态）、CC Switch 中配置的中转、API key 或云端 provider。每个会话独立绑定供应商，凭据只注入对应子进程。会话连接保持期间不能热切换认证环境；如需换供应商，请创建分支并为分支选择新配置。外部 `claude attach` 会话仍由 Claude 自己的 supervisor 管理，Deck 不会要求运行 `claude stop` 或强行接管其进程。
 
 网页会按 `agentId` 使用通用 API，并根据 adapter 能力矩阵隐藏或禁用不支持的操作。可用 API：
 
@@ -170,7 +171,7 @@ POST /api/agents/claude/threads/:threadId/interrupt
 POST /api/agents/claude/approvals/:approvalId
 ```
 
-新建会话至少传入 `cwd`；`providerId` 可省略以使用 CC Switch 当前可用的 Claude 中转配置，`model` 和 `permissionMode` 可选。任务空闲时可通过 `PATCH /api/agents/claude/threads/:threadId` 的 `settings.providerId` 修改该会话后续 turn 使用的中转。Claude Official 配置会显示为不可用，后端也会拒绝直接调用。Claude 的 fork、归档、压缩、review、独立 shell 和 MCP/Skills 列表尚未开放，能力矩阵会将这些操作标为不可用。
+新建会话至少传入 `cwd`；`providerId` 可省略以使用当前配置档，`model` 和 `permissionMode` 可选。首次发送前可通过 `PATCH /api/agents/claude/threads/:threadId` 修改供应商；连接建立后，可调整模型与权限，但更换供应商需要新建或分支会话。Default 模型跟随 Claude Code 当前配置，界面另行显示实际运行的模型。没有独立凭据的 CC Switch Official 配置会显示为不可用；官方 OAuth 登录请选「本机 Claude」。Claude 支持从历史消息创建文件级分支和重试；`/skills` 面板可列出并引用可用 Skill（活跃连接经 SDK `reload_skills` 枚举，未连接时扫描 `.claude/skills` 目录）；归档、压缩、review、独立 shell 和 MCP 列表尚未开放。
 
 ### OpenCode 后端适配
 
@@ -178,7 +179,7 @@ OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新�
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态；OpenCode 进程异常退出时只会让 Deck 内的 OpenCode 离线，不会按已退出的 PID 清理或影响电脑上其它 OpenCode 实例。
 
-新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：因为模型 ID 就是 `providerID/modelID`，选模型即选供应商，所有入口（新建会话、会话设置、命令面板）都只用一个按 provider 分组的可搜索选择器，不再先挑供应商再挑模型；关键字会同时匹配供应商名、模型名和模型 ID，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定，OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的 `/provider` 里已连接（connected）的供应商会排在目录最前面并在分组标题上标记「已连接」，未登录的供应商仍然可以浏览和搜索，只是排在后面。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；供应商切换、压缩、review、独立 shell、MCP 与 Skills 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。会话命名与 Codex 对齐：OpenCode 原生的随机 `slug`（如 `curious-comet`）只在没有任何标题和消息时作为兜底展示，新建空会话显示「新 OpenCode 会话」，一旦有首条用户消息就用它（前 42 字）做标题；新建时填写的名称或手动重命名会写入 OpenCode 的 `title` 并始终优先，不会被首条消息覆盖。归档/恢复是 Deck 侧软归档：OpenCode serve 没有原生归档接口，归档后会话移入归档箱、服务端会话原样保留，归档态持久化后重启不丢失；运行中的会话不能归档，归档会话需要恢复后才能继续发送。分支（fork）走 OpenCode 原生 `POST /session/:id/fork`：每轮下的「从此处分支」完整复制历史到新分支，原分支保留；消息旁的「从此重试」先把原文带回输入框，改完再发送才真正分支重发（直接发送即用原文重试），首轮重试则新建空分支，不改动原会话历史与文件。fork 出来的分支带「分支」后缀与来源 chip，侧栏同样标记；fork 用的全是 OpenCode 官方接口，不动服务端原有会话存储结构。会话元信息与 `/status` 显示 OpenCode 实际使用的模型 ID：即使设置是「跟随 OpenCode 默认」，也会解析成最后一条回复里的 `providerID/modelID`，头部供应商名同样按这个解析结果走。上下文用量来自最后一条 assistant 回复的 tokens（input + output + reasoning + cache），上限取模型目录里的 `limit.context`，填进 `tokenUsage` 后头部上下文条、`/status` 与用量统计都会生效；该数值在打开会话或重新读取历史时刷新，不会在每一轮结束后实时回读。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其工作以父会话里的「子代理」卡片呈现：task 工具调用显示为专属卡片，运行中会在卡片下方实时滚动显示子代理的最新活动（当前执行的工具或回复文本尾部），结束后展开卡片可查看子代理的最终结果；子代理的过程性输出不会作为独立会话污染会话列表。输入框支持 OpenCode 原生 `/` 命令：`/compact`（别名 `/summarize`）压缩上下文，`/undo`、`/redo` 撤回/恢复最近一轮（含文件恢复，均需二次确认，也可在时间线每条用户消息旁按条撤回），`/init` 与 `.opencode/commands/*.md` 自定义命令透传执行，`/models` 打开模型选择器，`/new`、`/sessions` 指引到 Deck 的新建与列表切换，`/details`、`/thinking` 对应时间线里的可展开细节，完整行为见 [Slash 指令文档](docs/slash-commands.md)；`/share` 等分享类命令尚未接入，仍请用原生 TUI 执行。
+新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：因为模型 ID 就是 `providerID/modelID`，选模型即选供应商，所有入口（新建会话、会话设置、命令面板）都只用一个按 provider 分组的可搜索选择器，不再先挑供应商再挑模型；关键字会同时匹配供应商名、模型名和模型 ID，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定，OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的 `/provider` 里已连接（connected）的供应商会排在目录最前面并在分组标题上标记「已连接」，未登录的供应商仍然可以浏览和搜索，只是排在后面。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；`/skills` 面板经 `GET /skill` 列出项目与全局 Skill，选中后以 `/name` 命令调用。供应商切换、压缩、review、独立 shell 与 MCP 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。会话命名与 Codex 对齐：OpenCode 原生的随机 `slug`（如 `curious-comet`）只在没有任何标题和消息时作为兜底展示，新建空会话显示「新 OpenCode 会话」，一旦有首条用户消息就用它（前 42 字）做标题；新建时填写的名称或手动重命名会写入 OpenCode 的 `title` 并始终优先，不会被首条消息覆盖。归档/恢复是 Deck 侧软归档：OpenCode serve 没有原生归档接口，归档后会话移入归档箱、服务端会话原样保留，归档态持久化后重启不丢失；运行中的会话不能归档，归档会话需要恢复后才能继续发送。分支（fork）走 OpenCode 原生 `POST /session/:id/fork`：每轮下的「从此处分支」完整复制历史到新分支，原分支保留；消息旁的「从此重试」先把原文带回输入框，改完再发送才真正分支重发（直接发送即用原文重试），首轮重试则新建空分支，不改动原会话历史与文件。fork 出来的分支带「分支」后缀与来源 chip，侧栏同样标记；fork 用的全是 OpenCode 官方接口，不动服务端原有会话存储结构。会话元信息与 `/status` 显示 OpenCode 实际使用的模型 ID：即使设置是「跟随 OpenCode 默认」，也会解析成最后一条回复里的 `providerID/modelID`，头部供应商名同样按这个解析结果走。上下文用量来自最后一条 assistant 回复的 tokens（input + output + reasoning + cache），上限取模型目录里的 `limit.context`，填进 `tokenUsage` 后头部上下文条、`/status` 与用量统计都会生效；该数值在打开会话或重新读取历史时刷新，不会在每一轮结束后实时回读。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其工作以父会话里的「子代理」卡片呈现：task 工具调用显示为专属卡片，运行中会在卡片下方实时滚动显示子代理的最新活动（当前执行的工具或回复文本尾部），结束后展开卡片可查看子代理的最终结果；子代理的过程性输出不会作为独立会话污染会话列表。输入框支持 OpenCode 原生 `/` 命令：`/compact`（别名 `/summarize`）压缩上下文，`/undo`、`/redo` 撤回/恢复最近一轮（含文件恢复，均需二次确认，也可在时间线每条用户消息旁按条撤回），`/init` 与 `.opencode/commands/*.md` 自定义命令透传执行，`/models` 打开模型选择器，`/new`、`/sessions` 指引到 Deck 的新建与列表切换，`/details`、`/thinking` 对应时间线里的可展开细节，完整行为见 [Slash 指令文档](docs/slash-commands.md)；`/share` 等分享类命令尚未接入，仍请用原生 TUI 执行。
 
 ### ACP 通用适配
 
@@ -201,6 +202,12 @@ OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新�
 ```
 
 ACP 会话支持新建、续聊、流式输出、工具与文件改动展示、权限审批、取消、重命名（Deck 侧）、软归档和 `plan` 计划面板；Agent 通过 `session/set_mode` 暴露的模式（如 Devin 的 normal/plan）可在顶部栏切换，模型目录与斜杠命令按 Agent 实际通告的能力展示。历史会话优先走 `session/list` + `session/load` 回放；不支持时可用描述符声明外部列举命令（如 `devin list --format json`），或直接保留重启前的缓存摘要。供应商切换、fork、压缩、review、独立 shell、MCP/Skills 等深度能力不在 ACP 协议范围内，界面按能力矩阵自动隐藏。
+
+如果某个 ACP agent 与原生 adapter 共用同一份会话存储（典型例子是官方的 `claude-code-acp`，它和原生 Claude 一样读写 `~/.claude`），同一批会话会在列表里重复出现。在它的描述符里加 `"fallbackFor": "claude"`，把它声明为原生 Claude 的**备选**：原生 Claude 可用时，备选 agent 只在被 Deck 接管或正在运行的会话上可见，其余历史会话（重复项、空壳）不再出现在列表、搜索和索引里；原生 Claude 离线或历史读取失败时，备选 agent 的会话自动完整显示。备选 agent 仍可在新建会话的「ACP」标签页里选择，名称带「（备选）」。
+
+```jsonc
+{ "agents": [{ "id": "claude-acp", "name": "Claude (ACP)", "command": "claude-code-acp", "fallbackFor": "claude" }] }
+```
 
 正被其它进程占用的会话（如 Devin 的 session lock，`session/list` 经 `_meta` 上报）在列表中标记「占用中」：可以打开查看缓存历史，但发送、删除等操作会被拒绝并提示占用方；另一方关闭后，下一次刷新自动解除标记，直接发送即可让 Deck 接管会话。
 

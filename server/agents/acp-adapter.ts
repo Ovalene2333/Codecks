@@ -22,6 +22,7 @@ import type {
   AcpSessionConfigOption,
   AcpSessionInfo,
   AcpSessionModeState,
+  AcpSessionModelState,
   AcpSessionUpdate,
   AcpToolCall,
 } from "./acp-types.js";
@@ -44,6 +45,12 @@ export interface AcpAgentSpec {
   args?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
+  /**
+   * 声明本 agent 是某个主 agent 的备选（例如 claude-code-acp 之于原生
+   * `claude`：二者读写同一份 `~/.claude` 会话）。主 agent 健康时隐藏本
+   * agent 未接管的历史会话，避免同一批会话重复出现；见 AgentRegistry。
+   */
+  fallbackFor?: AgentId;
   /**
    * ACP 没有强制的历史列举接口。`sessionCapabilities.list` 优先走
    * `session/list`；不支持时回落到这个本地命令（如 `devin list --format
@@ -110,6 +117,8 @@ interface AcpSessionState {
   tools: Map<string, any>;
   commands: AcpAvailableCommand[];
   modes?: AcpSessionModeState;
+  /** session/new|resume|load 响应里的模型目录（claude-code-acp 走这个字段）。 */
+  models?: AcpSessionModelState;
   configOptions: AcpSessionConfigOption[];
   /** 本地收集的 turn 历史（live 累积或 load 回放结果）。 */
   turns: any[];
@@ -119,8 +128,12 @@ interface AcpSessionState {
   messageText: Map<string, string>;
   thoughtText: string;
   thoughtItemId?: string;
+  /** 区分同 turn 内被工具/思考隔开的多段回复/思考（无 messageId 时）。 */
+  runSeq: number;
   /** 进行中的 session/load。 */
   loading?: Promise<any[]>;
+  /** running 期间收到的待发消息；turn 结束后按序 drain。 */
+  pendingSends: { turnId: string; text: string; images?: TurnImage[] }[];
 }
 
 /**
@@ -187,6 +200,8 @@ function toolOutputText(call: AcpToolCall): string {
 }
 
 function shellCommandOf(call: AcpToolCall): string {
+  const editable = editableCommandOf(call);
+  if (editable) return editable;
   const input = call.rawInput;
   if (input && typeof input === "object" && !Array.isArray(input)) {
     const row = input as Record<string, unknown>;
@@ -196,6 +211,25 @@ function shellCommandOf(call: AcpToolCall): string {
     }
   }
   return String(call.title || "").trim();
+}
+
+/**
+ * devin 的 request_permission 只带 {toolCallId, _meta} 快照，命令文本在
+ * `_meta["cognition.ai/editableCommand"]`；session/update 的完整 toolCall
+ * 里才有 title/rawInput。
+ */
+function editableCommandOf(call: AcpToolCall): string {
+  const meta = call._meta;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return "";
+  for (const [key, value] of Object.entries(meta)) {
+    if (
+      typeof value === "string" &&
+      value.trim() &&
+      /(?:^|[./])editableCommand$/i.test(key)
+    )
+      return value.trim();
+  }
+  return "";
 }
 
 /** oldText/newText 合成一个带 +/- 前缀的简易 diff，供 FileDiff 按行着色。 */
@@ -246,6 +280,8 @@ export class AcpAdapter extends EventEmitter {
   private historyStatus: AgentDescriptor["historyStatus"] = "loading";
   private historyError?: string;
   private startTask?: Promise<void>;
+  /** restart() 触发的进程停止；下一次启动要先等它结束。 */
+  private stopTask?: Promise<void>;
 
   constructor(
     private spec: AcpAgentSpec,
@@ -303,7 +339,7 @@ export class AcpAdapter extends EventEmitter {
       approvals: true,
       archive: true,
       delete: Boolean(caps.sessionCapabilities?.delete),
-      fork: false,
+      fork: Boolean(caps.sessionCapabilities?.fork),
       images: Boolean(caps.promptCapabilities?.image),
       interrupt: true,
       mcp: false,
@@ -320,6 +356,7 @@ export class AcpAdapter extends EventEmitter {
       id: this.id,
       name: this.spec.name,
       protocol: "acp",
+      fallbackFor: this.spec.fallbackFor,
       available: true,
       online: this.online && this.client.online,
       starting: this.starting,
@@ -369,6 +406,9 @@ export class AcpAdapter extends EventEmitter {
     this.starting = true;
     this.broadcast("agent.status", this.descriptor());
     try {
+      // 重载 = restart() 后立刻 startAll()：必须等旧进程真正退出再拉新的，
+      // 否则旧进程迟到的 exit 会被算到新进程头上，把刚起来的连接判死。
+      if (this.stopTask) await this.stopTask;
       await this.client.start();
       this.online = true;
       this.error = undefined;
@@ -407,7 +447,11 @@ export class AcpAdapter extends EventEmitter {
       });
     }
     this.approvals.clear();
-    void this.client.stop();
+    const stopping = this.client.stop();
+    this.stopTask = stopping;
+    void stopping.finally(() => {
+      if (this.stopTask === stopping) this.stopTask = undefined;
+    });
     for (const session of this.sessions.values()) session.live = false;
     for (const thread of this.threads.values())
       if (thread.status === "running" || thread.status === "waiting") {
@@ -452,6 +496,8 @@ export class AcpAdapter extends EventEmitter {
         turns: [],
         messageText: new Map(),
         thoughtText: "",
+        runSeq: 0,
+        pendingSends: [],
       };
       this.sessions.set(threadId, session);
     }
@@ -561,6 +607,7 @@ export class AcpAdapter extends EventEmitter {
     }
     if (result?.modes?.currentModeId)
       thread.sessionMode = result.modes.currentModeId;
+    if (result?.models) session.models = result.models;
     if (Array.isArray(result?.configOptions))
       session.configOptions = result.configOptions;
     // ACP 规范不在 new/resume/load 响应里带命令，但部分 agent 会顺带返回；
@@ -580,9 +627,8 @@ export class AcpAdapter extends EventEmitter {
     const option = (session.configOptions || []).find(
       (item) => item?.category === "model" && item?.type === "select",
     );
-    return typeof option?.currentValue === "string"
-      ? option.currentValue
-      : "";
+    if (typeof option?.currentValue === "string") return option.currentValue;
+    return session.models?.currentModelId || "";
   }
 
   /* ACP 没有标准 effort 字段；agent 若暴露了 effort 类 select
@@ -659,11 +705,50 @@ export class AcpAdapter extends EventEmitter {
     return thread;
   }
 
+  /** session/fork：agent 侧复制会话历史并返回新 sessionId（ACP unstable）。 */
+  async forkThread(providerId: string, threadId: string) {
+    const source = this.mustThread(threadId);
+    if (source.status === "running" || source.status === "waiting")
+      throw new Error("会话正在运行，无法分支");
+    await this.ensureClient();
+    const result = (await this.client.request("session/fork", {
+      sessionId: threadId,
+      cwd: source.cwd,
+      mcpServers: [],
+    })) as AcpNewSessionResult;
+    const sessionId = String(result?.sessionId || "");
+    if (!sessionId) throw new Error(`${this.spec.name} 没有返回 sessionId`);
+    const session = this.sessionFor(sessionId);
+    session.live = true;
+    const thread: ThreadSummary = {
+      agentId: this.id,
+      id: sessionId,
+      providerId: source.providerId || providerId || `${this.id}-current`,
+      name: `${source.name || source.preview || "会话"} · 分支`,
+      preview: source.preview,
+      cwd: source.cwd,
+      model: source.model,
+      status: "idle",
+      updatedAt: Date.now(),
+      sessionId,
+      forkedFromId: threadId,
+      controlMode: "managed",
+    };
+    this.applySessionInfo(thread, session, result);
+    this.threads.set(sessionId, thread);
+    this.broadcast("thread.updated", thread);
+    return thread;
+  }
+
   async readThread(_providerId: string, threadId: string) {
     const thread = this.mustThread(threadId);
     const session = this.sessionFor(threadId);
     const busy = thread.status === "running" || thread.status === "waiting";
-    if (!busy && this.client.online && this.client.agentCapabilities.loadSession) {
+    if (
+      !busy &&
+      this.client.online &&
+      this.client.agentCapabilities.loadSession
+    ) {
       try {
         await this.loadSession(thread, session);
       } catch (error) {
@@ -675,6 +760,7 @@ export class AcpAdapter extends EventEmitter {
         }
       }
     }
+    this.stampTurnModels(thread, session.turns);
     return {
       id: threadId,
       agentId: this.id,
@@ -687,6 +773,30 @@ export class AcpAdapter extends EventEmitter {
       turns: session.turns,
       tokenUsage: thread.tokenUsage,
     };
+  }
+
+  /**
+   * 回填 turn 的模型快照：live turn 的 id 与记录一致直接命中；session/load
+   * 回放生成的 `acp-replay-N` 合成 id 对不上，仅当「快照数与 turn 数一致
+   * 且没有任何 id 命中」时按位置回填，错位历史宁可留空让前端回落。
+   */
+  private stampTurnModels(thread: ThreadSummary, turns: any[]) {
+    const stamps =
+      this.options.threadSettings?.turnModelList(this.id, thread.id) || [];
+    if (!stamps.length || !Array.isArray(turns)) return;
+    const byId = new Map(stamps.map((stamp) => [stamp.turnId, stamp]));
+    const aligned =
+      turns.length === stamps.length &&
+      turns.every((turn) => !turn?.model && !byId.has(String(turn?.id || "")));
+    turns.forEach((turn, index) => {
+      if (!turn || turn.model) return;
+      const stamp =
+        byId.get(String(turn.id || "")) ||
+        (aligned ? stamps[index] : undefined);
+      if (stamp?.model) turn.model = stamp.model;
+      if (stamp?.reasoningEffort && !turn.reasoningEffort)
+        turn.reasoningEffort = stamp.reasoningEffort;
+    });
   }
 
   async renameThread(_providerId: string, threadId: string, name: string) {
@@ -730,7 +840,10 @@ export class AcpAdapter extends EventEmitter {
     const thread = this.mustThread(threadId);
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("运行中的会话不能删除");
-    if (this.client.online && this.client.agentCapabilities.sessionCapabilities?.delete)
+    if (
+      this.client.online &&
+      this.client.agentCapabilities.sessionCapabilities?.delete
+    )
       try {
         await this.client.request("session/delete", { sessionId: threadId });
       } catch (error) {
@@ -793,16 +906,28 @@ export class AcpAdapter extends EventEmitter {
     session: AcpSessionState,
     model: string,
   ) {
+    if (!session.live) return;
     const option = (session.configOptions || []).find(
       (item) => item?.category === "model" && item?.type === "select",
     );
-    if (!option || !session.live) return;
-    await this.client.request("session/set_config_option", {
-      sessionId: thread.id,
-      configId: option.id,
-      value: model,
-    });
-    thread.resolvedModel = model;
+    if (option) {
+      await this.client.request("session/set_config_option", {
+        sessionId: thread.id,
+        configId: option.id,
+        value: model,
+      });
+      thread.resolvedModel = model;
+      return;
+    }
+    // ACP unstable `session/set_model`（claude-code-acp 等走 models 字段的 agent）。
+    if (session.models?.availableModels?.length) {
+      await this.client.request("session/set_model", {
+        sessionId: thread.id,
+        modelId: model,
+      });
+      session.models.currentModelId = model;
+      thread.resolvedModel = model;
+    }
   }
 
   private async applyEffort(
@@ -830,9 +955,15 @@ export class AcpAdapter extends EventEmitter {
   ) {
     const thread = this.mustThread(threadId);
     if (thread.archived) throw new Error("会话已归档，请先恢复再发送");
-    if (thread.status === "running" || thread.status === "waiting")
-      throw new Error(`${this.spec.name} 会话正在运行`);
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
+    const session = this.sessionFor(threadId);
+    // ACP 没有 steer/queue 协议方法：turn 进行中先把消息排队，
+    // runPrompt 收尾时按序 drain——行为对齐 Claude CLI 的 queued message。
+    if (thread.status === "running" || thread.status === "waiting") {
+      const turnId = randomUUID();
+      session.pendingSends.push({ turnId, text, images });
+      return { turn: { id: turnId, status: "queued" } };
+    }
     await this.ensureClient();
     await this.ensureLive(thread);
     const turnId = randomUUID();
@@ -851,6 +982,7 @@ export class AcpAdapter extends EventEmitter {
     session.messageText.clear();
     session.thoughtText = "";
     session.thoughtItemId = undefined;
+    session.runSeq = 0;
     thread.status = "running";
     thread.activeTurnId = turnId;
     this.touch(thread);
@@ -869,10 +1001,22 @@ export class AcpAdapter extends EventEmitter {
       ],
     };
     session.turns.push(turn);
+    // ACP 回放拿不到逐回合模型；记下发送时的快照，readThread 时按
+    // turnId（回放则是按位置）回填，切换模型后旧回合不会被标成新模型。
+    void this.options.threadSettings
+      ?.recordTurnModel(this.id, thread.id, turnId, {
+        model: thread.resolvedModel || thread.model,
+        reasoningEffort:
+          thread.reasoningEffort || this.currentEffortOf(session),
+      })
+      ?.catch(() => undefined);
     this.broadcast("thread.updated", thread);
     this.emitAgentEvent(thread, {
       method: "turn/started",
-      params: { threadId: thread.id, turn: { id: turnId, status: "inProgress" } },
+      params: {
+        threadId: thread.id,
+        turn: { id: turnId, status: "inProgress" },
+      },
     });
     void this.runPrompt(thread, session, turn, turnId, text, images);
     return { turn: { id: turnId, status: "inProgress" } };
@@ -918,7 +1062,8 @@ export class AcpAdapter extends EventEmitter {
         24 * 60 * 60 * 1000,
       );
       const reason = String(result?.stopReason || "end_turn");
-      if (reason === "cancelled") this.completeTurn(thread, turnId, "cancelled");
+      if (reason === "cancelled")
+        this.completeTurn(thread, turnId, "cancelled");
       else if (reason === "refusal")
         this.failTurn(thread, turnId, `${this.spec.name} 拒绝了该请求`);
       else this.completeTurn(thread, turnId, "completed");
@@ -960,14 +1105,25 @@ export class AcpAdapter extends EventEmitter {
             item: { id: session.thoughtItemId, type: "reasoning" },
           },
         });
+      this.drainPendingSends(thread, session);
     }
   }
 
-  private completeTurn(
-    thread: ThreadSummary,
-    turnId: string,
-    status: string,
-  ) {
+  /** turn 结束（完成/失败/取消）后发队列里的下一条，按 FIFO 逐条 drain。 */
+  private drainPendingSends(thread: ThreadSummary, session: AcpSessionState) {
+    if (!this.threads.has(thread.id)) {
+      session.pendingSends.length = 0;
+      return;
+    }
+    const next = session.pendingSends.shift();
+    if (!next) return;
+    // 微任务延迟：让 turn/completed 与 thread.updated 先到达前端。
+    void Promise.resolve().then(() =>
+      this.beginTurn(thread, next.turnId, next.text, next.images),
+    );
+  }
+
+  private completeTurn(thread: ThreadSummary, turnId: string, status: string) {
     thread.status = "idle";
     thread.activeTurnId = undefined;
     this.touch(thread);
@@ -1040,7 +1196,17 @@ export class AcpAdapter extends EventEmitter {
         -32602,
         "未知会话",
       );
-    const toolCall = (params.toolCall || {}) as AcpToolCall;
+    const raw = (params.toolCall || {}) as AcpToolCall;
+    // devin 的权限请求只回 {toolCallId,_meta} 快照，kind/title/rawInput 要
+    // 从先前 session/update 里同一 toolCallId 的记录补齐，否则审批卡拿不到
+    // 命令文本、kind 也分不出来。
+    const known = this.sessions
+      .get(sessionId)
+      ?.tools.get(String(raw.toolCallId || ""));
+    const toolCall = {
+      ...((known?.__raw || {}) as AcpToolCall),
+      ...raw,
+    } as AcpToolCall;
     const options = Array.isArray(params.options) ? params.options : [];
     const id = `${sessionId}:${randomUUID()}`;
     const approval: PendingPermission = {
@@ -1059,19 +1225,17 @@ export class AcpAdapter extends EventEmitter {
 
   async resolveApproval(
     approvalId: string,
-    body: string | { decision?: string },
+    body: string | { decision?: string; optionId?: string },
   ) {
     const approval = this.approvals.get(approvalId);
     if (!approval) throw new Error("审批已处理或不存在");
-    const decision =
-      typeof body === "string" ? body : body.decision || "decline";
-    const outcome = this.permissionOutcome(approval.options, decision);
+    const input = typeof body === "string" ? { decision: body } : body || {};
+    const outcome = this.permissionOutcome(approval.options, input);
     this.client.respond(approval.requestId, { outcome });
     this.approvals.delete(approvalId);
     const thread = this.threads.get(approval.threadId);
     if (thread) {
-      thread.status = decision === "cancel" ? thread.status : "running";
-      if (decision === "cancel") thread.status = "running";
+      thread.status = "running";
       this.broadcast("thread.updated", thread);
     }
     this.broadcast("approval.resolved", { agentId: this.id, approvalId });
@@ -1080,15 +1244,34 @@ export class AcpAdapter extends EventEmitter {
 
   private permissionOutcome(
     options: AcpPermissionOption[],
-    decision: string,
+    input: { decision?: string; optionId?: string },
   ) {
-    const find = (kind: string) =>
-      options.find((option) => option.kind === kind);
+    // 前端会把 agent 的完整 options 渲染出来并回传 optionId（devin 一次给
+    // 多档）；id 不在列表里说明请求已过期，抛错保留待审批比错判拒绝安全。
+    if (input.optionId != null) {
+      const chosen = options.find(
+        (option) => String(option.optionId) === String(input.optionId),
+      );
+      if (!chosen) throw new Error("该选项已失效，请刷新后重试");
+      return { outcome: "selected" as const, optionId: chosen.optionId };
+    }
+    const decision = input.decision || "decline";
+    const find = (kind: string, match?: RegExp) =>
+      options.find(
+        (option) =>
+          option.kind === kind &&
+          (!match || match.test(`${option.optionId} ${option.name || ""}`)),
+      );
     const option =
       decision === "accept"
         ? find("allow_once") || find("allow_always") || options[0]
         : decision === "acceptForSession"
-          ? find("allow_always") || find("allow_once") || options[0]
+          ? // devin 把 allow_session/allow_always(_global)/switch_bypass 全标
+            // allow_always；「本会话」必须挑 session 档，不能按数组顺序撞。
+            find("allow_always", /session/i) ||
+            find("allow_always") ||
+            find("allow_once") ||
+            options[0]
           : decision === "decline"
             ? find("reject_once") || find("reject_always")
             : undefined;
@@ -1204,8 +1387,7 @@ export class AcpAdapter extends EventEmitter {
       });
     for (const session of this.sessions.values()) {
       for (const option of session.configOptions || []) {
-        if (option?.category !== "model" || option?.type !== "select")
-          continue;
+        if (option?.category !== "model" || option?.type !== "select") continue;
         for (const value of flattenConfigOptions(option.options)) {
           if (!catalog.has(value.id))
             catalog.set(value.id, {
@@ -1218,6 +1400,17 @@ export class AcpAdapter extends EventEmitter {
             });
         }
       }
+      // ACP 原生 models 字段（claude-code-acp 等不走 configOptions 的 agent）。
+      for (const model of session.models?.availableModels || []) {
+        if (!catalog.has(model.modelId))
+          catalog.set(model.modelId, {
+            id: model.modelId,
+            model: model.modelId,
+            displayName: model.name || model.modelId,
+            isDefault: session.models?.currentModelId === model.modelId,
+            ...effortMeta,
+          });
+      }
     }
     return [...catalog.values()];
   }
@@ -1226,6 +1419,7 @@ export class AcpAdapter extends EventEmitter {
     if (this.spec.models?.length) return true;
     for (const session of this.sessions.values())
       if (
+        session.models?.availableModels?.length ||
         (session.configOptions || []).some(
           (item) => item?.category === "model" && item?.type === "select",
         )
@@ -1248,7 +1442,7 @@ export class AcpAdapter extends EventEmitter {
     // 回放期间也会推送，先单独处理再分流到回放或实时 turn。
     if (this.applySessionMetaUpdate(thread, session, update)) return;
     if (session.replay) {
-      this.applyReplayUpdate(session.replay, update);
+      this.applyReplayUpdate(session, session.replay, update);
       return;
     }
     if (thread) this.applyLiveUpdate(thread, session, update);
@@ -1339,9 +1533,14 @@ export class AcpAdapter extends EventEmitter {
       case "agent_message_chunk": {
         const text = textOfContent(update.content);
         if (!text) return;
-        const itemId = `acp-msg-${
-          update.messageId || turnId || session.id
-        }`;
+        const itemId = this.chunkItemId(
+          session,
+          turn,
+          turnId,
+          "acp-msg",
+          "agentMessage",
+          update.messageId,
+        );
         session.messageText.set(
           itemId,
           (session.messageText.get(itemId) || "") + text,
@@ -1360,8 +1559,17 @@ export class AcpAdapter extends EventEmitter {
       case "agent_thought_chunk": {
         const text = textOfContent(update.content);
         if (!text) return;
-        session.thoughtText += text;
-        const itemId = `acp-think-${update.messageId || turnId || session.id}`;
+        const itemId = this.chunkItemId(
+          session,
+          turn,
+          turnId,
+          "acp-think",
+          "reasoning",
+          update.messageId,
+        );
+        // 每段思考独立累积：被其它内容隔开后再来的 chunk 属于新的一段。
+        session.thoughtText =
+          session.thoughtItemId === itemId ? session.thoughtText + text : text;
         session.thoughtItemId = itemId;
         const item = {
           id: itemId,
@@ -1417,8 +1625,29 @@ export class AcpAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * chunk 一般不带 messageId：连续的同类 chunk 续写尾部 item；被工具、
+   * 计划等其它内容隔开后再来的 chunk 属于新的一段，分配新 itemId——
+   * 与 load 回放按位置拆段的语义一致，运行中的时间线才不会整轮黏成一块。
+   */
+  private chunkItemId(
+    session: AcpSessionState,
+    turn: any,
+    turnId: string | undefined,
+    prefix: string,
+    type: string,
+    messageId?: string,
+  ) {
+    if (messageId) return `${prefix}-${messageId}`;
+    const tail = turn?.items?.at?.(-1);
+    if (tail?.type === type && String(tail?.id || "").startsWith(`${prefix}-`))
+      return String(tail.id);
+    return `${prefix}-${turnId || session.id}-r${session.runSeq++}`;
+  }
+
   /** session/load 回放：同样的归一化，但只建 turns、不发流式事件。 */
   private applyReplayUpdate(
+    session: AcpSessionState,
     replay: NonNullable<AcpSessionState["replay"]>,
     update: AcpSessionUpdate,
   ) {
@@ -1494,6 +1723,9 @@ export class AcpAdapter extends EventEmitter {
         const merged = { ...(previous?.__raw || {}), ...call, toolCallId };
         const item = this.normalizeToolCall(merged, previous);
         item.__raw = merged;
+        // 回放也登记 tools：resume/load 后 request_permission 才能用
+        // toolCallId 找回完整 kind/title/rawInput。
+        session.tools.set(toolCallId, item);
         if (index >= 0) turn.items[index] = item;
         else turn.items.push(item);
         return;
@@ -1637,16 +1869,12 @@ export class AcpAdapter extends EventEmitter {
             id,
             providerId: existing?.providerId || `${this.id}-current`,
             name:
-              existing?.name ||
-              info.title?.trim() ||
-              `${this.spec.name} 会话`,
+              existing?.name || info.title?.trim() || `${this.spec.name} 会话`,
             preview: existing?.preview || info.title?.trim() || "",
             cwd: info.cwd || existing?.cwd || "",
             model: existing?.model || "default",
             status:
-              live || session?.turnId
-                ? existing?.status || "running"
-                : "idle",
+              live || session?.turnId ? existing?.status || "running" : "idle",
             updatedAt: resolveUpdatedAt(info, existing, id),
             sessionId: id,
             controlMode: live ? "managed" : "history",
@@ -1674,7 +1902,10 @@ export class AcpAdapter extends EventEmitter {
    * 返回数组（可能为空）表示来源可信，未见 id 可被清理。
    */
   private async listRemoteSessions(): Promise<AcpSessionInfo[] | undefined> {
-    if (this.client.online && this.client.agentCapabilities.sessionCapabilities?.list) {
+    if (
+      this.client.online &&
+      this.client.agentCapabilities.sessionCapabilities?.list
+    ) {
       const sessions: AcpSessionInfo[] = [];
       let cursor: string | undefined;
       do {
@@ -1708,12 +1939,14 @@ export class AcpAdapter extends EventEmitter {
         return stdout;
       });
     const dirs = spec.perDirectory
-      ? [...new Set(
-          [
-            ...(this.options.directories || []),
-            ...[...this.threads.values()].map((thread) => thread.cwd),
-          ].filter(Boolean),
-        )]
+      ? [
+          ...new Set(
+            [
+              ...(this.options.directories || []),
+              ...[...this.threads.values()].map((thread) => thread.cwd),
+            ].filter(Boolean),
+          ),
+        ]
       : [undefined];
     const rows: Record<string, unknown>[] = [];
     for (const dir of dirs) {
@@ -1798,8 +2031,7 @@ export class AcpAdapter extends EventEmitter {
     if (!this.client.authMethods.length) return message;
     if (!/auth|login|credential|unauthorized|permission/i.test(message))
       return message;
-    const hint =
-      this.spec.authHint || `请先完成 ${this.spec.name} 的登录认证`;
+    const hint = this.spec.authHint || `请先完成 ${this.spec.name} 的登录认证`;
     return `${message}\n${hint}`;
   }
 
@@ -1818,9 +2050,12 @@ export class AcpAdapter extends EventEmitter {
 
 function permissionKind(call: AcpToolCall): ApprovalKind {
   const kind = String(call.kind || "");
-  if (kind === "execute") return "command";
   if (kind === "edit" || kind === "delete" || kind === "move") return "file";
-  return "permission";
+  // request_permission 的语义是「从 options 里选一个」而非 Codex 的权限
+  // 勾选：kind 缺失/未知（devin 快照常常没有 kind）也按命令卡渲染，保证
+  // 前端按钮发出 decision；若落成 permission 卡，按钮只会回
+  // {permissions, scope}，server 侧缺省 decline 等于全部拒绝。
+  return "command";
 }
 
 /** configOptions select 的 options 是平铺数组或 {name, options:[...]} 分组。 */
@@ -1833,7 +2068,11 @@ function flattenConfigOptions(options: unknown) {
       for (const child of entry.options) {
         const id = String(child?.value ?? child?.id ?? "");
         if (id)
-          out.push({ id, name: child?.name || child?.label, group: entry.name });
+          out.push({
+            id,
+            name: child?.name || child?.label,
+            group: entry.name,
+          });
       }
       continue;
     }

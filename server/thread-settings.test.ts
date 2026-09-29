@@ -118,3 +118,100 @@ test("cached session summaries migrate without replacing an existing choice", as
     permissionMode: "acceptEdits",
   });
 });
+
+test("wake codes are generated, survive restarts, and resolve back to the thread", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  const code = await store.ensureWakeCode("opencode", "session-1");
+  assert.match(code, /^[0-9a-f]{8}$/);
+  // 幂等：再次领取返回同一代号，preferred 被忽略。
+  assert.equal(await store.ensureWakeCode("opencode", "session-1"), code);
+  assert.equal(
+    await store.ensureWakeCode("opencode", "session-1", "gpu-box"),
+    code,
+  );
+  assert.deepEqual(store.findByWakeCode(code), {
+    agentId: "opencode",
+    threadId: "session-1",
+  });
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.deepEqual(restored.findByWakeCode(code), {
+    agentId: "opencode",
+    threadId: "session-1",
+  });
+  assert.deepEqual(restored.listWakeCodes(), [
+    { code, agentId: "opencode", threadId: "session-1" },
+  ]);
+});
+
+test("custom wake codes are validated and unique across agents", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake2-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  assert.equal(
+    await store.ensureWakeCode("opencode", "s-1", "gpu-train"),
+    "gpu-train",
+  );
+  await assert.rejects(
+    store.ensureWakeCode("claude", "s-2", "gpu-train"),
+    /已被占用/,
+  );
+  await assert.rejects(store.ensureWakeCode("claude", "s-2", "Bad Code!"));
+  // 不同会话各自生成不冲突的随机代号。
+  const another = await store.ensureWakeCode("claude", "s-2");
+  assert.notEqual(another, "gpu-train");
+});
+
+test("turn model snapshots persist, dedupe by turn id, and drop with the thread", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-turns-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  await store.recordTurnModel("codex", "t-1", "turn-1", { model: "sol" });
+  await store.recordTurnModel("codex", "t-1", "turn-2", {
+    model: "luna",
+    reasoningEffort: "high",
+  });
+  // 同 turnId 重记只原位覆盖，不产生第二条。
+  await store.recordTurnModel("codex", "t-1", "turn-1", { model: "sol-v2" });
+
+  assert.deepEqual(store.turnModel("codex", "t-1", "turn-1"), {
+    turnId: "turn-1",
+    model: "sol-v2",
+  });
+  assert.deepEqual(
+    store.turnModelList("codex", "t-1").map((entry) => entry.model),
+    ["sol-v2", "luna"],
+  );
+  assert.equal(store.turnModel("codex", "t-1", "missing"), undefined);
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.deepEqual(
+    restored.turnModelList("codex", "t-1").map((entry) => entry.turnId),
+    ["turn-1", "turn-2"],
+  );
+  // turnModels 是会话内注解，不混进 ThreadSummary 下发给客户端。
+  assert.deepEqual(restored.get("codex", "t-1"), undefined);
+
+  await restored.remove("codex", "t-1");
+  assert.deepEqual(restored.turnModelList("codex", "t-1"), []);
+});
+
+test("clearWakeCode drops the mapping and empty settings entries", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake3-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  const code = await store.ensureWakeCode("opencode", "session-1");
+  await store.clearWakeCode("opencode", "session-1");
+  assert.equal(store.findByWakeCode(code), undefined);
+  assert.equal(store.get("opencode", "session-1"), undefined);
+  // 清除不存在的代号是 no-op。
+  await store.clearWakeCode("opencode", "session-1");
+  // 会话删除时代号随设置一起消失。
+  const again = await store.ensureWakeCode("opencode", "session-2");
+  await store.remove("opencode", "session-2");
+  assert.equal(store.findByWakeCode(again), undefined);
+});

@@ -1,22 +1,20 @@
 import { useLayoutEffect, useRef } from "react";
-import {
-  Compass,
-  Folder,
-  GitBranch,
-  ListTree,
-  LoaderCircle,
-} from "lucide-react";
+import { Folder, GitBranch, LoaderCircle } from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { TurnBlock } from "./TurnBlock";
 import { basename } from "../format";
 import type { PendingUserMessage } from "./optimistic";
-import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
+import type {
+  StreamedAgentMessage,
+  StreamedEntry,
+  StreamedTurnItem,
+} from "./streaming";
 
 const QUICK_PROMPTS = [
-  { icon: Compass, text: "这个项目是做什么的？先给我一个概览" },
-  { icon: ListTree, text: "帮我梳理一下代码结构" },
-  { icon: GitBranch, text: "检查当前 git 状态和最近的改动" },
+  { label: "项目概览", text: "这个项目是做什么的？先给我一个概览" },
+  { label: "代码结构", text: "帮我梳理一下代码结构" },
+  { label: "Git 改动", text: "检查当前 git 状态和最近的改动" },
 ];
 
 export function Timeline({
@@ -24,9 +22,9 @@ export function Timeline({
   turns,
   streamed,
   streamedItems,
+  streamedEntries,
   pendingUsers,
   origin,
-  agentName,
   targetTurnId,
   targetItemId,
   targetRequest,
@@ -44,9 +42,9 @@ export function Timeline({
   turns: any[];
   streamed: StreamedAgentMessage[];
   streamedItems: StreamedTurnItem[];
+  streamedEntries: StreamedEntry[];
   pendingUsers: PendingUserMessage[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
-  agentName: string;
   targetTurnId?: string;
   targetItemId?: string;
   targetRequest?: number;
@@ -54,7 +52,7 @@ export function Timeline({
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onOpenOrigin?: () => void;
-  onEditUserMessage?: (item: any) => void;
+  onEditUserMessage?: (turnId: string, item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   onRevertUserMessage?: (turnId: string, item: any) => void;
   onQuickPrompt?: (text: string) => void;
@@ -63,15 +61,35 @@ export function Timeline({
   const timeline = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
   const scrollTop = useRef(0);
+  const viewportHeight = useRef(0);
   const activeThread = useRef(thread.id);
   const appliedTargetRequest = useRef<number | undefined>(undefined);
-  // 流式 delta 逐 token 触发本 effect：scrollTop/scrollIntoView 是同步布局操作，
+  // 流式 delta 逐 token 触发本 effect：读写 scrollTop 是同步布局操作，
   // 用 rAF 把同帧多次触发合并成一次，避免打字机式布局抖动。
   const pendingFrame = useRef(0);
 
   useLayoutEffect(() => {
     if (typeof cancelAnimationFrame !== "function") return;
     return () => cancelAnimationFrame(pendingFrame.current);
+  }, []);
+
+  useLayoutEffect(() => {
+    const element = timeline.current;
+    if (!element) return;
+    viewportHeight.current = element.clientHeight;
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (element.clientHeight === viewportHeight.current) return;
+      viewportHeight.current = element.clientHeight;
+      // 输入框换行/收起设置会改变消息区高度。只在原本贴底时继续贴底，
+      // 手动阅读历史时不抢走当前位置。
+      if (followOutput.current) {
+        element.scrollTop = element.scrollHeight;
+        scrollTop.current = element.scrollTop;
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
 
   useLayoutEffect(() => {
@@ -99,7 +117,10 @@ export function Timeline({
           appliedTargetRequest.current = targetRequest;
           activeThread.current = thread.id;
           followOutput.current = false;
-          target.scrollIntoView({ block: "center" });
+          const viewport = element.getBoundingClientRect();
+          const item = target.getBoundingClientRect();
+          element.scrollTop +=
+            item.top - viewport.top - (element.clientHeight - item.height) / 2;
           scrollTop.current = element.scrollTop;
           return;
         }
@@ -140,6 +161,14 @@ export function Timeline({
   const rememberScrollPosition = () => {
     const element = timeline.current;
     if (!element) return;
+    if (element.clientHeight !== viewportHeight.current) {
+      viewportHeight.current = element.clientHeight;
+      if (followOutput.current) {
+        element.scrollTop = element.scrollHeight;
+        scrollTop.current = element.scrollTop;
+        return;
+      }
+    }
     scrollTop.current = element.scrollTop;
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -152,33 +181,15 @@ export function Timeline({
       turn?.status === "running",
   );
   const hasActiveTurn = activeTurnIndex >= 0;
-  const isEmpty =
-    !turns.length && !pendingUsers.length && !streamed.length;
+  const isEmpty = !turns.length && !pendingUsers.length && !streamed.length;
   // 只在首次加载落定后展示 hero，避免缓存/请求在途时空态闪现后被内容替换。
   const showEmpty = isEmpty && targetFallbackReady === true;
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
       {showEmpty ? (
         <div className="session-empty">
-          <span className="session-empty-icon">
-            <Folder />
-          </span>
-          <h3>{basename(thread.cwd) || thread.name}</h3>
-          {thread.cwd ? (
-            <p className="session-empty-cwd" title={thread.cwd}>
-              {thread.cwd}
-            </p>
-          ) : null}
-          <div className="session-empty-tags">
-            <span
-              className={`agent-badge agent-${thread.agentId || "codex"}`}
-            >
-              {agentName}
-            </span>
-            <span className="session-empty-model">
-              {thread.resolvedModel || thread.model}
-            </span>
-          </div>
+          <h3>在 {basename(thread.cwd) || thread.name} 开始</h3>
+          <p className="session-empty-lead">描述你的任务，或选一个起点。</p>
           {onQuickPrompt ? (
             <div className="session-empty-prompts">
               {QUICK_PROMPTS.map((prompt) => (
@@ -186,16 +197,13 @@ export function Timeline({
                   key={prompt.text}
                   type="button"
                   onClick={() => onQuickPrompt(prompt.text)}
+                  title={prompt.text}
                 >
-                  <prompt.icon />
-                  {prompt.text}
+                  {prompt.label}
                 </button>
               ))}
             </div>
           ) : null}
-          <p className="session-empty-hint">
-            输入指令开始任务，输入 / 查看可用命令
-          </p>
         </div>
       ) : (
         <div className="session-meta">
@@ -238,6 +246,7 @@ export function Timeline({
               targetRequest={targetRequest}
               streamed={streamed}
               streamedItems={index === activeTurnIndex ? streamedItems : []}
+              streamedEntries={index === activeTurnIndex ? streamedEntries : []}
               pendingUsers={pendingUsers.filter(
                 (message) => message.turnId === String(turn?.id || ""),
               )}
@@ -300,6 +309,7 @@ export function Timeline({
               thread={thread}
               streamed={streamed}
               streamedItems={streamedItems}
+              streamedEntries={streamedEntries}
               pendingUsers={pendingUsers.filter(
                 (message) =>
                   message.turnId === String(thread.activeTurnId || ""),

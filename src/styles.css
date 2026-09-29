@@ -11,6 +11,11 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 button,
 input,
@@ -29,10 +34,9 @@ button {
   background: var(--bg);
 }
 aside {
-  width: 344px;
-  min-width: 344px;
+  width: 320px;
+  min-width: 320px;
   background: var(--sidebar);
-  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   z-index: 10;
@@ -200,18 +204,21 @@ nav button span {
 }
 .status.running i {
   background: var(--ok);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--ok) 75%, transparent);
 }
 .status.waiting {
   color: var(--wait);
 }
 .status.waiting i {
   background: var(--wait);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--wait) 70%, transparent);
 }
 .status.error {
   color: var(--danger);
 }
 .status.error i {
   background: var(--danger);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--danger) 70%, transparent);
 }
 .thread-line time {
   font-family: var(--font-mono);
@@ -284,7 +291,8 @@ nav button span {
   position: relative;
   flex: 1;
   min-width: 0;
-  background: var(--bg);
+  overflow: hidden;
+  background: var(--surface-muted);
   background-image: var(--ambient);
 }
 .new-thread {
@@ -364,24 +372,6 @@ nav button span {
 }
 .system-pills .live-dot {
   margin: 0 6px 0 0;
-}
-.provider-logo {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color) 16%, var(--surface));
-  color: var(--color);
-  border: 1px solid color-mix(in srgb, var(--color) 32%, transparent);
-  flex: none;
-}
-.provider-logo svg {
-  width: 18px;
-}
-.provider-logo.small {
-  width: 34px;
-  height: 34px;
 }
 .chat-title {
   min-width: 0;
@@ -528,7 +518,9 @@ nav button span {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-lg);
   padding: 19px;
 }
 .modal > header {
@@ -545,47 +537,6 @@ nav button span {
   font-size: 12px;
   color: var(--text-dim);
   margin: 10px 0 2px;
-}
-.provider-list {
-  display: grid;
-  gap: 7px;
-  margin-bottom: 18px;
-}
-.provider-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: 9px;
-  border-radius: var(--radius-md);
-}
-.provider-row > div {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.provider-row b {
-  font-size: var(--fs-meta);
-}
-.provider-row small {
-  font-size: var(--fs-meta);
-  color: var(--text-faint);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.provider-row .online,
-.provider-row .offline-dot {
-  font-size: var(--fs-meta);
-  color: var(--ok);
-}
-.provider-row .offline-dot {
-  color: var(--text-dim);
-}
-.provider-row .danger {
-  color: var(--danger);
 }
 .form {
   display: grid;
@@ -614,6 +565,18 @@ nav button span {
 .auth-card input:focus {
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+}
+/* checkbox/radio 不套用文本输入的整宽/内边距样式，保持原生尺寸 */
+.form input[type="checkbox"],
+.form input[type="radio"] {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.form input[type="checkbox"]:focus,
+.form input[type="radio"]:focus {
+  box-shadow: none;
 }
 .form-grid {
   display: grid;
@@ -696,6 +659,10 @@ nav button span {
   }
   .workspace {
     width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
   .new-thread {
     right: 12px;
@@ -743,12 +710,5 @@ nav button span {
   .modal {
     padding: 15px;
     border-radius: var(--radius-lg);
-  }
-  .provider-row {
-    padding: 8px;
-  }
-  .provider-row .provider-logo {
-    width: 31px;
-    height: 31px;
   }
 }

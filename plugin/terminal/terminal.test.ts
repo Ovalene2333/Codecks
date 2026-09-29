@@ -124,6 +124,7 @@ test("web terminal bridges PTY output, input, resize and close", async () => {
     Buffer.from(JSON.stringify({ type: "resize", cols: 120, rows: 40 })),
   );
   onData("terminal output");
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(writes, ["pwd\r"]);
   assert.deepEqual(resizes, [[120, 40]]);
   assert.equal(sent.at(-1)?.data, "terminal output");

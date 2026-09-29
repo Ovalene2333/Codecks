@@ -138,7 +138,7 @@ export function parseComposerCommand(
   return undefined;
 }
 
-const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
+const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps", "/skills"]);
 
 /** P0 OpenCode 内置命令（`/` 补全用；自定义命令运行时从服务端追加）。 */
 export const OPENCODE_COMMANDS = [
@@ -147,6 +147,7 @@ export const OPENCODE_COMMANDS = [
   { name: "/redo", hint: "恢复已撤回的内容（需确认）" },
   { name: "/init", hint: "生成或更新 AGENTS.md" },
   { name: "/models", hint: "选择模型" },
+  { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/new", hint: "新建会话（回到列表创建）" },
   { name: "/sessions", hint: "在左侧列表切换会话" },
   { name: "/details", hint: "工具执行细节（可展开查看）" },
@@ -164,6 +165,7 @@ function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
   if (key === "undo") return { kind: "undo" };
   if (key === "redo") return { kind: "redo" };
   if (key === "model" || key === "models") return { kind: "model" };
+  if (key === "skills") return { kind: "skills", query: arg };
   if (key === "status") return { kind: "status" };
   if (key === "ps") return { kind: "ps" };
   if (key === "usage") return { kind: "usage" };
