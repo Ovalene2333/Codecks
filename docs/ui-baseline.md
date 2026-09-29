@@ -62,6 +62,15 @@ header（标题，固定）
   图标旋转加 `.ui-spin`。
 - `Row` 的 `dim` 表示已停用/弱化；`stack` 让窄屏时右侧控件折行。
 
+## 交互行为：借无头库，不借外观
+
+行为复杂的控件（焦点管理、键盘导航、aria 状态）内部用 Radix 无头
+原语实现——目前 `Switch` 是 `@radix-ui/react-switch`，`Seg` 是
+`@radix-ui/react-tabs`。样式始终来自 `kit.css` 的 `ui-*` class，
+调用方签名不变。不要引入带样式的成品组件库（视觉语言与本项目
+不一致）；新增行为型控件（Tooltip/Popover/Menu/Dialog 等）时优先
+按同一模式接入 Radix。
+
 ## 色彩
 
 组件一律用语义 token（`--text-*`、`--surface-*`、`--line`、`--accent`
