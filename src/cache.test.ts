@@ -127,6 +127,118 @@ test("loading agent snapshots retain cached threads until history is ready", () 
   );
 });
 
+test("standby fallback agents do not keep their cached sessions alive", () => {
+  const thread = (agentId: string, id: string) => ({
+    agentId,
+    id,
+    providerId: `${agentId}-current`,
+    cwd: "/work",
+    preview: id,
+    name: id,
+    model: "default",
+    status: "idle" as const,
+    updatedAt: 1,
+  });
+  const cached = snapshot({
+    threads: [thread("claude", "a"), thread("claude-acp", "a")],
+  });
+  const agent = (
+    id: string,
+    extra: Partial<NonNullable<Snapshot["agents"]>[number]>,
+  ) => ({
+    id,
+    name: id,
+    available: true,
+    online: true,
+    capabilities: {} as any,
+    ...extra,
+  });
+  const incoming = (acp: Partial<NonNullable<Snapshot["agents"]>[number]>) =>
+    snapshot({
+      threads: [thread("claude", "a")],
+      agents: [
+        agent("claude", { historyStatus: "ready" }),
+        agent("claude-acp", { fallbackFor: "claude", ...acp }),
+      ],
+    });
+
+  // 备选 agent 历史读取失败也不例外：服务端在待命，缓存里的重复副本必须清掉。
+  for (const historyStatus of ["error", "loading", "cached"] as const) {
+    const reconciled = reconcileSnapshot(
+      cached,
+      incoming({ standby: true, historyStatus }),
+    );
+    assert.deepEqual(
+      reconciled.threads.map((item) => `${item.agentId}:${item.id}`),
+      ["claude:a"],
+      historyStatus,
+    );
+  }
+
+  // 不待命（主 agent 不可用）时沿用原有规则：历史没就绪就保留缓存。
+  const notStandby = reconcileSnapshot(
+    cached,
+    incoming({ historyStatus: "loading" }),
+  );
+  assert.deepEqual(
+    notStandby.threads.map((item) => `${item.agentId}:${item.id}`).sort(),
+    ["claude-acp:a", "claude:a"],
+  );
+});
+
+test("a disabled agent does not keep cached sessions on screen", () => {
+  const thread = (agentId: string, id: string) => ({
+    agentId,
+    id,
+    providerId: `${agentId}-current`,
+    cwd: "/work",
+    preview: id,
+    name: id,
+    model: "default",
+    status: "idle" as const,
+    updatedAt: 1,
+  });
+  const cached = snapshot({
+    threads: [thread("codex", "c1"), thread("kimi", "k1")],
+  });
+  const agent = (id: string, extra: object = {}) => ({
+    id,
+    name: id,
+    available: true,
+    online: true,
+    capabilities: {} as any,
+    ...extra,
+  });
+  const keys = (next: Snapshot) =>
+    next.threads.map((item) => `${item.agentId}:${item.id}`).sort();
+
+  // 停用后服务端不再下发它的会话；历史状态没就绪也不能把旧缓存留下。
+  const disabled = reconcileSnapshot(
+    cached,
+    snapshot({
+      threads: [thread("codex", "c1")],
+      agents: [
+        agent("codex", { historyStatus: "ready" }),
+        agent("kimi", { enabled: false, online: false }),
+      ],
+    }),
+  );
+  assert.deepEqual(keys(disabled), ["codex:c1"]);
+
+  // 没停用、只是历史还在加载：沿用原有规则，缓存的会话继续显示。
+  const loading = reconcileSnapshot(
+    cached,
+    snapshot({
+      threads: [thread("codex", "c1")],
+      agents: [
+        agent("codex", { historyStatus: "ready" }),
+        agent("kimi", { historyStatus: "loading" }),
+      ],
+    }),
+  );
+  assert.deepEqual(keys(loading), ["codex:c1", "kimi:k1"]);
+});
+
 test("writeSnapshotCache ignores empty snapshots so a later load cannot wipe the library", () => {
   resetCacheForTests();
   const store = new MemoryStorage();
@@ -273,6 +385,34 @@ test("thread cache returns the last write and dedupes inflight loads", async () 
   assert.deepEqual(readThreadCache("p:t2"), { turns: [2] });
 });
 
+test("a fresh thread load waits for an older response before reading reverted history", async () => {
+  resetCacheForTests();
+  configureCacheStorage(new MemoryStorage());
+  let finishOld!: (value: { turns: number[] }) => void;
+  const old = dedupeThreadLoad(
+    "p:reverted",
+    () =>
+      new Promise<{ turns: number[] }>((resolve) => {
+        finishOld = resolve;
+      }),
+  );
+  let freshCalls = 0;
+  const fresh = dedupeThreadLoad(
+    "p:reverted",
+    async () => {
+      freshCalls += 1;
+      return { turns: [] };
+    },
+    true,
+  );
+  assert.equal(freshCalls, 0);
+  finishOld({ turns: [1] });
+  await old;
+  assert.deepEqual(await fresh, { turns: [] });
+  assert.equal(freshCalls, 1);
+  assert.deepEqual(readThreadCache("p:reverted"), { turns: [] });
+});
+
 test("ui cache restores expanded projects but not the search box", () => {
   resetCacheForTests();
   configureCacheStorage(new MemoryStorage());
@@ -284,13 +424,18 @@ test("ui cache restores expanded projects but not the search box", () => {
   });
 });
 
-test("ui cache persists tiled view mode only when set", () => {
+test("ui cache drops the retired tiled view mode", () => {
   resetCacheForTests();
-  configureCacheStorage(new MemoryStorage());
-  writeUiCache({ expandedProjects: [], query: "", viewMode: "tiled" });
-  resetCacheForTests();
-  assert.equal(readUiCache().viewMode, "tiled");
-  writeUiCache({ expandedProjects: [], query: "", viewMode: "list" });
-  resetCacheForTests();
-  assert.equal(readUiCache().viewMode, undefined);
+  const store = new MemoryStorage();
+  configureCacheStorage(store);
+  store.setItem(
+    "codex-deck:ui:v2",
+    JSON.stringify({ expandedProjects: ["/tmp/app"], viewMode: "tiled" }),
+  );
+  assert.deepEqual(readUiCache(), {
+    expandedProjects: ["/tmp/app"],
+    query: "",
+  });
+  writeUiCache(readUiCache());
+  assert.equal(store.getItem("codex-deck:ui:v2")?.includes("viewMode"), false);
 });

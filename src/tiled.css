@@ -1,4 +1,4 @@
-/* ===================== 平铺模式 =====================
+/* ===================== 监控台原型 =====================
    结构：.tiled-shell（App 根，替代 .app-shell）> .tiled-view > 顶栏 +
    .tiled-stage（卫星栏 + hero）/ .tiled-overview（总览网格）+ .tiled-dock。 */
 
@@ -116,6 +116,7 @@
   background: var(--glass);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 30px -18px rgb(0 0 0 / 60%);
   z-index: 20;
 }
 
@@ -172,7 +173,7 @@
 .tiled-topbar .watch-strip {
   display: flex;
   flex: none;
-  gap: 4px;
+  gap: 6px;
 }
 .tiled-topbar .watch-strip button {
   display: inline-flex;
@@ -180,9 +181,9 @@
   gap: 5px;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
   color: var(--text-dim);
   font-size: 12px;
   font-weight: 600;
@@ -191,12 +192,14 @@
   cursor: pointer;
 }
 .tiled-topbar .watch-strip button:hover {
+  border-color: var(--control-border);
   background: var(--control-hover);
 }
 .tiled-topbar .watch-strip button.active {
-  background: var(--surface-2);
-  border-color: var(--line);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   color: var(--text);
+  box-shadow: var(--shadow-sm);
 }
 .tiled-topbar .watch-strip button b {
   font-family: var(--font-mono);
@@ -243,7 +246,12 @@
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  background: color-mix(in srgb, var(--surface) 52%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-sm);
   overflow: hidden;
 }
 .tiled-rail.left {
@@ -309,7 +317,9 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-lg);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-lg);
   overflow: hidden;
   animation: tile-hero-in 180ms var(--ease-out);
 }
@@ -363,11 +373,17 @@
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
   overflow: hidden;
 }
 .lane-active {
   border-color: color-mix(in srgb, var(--ok) 32%, var(--line));
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    0 0 26px -10px color-mix(in srgb, var(--ok) 40%, transparent);
 }
 .lane-idle {
   background: color-mix(in srgb, var(--surface) 38%, transparent);
@@ -466,7 +482,7 @@
 .tiled-empty-projects {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   justify-content: center;
   max-width: 600px;
 }
@@ -475,22 +491,32 @@
   align-items: center;
   gap: 9px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--card-face), var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-sm);
+  padding: 11px 16px;
   color: var(--text-soft);
   font-size: var(--fs-ui);
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color var(--ease),
+    transform var(--ease),
+    box-shadow var(--ease);
 }
 .tiled-empty-projects button:hover {
   border-color: var(--line-strong);
-  background: var(--surface-2);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-md);
 }
 .tiled-empty-projects button > svg {
   width: 15px;
   height: 15px;
-  color: var(--text-faint);
+  color: var(--accent-hover);
   flex: none;
 }
 .tiled-empty-projects button > div {
@@ -506,8 +532,12 @@
   max-width: 240px;
 }
 .tiled-empty-projects .recent-create {
-  border-style: dashed;
-  color: var(--text-dim);
+  border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+}
+.tiled-empty-projects .recent-create > svg {
+  color: var(--accent-hover);
 }
 
 /* ---- 会话 tile（卫星栏与总览共用） ---- */
@@ -524,7 +554,12 @@
   border: 1px solid var(--line);
   border-left-width: 3px;
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background:
+    var(--card-face),
+    var(--surface);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-sm);
   cursor: pointer;
   text-align: left;
   overflow: hidden;
@@ -538,8 +573,10 @@
   border-top-color: var(--line-strong);
   border-right-color: var(--line-strong);
   border-bottom-color: var(--line-strong);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-md);
 }
 .tile-card:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -548,8 +585,16 @@
 /* 聚焦中的会话仍留在边栏里，用 accent 圈出当前项 */
 .tile-card.current {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
-  box-shadow: 0 0 0 1px var(--accent) inset;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 12%, transparent),
+      color-mix(in srgb, var(--accent) 5%, transparent)
+    ),
+    var(--surface);
+  box-shadow:
+    0 0 0 1px var(--accent) inset,
+    0 6px 20px -8px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 .tile-card.current .tile-card-top::after {
   content: "当前";
@@ -563,17 +608,50 @@
   padding: 0 7px;
   vertical-align: 1px;
 }
+/* 状态色：左缘色条 + 自左向右的微弱染色，卡片立刻有「状态感」 */
 .tile-card.status-running {
   border-left-color: var(--ok);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ok) 9%, transparent),
+      transparent 46%
+    ),
+    var(--card-face),
+    var(--surface);
 }
 .tile-card.status-waiting {
   border-left-color: var(--wait);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--wait) 10%, transparent),
+      transparent 46%
+    ),
+    var(--card-face),
+    var(--surface);
 }
 .tile-card.status-error {
   border-left-color: var(--danger);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--danger) 10%, transparent),
+      transparent 46%
+    ),
+    var(--card-face),
+    var(--surface);
 }
 .tile-card.unseen:not(.status-running):not(.status-waiting):not(.status-error) {
   border-left-color: var(--info);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--info) 8%, transparent),
+      transparent 46%
+    ),
+    var(--card-face),
+    var(--surface);
 }
 .tiled-rail .tile-card.status-idle:not(.unseen) {
   opacity: 0.78;
@@ -783,26 +861,43 @@
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px max(8px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line);
-  background: var(--sidebar);
+  gap: 6px;
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto;
+  margin-bottom: max(14px, env(safe-area-inset-bottom));
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--glass);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-md);
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+.tiled-dock::-webkit-scrollbar {
+  display: none;
 }
 .dock-library {
   flex: none;
   width: 148px;
+}
+.dock-library.library-segment {
+  border-color: transparent;
+  background: var(--surface-muted);
 }
 .dock-chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   flex: none;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: transparent;
   border-radius: 99px;
-  padding: 5px 12px;
+  padding: 6px 12px;
   color: var(--text-dim);
   font-size: var(--fs-small);
   cursor: pointer;
@@ -811,7 +906,7 @@
   white-space: nowrap;
 }
 .dock-chip:hover {
-  border-color: var(--line-strong);
+  background: var(--control-hover);
   color: var(--text);
 }
 .dock-chip > svg {
@@ -821,7 +916,16 @@
   color: var(--text-faint);
 }
 .dock-chip.new {
-  border-style: dashed;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+.dock-chip.new > svg {
+  color: var(--accent-hover);
+}
+.dock-chip.new:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .tiled-dock-empty {
   color: var(--text-faint);
@@ -922,7 +1026,27 @@
   .tiled-overview {
     padding: 10px;
   }
+  /* 手机上 dock 回归全宽底栏，避免小屏里浮动胶囊挤压内容 */
   .tiled-dock {
+    width: auto;
+    max-width: none;
+    margin: 0;
     padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 0;
+    background: var(--sidebar);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    scrollbar-width: thin;
+  }
+  .dock-chip {
+    border-color: var(--line);
+    background: var(--surface);
+  }
+  .dock-chip.new {
+    border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
 }

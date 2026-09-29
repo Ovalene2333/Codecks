@@ -86,6 +86,49 @@ export function TerminalView({
         terminal.writeln(
           "\x1b[2m终端已就绪，点击连接后启动宿主机 Shell。\x1b[0m",
         );
+        const copySelection = async () => {
+          const selection = terminal.getSelection();
+          if (!selection) return false;
+          try {
+            await navigator.clipboard.writeText(selection);
+            terminal.clearSelection();
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        const pasteClipboard = async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            const socket = socketRef.current;
+            if (text && socket?.readyState === WebSocket.OPEN)
+              socket.send(JSON.stringify({ type: "input", data: text }));
+            else if (text) terminal.paste(text);
+          } catch {
+            onToast("无法读取剪贴板，请检查浏览器权限");
+          }
+        };
+        terminal.attachCustomKeyEventHandler((event) => {
+          if (event.type !== "keydown") return true;
+          if (event.ctrlKey && event.shiftKey && event.code === "KeyC") {
+            void copySelection();
+            return false;
+          }
+          if (event.ctrlKey && event.shiftKey && event.code === "KeyV") {
+            void pasteClipboard();
+            return false;
+          }
+          if (event.shiftKey && event.code === "Insert") {
+            void pasteClipboard();
+            return false;
+          }
+          return true;
+        });
+        mountRef.current.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          if (terminal.hasSelection()) void copySelection();
+          else void pasteClipboard();
+        });
         terminal.onData((data) => {
           const socket = socketRef.current;
           if (socket?.readyState === WebSocket.OPEN)

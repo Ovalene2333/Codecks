@@ -1,0 +1,94 @@
+/* 设置界面：面板型弹窗外壳 + 设置页专属布局。
+   组件原语在 kit.css；尺寸/间距全部来自 tokens.css。规范见 docs/ui-baseline.md。 */
+
+/* ── 面板型弹窗（.ui-panel）─────────────────────────────────
+   标题与标签固定，只有内容区（.ui-panel__body）滚动；高度固定，
+   各标签共用同一高度——切换标签时弹窗不再忽大忽小、不再上下跳。 */
+.modal.ui-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(var(--modal-w), 100%);
+  height: min(var(--modal-h), calc(100dvh - var(--space-4) * 2));
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal.ui-panel > header {
+  flex: none;
+  margin: 0;
+  padding: var(--space-4) var(--space-5) var(--space-3);
+}
+
+.modal.ui-panel > header h2 {
+  font-size: var(--fs-modal-title);
+}
+
+.ui-panel__tabs {
+  flex: none;
+  padding: 0 var(--space-5) var(--space-3);
+}
+
+.ui-panel__body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-2) var(--space-5) var(--space-6);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* 内容区顶部一条淡淡的分隔：滚动时标题和标签下方有明确的边界。 */
+.ui-panel__tabs + .ui-panel__body {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+}
+
+/* 手机：贴底的整页面板，圆角只留顶部；底部让出安全区。 */
+@media (max-width: 640px) {
+  .modal-backdrop:has(> .ui-panel) {
+    align-items: end;
+    padding: 0;
+  }
+
+  .modal.ui-panel {
+    width: 100%;
+    height: calc(100dvh - var(--space-6));
+    border-bottom: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+
+  .modal.ui-panel > header,
+  .ui-panel__tabs {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+
+  .ui-panel__body {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+    padding-bottom: calc(var(--space-6) + env(safe-area-inset-bottom));
+  }
+}
+
+/* ── 设置页专属 ─────────────────────────────────────────── */
+/* 一行里右侧有输入框（OpenCode 子代理的模型）：窄屏折到下一行。 */
+.ui-input--model {
+  width: 200px;
+}
+
+@media (max-width: 640px) {
+  .ui-row--stack {
+    flex-wrap: wrap;
+  }
+
+  .ui-row--stack .ui-row__side {
+    flex: 1 0 100%;
+    margin-left: 0;
+  }
+
+  .ui-row--stack .ui-input--model {
+    flex: 1;
+    width: auto;
+  }
+}

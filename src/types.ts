@@ -109,7 +109,12 @@ export interface ApprovalQuestion {
   prompt?: string;
   header?: string;
   question?: string;
-  options?: { label: string; value?: string; isOther?: boolean }[];
+  options?: {
+    label: string;
+    value?: string;
+    description?: string;
+    isOther?: boolean;
+  }[];
   isOther?: boolean;
   multiple?: boolean;
   custom?: boolean;
@@ -216,6 +221,8 @@ export interface ThreadSummary {
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+  /** Claude SDK process remains connected between turns. */
+  claudeConnected?: boolean;
   /** 会话被其它进程占用（ACP session lock），只能查看缓存历史。 */
   locked?: boolean;
 }
@@ -264,8 +271,70 @@ export interface ActiveTask {
   detailError?: string;
 }
 
+/** 与 server/types.ts 同形：监控台的实时活动（见 server/activity.ts）。 */
+export interface ActivityItem {
+  id: string;
+  type: string;
+  status?: string;
+  command?: string;
+  tool?: string;
+  server?: string;
+  title?: string;
+  agent?: string;
+  activity?: string;
+  query?: string;
+  path?: string;
+  input?: Record<string, string>;
+  commandActions?: {
+    type: string;
+    path?: string;
+    query?: string;
+    name?: string;
+    command?: string;
+  }[];
+  changes?: { path: string; kind?: string }[];
+  changeCount?: number;
+}
+
+export interface ThreadActivity {
+  agentId: AgentId;
+  threadId: string;
+  turnId?: string;
+  turnStartedAt?: number;
+  lastEventAt: number;
+  step?: { item: ActivityItem; startedAt: number };
+  lastTurn?: { startedAt: number; endedAt: number; status: string };
+}
+
+export interface ActivityUpdate {
+  agentId: AgentId;
+  threadId: string;
+  activity: ThreadActivity | null;
+}
+
+export interface HostStats {
+  platform: string;
+  arch: string;
+  cpuCount: number;
+  cpuPercent?: number;
+  loadavg: number[];
+  memTotal: number;
+  memAvailable: number;
+  uptimeSec: number;
+  deck: {
+    pid: number;
+    rss: number;
+    heapUsed: number;
+    uptimeSec: number;
+    node: string;
+    clients: number;
+  };
+}
+
 export interface ApprovalResolveBody {
   decision?: "accept" | "acceptForSession" | "decline" | "cancel";
+  /** ACP：直接选中 agent 给出的某个 optionId（devin 一次给多档选项）。 */
+  optionId?: string;
   permissions?: unknown;
   scope?: "session" | "turn";
   answers?: unknown;
@@ -323,6 +392,21 @@ export interface AgentDescriptor {
   name: string;
   /** native=CLI 私有协议 adapter；acp=Agent Client Protocol 通用接入。 */
   protocol?: "native" | "acp";
+  /**
+   * 备选 agent：与该主 agent 共用同一份会话存储。主 agent 可用时服务端
+   * 不再重复下发它的历史会话；主 agent 不可用时自动顶上。
+   */
+  fallbackFor?: AgentId;
+  /** 备选 agent 正在待命：服务端已隐藏它的历史会话，本地缓存的旧副本应丢弃。 */
+  standby?: boolean;
+  /** 是否被加载；缺省（旧服务端）视为 true。false 时不启动、不下发会话。 */
+  enabled?: boolean;
+  /** 能否在设置里停用；Codex 是核心 agent，不可停用。缺省视为 true。 */
+  toggleable?: boolean;
+  /** enabled=false 的原因：`user` 用户停用；`default` 默认策略不加载。 */
+  disabledReason?: "user" | "default";
+  /** 默认策略不加载的说明，如「未检测到 kimi 命令」。 */
+  defaultNote?: string;
   available: boolean;
   online: boolean;
   starting?: boolean;
@@ -330,6 +414,38 @@ export interface AgentDescriptor {
   historyStatus?: "cached" | "loading" | "ready" | "error";
   historyError?: string;
   capabilities: AgentCapabilities;
+}
+
+/** `PUT /agents/:id/enabled` 的结果；applied=false 表示有会话在运行、需要 force。 */
+export interface AgentToggleResponse {
+  applied: boolean;
+  changed: boolean;
+  busyCount: number;
+  snapshot: Snapshot;
+}
+
+export interface AgentReloadResult {
+  id: AgentId;
+  /** 有会话在运行且没有 force 时为 false。 */
+  reloaded: boolean;
+  busyCount: number;
+  error?: string;
+}
+
+export interface AgentReloadResponse {
+  result: AgentReloadResult;
+  snapshot: Snapshot;
+}
+
+export interface AgentsReloadResponse {
+  sync: {
+    added: AgentId[];
+    removed: AgentId[];
+    replaced: AgentId[];
+    skippedBusy: AgentId[];
+  };
+  results: AgentReloadResult[];
+  snapshot: Snapshot;
 }
 
 export interface AgentProfile {
@@ -352,6 +468,7 @@ export interface Snapshot {
   threads: ThreadSummary[];
   archivedThreads?: ThreadSummary[];
   approvals: Approval[];
+  activities?: ThreadActivity[];
   projects?: ProjectRecord[];
   preferences?: DeckPreferences;
   runtime?: RuntimeSnapshot;

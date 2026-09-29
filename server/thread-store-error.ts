@@ -13,6 +13,7 @@ export function classifyThreadStoreError(error: unknown): ThreadStoreErrorKind {
   const message = errorMessage(error);
   if (
     /is not materialized yet/i.test(message) ||
+    /list_turns is not supported yet/i.test(message) ||
     /rollout\b[\s\S]*\bis empty\b/i.test(message) ||
     /failed to read session metadata/i.test(message) ||
     /no rollout found/i.test(message)
@@ -29,7 +30,10 @@ export function classifyThreadStoreError(error: unknown): ThreadStoreErrorKind {
 }
 
 export function isMissingRolloutError(error: unknown) {
-  return classifyThreadStoreError(error) === "unmaterialized";
+  return (
+    !/list_turns is not supported yet/i.test(errorMessage(error)) &&
+    classifyThreadStoreError(error) === "unmaterialized"
+  );
 }
 
 export function threadStoreUserMessage(

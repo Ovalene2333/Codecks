@@ -2,7 +2,8 @@ import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvFile } from "node:process";
@@ -21,8 +22,9 @@ import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
 import { AcpAdapter } from "./agents/acp-adapter.js";
 import {
   ensureAcpAgentsExample,
-  loadAcpAgentSpecs,
+  loadAcpAgentEntries,
 } from "./agents/acp-agents.js";
+import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
@@ -39,13 +41,19 @@ import {
 } from "./runtime-lock.js";
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
+import { ActivityTracker } from "./activity.js";
+import { CpuSampler, hostStats } from "./host-stats.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
+import { AgentSettingsStore } from "./agent-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
+import { WakeDeduper } from "./wake-dedupe.js";
 import { resolveThreadImage } from "./thread-image.js";
+import { readOpenCodeConfig, writeOpenCodeConfig } from "./opencode-config.js";
 import { ToolRegistry } from "../plugin/server-registry.js";
 import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
+import { TextFilesTool } from "../plugin/text-files/text-files.server.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -120,11 +128,13 @@ const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
 const threadSummaries = new ThreadSummaryCache(dataDir);
 const threadSettings = new ThreadSettingsStore(dataDir);
+const agentSettings = new AgentSettingsStore(dataDir);
 const [, , cachedThreads] = await Promise.all([
   store.load(),
   projects.load(),
   threadSummaries.load(),
   threadSettings.load(),
+  agentSettings.load(),
 ]);
 const initialThreads = [
   ...cachedThreads.threads,
@@ -166,20 +176,30 @@ const opencode = new OpenCodeAdapter({
 // ACP agents（devin acp、kimi acp 等）：descriptor 驱动，启动失败的 agent
 // 只在 startAll 里表现为 offline，不影响其它 adapter。
 await ensureAcpAgentsExample(dataDir);
-const acpDirectories = [
-  ...projects.list().map((project) => project.cwd),
-  ...projects.getPreferences().recentDirs,
-  ...initialThreads.map((thread) => thread.cwd),
-].filter(Boolean);
-const acpAdapters = (await loadAcpAgentSpecs(dataDir)).map(
-  (spec) =>
+const acpDirectories = () =>
+  [
+    ...projects.list().map((project) => project.cwd),
+    ...projects.getPreferences().recentDirs,
+    ...initialThreads.map((thread) => thread.cwd),
+  ].filter(Boolean);
+// Codex 是核心 agent（供应商/Runtime 都挂在它上面），不可停用；其余 agent
+// 按用户在设置里的显式选择加载，没有选择过就走默认（见 loadAcpAgentEntries）。
+const agents = new AgentRegistry();
+agents.register(manager, { toggleable: false });
+agents.register(claude, { enabled: agentSettings.enabled("claude") });
+agents.register(opencode, { enabled: agentSettings.enabled("opencode") });
+const acpHost = new AcpAgentHost({
+  registry: agents,
+  settings: agentSettings,
+  load: () => loadAcpAgentEntries(dataDir),
+  create: (spec, carried) =>
     new AcpAdapter(spec, {
       threadSettings,
-      initialThreads,
-      directories: acpDirectories,
+      initialThreads: carried ?? initialThreads,
+      directories: acpDirectories(),
     }),
-);
-const agents = new AgentRegistry([manager, claude, opencode, ...acpAdapters]);
+});
+await acpHost.sync();
 const sessionSearch = new SessionSearchIndexer(
   new SessionSearchStore(dataDir),
   agents,
@@ -187,13 +207,20 @@ const sessionSearch = new SessionSearchIndexer(
 const tools = new ToolRegistry([
   new WebTerminalTool({ useWsl, processCwd: projectRoot }),
   new GitTool({ useWsl, processCwd: projectRoot }),
+  new TextFilesTool({ useWsl, processCwd: projectRoot }),
 ]);
+const activity = new ActivityTracker();
+const cpuSampler = new CpuSampler();
 const fullSnapshot = () => ({
   ...agents.snapshot(),
+  activities: activity.list(),
   projects: projects.list(),
   preferences: projects.getPreferences(),
 });
 const app = express();
+const wakeDeduper = new WakeDeduper<
+  Awaited<ReturnType<AgentRegistry["sendTurn"]>>
+>();
 // 快照/线程全文动辄数 MB，手机弱网下 gzip 是最便宜的收益：只压文本类，
 // 图片走 blob/octet-stream 不会被压缩中间件重复处理。
 app.use(
@@ -315,7 +342,19 @@ app.get(
 );
 app.get(
   "/api/tasks",
-  route(async () => ({ tasks: await agents.listTasks() })),
+  route(async () => ({
+    // registry 只知道会话 updatedAt；活动追踪器记下的才是本轮真实开始时间。
+    tasks: (await agents.listTasks()).map((task) => ({
+      ...task,
+      startedAt:
+        activity.get(task.agentId, task.threadId)?.turnStartedAt ??
+        task.startedAt,
+    })),
+  })),
+);
+app.get(
+  "/api/monitor/host",
+  route(async () => hostStats(cpuSampler, wss.clients.size)),
 );
 app.post(
   "/api/session-search",
@@ -373,8 +412,145 @@ app.get(
       typeof req.query.providerId === "string"
         ? req.query.providerId
         : undefined,
+      typeof req.query.directory === "string" ? req.query.directory : undefined,
     ),
   ),
+);
+/**
+ * Agent 启停与重载（不重启 Deck 主服务）：
+ * - PUT  /agents/:id/enabled  启用/停用；有会话在运行时返回 applied:false，
+ *   带 force 才会中断它们。显式选择落盘在 agent-settings.json。
+ * - POST /agents/:id/reload   重启该 agent 的后端进程并重读配置与会话。
+ * - POST /agents/reload       先按 acp-agents.json 增删改 ACP agent，再重载全部。
+ */
+const agentForceSchema = z.object({ force: z.boolean().optional() });
+app.put(
+  "/api/agents/:agentId/enabled",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = agentForceSchema
+      .extend({ enabled: z.boolean() })
+      .parse(req.body);
+    const result = await agents.setEnabled(id, input.enabled, {
+      force: input.force,
+    });
+    // 与默认一致时清掉显式选择：默认（如「命令已安装」）之后能继续跟随实际情况。
+    if (result.applied)
+      await agentSettings.setEnabled(
+        id,
+        input.enabled === agents.defaultEnabled(id) ? null : input.enabled,
+      );
+    return { ...result, snapshot: fullSnapshot() };
+  }),
+);
+app.post(
+  "/api/agents/reload",
+  route(async (req) => {
+    const input = agentForceSchema.parse(req.body ?? {});
+    const sync = await acpHost.sync({ force: input.force });
+    const results = await agents.reloadAll({ force: input.force });
+    return { sync, results, snapshot: fullSnapshot() };
+  }),
+);
+app.post(
+  "/api/agents/:agentId/reload",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = agentForceSchema.parse(req.body ?? {});
+    const result = await agents.reload(id, { force: input.force });
+    return { result, snapshot: fullSnapshot() };
+  }),
+);
+/**
+ * OpenCode 代理配置：读 = 全局/项目 opencode.json + server 的 GET /agent；
+ * 写 = 落盘到对应 opencode.json（全局与项目同一 schema），在线时再
+ * PATCH /config 让运行中的 server 立即生效。
+ */
+app.get(
+  "/api/agents/opencode/config",
+  route(async (req) => {
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    const [globalConfig, projectConfig, catalog] = await Promise.all([
+      readOpenCodeConfig("global"),
+      directory
+        ? readOpenCodeConfig("project", directory)
+        : Promise.resolve(undefined),
+      opencode.isOnline()
+        ? opencode.agentCatalog(directory).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    return {
+      online: opencode.isOnline(),
+      global: globalConfig,
+      project: projectConfig,
+      agents: catalog,
+    };
+  }),
+);
+app.put(
+  "/api/agents/opencode/config",
+  route(async (req) => {
+    const input = z
+      .object({
+        scope: z.enum(["global", "project"]),
+        directory: z.string().min(1).optional(),
+        agent: z
+          .record(
+            z.string(),
+            z.object({
+              model: z.string().nullable().optional(),
+              disable: z.boolean().nullable().optional(),
+              prompt: z.string().nullable().optional(),
+              temperature: z.number().nullable().optional(),
+            }),
+          )
+          .optional(),
+        model: z.string().nullable().optional(),
+        smallModel: z.string().nullable().optional(),
+      })
+      .parse(req.body);
+    if (input.scope === "project" && !input.directory?.trim())
+      throw new Error("项目范围必须提供 directory");
+    const directory = input.directory?.trim() || undefined;
+    const file = await writeOpenCodeConfig(input.scope, directory, {
+      agent: input.agent,
+      model: input.model,
+      smallModel: input.smallModel,
+    });
+    // 在线时同步 PATCH 让改动立即生效；失败不影响落盘结果。
+    let applied = false;
+    let applyError: string | undefined;
+    if (opencode.isOnline()) {
+      const patch: Record<string, unknown> = {};
+      if (input.agent) {
+        const agents: Record<string, Record<string, unknown>> = {};
+        for (const [name, entry] of Object.entries(input.agent)) {
+          const cleaned: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(entry)) {
+            if (value === undefined || value === null) continue;
+            cleaned[key] = value;
+          }
+          if (entry.disable === false) cleaned.disable = false;
+          if (Object.keys(cleaned).length) agents[name] = cleaned;
+        }
+        if (Object.keys(agents).length) patch.agent = agents;
+      }
+      if (input.model) patch.model = input.model;
+      if (input.smallModel) patch.small_model = input.smallModel;
+      if (Object.keys(patch).length) {
+        try {
+          await opencode.patchRuntimeConfig(patch, directory);
+          applied = true;
+        } catch (error: any) {
+          applyError = error?.message || String(error);
+        }
+      }
+    }
+    return { path: file.path, applied, applyError };
+  }),
 );
 app.post(
   "/api/agents/:agentId/threads",
@@ -466,7 +642,7 @@ app.patch(
         settings: z
           .object({
             providerId: z.string().min(1).optional(),
-            model: z.string().min(1).optional(),
+            model: z.string().optional(),
             reasoningEffort: z.string().optional(),
             personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
             approvalPolicy: z
@@ -521,7 +697,10 @@ app.delete(
   route(async (req) => {
     const id = agentId(req.params.agentId);
     const threadId = param(req.params.threadId);
-    await agents.deleteThread(id, threadId);
+    const options = z
+      .object({ closeConnection: z.boolean().optional() })
+      .parse(req.body || {});
+    await agents.deleteThread(id, threadId, options);
     await threadSettings.remove(id, threadId);
     return fullSnapshot();
   }),
@@ -582,6 +761,137 @@ app.post(
     );
   }),
 );
+const findThreadSummary = (id: AgentId, threadId: string) => {
+  const snapshot = agents.get(id).snapshot();
+  return [...snapshot.threads, ...(snapshot.archivedThreads || [])].find(
+    (item) => item.id === threadId,
+  );
+};
+// adapter 已被移除时代号本体仍要返回，便于排查悬挂映射。
+const tryThreadSummary = (id: AgentId, threadId: string) => {
+  try {
+    return findThreadSummary(id, threadId);
+  } catch {
+    return undefined;
+  }
+};
+// watcher 通常就跑在 deck 本机（agent 的 bash 亦然），回环直连
+// 即可，无需绕公网/tunnel。
+const localBase = `http://${formatHost(
+  host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host,
+)}:${port}`;
+app.get(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    const code =
+      threadSettings.get(
+        agentId(req.params.agentId),
+        param(req.params.threadId),
+      )?.wakeCode ?? null;
+    return { code, localUrl: code ? `${localBase}/api/wake/${code}` : null };
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    if (!findThreadSummary(id, threadId)) throw new Error("会话不存在");
+    const { code, notify } = z
+      .object({
+        code: z.string().max(40).optional(),
+        notify: z.boolean().optional(),
+      })
+      .parse(req.body || {});
+    const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code);
+    const wakePath = `/api/wake/${wakeCode}`;
+    const localUrl = `${localBase}${wakePath}`;
+    const result: {
+      code: string;
+      path: string;
+      localUrl: string;
+      notified?: boolean;
+    } = { code: wakeCode, path: wakePath, localUrl };
+    if (notify) {
+      // 只告诉会话代号与用法；地址和令牌由本机发现文件提供，
+      // 令牌不进入会话上下文。
+      try {
+        await agents.sendTurn(
+          id,
+          threadId,
+          [
+            `[deck] 本会话已开启远程唤醒，代号 ${wakeCode}。`,
+            `在远端启动长任务后，用 deck-wake skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
+            `没有该 skill 时可直接调用：curl -X POST "$(cat ~/.codex-deck/url)${wakePath}" -H "Authorization: Bearer $(cat ~/.codex-deck/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
+            "本条仅需确认收到，无需其它操作。",
+          ].join("\n"),
+        );
+        result.notified = true;
+      } catch (error: any) {
+        // 通知失败不影响代号生效（例如会话正忙、进程未起），UI 另行提示。
+        result.notified = false;
+      }
+    }
+    return result;
+  }),
+);
+app.delete(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    await threadSettings.clearWakeCode(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    );
+    return { ok: true };
+  }),
+);
+app.get(
+  "/api/wake",
+  route(async () => ({
+    items: threadSettings.listWakeCodes().map((target) => {
+      const thread = tryThreadSummary(target.agentId, target.threadId);
+      return {
+        ...target,
+        name: thread?.name,
+        cwd: thread?.cwd,
+        status: thread?.status,
+      };
+    }),
+  })),
+);
+app.get(
+  "/api/wake/:code",
+  route(async (req) => {
+    const code = param(req.params.code);
+    const target = threadSettings.findByWakeCode(code);
+    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const thread = tryThreadSummary(target.agentId, target.threadId);
+    return { code, ...target, name: thread?.name, status: thread?.status };
+  }),
+);
+app.post(
+  "/api/wake/:code",
+  route(async (req) => {
+    const code = param(req.params.code);
+    const target = threadSettings.findByWakeCode(code);
+    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const body = (
+      req.body && typeof req.body === "object" ? req.body : {}
+    ) as Record<string, unknown>;
+    const { text, ...rest } = body;
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    const detail =
+      trimmed || (Object.keys(rest).length ? JSON.stringify(rest) : "");
+    const prompt = detail
+      ? `[wake:${code}] ${detail}`
+      : `[wake:${code}] 外部唤醒信号`;
+    if (prompt.length > 100_000) throw new Error("wake 载荷过大");
+    const result = await wakeDeduper.run(code, prompt, () =>
+      agents.sendTurn(target.agentId, target.threadId, prompt),
+    );
+    return { code, ...target, result };
+  }),
+);
 app.get(
   "/api/agents/:agentId/threads/:threadId/commands",
   route(async (req) => ({
@@ -590,6 +900,16 @@ app.get(
       param(req.params.threadId),
     ),
   })),
+);
+app.get(
+  "/api/agents/:agentId/threads/:threadId/skills",
+  route(async (req) =>
+    agents.listSkills(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      req.query.reload === "1",
+    ),
+  ),
 );
 app.post(
   "/api/agents/:agentId/threads/:threadId/commands",
@@ -624,7 +944,11 @@ app.post(
     const input = z
       .object({ messageID: z.string().min(1).max(200).optional() })
       .parse(req.body || {});
-    return agents.revertSession(id, param(req.params.threadId), input.messageID);
+    return agents.revertSession(
+      id,
+      param(req.params.threadId),
+      input.messageID,
+    );
   }),
 );
 app.post(
@@ -639,7 +963,6 @@ app.post(
   "/api/agents/:agentId/threads/:threadId/fork",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    if (id !== "opencode") throw new Error("该 Agent 请使用会话分支旧接口");
     const input = z
       .object({
         messageID: z.string().min(1).max(200).optional(),
@@ -653,7 +976,6 @@ app.post(
   "/api/agents/:agentId/threads/:threadId/retry",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    if (id !== "opencode") throw new Error("该 Agent 请使用会话重试旧接口");
     const input = z
       .object({
         turnId: z.string().min(1).max(200),
@@ -686,6 +1008,7 @@ app.post(
         decision: z
           .enum(["accept", "acceptForSession", "decline", "cancel"])
           .optional(),
+        optionId: z.string().optional(),
         permissions: z.unknown().optional(),
         scope: z.enum(["session", "turn"]).optional(),
         answers: z.unknown().optional(),
@@ -709,6 +1032,7 @@ app.post(
   "/api/runtime/reload",
   route(async () => {
     const ccs = await store.refreshCcSwitch();
+    await claude.reloadProfiles(store.ccSwitchPath);
     manager.emit("event", { type: "snapshot", data: fullSnapshot() });
     const busy = manager.busyThreads();
     let restarted = false;
@@ -1388,18 +1712,25 @@ agents.on("event", (event) => {
     });
     return;
   }
+  const activityUpdate = activity.ingest(event);
+  if (activityUpdate)
+    broadcast(
+      JSON.stringify({ type: "activity.updated", data: activityUpdate }),
+    );
   if (
     event.type === "snapshot" ||
     event.type === "thread.updated" ||
     event.type === "thread.deleted"
   ) {
-    const snapshot = agents.snapshot();
-    const archived = snapshot.archivedThreads || [];
-    const historiesReady = snapshot.agents.every(
-      (agent) => agent.historyStatus === "ready",
-    );
-    if (snapshot.threads.length || archived.length || historiesReady)
-      threadSummaries.schedule(snapshot.threads, archived);
+    // 落盘的是 cacheSnapshot：已停用 agent 的会话摘要也要保留，重新启用前不能丢。
+    const cache = agents.cacheSnapshot();
+    const historiesReady = agents
+      .list()
+      .every(
+        (agent) => agent.enabled === false || agent.historyStatus === "ready",
+      );
+    if (cache.threads.length || cache.archivedThreads.length || historiesReady)
+      threadSummaries.schedule(cache.threads, cache.archivedThreads);
     sessionSearch.reconcileSoon();
   }
   // snapshot 走合并窗口；thread.updated/deleted 与 codex.event 本就是增量小包，
@@ -1448,6 +1779,17 @@ try {
 }
 
 console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
+// 本机发现文件：deck-wake 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
+try {
+  const deckHome = path.resolve(
+    process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
+  );
+  mkdirSync(deckHome, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(deckHome, "url"), `${localBase}\n`, { mode: 0o600 });
+  writeFileSync(path.join(deckHome, "token"), `${token}\n`, { mode: 0o600 });
+} catch (error: any) {
+  console.error("写入唤醒发现文件失败:", error?.message || error);
+}
 if (lanListener) {
   const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");
   if (urls.length) {
@@ -1542,4 +1884,5 @@ const shutdown = (signal: string) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 // Windows Ctrl+Break 只在 win32 上存在，其他平台注册会报错，故加守卫。
-if (process.platform === "win32") process.on("SIGBREAK", () => shutdown("SIGBREAK"));
+if (process.platform === "win32")
+  process.on("SIGBREAK", () => shutdown("SIGBREAK"));

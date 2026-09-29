@@ -83,7 +83,7 @@ test("matchingSlashCommands filters as the user types", () => {
   );
   assert.deepEqual(
     matchingSlashCommands("/", "claude").map((item) => item.name),
-    ["/status", "/ps", "/usage"],
+    ["/skills", "/status", "/ps", "/usage"],
   );
   assert.match(incompleteCommandHint("/goal"), /目标/);
   assert.match(incompleteCommandHint("/fast turbo"), /on\|off/);
@@ -118,6 +118,19 @@ test("opencode commands parse to native or passthrough kinds", () => {
   });
   assert.deepEqual(parseComposerCommand("/undo", "opencode"), { kind: "undo" });
   assert.deepEqual(parseComposerCommand("/redo", "opencode"), { kind: "redo" });
+  // /skills 开 Deck 面板而不是透传给 serve（serve 没有这条命令）。
+  assert.deepEqual(parseComposerCommand("/skills", "opencode"), {
+    kind: "skills",
+    query: "",
+  });
+  assert.deepEqual(parseComposerCommand("/skills pdf", "opencode"), {
+    kind: "skills",
+    query: "pdf",
+  });
+  assert.deepEqual(parseComposerCommand("/skills pdf", "claude"), {
+    kind: "skills",
+    query: "pdf",
+  });
   // Codex 解析不受影响：未知命令仍返回 undefined。
   assert.equal(parseComposerCommand("/my-deploy prod"), undefined);
   assert.equal(parseComposerCommand("/undo"), undefined);
@@ -157,6 +170,7 @@ test("opencode slash menu merges builtins with server custom commands", () => {
   const names = items.map((item) => item.name);
   assert.ok(names.includes("/compact"));
   assert.ok(names.includes("/models"));
+  assert.ok(names.includes("/skills"));
   assert.ok(names.includes("/deploy"));
   assert.equal(names.filter((name) => name === "/compact").length, 1);
   assert.deepEqual(

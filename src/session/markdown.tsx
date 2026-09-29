@@ -109,6 +109,66 @@ const MARKDOWN_BASE_COMPONENTS = {
   h2: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
 };
 
+function FileImage({ src, alt }: { src?: string; alt?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed)
+    return (
+      <span className="markdown-image-missing" title={String(src || "")}>
+        图片无法显示{alt || src ? `：${alt || src}` : ""}
+      </span>
+    );
+  return (
+    <img
+      className="markdown-image"
+      src={String(src)}
+      alt={alt || ""}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+const FILE_MARKDOWN_BASE_COMPONENTS = {
+  // 文件预览里 http(s) 链接可点击；相对路径/锚点点击会破坏应用路由，降级为文本。
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) =>
+    href && /^https?:\/\//i.test(href) ? (
+      <a href={href} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span title={href}>{children}</span>
+    ),
+  img: ({ src, alt }: { src?: string; alt?: string }) => (
+    <FileImage src={src} alt={alt} />
+  ),
+};
+
+export const FileMarkdown = memo(function FileMarkdown({
+  text,
+  onCopy,
+}: {
+  text: string;
+  onCopy?: () => void;
+}) {
+  const components = useMemo(
+    () => ({
+      ...FILE_MARKDOWN_BASE_COMPONENTS,
+      pre: ({ children }: { children?: React.ReactNode }) => (
+        <CopyablePre onCopy={onCopy}>{children}</CopyablePre>
+      ),
+    }),
+    [onCopy],
+  );
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
 export const AssistantMarkdown = memo(
   function AssistantMarkdown({
     text,
