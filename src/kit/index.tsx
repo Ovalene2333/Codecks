@@ -1,8 +1,6 @@
-import {
-  type ButtonHTMLAttributes,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { type ButtonHTMLAttributes, type ReactNode } from "react";
+import * as RxSwitch from "@radix-ui/react-switch";
+import * as Tabs from "@radix-ui/react-tabs";
 
 /**
  * UI 基线组件。样式在 src/kit.css，规范见 docs/ui-baseline.md。
@@ -51,8 +49,8 @@ export function Button({
 }
 
 /**
- * 分段控件 / 标签页。方向键、Home/End 在标签间移动，选中即激活；
- * 只有选中项在 Tab 序列里（roving tabindex）。
+ * 分段控件 / 标签页。内部用 Radix Tabs：方向键、Home/End 移动并选中
+ * （roving tabindex），样式仍是 kit.css 的 .ui-seg。只借行为，不借外观。
  */
 export function Seg<T extends string>({
   items,
@@ -70,53 +68,27 @@ export function Seg<T extends string>({
   idPrefix?: string;
   className?: string;
 }) {
-  const move = (event: KeyboardEvent<HTMLDivElement>) => {
-    const index = items.findIndex((item) => item.value === value);
-    const last = items.length - 1;
-    const next =
-      event.key === "ArrowRight"
-        ? (index + 1) % items.length
-        : event.key === "ArrowLeft"
-          ? (index - 1 + items.length) % items.length
-          : event.key === "Home"
-            ? 0
-            : event.key === "End"
-              ? last
-              : -1;
-    if (next < 0) return;
-    event.preventDefault();
-    onChange(items[next].value);
-    (
-      event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[next] ||
-      null
-    )?.focus();
-  };
   return (
-    <div
-      className={cx("ui-seg", className)}
-      role="tablist"
-      aria-label={label}
-      onKeyDown={move}
+    <Tabs.Root
+      value={value}
+      onValueChange={(next) => onChange(next as T)}
+      activationMode="automatic"
+      style={{ display: "contents" }}
     >
-      {items.map((item) => {
-        const active = item.value === value;
-        return (
-          <button
+      <Tabs.List className={cx("ui-seg", className)} aria-label={label}>
+        {items.map((item) => (
+          <Tabs.Trigger
             key={item.value}
-            type="button"
-            role="tab"
+            value={item.value}
             id={idPrefix ? `${idPrefix}-tab-${item.value}` : undefined}
-            aria-selected={active}
             aria-controls={idPrefix ? `${idPrefix}-panel` : undefined}
-            tabIndex={active ? 0 : -1}
-            className={cx("ui-seg__item", active && "is-active")}
-            onClick={() => onChange(item.value)}
+            className={cx("ui-seg__item", item.value === value && "is-active")}
           >
             {item.label}
-          </button>
-        );
-      })}
-    </div>
+          </Tabs.Trigger>
+        ))}
+      </Tabs.List>
+    </Tabs.Root>
   );
 }
 
@@ -137,15 +109,13 @@ export function Switch({
   title?: string;
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
+    <RxSwitch.Root
+      checked={checked}
+      onCheckedChange={onChange}
       aria-label={label}
       title={title}
       disabled={disabled || busy}
       className={cx("ui-switch", busy && "is-busy")}
-      onClick={() => onChange(!checked)}
     />
   );
 }
