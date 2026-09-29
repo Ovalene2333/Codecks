@@ -364,7 +364,7 @@ export function TiledStage({
             onClick={() => runViewTransition(onExitFocus)}
           >
             <LayoutGrid />
-            平铺
+            监控台
           </button>
         </div>
         {focused && (
@@ -775,7 +775,7 @@ export function TiledStage({
   );
 }
 
-function TileCard({
+export function TileCard({
   thread,
   current,
   project,

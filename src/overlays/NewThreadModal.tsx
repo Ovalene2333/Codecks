@@ -28,6 +28,7 @@ import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import {
   agentProtocol,
   defaultAgentId,
+  isAgentEnabled,
   opencodeProviderId,
   type AgentId,
   type AgentProtocol,
@@ -64,11 +65,13 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
+  // 已停用的 agent 不能新建会话：选择器里直接不出现，在设置里启用后才回来。
+  const enabledAgents = agents.filter(isAgentEnabled);
   const agentOptions: Pick<
     AgentDescriptor,
-    "id" | "name" | "online" | "starting" | "protocol"
-  >[] = agents.length
-    ? agents
+    "id" | "name" | "online" | "starting" | "protocol" | "fallbackFor"
+  >[] = enabledAgents.length
+    ? enabledAgents
     : [
         {
           id: "codex",
@@ -264,6 +267,7 @@ export function NewThreadModal({
                 disabled={!agent.online && !agent.starting}
               >
                 {agent.name}
+                {agent.fallbackFor ? "（备选）" : ""}
                 {!agent.online
                   ? agent.starting
                     ? "（启动中）"
@@ -385,6 +389,7 @@ export function NewThreadModal({
             <ModelPicker
               agentId={agentId}
               providerId=""
+              cwd={form.cwd}
               model={form.model}
               reasoningEffort={form.reasoningEffort}
               onChange={(next) =>

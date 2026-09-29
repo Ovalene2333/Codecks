@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 
@@ -57,6 +57,7 @@ export function groupSearchableOptions(options: SearchableOption[]) {
 interface PickerAnchor {
   left: number;
   width: number;
+  maxHeight: number;
   top?: number;
   bottom?: number;
 }
@@ -65,7 +66,6 @@ interface PickerAnchor {
    cramped under the thumb and gets clipped by scrollable modal bodies. */
 const SHEET_QUERY = "(max-width: 760px)";
 const DROPDOWN_MIN_SPACE = 240;
-const DROPDOWN_MIN_SPACE_ABOVE = 200;
 /** Rows rendered per chunk; long catalogs grow on scroll instead of up front. */
 const ROW_CHUNK = 60;
 
@@ -90,12 +90,20 @@ function anchorFor(trigger: HTMLElement | null): PickerAnchor | undefined {
   const spaceBelow = window.innerHeight - box.bottom;
   const spaceAbove = box.top;
   const preferAbove =
-    spaceBelow < DROPDOWN_MIN_SPACE &&
-    spaceAbove > spaceBelow &&
-    spaceAbove > DROPDOWN_MIN_SPACE_ABOVE;
+    spaceBelow < DROPDOWN_MIN_SPACE && spaceAbove > spaceBelow;
   return preferAbove
-    ? { left, width, bottom: window.innerHeight - box.top + 4 }
-    : { left, width, top: box.bottom + 4 };
+    ? {
+        left,
+        width,
+        bottom: window.innerHeight - box.top + 4,
+        maxHeight: Math.max(0, spaceAbove - margin - 4),
+      }
+    : {
+        left,
+        width,
+        top: box.bottom + 4,
+        maxHeight: Math.max(0, spaceBelow - margin - 4),
+      };
 }
 
 export function SearchablePicker({
@@ -209,12 +217,22 @@ export function SearchablePicker({
     };
   }, [open, sheet]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
+    const list = listRef.current;
     const row = listRef.current?.querySelector<HTMLElement>(
       `[data-idx="${active}"]`,
     );
-    row?.scrollIntoView({ block: "nearest" });
+    if (!list || !row) return;
+    const top =
+      row.getBoundingClientRect().top -
+      list.getBoundingClientRect().top +
+      list.scrollTop;
+    if (top < list.scrollTop) {
+      list.scrollTop = top;
+    } else if (top + row.offsetHeight > list.scrollTop + list.clientHeight) {
+      list.scrollTop = top + row.offsetHeight - list.clientHeight;
+    }
   }, [active, open]);
 
   useEffect(() => {
@@ -323,6 +341,7 @@ export function SearchablePicker({
                 width: anchor?.width,
                 top: anchor?.top,
                 bottom: anchor?.bottom,
+                maxHeight: anchor?.maxHeight,
               }}
             >
               {sheet && (

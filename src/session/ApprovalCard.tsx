@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, FolderOpen, ShieldAlert, Terminal } from "lucide-react";
+import { Check, FolderOpen, ShieldAlert, Terminal, X } from "lucide-react";
 import type { Approval, ApprovalResolveBody, FileChange } from "../types";
 import { agentName } from "../agents";
 import { displayText } from "../format";
@@ -11,6 +11,30 @@ export function defaultDecisions(approval: Approval) {
   if (approval.kind === "command" || approval.kind === "file" || !approval.kind)
     return ["decline", "accept", "acceptForSession"];
   return listed || [];
+}
+
+export interface AgentPermissionOption {
+  optionId: string;
+  name: string;
+  kind: string;
+}
+
+/**
+ * ACP session/request_permission 的 options：agent 给的每一档都渲染出来，
+ * 点击回传 optionId。只认这个方法，避免把别的协议的 options 字段误当
+ * ACP 选项。
+ */
+export function agentOptionList(approval: Approval): AgentPermissionOption[] {
+  if (approval.request.method !== "session/request_permission") return [];
+  const raw = approval.request.params?.options;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry: any) => ({
+      optionId: String(entry?.optionId ?? ""),
+      name: String(entry?.name || entry?.optionId || "选项"),
+      kind: String(entry?.kind || ""),
+    }))
+    .filter((entry) => entry.optionId);
 }
 
 export function ApprovalCard({
@@ -56,9 +80,14 @@ export function ApprovalCard({
     );
 
   const decisions = defaultDecisions(approval);
+  // ACP（devin 等）把完整 options 透传过来时逐档渲染，点哪档回哪个
+  // optionId——devin 一次会给 Allow/本会话/本项目/全局/bypass/拒绝等多档。
+  const agentOptions = agentOptionList(approval);
   const title =
     kind === "file"
       ? `${actor} 请求修改文件`
+      : params.permission?.permission === "external_directory"
+        ? `${actor} 请求访问项目外目录`
       : approval.networkApproval
         ? `${actor} 请求网络访问`
         : `${actor} 请求执行命令`;
@@ -95,8 +124,46 @@ export function ApprovalCard({
         </div>
       ) : null}
       {kind === "file" && <FileDiff changes={changes} />}
-      <div className="approval-actions">
-        {decisions.includes("decline") && (
+      <div
+        className={`approval-actions${agentOptions.length ? " option-list" : ""}`}
+      >
+        {agentOptions.length ? (
+          <>
+            {agentOptions.map((option) => (
+              <button
+                key={option.optionId}
+                type="button"
+                disabled={disabled}
+                className={
+                  option.kind.startsWith("reject")
+                    ? ""
+                    : option.kind === "allow_once"
+                      ? "approve"
+                      : "approve session"
+                }
+                onClick={() =>
+                  onResolve(approval.id, { optionId: option.optionId })
+                }
+              >
+                {option.kind.startsWith("reject") ? <X /> : <Check />}
+                {option.name}
+              </button>
+            ))}
+            {!agentOptions.some((option) =>
+              option.kind.startsWith("reject"),
+            ) && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onResolve(approval.id, { decision: "cancel" })}
+              >
+                取消
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            {decisions.includes("decline") && (
           <button
             type="button"
             disabled={disabled}
@@ -134,8 +201,12 @@ export function ApprovalCard({
               onResolve(approval.id, { decision: "acceptForSession" })
             }
           >
-            本会话允许
+            {approval.request.method?.startsWith("opencode/permission")
+              ? "始终允许"
+              : "本会话允许"}
           </button>
+        )}
+          </>
         )}
       </div>
     </article>
@@ -280,7 +351,7 @@ function QuestionApproval({
   onResolve: (id: string, body: ApprovalResolveBody) => void;
   disabled: boolean;
 }) {
-  const items = questions.slice(0, 3);
+  const items = questions.slice(0, 4);
   const [answers, setAnswers] = useState<{ value: string; other: string }[]>(
     () => items.map(() => ({ value: "", other: "" })),
   );
@@ -340,7 +411,9 @@ function QuestionApproval({
           const options = question.options || [];
           const answer = answers[index];
           const labels = pickedLabels(answer);
-          const multiple = Boolean(approval.multiple || question.multiple);
+          const multiple = Boolean(
+            approval.multiple || question.multiple || question.multiSelect,
+          );
           const custom =
             question.custom === true ||
             Boolean(question.isOther) ||

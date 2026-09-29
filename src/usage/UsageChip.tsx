@@ -7,6 +7,7 @@ import {
   remainingPercent,
   usageChipMetric,
   usageTone,
+  usageWindow,
 } from "./format";
 import { Drawer } from "../ui";
 import { formatTokens, relativeTime } from "../format";
@@ -24,6 +25,7 @@ export function UsageChip({
 }) {
   const metric = usageChipMetric(runtime?.rateLimits, runtime?.rateLimitsError);
   const tone = runtime?.rateLimits ? usageTone(runtime.rateLimits) : "muted";
+  const pct = remainingPercent(usageWindow(runtime?.rateLimits)?.usedPercent);
   return (
     <button
       type="button"
@@ -31,8 +33,13 @@ export function UsageChip({
       title="账号额度"
       onClick={onOpen}
     >
-      <Gauge />
+      <span className="usage-chip-label">额度</span>
       <span className="usage-chip-metric">{metric}</span>
+      {pct != null ? (
+        <i className="usage-chip-track" aria-hidden="true">
+          <b style={{ width: `${pct}%` }} />
+        </i>
+      ) : null}
     </button>
   );
 }
@@ -61,10 +68,7 @@ export function UsageDrawer({
     return stats.sessions.reduce(
       (sum, row) =>
         sum +
-        estimateCost(
-          row.totals,
-          row.thread.resolvedModel || row.thread.model,
-        ),
+        estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
       0,
     );
   }, [threads, projects]);
@@ -143,10 +147,7 @@ function UsageStats({
   const cost = stats.sessions.reduce(
     (sum, row) =>
       sum +
-      estimateCost(
-        row.totals,
-        row.thread.resolvedModel || row.thread.model,
-      ),
+      estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
     0,
   );
 

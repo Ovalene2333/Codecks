@@ -16,6 +16,9 @@
   height: 32px;
   flex: none;
   display: block;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 7%),
+    0 4px 14px -4px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .brand svg {
   width: 16px;
@@ -126,7 +129,7 @@
   min-width: 0;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
   color: var(--text-dim);
@@ -142,7 +145,8 @@
   font-weight: 650;
 }
 .sidebar-meta .watch-strip button.active {
-  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
   color: var(--text);
   box-shadow: var(--shadow-sm);
 }
@@ -268,20 +272,32 @@
   padding: 6px 6px 6px 10px;
   border: 0;
   border-left: 2px solid transparent;
-  border-radius: 0 8px 8px 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color var(--ease),
+    border-color var(--ease),
+    box-shadow var(--ease);
 }
 .session-row:hover,
 .session-row:focus-visible {
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
   outline: none;
 }
 .session-row.selected {
   border-left-color: transparent;
-  background: var(--surface-2);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      color-mix(in srgb, var(--accent) 4%, transparent) 58%,
+      transparent
+    ),
+    var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .session-row .session-search-hit {
   display: flex;
@@ -463,8 +479,8 @@
   position: relative;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
-  padding: 10px 12px max(12px, env(safe-area-inset-bottom));
+  gap: 5px;
+  padding: 8px 12px max(8px, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--sidebar);
 }

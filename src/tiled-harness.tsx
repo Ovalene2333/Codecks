@@ -174,7 +174,7 @@ interface DemoLine {
 
 const HERO_LINES: Record<string, DemoLine[]> = {
   tiled: [
-    { role: "user", text: "给网页加一个平铺模式，活跃会话放在屏幕中间" },
+    { role: "user", text: "给网页加一个监控台，活跃会话放在屏幕中间" },
     {
       role: "agent",
       text: "方案：中心 hero 显示聚焦会话，左右卫星栏放其余活跃会话，空闲项目收进底部 dock。列表模式原样保留，顶栏一键切换。",

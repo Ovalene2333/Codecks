@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Lock, ShieldAlert } from "lucide-react";
 import { api, post } from "../api";
-import { dedupeThreadLoad, readThreadCache } from "../cache";
+import { dedupeThreadLoad, readThreadCache, writeThreadCache } from "../cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
 import { SessionToolbar } from "../layout/SessionToolbar";
@@ -49,6 +49,8 @@ import {
   shouldSurfaceThreadLoadError,
 } from "./thread-load";
 import { draftFromUserMessage, userMessageText } from "./user-message";
+
+const EMPTY_TURNS: any[] = [];
 
 export function ChatWorkspace({
   thread,
@@ -104,6 +106,7 @@ export function ChatWorkspace({
   const [threadLoadSettled, setThreadLoadSettled] = useState(false);
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [commandModal, setCommandModal] = useState<CommandModalKind>();
   const [modelCatalog, setModelCatalog] = useState<ModelInfo[]>([]);
@@ -124,14 +127,18 @@ export function ChatWorkspace({
   >();
   const fullRef = useRef(full);
   fullRef.current = full;
+  const loadVersion = useRef(0);
   const updateDraft = (next: typeof draft) => {
     setDraft(writeComposerDraft(threadCacheKey, next));
   };
   const load = useCallback(
-    () =>
-      dedupeThreadLoad(threadCacheKey, () => api(threadPath(thread)))
+    (fresh = false) => {
+      const version = loadVersion.current;
+      return dedupeThreadLoad(threadCacheKey, () => api(threadPath(thread)), fresh)
         .then((data) => {
-          const next = shouldKeepLoadedThread(fullRef.current, data)
+          if (version !== loadVersion.current) return;
+          const next = (thread.agentId || "codex") === "claude" &&
+            shouldKeepLoadedThread(fullRef.current, data)
             ? fullRef.current
             : data;
           setFull(next);
@@ -144,14 +151,19 @@ export function ChatWorkspace({
           setError("");
         })
         .catch((err) => {
+          if (version !== loadVersion.current) return;
           if (shouldSurfaceThreadLoadError(fullRef.current))
             setError(err.message);
         })
-        .finally(() => setThreadLoadSettled(true)),
+        .finally(() => {
+          if (version === loadVersion.current) setThreadLoadSettled(true);
+        });
+    },
     [threadCacheKey, thread.id, thread.providerId, thread.agentId],
   );
   useEffect(() => {
     setThreadLoadSettled(false);
+    loadVersion.current += 1;
     const cached = readThreadCache(threadCacheKey);
     fullRef.current = cached || undefined;
     setFull(cached || undefined);
@@ -201,7 +213,7 @@ export function ChatWorkspace({
     }
     let cancelled = false;
     api<ModelInfo[]>(
-      `/agents/${encodeURIComponent(id)}/models?providerId=${encodeURIComponent(thread.providerId)}`,
+      `/agents/${encodeURIComponent(id)}/models?providerId=${encodeURIComponent(thread.providerId)}${id === "opencode" && thread.cwd ? `&directory=${encodeURIComponent(thread.cwd)}` : ""}`,
     )
       .then((list) => {
         if (!cancelled) setModelCatalog(Array.isArray(list) ? list : []);
@@ -210,11 +222,21 @@ export function ChatWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [thread.agentId, thread.providerId]);
+  }, [thread.agentId, thread.providerId, thread.cwd]);
 
-  const latestEvent = events.at(-1);
+  // 只让「非 delta」事件触发 effect：delta 高频且不携带结构变化，若参与
+  // 依赖，每次 delta 都会清掉 300ms 历史刷新计时器——持续流式期间
+  // full.turns 长期不更新，时间线只能靠 live 事件近似渲染。
+  const latestSyncEvent = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const method = String(events[index]?.method || "");
+      if (method && !method.toLowerCase().endsWith("/delta"))
+        return events[index];
+    }
+    return undefined;
+  }, [events]);
   useEffect(() => {
-    const event = latestEvent;
+    const event = latestSyncEvent;
     const method = String(event?.method || "");
     if (!method || method.toLowerCase().endsWith("/delta")) return;
     if (event?.providerId && event.providerId !== thread.providerId) return;
@@ -242,7 +264,7 @@ export function ChatWorkspace({
     }
     const timer = window.setTimeout(() => load(), 300);
     return () => window.clearTimeout(timer);
-  }, [latestEvent, load, thread.id, thread.providerId, thread.agentId]);
+  }, [latestSyncEvent, load, thread.id, thread.providerId, thread.agentId]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
@@ -262,7 +284,9 @@ export function ChatWorkspace({
       };
     if (
       thread.agentId === "claude" &&
-      !["status", "usage", "ps", "model", "permissions"].includes(command.kind)
+      !["status", "usage", "ps", "model", "permissions", "skills"].includes(
+        command.kind,
+      )
     )
       throw new Error(`${agentName} 暂不支持这个 Codecks 命令`);
     if (command.kind === "compact" && !capabilities.sessionSettings)
@@ -478,7 +502,9 @@ export function ChatWorkspace({
   };
   const submit = async (candidate: typeof draft, restoreOnFailure: boolean) => {
     const value = candidate.text.trim();
-    if (sending || thread.compacting) return;
+    // State updates are batched; Enter and a button click can reach this handler
+    // before `sending` renders. Claim the submission synchronously.
+    if (sendingRef.current || reverting || thread.compacting) return;
     const command = parseComposerCommand(value, thread.agentId || "codex");
     const hint = incompleteCommandHint(value);
     if (!command && hint) {
@@ -489,6 +515,7 @@ export function ChatWorkspace({
     // 分支重发意图下只接受正文发送；斜杠命令走正常链路并丢弃分支意图。
     const branchRetry = !command ? retrySource : undefined;
     if (command && retrySource) setRetrySource(undefined);
+    sendingRef.current = true;
     setSending(true);
     setError("");
     setStatusNote("");
@@ -509,6 +536,7 @@ export function ChatWorkspace({
           updateDraft({ text: value, images: pendingImages });
         setError(err.message);
       } finally {
+        sendingRef.current = false;
         setSending(false);
       }
       return;
@@ -568,6 +596,7 @@ export function ChatWorkspace({
         updateDraft({ text: value, images: pendingImages });
       setError(err.message);
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
@@ -577,27 +606,34 @@ export function ChatWorkspace({
     if (result.skippedImages) onToast("历史图片来自本机路径，请重新选择后发送");
     return result.draft;
   };
-  /** 纯编辑：把原文带回输入框追加为新 turn，不改变分支意图之外的状态。 */
-  const editUserMessage = (item: any) => {
-    setRetrySource(undefined);
-    updateDraft(readHistoryDraft(item));
-    setComposerFocusRequest((current) => current + 1);
-  };
-  const retryPath = (thread.agentId || "codex") === "opencode"
-    ? `${threadPath(thread)}/retry`
-    : commandPath("retry");
+  // Codex 走旧 manager 路由；其它 Agent（opencode/claude/acp）走通用
+  // Agent API，否则会误进 Codex adapter 报「供应商不存在/源会话不存在」。
+  const retryPath = (thread.agentId || "codex") === "codex"
+    ? commandPath("retry")
+    : `${threadPath(thread)}/retry`;
   /**
    * 从历史消息分支重试（两步式）：先把原文带回输入框并记住来源 turn，
    * 用户改完按发送才真正 fork + 重发；直接发送即用原文重试。
    * 原分支完整保留， destructive 的撤回（undo）只留给真正想抹掉历史时用。
    */
   const retryUserMessage = (turnId: string, item: any) => {
-    if (sending || locked || thread.compacting) return;
+    if (sending || locked || reverting || thread.compacting) return;
     const candidate = readHistoryDraft(item);
     const preview = candidate.text.trim().slice(0, 42) || "所选消息";
     setRetrySource({ turnId, preview });
     updateDraft(candidate);
     setComposerFocusRequest((current) => current + 1);
+  };
+  const editUserMessage = (turnId: string, item: any) => {
+    if (!["codex", "opencode"].includes(thread.agentId || "codex")) return;
+    if (sending || locked || reverting || thread.compacting) return;
+    const candidate = readHistoryDraft(item);
+    void executeRevert(turnId).then((reverted) => {
+      if (!reverted) return;
+      setRetrySource(undefined);
+      updateDraft(candidate);
+      setComposerFocusRequest((current) => current + 1);
+    });
   };
   const executeRetrySend = async (
     turnId: string,
@@ -621,11 +657,12 @@ export function ChatWorkspace({
   };
   const compact = async () => {
     try {
-      if ((thread.agentId || "codex") === "opencode") {
-        await post(`${threadPath(thread)}/compact`);
-      } else {
-        await post(`/threads/${thread.providerId}/${thread.id}/compact`);
-      }
+      await post(
+        (thread.agentId || "codex") === "codex"
+          ? `/threads/${thread.providerId}/${thread.id}/compact`
+          : `${threadPath(thread)}/compact`,
+      );
+      await load(true);
       onSnapshot();
     } catch (err: any) {
       setError(err.message);
@@ -651,20 +688,35 @@ export function ChatWorkspace({
         `${threadPath(thread)}/revert`,
         messageID ? { messageID } : {},
       );
+      loadVersion.current += 1;
+      const turns = fullRef.current?.turns;
+      if (Array.isArray(turns)) {
+        const cut = turns.findIndex((turn: any) => String(turn?.id) === result.messageID);
+        if (cut >= 0) {
+          const next = { ...fullRef.current, turns: turns.slice(0, cut) };
+          fullRef.current = next;
+          setFull(next);
+          writeThreadCache(threadCacheKey, next);
+        }
+      }
       const files = Number(result?.files || 0);
-      setStatusNote(
-        [
-          `已撤回${messageID ? "所选消息及之后" : "最近一轮"}的内容。`,
-          files > 0
-            ? `恢复 ${files} 个文件（+${result.additions} −${result.deletions}）。`
-            : "未发现可恢复的文件快照，仅回滚了对话（非 git 仓库时属正常）。",
-          "可用 /redo 恢复撤回前的内容（需确认）。",
-        ].join("\n"),
+      setStatusNote((thread.agentId || "codex") === "codex"
+        ? "已回退到所选消息之前。Codex 仅回退对话历史，工作区文件不会自动恢复。"
+        : [
+            `已撤回${messageID ? "所选消息及之后" : "最近一轮"}的内容。`,
+            files > 0
+              ? `恢复 ${files} 个文件（+${result.additions} −${result.deletions}）。`
+              : "未发现可恢复的文件快照，仅回滚了对话（非 git 仓库时属正常）。",
+            "再次发送前可用 /redo 恢复撤回前的内容（需确认）。",
+          ].join("\n"),
       );
-      load();
+      setPendingUsers([]);
+      await load(true);
       onSnapshot();
+      return true;
     } catch (err: any) {
       setError(err.message);
+      return false;
     } finally {
       setReverting(false);
       setRevertConfirm(undefined);
@@ -674,8 +726,9 @@ export function ChatWorkspace({
     setReverting(true);
     try {
       await post(`${threadPath(thread)}/unrevert`, {});
+      loadVersion.current += 1;
       setStatusNote("已恢复撤回前的内容与文件。");
-      load();
+      await load(true);
       onSnapshot();
     } catch (err: any) {
       setError(err.message);
@@ -710,6 +763,7 @@ export function ChatWorkspace({
         method: "PATCH",
         body: JSON.stringify({ settings }),
       });
+      setError("");
       onSnapshot();
       return true;
     } catch (err: any) {
@@ -719,17 +773,14 @@ export function ChatWorkspace({
   };
   const forkFrom = async (lastTurnId?: string) => {
     try {
-      const isOpenCode = (thread.agentId || "codex") === "opencode";
+      const agentId = thread.agentId || "codex";
       const created = await post(
-        isOpenCode
-          ? `${threadPath(thread)}/fork`
-          : `/threads/${thread.providerId}/${thread.id}/fork`,
-        // OpenCode 原生 fork 用 messageID 做边界，Codex 用 lastTurnId；
-        // 通用路由两侧都接受，这里按 Agent 语义发送。
+        agentId === "codex"
+          ? `/threads/${thread.providerId}/${thread.id}/fork`
+          : `${threadPath(thread)}/fork`,
+        // 所有 Agent 传保留到的轮次；OpenCode adapter 负责换算原生排除边界。
         lastTurnId
-          ? isOpenCode
-            ? { messageID: lastTurnId }
-            : { lastTurnId }
+          ? { lastTurnId }
           : {},
       );
       onSelectThread(thread.providerId, created.id);
@@ -740,9 +791,9 @@ export function ChatWorkspace({
   };
   // events 全扫从每 render 两遍降为一遍；非 running/waiting 直接给空数组，
   // 与旧逻辑一致（旧代码同样按 status 短路）。
-  const { streamed, streamedItems } = useMemo(() => {
+  const { streamed, streamedItems, streamedEntries } = useMemo(() => {
     if (thread.status !== "running" && thread.status !== "waiting")
-      return { streamed: [], streamedItems: [] };
+      return { streamed: [], streamedItems: [], streamedEntries: [] };
     const live = collectStreamed(
       events,
       thread.providerId,
@@ -750,7 +801,11 @@ export function ChatWorkspace({
       thread.activeTurnId,
       thread.agentId || "codex",
     );
-    return { streamed: live.messages, streamedItems: live.items };
+    return {
+      streamed: live.messages,
+      streamedItems: live.items,
+      streamedEntries: live.entries,
+    };
   }, [
     events,
     thread.status,
@@ -827,12 +882,12 @@ export function ChatWorkspace({
       >
         <Timeline
           thread={thread}
-          turns={Array.isArray(full?.turns) ? full.turns : []}
+          turns={Array.isArray(full?.turns) ? full.turns : EMPTY_TURNS}
           streamed={streamed}
           streamedItems={streamedItems}
+          streamedEntries={streamedEntries}
           pendingUsers={pendingUsers}
           origin={origin}
-          agentName={agentName}
           onQuickPrompt={(text) => {
             updateDraft({ ...draft, text });
             setComposerFocusRequest((current) => current + 1);
@@ -843,18 +898,28 @@ export function ChatWorkspace({
           targetFallbackReady={threadLoadSettled}
           onCopy={() => onToast("已复制")}
           onForkFrom={
-            capabilities.fork ? (turnId) => forkFrom(turnId) : undefined
+            capabilities.fork && ["codex", "claude", "opencode"].includes(thread.agentId || "codex")
+              ? (turnId) => forkFrom(turnId)
+              : undefined
           }
           onOpenOrigin={onOpenOrigin}
-          onEditUserMessage={editUserMessage}
-          onRetryUserMessage={capabilities.fork ? retryUserMessage : undefined}
+          onEditUserMessage={
+            ["codex", "opencode"].includes(thread.agentId || "codex")
+              ? editUserMessage
+              : undefined
+          }
+          onRetryUserMessage={
+            capabilities.fork && ["codex", "claude"].includes(thread.agentId || "codex")
+              ? retryUserMessage
+              : undefined
+          }
           onRevertUserMessage={
             (thread.agentId || "codex") === "opencode"
               ? openMessageRevert
               : undefined
           }
           messageActionsDisabled={
-            locked || sending || Boolean(thread.compacting)
+            locked || sending || reverting || Boolean(thread.compacting)
           }
         />
       </RenderErrorBoundary>
@@ -900,7 +965,7 @@ export function ChatWorkspace({
         thread={thread}
         text={draft.text}
         images={draft.images}
-        sending={sending}
+        sending={sending || reverting}
         imageWarning={imageWarning}
         extraCommands={[
           // ACP agent 的 /model 走 Deck 模型面板（有目录时），其余命令来自
@@ -937,6 +1002,7 @@ export function ChatWorkspace({
               locked={locked}
               onSettings={saveSettings}
               onCompact={compact}
+              showCompact={false}
             />
           ) : undefined
         }

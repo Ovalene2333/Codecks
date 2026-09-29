@@ -110,6 +110,8 @@ export class WebTerminalTool implements DeckTool {
   }
 
   connect(socket: WebSocket) {
+    (socket as unknown as { _socket?: { setNoDelay?: (v?: boolean) => void } })
+      ._socket?.setNoDelay?.(true);
     let terminal: pty.IPty | undefined;
     let starting = false;
     let closed = false;
@@ -185,10 +187,26 @@ export class WebTerminalTool implements DeckTool {
           this.pendingSessions -= 1;
         }
         this.sessions.add(terminal);
-        terminal.onData((data) => send({ type: "output", data }));
+        let pendingOutput = "";
+        let flushScheduled = false;
+        terminal.onData((data) => {
+          pendingOutput += data;
+          if (flushScheduled) return;
+          flushScheduled = true;
+          setImmediate(() => {
+            flushScheduled = false;
+            const output = pendingOutput;
+            pendingOutput = "";
+            if (output) send({ type: "output", data: output });
+          });
+        });
         terminal.onExit(({ exitCode, signal }) => {
           if (terminal) this.sessions.delete(terminal);
           terminal = undefined;
+          if (pendingOutput) {
+            send({ type: "output", data: pendingOutput });
+            pendingOutput = "";
+          }
           send({ type: "exit", exitCode, signal });
           socket.close(1000, "terminal exited");
         });

@@ -212,6 +212,69 @@ test("an optimistic steer is inserted before commands that arrive after it", () 
   assert.ok(html.indexOf("追加消息") < html.indexOf("rg 新命令"));
 });
 
+test("live messages interleave with live items in event order", () => {
+  const thread: ThreadSummary = {
+    id: "thread-1",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "running",
+    updatedAt: Date.now(),
+    activeTurnId: "turn-1",
+    agentId: "devin",
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: { id: "turn-1", status: "inProgress", items: [] },
+      index: 1,
+      thread,
+      streamed: [
+        { itemId: "msg-1", text: "第一段" },
+        { itemId: "msg-2", text: "第二段" },
+      ],
+      streamedItems: [
+        {
+          itemId: "tool-1",
+          item: {
+            id: "tool-1",
+            type: "commandExecution",
+            command: "echo one",
+            status: "completed",
+          },
+        },
+        {
+          itemId: "tool-2",
+          item: {
+            id: "tool-2",
+            type: "commandExecution",
+            command: "echo two",
+            status: "completed",
+          },
+        },
+      ],
+      streamedEntries: [
+        { kind: "message", itemId: "msg-1" },
+        { kind: "item", itemId: "tool-1" },
+        { kind: "message", itemId: "msg-2" },
+        { kind: "item", itemId: "tool-2" },
+      ],
+    }),
+  );
+
+  const order = ["第一段", "echo one", "第二段", "echo two"].map((text) =>
+    html.indexOf(text),
+  );
+  assert.ok(
+    order.every((pos) => pos >= 0) &&
+      order[0] < order[1] &&
+      order[1] < order[2] &&
+      order[2] < order[3],
+    `expected interleaved order, got ${order.join(",")}`,
+  );
+});
+
 test("history user messages expose retry-from-here instead of append resend", () => {
   const thread: ThreadSummary = {
     id: "thread-1",

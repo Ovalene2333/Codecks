@@ -36,6 +36,28 @@ export interface AgentDescriptor {
    * `acp` = Agent Client Protocol 通用接入。前端据此给 Agent 选择器分组。
    */
   protocol?: "native" | "acp";
+  /**
+   * 备选 agent：与 `fallbackFor` 指向的主 agent 共用同一份会话存储（如
+   * claude-code-acp 与原生 Claude 都读写 `~/.claude`）。主 agent 健康时，
+   * registry 不再重复展示它的历史会话；主 agent 不可用时自动顶上。
+   */
+  fallbackFor?: AgentId;
+  /**
+   * 仅由 registry 在下发描述符时填写：主 agent 可用，这个备选 agent 正在待命，
+   * 它未接管的历史会话不会出现在快照里（客户端也不应保留本地缓存的旧副本）。
+   */
+  standby?: boolean;
+  /**
+   * 仅由 registry 在下发描述符时填写：这个 agent 是否被加载。缺省视为 true。
+   * false 时不启动、不下发它的会话，也不再报告运行状态。
+   */
+  enabled?: boolean;
+  /** 仅由 registry 填写：能否在设置里停用（Codex 是核心，不可停用）。缺省视为 true。 */
+  toggleable?: boolean;
+  /** enabled=false 的原因：`user` 用户在设置里停用；`default` 默认策略不加载。 */
+  disabledReason?: "user" | "default";
+  /** 默认策略不加载的说明，如「未检测到 kimi 命令」。 */
+  defaultNote?: string;
   available: boolean;
   online: boolean;
   starting?: boolean;
@@ -94,6 +116,14 @@ export interface AgentCommand {
   description?: string;
 }
 
+export interface AgentSkill {
+  name: string;
+  description?: string;
+  path?: string;
+  scope?: string;
+  enabled?: boolean;
+}
+
 export interface AgentRevertSummary {
   messageID: string;
   files: number;
@@ -101,17 +131,26 @@ export interface AgentRevertSummary {
   deletions: number;
 }
 
-export interface AgentAdapter extends Pick<EventEmitter, "on"> {
+export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
   readonly id: AgentId;
   descriptor(): AgentDescriptor;
   snapshot(): AgentSnapshot;
   startAll(): Promise<void>;
   refreshAll(): Promise<void>;
+  /**
+   * 不重启 Deck 的「重载」：重新读取该 agent 的配置与会话。缺省实现是
+   * `restart()`（停后端进程）再 `startAll()`；adapter 若不能安全地停掉
+   * 后端（Claude 的长连接会话），提供自己的轻量实现。
+   */
+  reload?(): Promise<void>;
   repairHistory?(): Promise<void>;
   busyThreads(): ThreadSummary[];
   restart(): void;
   publicProfiles?(): AgentPublicProfile[];
-  listModels?(providerId?: string): Promise<ModelInfo[]> | ModelInfo[];
+  listModels?(
+    providerId?: string,
+    directory?: string,
+  ): Promise<ModelInfo[]> | ModelInfo[];
   createThread?(
     providerId: string,
     input: AgentCreateThreadInput,
@@ -129,7 +168,11 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     threadId: string,
     settings: Partial<AgentCreateThreadInput>,
   ): Promise<unknown>;
-  deleteThread?(providerId: string, threadId: string): Promise<unknown>;
+  deleteThread?(
+    providerId: string,
+    threadId: string,
+    options?: { closeConnection?: boolean },
+  ): Promise<unknown>;
   sendTurn?(
     providerId: string,
     threadId: string,
@@ -147,6 +190,8 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
       | string
       | {
           decision?: string;
+          /** ACP：直接选中 agent 给出的 optionId。 */
+          optionId?: string;
           permissions?: unknown;
           scope?: "session" | "turn";
           answers?: unknown;
@@ -169,6 +214,11 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     providerId: string,
     threadId: string,
   ): Promise<AgentCommand[]>;
+  listSkills?(
+    providerId: string,
+    threadId: string,
+    forceReload?: boolean,
+  ): Promise<{ skills: AgentSkill[]; errors?: unknown[] }>;
   runSessionCommand?(
     providerId: string,
     threadId: string,
@@ -193,8 +243,5 @@ export interface AgentAdapter extends Pick<EventEmitter, "on"> {
     threadId: string,
     messageID?: string,
   ): Promise<AgentRevertSummary>;
-  unrevertSession?(
-    providerId: string,
-    threadId: string,
-  ): Promise<{ ok: true }>;
+  unrevertSession?(providerId: string, threadId: string): Promise<{ ok: true }>;
 }

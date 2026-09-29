@@ -34,6 +34,7 @@ export function SessionToolbar({
   onSettings,
   onCompact,
   variant = "inline",
+  showCompact = true,
 }: {
   thread: ThreadSummary;
   locked?: boolean;
@@ -49,6 +50,7 @@ export function SessionToolbar({
   }) => void;
   onCompact: () => void;
   variant?: "inline" | "panel";
+  showCompact?: boolean;
 }) {
   return (
     <div
@@ -57,6 +59,7 @@ export function SessionToolbar({
       <div className="toolbar-fields">
         <ModelPicker
           agentId={thread.agentId || "codex"}
+          cwd={thread.cwd}
           compact
           disabled={locked}
           providerId={thread.providerId}
@@ -86,7 +89,7 @@ export function SessionToolbar({
             </select>
           </label>
         ) : thread.agentId === "opencode" ? null : thread.agentId &&
-            thread.agentId !== "codex" ? (
+          thread.agentId !== "codex" ? (
           // ACP 等通用 agent：没有 codex 沙箱/审批语义；有 sessionModes 时给
           // 模式切换（对应 ACP session/set_mode）。
           thread.sessionModes?.length ? (
@@ -196,7 +199,7 @@ export function SessionToolbar({
         )}
       </div>
       {locked && <small className="toolbar-hint">任务结束后生效</small>}
-      {(thread.agentId || "codex") === "codex" && (
+      {showCompact && (thread.agentId || "codex") === "codex" && (
         <button
           type="button"
           className="text-btn compact-btn"

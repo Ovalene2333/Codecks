@@ -832,6 +832,9 @@ export class CodexAdapter extends EventEmitter {
       params.sandboxPolicy = sandboxPolicyFromMode(settings.sandbox);
     if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
       params.serviceTier = settings.serviceTier || null;
+    // 手填模型清空时表示「用供应商默认」，normalize 后没有可下发字段；
+    // 只剩 threadId 的空更新对 runtime 没有意义，直接跳过。
+    if (Object.keys(params).length === 1) return this.threads.get(threadId);
     try {
       await client.request("thread/settings/update", params);
     } catch (error: any) {
@@ -935,6 +938,27 @@ export class CodexAdapter extends EventEmitter {
       "idle",
     );
     return this.threads.get(result.thread.id) || result.thread;
+  }
+
+  /** In-place conversation rewind. Codex does not revert workspace files. */
+  async revertSession(providerId: string, threadId: string, beforeTurnId?: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Codex 会话不存在");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务运行中不能编辑历史消息，请先停止任务");
+    const target = String(beforeTurnId || "").trim();
+    if (!target) throw new Error("请选择要编辑的消息");
+    await this.ensureLoaded(providerId, threadId);
+    const client = await this.ensure(providerId);
+    await client.request("thread/revert", { threadId, beforeTurnId: target });
+    thread.status = "idle";
+    thread.activeTurnId = undefined;
+    thread.lastError = undefined;
+    thread.updatedAt = Date.now();
+    delete thread.tokenUsage;
+    void this.usageStore.remove(threadId).catch(() => undefined);
+    this.broadcast("thread.updated", thread);
+    return { messageID: target, files: 0, additions: 0, deletions: 0 };
   }
 
   private async createEmptyFork(providerId: string, source: ThreadSummary) {
@@ -1118,6 +1142,13 @@ export class CodexAdapter extends EventEmitter {
   }
 
   async readThread(providerId: string, threadId: string) {
+    // thread/start creates an in-memory, empty session. Some runtimes answer
+    // includeTurns with "list_turns is not supported yet" until the first
+    // turn is persisted. We already have all metadata needed to show it.
+    if (this.loadedThreads.has(threadId) && !this.knownRollouts.has(threadId)) {
+      const fresh = this.threads.get(threadId);
+      if (fresh) return { ...fresh, turns: [] };
+    }
     const client = await this.ensure(providerId);
     const read = (includeTurns: boolean) =>
       client
@@ -1132,6 +1163,7 @@ export class CodexAdapter extends EventEmitter {
           const normalized = restored
             ? { ...thread, tokenUsage: restored }
             : thread;
+          this.stampTurnModels(normalized);
           if (existing && restored) {
             existing.tokenUsage = restored;
             this.broadcast("thread.updated", existing);
@@ -1158,7 +1190,39 @@ export class CodexAdapter extends EventEmitter {
           }
         }
       }
-      return await read(false);
+      try {
+        return await read(false);
+      } catch (metadataError: unknown) {
+        if (classifyThreadStoreError(metadataError) !== "unmaterialized")
+          throw explainThreadStoreError(metadataError);
+        // Some app-server versions route even includeTurns=false through
+        // list_turns for an empty rollout. The list/start summary is enough
+        // to render that session until its first turn is written.
+        const cached = this.threads.get(threadId);
+        if (cached) return { ...cached, turns: [] };
+        throw explainThreadStoreError(metadataError);
+      }
+    }
+  }
+
+  /**
+   * Codex 的 turn 记录不含模型；把 turn/started 时记入的快照回填到
+   * turn.model / turn.reasoningEffort。agent 自带字段（或老数据没有快照）
+   * 时保持原值，由前端回落到会话当前模型。
+   */
+  private stampTurnModels(thread: any) {
+    const turns = thread?.turns;
+    if (!Array.isArray(turns) || !this.threadSettings) return;
+    for (const turn of turns) {
+      if (!turn || turn.model) continue;
+      const stamp = this.threadSettings.turnModel(
+        this.id,
+        String(thread.id),
+        String(turn.id || ""),
+      );
+      if (stamp?.model) turn.model = stamp.model;
+      if (stamp?.reasoningEffort && !turn.reasoningEffort)
+        turn.reasoningEffort = stamp.reasoningEffort;
     }
   }
 
@@ -1726,6 +1790,13 @@ export class CodexAdapter extends EventEmitter {
         this.rememberRollout(existing.id);
         existing.status = "running";
         existing.activeTurnId = params.turn?.id;
+        if (params.turn?.id)
+          void this.threadSettings
+            ?.recordTurnModel(this.id, existing.id, String(params.turn.id), {
+              model: existing.resolvedModel || existing.model,
+              reasoningEffort: existing.reasoningEffort,
+            })
+            ?.catch(() => undefined);
         existing.interruptedTurnId = undefined;
         existing.updatedAt = Date.now();
         existing.lastError = undefined;
