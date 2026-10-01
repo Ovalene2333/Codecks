@@ -49,11 +49,11 @@
 
 ## 界面预览
 
-<img src="docs/screenshots/desktop-console.png" alt="Codecks 总览首页" width="100%">
+<img src="docs/screenshots/desktop-home.png" alt="Codecks 总览首页" width="100%">
 
 <p align="center"><sub>总览首页：待审批、要你处理的事、新回复、正在跑的任务；右边是用量额度和各 Agent 的运行状态</sub></p>
 
-<img src="docs/screenshots/desktop-session.png" alt="Codecks 会话页" width="100%">
+<img src="docs/screenshots/desktop-chat.png" alt="Codecks 会话页" width="100%">
 
 <p align="center"><sub>会话页：命令、读文件、改文件（点开能看 diff）都在时间线里，底下随时可以追加指令或中断</sub></p>
 
@@ -63,8 +63,8 @@
     <td width="50%" align="center"><strong>设置 · 供应商</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/desktop-settings.png" alt="Codecks 设置里的 Agent 页" width="100%"></td>
-    <td><img src="docs/screenshots/desktop-providers.png" alt="Codecks 设置里的供应商页" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-settings-agents.png" alt="Codecks 设置里的 Agent 页" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-settings-providers.png" alt="Codecks 设置里的供应商页" width="100%"></td>
   </tr>
 </table>
 
@@ -75,7 +75,7 @@
     <td width="33%" align="center"><strong>手机 · 会话</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/mobile-console.png" alt="Codecks 手机端总览" width="100%"></td>
+    <td><img src="docs/screenshots/mobile-home.png" alt="Codecks 手机端总览" width="100%"></td>
     <td><img src="docs/screenshots/mobile-approval.png" alt="Codecks 手机端审批" width="100%"></td>
     <td><img src="docs/screenshots/mobile-session.png" alt="Codecks 手机端会话页" width="100%"></td>
   </tr>
@@ -84,9 +84,9 @@
 <details>
 <summary>浅色主题</summary>
 <br>
-<img src="docs/screenshots/desktop-console-light.png" alt="Codecks 浅色主题总览" width="100%">
+<img src="docs/screenshots/desktop-home-light.png" alt="Codecks 浅色主题总览" width="100%">
 <br><br>
-<img src="docs/screenshots/desktop-session-light.png" alt="Codecks 浅色主题会话页" width="100%">
+<img src="docs/screenshots/desktop-chat-light.png" alt="Codecks 浅色主题会话页" width="100%">
 </details>
 
 <p align="center"><sub>截图里的项目、会话和供应商都是演示数据。</sub></p>
