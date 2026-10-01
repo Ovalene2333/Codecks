@@ -8,18 +8,20 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-[Codecks](https://github.com/Ovalene2333/Codecks) 是一个网页端的 [Codex CLI](https://github.com/openai/codex) 远程控制台，并提供 Claude Code、OpenCode adapter 后端与 [ACP](https://agentclientprotocol.com) 通用适配（Devin、Kimi CLI、Goose、Copilot CLI 等）。它直接使用本机现有的登录、`~/.codex` 会话和项目目录，让你从桌面或手机浏览器统一查看任务、处理审批和继续对话。
+[Codecks](https://github.com/Ovalene2333/Codecks) 是一个跑在你自己电脑上的网页控制台，用浏览器（电脑或手机都行）盯着、指挥 AI 编程 Agent 干活。主要接 [Codex CLI](https://github.com/openai/codex)，也能接 Claude Code、OpenCode，以及通过 [ACP](https://agentclientprotocol.com) 接入的 Devin、Kimi CLI、Goose、Copilot CLI 等。
 
-只用 OpenAI Official 时无需安装 CC Switch；如果已经在 [CC Switch](https://github.com/farion1231/cc-switch) 中配置了多家连接，Codecks 也可以让每个 Session 独立选择供应商和模型，不必反复切换当前项。会话列表、任务中心和审批入口会统一标记实际使用的 Agent。
+它直接用本机已有的登录状态、`~/.codex` 里的会话和你的项目目录，不另存一套历史。人不在电脑前，可以用手机看任务跑到哪了、批一下命令、接着往下聊。
+
+只用 OpenAI Official 的话不需要装 CC Switch。如果你在 [CC Switch](https://github.com/farion1231/cc-switch) 里配了好几家中转，Codecks 可以让每个会话各选各的供应商和模型，不用来回切「当前项」。会话列表、任务和审批里都会标出实际用的是哪个 Agent。
 
 ## 阅读导引
 
 - **先了解项目**
   - [界面预览](#界面预览)
   - [特性](#特性)
-    - [真实会话，而不是复制品](#真实会话而不是复制品)
-    - [远程值守](#远程值守)
-    - [多家中转同时在线](#多家中转同时在线)
+    - [总览首页](#总览首页) · [手机上用](#手机上用) · [真实会话](#真实会话) · [审批和提醒](#审批和提醒)
+    - [对话和时间线](#对话和时间线) · [任务与用量](#任务与用量) · [工具](#工具) · [设置](#设置)
+    - [远程值守](#远程值守) · [远程唤醒](#远程唤醒) · [多家中转同时在线](#多家中转同时在线)
 - **开始使用**
   - [快速开始](#快速开始)
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
@@ -47,85 +49,190 @@
 
 ## 界面预览
 
-<img src="docs/screenshots/desktop-session.png" alt="Codecks 控制台：按项目分组并管理 Codex 会话" width="100%">
+<img src="docs/screenshots/desktop-console.png" alt="Codecks 总览首页" width="100%">
 
-<p align="center"><sub>桌面端会话界面：按项目分组，同时管理多个 Codex Session</sub></p>
+<p align="center"><sub>总览首页：待审批、要你处理的事、新回复、正在跑的任务；右边是用量额度和各 Agent 的运行状态</sub></p>
+
+<img src="docs/screenshots/desktop-session.png" alt="Codecks 会话页" width="100%">
+
+<p align="center"><sub>会话页：命令、读文件、改文件（点开能看 diff）都在时间线里，底下随时可以追加指令或中断</sub></p>
 
 <table>
   <tr>
-    <td width="50%" align="center"><strong>项目控制台</strong></td>
-    <td width="50%" align="center"><strong>供应商与模型</strong></td>
+    <td width="50%" align="center"><strong>设置 · Agent</strong></td>
+    <td width="50%" align="center"><strong>设置 · 供应商</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/desktop-console.png" alt="Codecks 桌面端项目控制台" width="100%"></td>
-    <td><img src="docs/screenshots/desktop-providers.png" alt="Codecks 供应商与模型设置" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-settings.png" alt="Codecks 设置里的 Agent 页" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-providers.png" alt="Codecks 设置里的供应商页" width="100%"></td>
   </tr>
 </table>
 
-<p align="center">
-  <strong>移动端远程值守</strong><br><br>
-  <img src="docs/screenshots/mobile-console.png" alt="Codecks 移动端控制台" width="320">
-</p>
+<table>
+  <tr>
+    <td width="33%" align="center"><strong>手机 · 总览</strong></td>
+    <td width="33%" align="center"><strong>手机 · 审批</strong></td>
+    <td width="33%" align="center"><strong>手机 · 会话</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/mobile-console.png" alt="Codecks 手机端总览" width="100%"></td>
+    <td><img src="docs/screenshots/mobile-approval.png" alt="Codecks 手机端审批" width="100%"></td>
+    <td><img src="docs/screenshots/mobile-session.png" alt="Codecks 手机端会话页" width="100%"></td>
+  </tr>
+</table>
 
-Codecks 不依赖 CC Switch 或中转服务，已有 OpenAI Official 登录可以直接使用。对需要多家连接的人，它会只读同步 CC Switch 的连接定义，让多个 Session 同时使用不同供应商。适合本机、局域网，以及 Cloudflare / 自建反代 / 任意隧道命令。
+<details>
+<summary>浅色主题</summary>
+<br>
+<img src="docs/screenshots/desktop-console-light.png" alt="Codecks 浅色主题总览" width="100%">
+<br><br>
+<img src="docs/screenshots/desktop-session-light.png" alt="Codecks 浅色主题会话页" width="100%">
+</details>
 
-**Codecks** 这个名字由 **Codex** 与 **deck** 组合而来：一边是 Codex CLI 的真实会话，一边是远程值守用的控制台。
+<p align="center"><sub>截图里的项目、会话和供应商都是演示数据。</sub></p>
 
-> `app-server` 目前仍是 Codex CLI 的实验接口。请使用较新的 CLI，升级后重新构建并重启 Codecks。
+Codecks 不依赖 CC Switch 或中转服务，有 OpenAI Official 登录就能直接用。要用多家连接的话，它会只读同步 CC Switch 里的连接定义，让多个会话同时走不同的供应商。本机、局域网、Cloudflare、自建反代或者任意隧道命令，都可以用来访问它。
+
+名字是 **Codex** 加 **deck** 拼出来的：一边是 Codex CLI 的真实会话，一边是用来远程盯着它们的控制台。
+
+> Codex CLI 的 `app-server` 目前还是实验接口。请用比较新的 CLI，升级后重新构建并重启 Codecks。
 
 ## 特性
 
-### 真实会话，而不是复制品
+### 总览首页
 
-Codecks 直接使用当前系统的 `~/.codex`。启动时读取已有 session，不会复制 `CODEX_HOME`，也不会把历史拆成孤岛。
+打开 Codecks 先看到的是总览（网址 `/`），按「现在该谁动手」分成几块：
 
-- 按工作目录分组，同一路径可以并行多个独立 session
-- 项目折叠后不再只留一条：运行、待确认、出错或压缩中的会话会全部显示，最近 24 小时内更新过的会话一并显示，当前选中和「有新回复」的会话也不会被折叠隐藏；其余会话收进「其余 N 条」，展开即看到全部
-- 见过的项目目录会记在 `.data/projects.json`，新开网页、Runtime 还没列出历史时侧栏也还在
-- Server 会把最近一次成功同步的会话摘要写入 `.data/thread-summaries.json`，重启后先显示摘要，再在后台校准原生历史；摘要不包含完整对话，也不是另一套 history
-- Codex 正常启动通过 app-server 的 State DB 索引列出 session，不再扫描全部 rollout 修复元数据；供应商设置中的“历史索引 · 修复”才会显式扫描原生 rollout，并在 State DB 缺失但本地仍有缓存时自动执行一次恢复
-- Claude 会把 JSONL 的大小、修改时间和摘要写入 `.data/claude-history-index.json`，后续启动只重新解析新增或变化的历史文件
-- Windows `D:\...` 与 WSL `/mnt/d/...` 会归入同一项目
-- 查看运行、空闲、待审批和异常；刚完成且尚未打开的 Session 会标为「有新回复」，并可从侧栏单独筛选
-- 侧栏「任务」统一汇总所有受管 Codex / Claude Session 的活动 Turn、运行命令和待确认状态；可以跳转来源或停止整个任务。较新 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，并允许单独停止；旧 Runtime 自动退化为 Turn 级中断
-- 审批请求使用全局浮窗显示，不必先进入对应 Session；可以在浮窗中直接批准或拒绝，也可以跳转到请求来源
-- 权限选择与 Codex CLI 对齐：新 Codex Session 默认使用 `Workspace Write + Approve for me`；旧版本留下且未标记 reviewer 的 `Workspace Write + Never ask` 项目默认值会自动按此安全默认值解释。`Approve for me` 对应 `approval_policy = "on-request"` 与 `approvals_reviewer = "auto_review"`，越界请求会交给 `codex-auto-review`；`Never ask` 才使用 `approval_policy = "never"`。自动审查依赖沙箱边界，因此选择 `Approve for me` 会使用 `Workspace Write`，选择 `Full Access` 会切到 `Never ask`
-- 可在侧栏开启浏览器系统提醒：页面保持连接时，新的审批和任务完成会发送通知，点击通知会打开对应 Session；浏览器关闭后不会后台推送
-- 消息发送后会立即显示；未发送的文字与图片草稿按 Session 分开保留，切换会话不会串内容
-- 助手回复中的 Markdown 图片，以及 Codex / 兼容 Agent 返回的生成图片，会先显示为按需加载控件；点击后才请求图片，并使用浏览器懒加载，适合移动网络和远程值守场景节省流量
-- 侧栏搜索除项目、会话名、模型和摘要外，也会检索 Codex 与 Claude 会话中的用户消息和助手正文；输入至少 3 个字符后显示正文命中摘要，点击可打开并定位到对应 Turn。正文索引保存在 `.data/session-search.sqlite`，首次启动会在没有运行中任务时按最近会话优先、单并发后台补建，不会把完整对话放进浏览器快照
-- 每个 Turn 会汇总显示 Codex 本轮读取过的文件；运行中的命令、文件变更、MCP 和动态工具调用会随实时事件立即进入时间线，不必等待历史写盘。连续或单次包含多个文件的 `update` 会合并为可展开的文件变更组，读取和检索也会显示为可展开的中文动作，可继续查看命令、参数与返回内容。OpenCode 连续的文件编辑会收成一行「编辑 N 次 · 文件名」（含读取/检索的中文动作与本轮已读汇总），`Edit applied successfully.` 这类无信息回执默认隐藏，点开只看有实际内容的输出
-- 历史输入消息可带回输入框编辑，或从该消息之前创建分支并重试；任务运行中（含待审批）发送的新输入会像 Codex CLI 一样 steer 当前 turn，空闲时才开启新 turn
-- 输入框支持 Codex 高频指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，以及 `!command` 无沙箱执行；完整语法与后续路线见 [Slash 指令文档](docs/slash-commands.md)
-- 侧栏「工具」使用 `plugin/<id>/` 下的独立模块提供可扩展小工具，前端视图与服务端能力分别通过注册表接入。Web Terminal 挂载在 `/terminal`，打开后不会自动创建连接，选好当前 Session、最近项目或自定义绝对目录后点击连接才会启动宿主机 Shell；它支持 ANSI、全屏 TUI、窗口尺寸同步和移动端快捷键，Windows `--wsl` 模式进入 WSL，其他模式进入宿主系统默认 Shell，关闭页面或连接会自动结束对应 PTY
-- Git 管理工具挂载在 `/git`，可选择项目目录查看工作区与暂存区改动、批量暂存或取消暂存、创建提交、切换或新建分支，以及获取、快进拉取和推送远端；非仓库目录可直接初始化。所有文件与分支参数均以独立 Git 参数传递，不拼接 Shell 命令
-- 文本编辑器挂载在 `/text-editor`（旧 `/text-files` 自动归一化），可逐级浏览宿主机目录（含隐藏文件与 WSL 路径），支持目录筛选、新建/重命名/删除条目，打开文本文件后在线编辑、查找并保存；超过 1MB 的文件只读预览开头部分，保存带 mtime 冲突检测，文件被外部修改时需确认后才能覆盖
-- 右上角“外观设置”支持跟随系统、浅色或深色主题；动画可跟随系统的减少动态效果偏好、强制开启或完全关闭，选择只保存在当前浏览器
-- 用量面板会汇总 session 的累计 token，并按项目或 session 查看未缓存输入、缓存输入和输出明细；运行时用量会缓存到 `.data/codex-usage.json`，显式修复历史索引时也会从 rollout 回填缺失记录，重启 Server 后仍可恢复；Official 账号额度保留在独立页签
-- 项目设置可覆盖该目录默认供应商的请求重试、流重试和流空闲超时；写进共享 Runtime，有会话在跑时先记下，空闲后再应用
-- 「供应商设置 → Codex 上下文」可分别设置 `model_context_window` 与 `model_auto_compact_token_limit`；留空沿用模型 / Runtime 默认值。设置保存在 `.data/runtime-config.json`，不会改写 `~/.codex/config.toml`。保存前会说明并重启共享 Codex Runtime；有任务运行或等待审批时会拒绝保存
-- Codex runtime 进程在外部被结束（如在后台 ctrl+C）时，正在运行或等待审批的 session 会被标记为「运行时中断」并解除占用，可以继续分支、重试或修改配置；刷新不会把被中断的任务恢复成“正在运行”
+- **待处理审批**：卡片直接批准或拒绝，多个审批可以左右切换
+- **需要处理**：Agent 在等你回复的会话，以及出错的会话
+- **新回复**：跑完了、你还没点开的会话，带回复开头的预览，可以一键全部标为已读
+- **运行中**：正在跑的会话，显示当前在干什么（执行哪条命令、编辑哪个文件）和这一轮已经跑了多久
+- **最近会话**
+- **deck-wake 监督中**：本机上正在盯远端任务的 watcher，见[远程唤醒](#远程唤醒)
+
+顶上一排计数（待处理、异常、新回复、运行中、疑似卡住），点一下滚到对应的列表。「疑似卡住」指运行中但很久没有新事件：等模型超过 3 分钟，或者一条命令超过 10 分钟没动静。
+
+右边是两块面板：
+
+- **用量与额度**：累计 token、按模型单价折算的费用、Official 账号额度，以及上下文快满的会话
+- **运行健康**：各 Agent 的状态（没装或被停用的折叠在一行里）、供应商报错、本机 CPU 和内存、Deck 自己和各 Agent 后端进程的内存占用
+
+「调整布局」可以拖动面板顺序，主栏和右栏各排各的，只保存在当前设备上。一个会话都没有时显示欢迎页。
+
+### 手机上用
+
+窗口窄于 760px 就自动换成手机布局：
+
+- 底部导航是 总览 / 会话 / ＋新建 / 工具 / 设置。总览图标上的角标是等你处理的数量（待确认加出错），会话图标上的小点表示有新回复。进了某个会话，底栏就让位给输入框
+- 会话列表是单独的整屏页面（`/sessions`）
+- 审批从底部弹出来，可以直接批准一次、拒绝，或者展开「更多」看其它选项
+- 设置在手机上先出分类列表，点进去才是具体页面，系统返回键退一级
+
+每个页面都有自己的网址（`/`、`/sessions`、`/session/<key>`、`/terminal` 这类），刷新、分享链接、系统返回键都能回到原来的位置。
+
+### 真实会话
+
+Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历史拆成孤岛。
+
+- 按工作目录分组，同一个目录可以并行开多个会话。Windows 的 `D:\...` 和 WSL 的 `/mnt/d/...` 算同一个项目
+- 项目折叠后不会只剩一条：运行中、待确认、出错、压缩中的会话，以及 24 小时内更新过的会话都会留着，当前打开的和有新回复的也不会被收起来，剩下的折进「其余 N 条」，展开就是全部
+- 见过的项目目录记在 `.data/projects.json`，新开网页、或者 Runtime 还没列出历史的时候，侧栏也不会是空的
+- 重启后先显示上次同步的会话摘要（`.data/thread-summaries.json`），再在后台跟原生历史对齐。摘要里没有完整对话，也不是另一份历史
+- Codex 正常启动时走 app-server 的 State DB 索引列会话，不会再扫整个 rollout 目录。需要的话，在「设置 → Agent → Codex → 历史索引」点「修复」才会扫原生 rollout；State DB 丢了但本地还有缓存时，会自动修一次
+- Claude 会话的 JSONL 大小、修改时间和摘要记在 `.data/claude-history-index.json`，下次启动只解析新增或有变化的文件
+- 能看到每个会话是运行中、空闲、待审批还是出错。刚跑完、你还没打开的会话会标「有新回复」，侧栏可以单独筛出来
+- 侧栏搜索除了项目名、会话名、模型和摘要，也会搜 Codex 和 Claude 会话里的用户消息和助手正文。输入至少 3 个字才搜正文，结果带命中片段，点开会定位到对应的 Turn。正文索引存在 `.data/session-search.sqlite`：第一次启动会在没有任务运行的时候，按最近会话优先、单并发慢慢建，完整对话不会塞进浏览器快照
+
+### 审批和提醒
+
+- 审批请求用全局浮窗显示，不用先进到对应的会话。可以在浮窗里直接批准或拒绝，也能跳到请求来源。总览首页上同样有审批卡片
+- 权限选项跟 Codex CLI 对齐。新的 Codex 会话默认用 `Workspace Write + Approve for me`；旧版本留下的、没标 reviewer 的 `Workspace Write + Never ask` 项目默认值，会按这个更安全的默认值来理解。`Approve for me` 对应 `approval_policy = "on-request"` 加 `approvals_reviewer = "auto_review"`，越界请求交给 `codex-auto-review`；只有 `Never ask` 才是 `approval_policy = "never"`。自动审查要靠沙箱兜底，所以选 `Approve for me` 会用 `Workspace Write`，选 `Full Access` 会切到 `Never ask`
+- 浏览器系统提醒在「设置 → 会话 → 系统提醒」里开：有新审批、有新回复时发通知，也可以设成只在页面不在前台时才发。点通知会打开对应的会话。页面得保持连接，浏览器关了就不会再推送
+
+### 对话和时间线
+
+- 消息发出去马上就显示。没发的文字和图片草稿按会话分开存，切换会话不会串
+- 任务运行中（包括等审批）发的新消息，会像 Codex CLI 一样 steer 当前 Turn；空闲时才开新 Turn
+- 历史里的用户消息可以带回输入框修改，也可以从那条消息之前开分支重试
+- 输入框支持 Codex 的常用指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，还有 `!command` 无沙箱执行。完整语法和后续计划见 [Slash 指令文档](docs/slash-commands.md)
+- 助手回复里的 Markdown 图片，以及 Codex 或兼容 Agent 生成的图片，先显示成「点击加载」，点了才请求，并且懒加载。用手机流量时能省不少
+- 每个 Turn 会汇总本轮读过的文件。命令、文件改动、MCP 和动态工具调用跟着实时事件马上出现，不用等历史落盘
+- 一次改了多个文件的 `update`，或者连续几次 `update`，会合并成一个可展开的文件改动组。读取和检索显示成可展开的中文动作，点开能看命令、参数和返回内容
+- OpenCode 连续的文件编辑收成一行「编辑 N 次 · 文件名」，`Edit applied successfully.` 这种没信息量的回执默认藏起来，点开只看有实际内容的输出
+
+### 任务与用量
+
+- 侧栏的「任务」汇总所有受管的 Codex / Claude 会话：活动中的 Turn、在跑的命令、待确认状态，可以跳到来源，也能停掉整个任务。较新的 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，可以单独停；旧 Runtime 自动退化成 Turn 级中断
+- 用量面板汇总各会话累计的 token，可以按项目或会话看未缓存输入、缓存输入和输出；Official 账号额度单独一个页签。运行时用量缓存在 `.data/codex-usage.json`，重启 Server 后还在；「修复」历史索引时也会从 rollout 里回填缺的记录
+- 项目设置可以覆盖该目录默认供应商的请求重试、流重试和流空闲超时。这些会写进共享 Runtime：有会话在跑就先记着，空闲后再生效
+- 「设置 → Agent → Codex → 上下文」可以分别设 `model_context_window` 和 `model_auto_compact_token_limit`，留空就用模型或 Runtime 的默认值。设置存在 `.data/runtime-config.json`，不会改 `~/.codex/config.toml`。保存会重启共享的 Codex Runtime，有任务在跑或在等审批时会拒绝保存
+- Codex Runtime 进程被外部结束（比如在后台按了 Ctrl+C）时，在跑或在等审批的会话会标成「运行时中断」并解除占用，可以继续分支、重试或改配置。刷新页面不会把它们又当成「正在运行」
+
+### 工具
+
+侧栏（手机上是底栏）的「工具」里放了几个小工具。每个工具是 `plugin/<id>/` 下的一个独立模块，前端视图和服务端能力分别注册。「设置 → 工具」里可以隐藏用不上的，也能选桌面端是在新标签页还是当前页打开。
+
+- **Web Terminal**（`/terminal`）：打开后不会自动连接，选好当前会话、最近项目或者自己填一个绝对目录，再点连接才会在宿主机上起 Shell。支持 ANSI、全屏 TUI、窗口大小同步和手机快捷键。Windows 的 `--wsl` 模式进 WSL，其它情况进系统默认 Shell。关掉页面或断开连接，对应的 PTY 会自动结束
+- **Git 管理**（`/git`）：选项目目录，看工作区和暂存区的改动，批量暂存或取消暂存，提交，切换或新建分支，fetch、快进 pull、push。不是仓库的目录可以直接 init。文件名和分支名都作为独立的 Git 参数传，不拼 Shell 命令
+- **文本编辑器**（`/text-editor`，旧的 `/text-files` 会自动跳转）：逐级浏览宿主机目录（含隐藏文件和 WSL 路径），可以筛选、新建、重命名、删除，打开文本文件后在线编辑、查找、保存。超过 1MB 的文件只读预览开头一段；保存带 mtime 冲突检测，文件被外部改过的话要确认后才能覆盖
+- **快捷指令**（`/commands`）：把常用命令存下来，点一下就在指定目录里执行。命令里可以写 `{参数名}` 占位符，执行前填值，值会做 Shell 转义。可以绑定目录，按目录分组。输出和退出码直接显示，超时 10 分钟，输出太长会截断。存在 `.data/quick-commands.json`
+
+<img src="docs/screenshots/desktop-tools.png" alt="Codecks 快捷指令工具" width="100%">
+
+### 设置
+
+桌面端点侧栏底部的「设置」，手机上点底栏的「设置」。
+
+| 页面 | 里面有什么 |
+| --- | --- |
+| 界面 | 主题（跟随系统 / 浅色 / 深色）、动画、界面效果、会话正文字号，只存在当前浏览器 |
+| 会话 | 发送键（Enter 发送，或 Ctrl/⌘+Enter 发送）、系统提醒、新会话的默认值 |
+| Agent | 启用、停用、重载每个 Agent，不用重启 Deck；Codex 和 OpenCode 有各自的详情页 |
+| 工具 | 工具菜单显示哪些、桌面端怎么打开 |
+| 快捷键 | 桌面端快捷键一览 |
+| 数据 | 设置备份（导出 / 导入 JSON，不含令牌和 API Key）、本地缓存、最近目录、恢复默认、在本设备退出 |
+| 关于 | 版本、运行状态，一键复制诊断信息（只含版本、状态和错误首行，不含令牌、API Key 和会话内容） |
+| 供应商 | 同步 CC Switch、添加自定义供应商。放在最下面，平时用得少 |
+
+桌面端的快捷键：`Esc` 一层层往外退（先关最上面的弹窗，再让输入框失焦，最后回总览，终端里的 `Esc` 留给 Shell）；`/` 或 `Ctrl/⌘+K` 聚焦侧栏搜索；总览里有多个审批时用 `←` `→` 切换；文本编辑器里 `Ctrl/⌘+S` 保存、`Ctrl/⌘+F` 查找。
 
 ### 远程值守
 
-runtime 的 control WebSocket 只监听本机回环地址。终端用 `codex --remote` 接入后，可以和网页同时查看、审批、继续同一批 Session。
+runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex --remote` 接进来，就能和网页同时查看、审批、继续同一批 Session。
 
-- 一个共享 Codex runtime，每个新 Session 独立选择 `modelProvider + model`
-- 「切换供应商」会 `thread/fork`：完整复制历史到新分支，原分支保留以便回退
-- 普通 `codex` 创建的旧 Session 仍会出现在历史里，但不会伪装成实时受管状态
+- 一个共享的 Codex runtime，每个新 Session 单独选 `modelProvider + model`
+- 「切换供应商」会 `thread/fork`：把历史完整复制到新分支，原分支留着，想回退随时可以
+- 用普通 `codex` 创建的旧 Session 还是会出现在历史里，但不会假装成实时受管的状态
+
+### 远程唤醒
+
+Agent 在远端（SSH、GPU 机器、Slurm 之类）启动了一个要跑几小时的任务，不用让它干等，你也不用自己反复去看。在本机挂一个后台 watcher，任务一结束，Deck 就往对应会话里注入一条 `[wake:<代号>] ...` 消息，Agent 从这里接着干。
+
+- 会话头部的雷达图标打开「远程唤醒」：可以开启或关闭、自定义代号，能看到这个会话正被哪些 watcher 盯着，也能复制调用示例
+- 总览首页的「deck-wake 监督中」列出本机上正在跑的 deck-wake watcher；watcher 没发出唤醒就消失了（被 kill、机器重启），会作为「失联」出现在「需要处理」里，由你决定要不要通知会话
+- 唤醒请求 Deck 一收到就先落盘再返回 202，之后在后台重试到送达，所以 Agent 闪断、会话正忙或者 Deck 重启都不会丢。实在送不到的会出现在「需要处理」里
+- 外部脚本也可以直接调接口，不必用 watcher：
+
+```bash
+curl -X POST "$(cat ~/.codex-deck/url)/api/wake/<代号>" \
+  -H "Authorization: Bearer $(cat ~/.codex-deck/token)" \
+  -H "Content-Type: application/json" -d '{"text":"任务已完成"}'
+```
+
+`~/.codex-deck/url` 和 `token` 是 Deck 启动时写下的，权限 600，方便本机脚本读取而不用把令牌贴进命令或会话；目录可以用 `CODEX_DECK_HOME` 改。
 
 ### 多家中转同时在线
 
-CC Switch 负责把供应商写进 Codex 的 live 配置，一次只能启用一个当前项。Claude Code 往往能跟着切；Codex 通常要重启进程才认新配置。真正麻烦的不是「CC Switch 不会切」，而是不能让 Session A 走这家、Session B 走那家。
+CC Switch 会把供应商写进 Codex 的 live 配置，一次只能启用一个「当前项」。Claude Code 通常能跟着切，Codex 一般要重启进程才认新配置。麻烦的地方在于，没法让会话 A 走这家、会话 B 走那家。
 
-Codecks 把 CC Switch 里的连接只读同步进来，每个 Session 自己选中转站和模型。
+Codecks 把 CC Switch 里的连接只读同步进来，每个会话自己选中转站和模型：
 
-- 不用为了换一家而改 CC Switch 当前项
-- 多个中转站可以同时各跑各的 Session，额度分开花
-- 自动发现 CC Switch 数据库，周期性只读同步，不改写当前项
-- 供应商设置里可手动「重新加载」：立刻再读一次 CC Switch，并在任务空闲时重启共享 Runtime
-- 网页仍保留手动供应商入口，给没有安装 CC Switch 的环境用
-- Node 服务可跑在 Windows 或 WSL；Windows 上可用 `--wsl` 读取 WSL 的 `~/.codex` 并在 WSL 中启动 runtime
+- 想换一家不用去改 CC Switch 的当前项
+- 多个中转站可以同时各跑各的会话，额度分开花
+- 自动发现 CC Switch 数据库，定期只读同步，不会改动当前项
+- 「设置 → 供应商」里点「重新读取」，立刻再读一次 CC Switch，并在任务空闲时重启共享 Runtime
+- 没装 CC Switch 的话，网页里也能手动添加自定义供应商
+- Node 服务可以跑在 Windows 或 WSL；Windows 上用 `--wsl` 就会读 WSL 里的 `~/.codex`，并在 WSL 里启动 runtime
 
 ## 快速开始
 
@@ -200,6 +307,8 @@ OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新�
   ]
 }
 ```
+
+内置的 ACP Agent 只有在 `PATH` 里找得到对应命令时才默认加载。每个 Agent 都能在「设置 → Agent」里单独启用、停用或重载，不用重启 Deck；改了 `acp-agents.json` 以后点「重载全部」，会按文件增删改 ACP Agent，有会话在运行的 Agent 会跳过。
 
 ACP 会话支持新建、续聊、流式输出、工具与文件改动展示、权限审批、取消、重命名（Deck 侧）、软归档和 `plan` 计划面板；Agent 通过 `session/set_mode` 暴露的模式（如 Devin 的 normal/plan）可在顶部栏切换，模型目录与斜杠命令按 Agent 实际通告的能力展示。历史会话优先走 `session/list` + `session/load` 回放；不支持时可用描述符声明外部列举命令（如 `devin list --format json`），或直接保留重启前的缓存摘要。供应商切换、fork、压缩、review、独立 shell、MCP/Skills 等深度能力不在 ACP 协议范围内，界面按能力矩阵自动隐藏。
 
@@ -379,7 +488,7 @@ npm start
 ## 日常工作流
 
 1. 启动 Codecks
-2. 在「供应商设置」里复制终端接入命令
+2. 在「设置 → Agent → Codex」里点「复制终端命令」
 3. 在一个或多个终端中运行：
 
 ```bash
@@ -408,7 +517,8 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
 | `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
-| `DATA_DIR`                      | `.data`                    | Codecks 偏好、项目与用量缓存、自定义供应商元数据                                       |
+| `DATA_DIR`                      | `.data`                    | Codecks 的偏好、项目、用量缓存、Agent 开关、快捷指令、自定义供应商等数据               |
+| `CODEX_DECK_HOME`               | `~/.codex-deck`            | 本机发现目录：Deck 把访问地址和令牌写在这里（权限 600），给本机的唤醒脚本读            |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_                   | 仅监听本机的 Codex control WebSocket 端口                                              |
 | `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径                                                        |
 | `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` / `ddns:duckdns\|ddns:cloudflare` |
@@ -435,7 +545,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 - Linux / macOS：`~/.cc-switch/cc-switch.db`
 - WSL：扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
 
-自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Codecks 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在供应商设置中点「重新加载」会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。若当时有任务在跑，列表会先更新，空闲后再点「应用」。
+自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Codecks 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在「设置 → 供应商」里点「重新读取」，会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。如果当时有任务在跑，列表会先更新，等空闲了再点「应用」。
 
 CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Codecks。
 
@@ -445,8 +555,9 @@ CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 
 - Claude CC Switch 配置中的认证环境变量只存在于 adapter 启动的进程环境中
 - `.data/` 可能含自定义供应商密钥，已加入 `.gitignore`
 - runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
-- Web Terminal 等同于以 Codecks Server 用户身份登录宿主机，终端 WebSocket 使用同一访问令牌鉴权；对外暴露时不要使用 `--no-token`，并建议在反向代理或隧道层再加一道访问控制
+- Web Terminal 等同于以 Codecks Server 用户身份登录宿主机，终端 WebSocket 使用同一访问令牌鉴权；快捷指令同样会在宿主机上执行命令。对外暴露时不要使用 `--no-token`，并建议在反向代理或隧道层再加一道访问控制
 - 网页具备执行命令和批准文件修改的能力；公网使用时请同时启用令牌与额外访问控制
+- 启动时会把访问地址和令牌写到 `~/.codex-deck/`（权限 600，目录可用 `CODEX_DECK_HOME` 改），给本机的唤醒脚本读。没开令牌时 `token` 文件是空的
 
 详见 [SECURITY.md](SECURITY.md)。
 
@@ -460,7 +571,9 @@ npm run build
 ```
 
 Agent runtime 的目录边界、能力契约和新 adapter 接入步骤见
-[Agent Adapter 开发约定](docs/agent-adapters.md)。
+[Agent Adapter 开发约定](docs/agent-adapters.md)。界面的尺寸、组件和主题约定见 [UI 基线](docs/ui-baseline.md)。
+
+`settings-harness.html`、`monitor-harness.html` 这类 `*-harness.html` 是不接后端的预览页（自带假数据），`npm run dev` 起来后在 Vite 里直接打开就行，改界面时用来点按验证。
 
 ## 故障排除
 
@@ -503,13 +616,13 @@ Windows 的 `CODEX_HOME` 不会被 WSL 模式复用。在 Linux 或 WSL 内启�
 
 带 Base URL 的中转供应商只使用该记录自己的 API Key。OpenAI Official 使用原生 `~/.codex/auth.json` 中的 ChatGPT 登录状态。自定义供应商通过进程启动参数和独立环境变量注入，不会改写 `config.toml`。
 
-CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Codecks 点「重新加载」或「应用」。
+CC Switch 切换供应商时可能改写原生 `auth.json`。若 Official 报 401，先在 CC Switch 中切回 Official 并重新登录，再回到 Codecks 的「设置 → 供应商」点「重新读取」或「应用」。
 
-中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Codecks 供应商设置中点「重新加载」或「应用」后开新 Session。已有旧 Session 不会自动改鉴权。
+中转供应商标了「无独立 Key」时，在 CC Switch 中补上 API Key，再在 Codecks 的「设置 → 供应商」里点「重新读取」或「应用」，然后开新 Session。已有的旧 Session 不会自动改鉴权。
 
 ### 为什么显示「待应用」
 
-连接定义只在 app-server 启动时加载。Codecks 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点「应用」或「重新加载」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
+连接定义只在 app-server 启动时加载。Codecks 检测到变化后不会自动杀掉正在工作的 Session，而是显示「待应用」。任务空闲后点「应用」或「重新读取」会安全重启共享 runtime；历史 Session 不受影响，已连接的终端需要重新连接。
 
 ## 许可证
 
