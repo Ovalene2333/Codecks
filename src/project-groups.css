@@ -12,13 +12,15 @@
 }
 .watch-dot.running {
   background: var(--ok);
-  box-shadow: none;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 65%, transparent);
 }
 .watch-dot.waiting {
   background: var(--wait);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--wait) 60%, transparent);
 }
 .watch-dot.unseen {
   background: var(--info);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--info) 60%, transparent);
 }
 .session-search {
   display: flex;
@@ -91,7 +93,7 @@
   color: var(--text-dim);
   flex: none;
 }
-.project-toggle span {
+.project-toggle .project-name {
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
@@ -99,19 +101,25 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.project-toggle .project-session-count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
 .project-heading b {
   display: inline-block !important;
   margin-left: auto;
-  min-width: 20px;
-  padding: 1px 6px;
+  min-width: 0;
+  padding: 0 4px;
   border: 0;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--text-dim);
+  background: transparent;
+  color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 11px !important;
+  font-size: var(--fs-meta) !important;
   line-height: 16px;
-  text-align: center;
+  text-align: right;
   flex: none;
 }
 .project-add {
@@ -145,7 +153,7 @@
   gap: 6px;
   min-width: 0;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .provider-dot-mini {
   width: 6px;
@@ -157,7 +165,7 @@
 .thread-meta time,
 .thread-meta small {
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--text-faint);
 }
 .provider-badge {
@@ -168,7 +176,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 16px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -185,7 +193,7 @@
   background: var(--danger-bg);
   border-radius: var(--radius-md);
   color: var(--danger-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .source-error summary {
   display: flex;
@@ -206,283 +214,6 @@
   margin: 4px 0 0;
   color: var(--danger-text);
   white-space: pre-wrap;
-}
-.sync-note {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 11px;
-  margin-bottom: 12px;
-  border: 1px solid var(--success-border);
-  background: var(--success-bg);
-  border-radius: var(--radius-md);
-  color: var(--ok);
-}
-
-.sync-note.offline {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text-dim);
-}
-
-.sync-note.runtime-context-note {
-  align-items: flex-start;
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text-dim);
-}
-
-.sync-note.runtime-context-note > svg {
-  margin-top: 2px;
-  color: var(--accent);
-}
-
-.sync-note > .runtime-context-form {
-  min-width: 0;
-  flex: 1;
-  display: grid;
-  gap: 10px;
-}
-
-.sync-note .runtime-context-form .form-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 9px;
-}
-
-.runtime-context-form label {
-  min-width: 0;
-}
-
-.runtime-context-form code {
-  overflow-wrap: anywhere;
-  color: var(--text-faint);
-  font-size: 9px;
-}
-
-.sync-note .runtime-context-warning {
-  color: var(--text-dim);
-  line-height: 1.55;
-}
-
-.runtime-context-form > button {
-  justify-self: end;
-  min-height: 36px;
-  padding: 0 13px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface-raised);
-  color: var(--text);
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.runtime-context-form > button:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-
-.sync-note.pending {
-  border-color: var(--line);
-}
-
-.sync-note > button,
-.sync-note.pending .primary {
-  margin-left: auto;
-  min-height: 36px;
-  padding: 0 13px;
-  flex: none;
-  border: 1px solid var(--success-border);
-  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
-  color: var(--ok);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.sync-note.offline > button {
-  border-color: var(--control-border);
-  background: var(--control);
-  color: var(--text-soft);
-}
-
-.sync-note > button:disabled {
-  opacity: 0.55;
-  cursor: wait;
-}
-
-.sync-note.pending .primary {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-.sync-note.reloading > svg {
-  animation: spin 0.8s linear infinite;
-}
-
-.terminal-connect {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 12px;
-  margin: 12px 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface-muted);
-}
-
-.terminal-connect > svg {
-  width: 18px;
-  color: var(--text-dim);
-  flex: none;
-}
-
-.terminal-connect > div {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.terminal-connect small {
-  color: var(--text-dim);
-  font-size: 11px;
-}
-
-.terminal-connect button {
-  margin-left: auto;
-  flex: none;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  border-radius: 7px;
-  color: var(--text);
-  padding: 7px 9px;
-  cursor: pointer;
-}
-.sync-note svg {
-  width: 18px;
-  flex: none;
-}
-.sync-note div {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-.sync-note b {
-  font-size: 11px;
-}
-.sync-note small {
-  font-size: 11px;
-  color: color-mix(in srgb, var(--ok) 78%, var(--text-dim));
-}
-.sync-note.offline small {
-  color: var(--text-dim);
-}
-.provider-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.provider-group-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0 2px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.provider-group-label::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--line);
-}
-
-.provider-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-}
-
-.provider-logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  flex: none;
-  border: 1px solid;
-  border-radius: 9px;
-}
-
-.provider-logo svg {
-  width: 18px;
-  height: 18px;
-  color: var(--color, var(--text-dim));
-}
-
-.provider-row > div {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.provider-row b {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-row small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.online,
-.offline-dot {
-  flex: none;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid;
-  white-space: nowrap;
-}
-
-.online {
-  border-color: var(--success-border);
-  background: var(--success-bg);
-  color: var(--ok);
-}
-
-.offline-dot {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text-dim);
-}
-
-.provider-row mark {
-  margin-left: 5px;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: var(--success-bg);
-  color: var(--ok);
-  font-size: 11px;
 }
 * {
   scrollbar-width: thin;
@@ -661,7 +392,7 @@
 }
 .migration-note b {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .migration-note p {
   margin: 4px 0 0;
@@ -676,7 +407,7 @@
   width: fit-content;
   margin: -14px auto 24px;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .migration-origin svg {
   width: 13px;
@@ -787,14 +518,14 @@
 .task-error p {
   margin: 5px 0;
   color: var(--danger-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }
 .task-error small {
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 /* ACP 会话被其它进程占用时的中性提示条（非错误）。 */
 .lock-banner {
@@ -819,7 +550,7 @@
 }
 .lock-banner p {
   margin: 5px 0;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -864,19 +595,6 @@
   .thread-actions button {
     min-height: 48px;
     font-size: 12px;
-  }
-  .sync-note > button,
-  .sync-note.pending .primary {
-    width: 100%;
-    margin-left: 0;
-    min-height: 44px;
-  }
-  .sync-note .runtime-context-form .form-grid {
-    grid-template-columns: 1fr;
-  }
-  .runtime-context-form > button {
-    width: 100%;
-    min-height: 44px;
   }
   .wsl-cwd-btn {
     min-width: 44px;

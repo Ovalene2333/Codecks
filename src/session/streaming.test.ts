@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   activeStreamItemId,
   appendCodexEvent,
+  collectStreamed,
   collectStreamedAgentMessages,
   collectStreamedTurnItems,
   mergeTurnItems,
@@ -405,6 +406,78 @@ test("OpenCode text deltas use the part id used by persisted history", () => {
       [{ itemId: "part-1", text: "same message", completed: true }],
     ).has("part-1"),
   );
+});
+
+test("OpenCode text deltas continue from the last native part snapshot", () => {
+  const base = {
+    agentId: "opencode",
+    providerId: "openai",
+    params: { threadId: "thread-1", turnId: "turn-1" },
+  };
+  const events = [
+    {
+      ...base,
+      method: "item/updated",
+      params: { ...base.params, item: { id: "part-1", type: "text", text: "Hello" } },
+    },
+    {
+      ...base,
+      method: "item/agentMessage/delta",
+      params: { ...base.params, itemId: "part-1", delta: " world" },
+    },
+  ];
+  assert.deepEqual(
+    collectStreamedAgentMessages(events, "openai", "thread-1", "turn-1", "opencode"),
+    [{ itemId: "part-1", text: "Hello world" }],
+  );
+});
+
+test("live entries interleave messages and items in event order", () => {
+  let events: any[] = [];
+  const tool = (id: string, status = "completed") => ({
+    providerId: "official",
+    method: "item/completed",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id, type: "commandExecution", command: id, status },
+    },
+  });
+  events = appendCodexEvent(events, delta("先", "msg-1"));
+  events = appendCodexEvent(events, tool("tool-1"));
+  events = appendCodexEvent(events, delta("后", "msg-2"));
+  events = appendCodexEvent(events, tool("tool-2"));
+
+  const live = collectStreamed(events, "official", "thread-1", "turn-1");
+  assert.deepEqual(live.entries, [
+    { kind: "message", itemId: "msg-1" },
+    { kind: "item", itemId: "tool-1" },
+    { kind: "message", itemId: "msg-2" },
+    { kind: "item", itemId: "tool-2" },
+  ]);
+});
+
+test("a message still streaming sits at its latest position in entries", () => {
+  let events: any[] = [];
+  const tool = (id: string) => ({
+    providerId: "official",
+    method: "item/started",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      item: { id, type: "commandExecution", command: id },
+    },
+  });
+  events = appendCodexEvent(events, delta("A", "msg-1"));
+  events = appendCodexEvent(events, tool("tool-1"));
+  // 同一消息继续流入时合并事件移到尾部，位置跟随最近一次活动。
+  events = appendCodexEvent(events, delta("B", "msg-1"));
+
+  const live = collectStreamed(events, "official", "thread-1", "turn-1");
+  assert.deepEqual(live.entries, [
+    { kind: "item", itemId: "tool-1" },
+    { kind: "message", itemId: "msg-1" },
+  ]);
 });
 
 test("extension items stream live for Claude todo snapshots", () => {

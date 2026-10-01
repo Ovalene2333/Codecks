@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { threadPath } from "../agents";
 import {
   approvalMode,
   APPROVAL_OPTIONS,
@@ -108,6 +109,7 @@ function ModelCommand({ thread, locked, onSettings, onClose }: any) {
     <div className="form command-form">
       <ModelPicker
         agentId={thread.agentId || "codex"}
+        cwd={thread.cwd}
         providerId={thread.providerId}
         model={next.model}
         reasoningEffort={next.reasoningEffort}
@@ -254,9 +256,15 @@ function ClaudePermissionsCommand({
 
 function SkillsCommand({ thread, initialQuery, onInsert }: any) {
   const [query, setQuery] = useState(initialQuery);
+  const agentId = thread.agentId || "codex";
+  // Codex 沿用旧路由；其它 agent 走通用 Agent API。
   const { data, loading, error } = useCommandData<any>(
-    `/threads/${thread.providerId}/${thread.id}/skills`,
+    agentId === "codex"
+      ? `/threads/${thread.providerId}/${thread.id}/skills`
+      : `${threadPath(thread)}/skills`,
   );
+  // Codex 以 `$name` 引用 skill；Claude/OpenCode 的 skill 是 slash 命令。
+  const prefix = agentId === "codex" ? "$" : "/";
   const skills = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return (Array.isArray(data?.skills) ? data.skills : []).filter(
@@ -280,9 +288,12 @@ function SkillsCommand({ thread, initialQuery, onInsert }: any) {
             type="button"
             key={`${skill.scope}:${skill.path}:${skill.name}`}
             disabled={!skill.enabled}
-            onClick={() => onInsert(`$${skill.name} `)}
+            onClick={() => onInsert(`${prefix}${skill.name} `)}
           >
-            <b>${skill.name}</b>
+            <b>
+              {prefix}
+              {skill.name}
+            </b>
             <span>{skill.description || "无说明"}</span>
             <small>{skill.enabled ? skill.scope || "skill" : "已停用"}</small>
           </button>

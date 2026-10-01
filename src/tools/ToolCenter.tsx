@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../api";
 import { toolIcon, toolPath, toolView } from "../../plugin/client-registry";
+import { deckRewrite, readDeckState } from "../deck-history";
 import type { ToolDescriptor } from "../../plugin/types";
 
 export function ToolCenter({
@@ -24,6 +25,15 @@ export function ToolCenter({
     void api<{ tools: ToolDescriptor[] }>("/tools")
       .then((result) => setTools(result.tools))
       .catch((loadError) => setError(loadError.message));
+  }, []);
+  // 浏览器前进/后退在工具页之间跳转时同步当前工具
+  useEffect(() => {
+    const sync = () => {
+      const next = toolPath(location.pathname)?.slice(1);
+      if (next) setSelected(next);
+    };
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
   }, []);
   const tool = tools.find((item) => item.id === selected);
   const View = tool ? toolView(tool.id) : undefined;
@@ -56,7 +66,14 @@ export function ToolCenter({
                 onClick={() => {
                   setSelected(item.id);
                   if (item.pagePath && location.pathname !== item.pagePath)
-                    history.replaceState(null, "", item.pagePath);
+                    history.replaceState(
+                      deckRewrite(readDeckState(history.state), {
+                        page: "tools",
+                        view: "workspace",
+                      }),
+                      "",
+                      item.pagePath,
+                    );
                 }}
               >
                 <Icon />

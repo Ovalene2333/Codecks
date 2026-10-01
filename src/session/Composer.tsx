@@ -1,5 +1,19 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CircleStop, ImagePlus, Send, X } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  ChevronDown,
+  CircleStop,
+  ImagePlus,
+  Send,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import type { ThreadSummary } from "../types";
 import { matchingSlashCommands, opensCommandPanel } from "./commands";
 import { collectComposerImages, type ComposerImage } from "./images";
@@ -40,9 +54,13 @@ export function Composer({
   onCancelBranch?: () => void;
 }) {
   const area = useRef<HTMLTextAreaElement>(null);
+  const composing = useRef(false);
   const picker = useRef<HTMLInputElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [activeCmd, setActiveCmd] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsId = useId();
   const compacting = Boolean(thread.compacting);
   const running =
     Boolean(thread.activeTurnId) &&
@@ -56,13 +74,32 @@ export function Composer({
       : extraCommands,
   );
   const canSend = Boolean(text.trim() || images.length);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
     node.style.height = "auto";
     node.style.height = text ? `${Math.min(node.scrollHeight, 160)}px` : "";
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
+  useEffect(() => setSettingsOpen(false), [thread.id]);
+  // 菜单限高后可滚动：键盘上下移动时让高亮项保持可见。
+  useLayoutEffect(() => {
+    const container = menu.current;
+    const active = container?.querySelector<HTMLElement>("button.on");
+    if (!container || !active) return;
+    const top =
+      active.getBoundingClientRect().top -
+      container.getBoundingClientRect().top +
+      container.scrollTop;
+    if (top < container.scrollTop) {
+      container.scrollTop = top;
+    } else if (
+      top + active.offsetHeight >
+      container.scrollTop + container.clientHeight
+    ) {
+      container.scrollTop = top + active.offsetHeight - container.clientHeight;
+    }
+  }, [activeCmd, suggestions.length]);
   useEffect(() => {
     if (!focusRequest) return;
     const node = area.current;
@@ -114,7 +151,7 @@ export function Composer({
       }}
     >
       {suggestions.length > 0 && (
-        <div className="slash-menu" role="listbox">
+        <div className="slash-menu" role="listbox" ref={menu}>
           {suggestions.map((item, index) => (
             <button
               key={item.name}
@@ -155,12 +192,11 @@ export function Composer({
           {imageWarning}
         </p>
       )}
-      {sessionControls && (
-        <div className="composer-session-controls">{sessionControls}</div>
-      )}
       {branchHint && (
         <div className="composer-branch-hint" role="status">
-          <span>将从「{branchHint}」分支重发，原分支保留；直接发送即用当前文字重试</span>
+          <span>
+            将从「{branchHint}」分支重发，原分支保留；直接发送即用当前文字重试
+          </span>
           {onCancelBranch && (
             <button
               type="button"
@@ -172,6 +208,34 @@ export function Composer({
             </button>
           )}
         </div>
+      )}
+      {sessionControls && (
+        <>
+          {settingsOpen && (
+            <div id={settingsId} className="composer-session-controls">
+              {sessionControls}
+            </div>
+          )}
+          <div className="composer-session-summary">
+            {!settingsOpen && (
+              <span title={thread.resolvedModel || thread.model || "默认模型"}>
+                {thread.resolvedModel || thread.model || "默认模型"}
+              </span>
+            )}
+            <button
+              type="button"
+              className="composer-settings-trigger"
+              aria-label="会话设置"
+              aria-expanded={settingsOpen}
+              aria-controls={settingsId}
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              <SlidersHorizontal />
+              设置
+              <ChevronDown className={settingsOpen ? "open" : ""} />
+            </button>
+          </div>
+        </>
       )}
       <div className="composer-box">
         <button
@@ -189,6 +253,8 @@ export function Composer({
           value={text}
           disabled={compacting}
           onChange={(event) => onChange(event.target.value)}
+          onCompositionStart={() => { composing.current = true; }}
+          onCompositionEnd={() => { composing.current = false; }}
           onPaste={(event) => {
             const files = Array.from(event.clipboardData?.items || [])
               .filter(
@@ -202,6 +268,13 @@ export function Composer({
             void addFiles(files);
           }}
           onKeyDown={(event) => {
+            // Enter confirms an IME candidate before the final onChange. Sending
+            // here would submit the old draft and then put that text back.
+            if (
+              composing.current ||
+              event.nativeEvent.isComposing ||
+              event.nativeEvent.keyCode === 229
+            ) return;
             if (
               suggestions.length &&
               (event.key === "ArrowDown" || event.key === "ArrowUp")

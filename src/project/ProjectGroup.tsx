@@ -72,6 +72,19 @@ export function ProjectGroupView({
   const providerById = new Map(
     providers.map((item) => [item.id, item] as const),
   );
+  const providerCounts = new Map<string, Map<string, number>>();
+  for (const thread of project.sessions) {
+    const agentId = thread.agentId || "codex";
+    const counts = providerCounts.get(agentId) || new Map<string, number>();
+    counts.set(thread.providerId, (counts.get(thread.providerId) || 0) + 1);
+    providerCounts.set(agentId, counts);
+  }
+  const commonProviderByAgent = new Map(
+    [...providerCounts].map(([agentId, counts]) => [
+      agentId,
+      [...counts].sort((a, b) => b[1] - a[1])[0]?.[0],
+    ]),
+  );
   return (
     <div className={`project-group ${project.pinned ? "pinned" : ""}`}>
       <div className="project-heading">
@@ -83,13 +96,23 @@ export function ProjectGroupView({
         >
           {collapsed ? <ChevronRight /> : <ChevronDown />}
           <Folder />
-          <span title={project.cwd}>{project.name}</span>
+          <span className="project-name" title={project.cwd}>
+            {project.name}
+          </span>
           {project.pinned && <Pin className="pin-mark" />}
+          {project.sessions.length > 1 && (
+            <small
+              className="project-session-count"
+              title={`${project.sessions.length} 个会话`}
+            >
+              · {project.sessions.length}
+            </small>
+          )}
         </button>
-        <b>{project.sessions.length}</b>
         <button
           className="project-add"
           title={`在 ${project.name} 中新建会话`}
+          aria-label={`在 ${project.name} 中新建会话`}
           onClick={onAdd}
         >
           <Plus />
@@ -97,6 +120,7 @@ export function ProjectGroupView({
         <button
           className="project-add"
           title="项目菜单"
+          aria-label={`${project.name} 项目菜单`}
           onClick={() => setMenu(true)}
         >
           <MoreHorizontal />
@@ -167,7 +191,12 @@ export function ProjectGroupView({
                 <MoreHorizontal />
               </button>
             </div>
-            <div className="thread-meta">
+            <div
+              className="thread-meta"
+              title={[agentLabel, providerLabel, thread.model]
+                .filter(Boolean)
+                .join(" · ")}
+            >
               <time
                 dateTime={
                   Number.isFinite(thread.updatedAt)
@@ -183,7 +212,10 @@ export function ProjectGroupView({
               >
                 {agentLabel}
               </small>
-              {providerLabel ? (
+              {providerLabel &&
+              (searchQuery.trim() ||
+                thread.providerId !==
+                  commonProviderByAgent.get(thread.agentId || "codex")) ? (
                 <small
                   className="provider-badge session-provider"
                   style={
@@ -200,23 +232,17 @@ export function ProjectGroupView({
                   {providerLabel}
                 </small>
               ) : null}
-              <small
-                className={
-                  thread.controlMode === "history"
-                    ? "history-badge"
-                    : "mode-badge"
-                }
-                onClick={
-                  thread.controlMode === "history"
-                    ? (event) => {
-                        event.stopPropagation();
-                        onHistory(thread);
-                      }
-                    : undefined
-                }
-              >
-                {thread.controlMode === "managed" ? "受管" : "历史"}
-              </small>
+              {thread.controlMode === "history" && (
+                <small
+                  className="history-badge"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onHistory(thread);
+                  }}
+                >
+                  历史
+                </small>
+              )}
               {thread.locked ? (
                 <small
                   className="lock-badge"
@@ -249,7 +275,13 @@ export function ProjectGroupView({
   );
 }
 
-function SearchHighlight({ text, query }: { text: string; query: string }) {
+export function SearchHighlight({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
   const needle = query.trim();
   const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
   if (!needle || index < 0) return <span>{text}</span>;

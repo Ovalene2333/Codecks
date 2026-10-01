@@ -28,6 +28,7 @@ import { isWslCwd, toggleWslCwd } from "../wsl-path";
 import {
   agentProtocol,
   defaultAgentId,
+  isAgentEnabled,
   opencodeProviderId,
   type AgentId,
   type AgentProtocol,
@@ -64,11 +65,13 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
+  // 已停用的 agent 不能新建会话：选择器里直接不出现，在设置里启用后才回来。
+  const enabledAgents = agents.filter(isAgentEnabled);
   const agentOptions: Pick<
     AgentDescriptor,
-    "id" | "name" | "online" | "starting" | "protocol"
-  >[] = agents.length
-    ? agents
+    "id" | "name" | "online" | "starting" | "protocol" | "fallbackFor"
+  >[] = enabledAgents.length
+    ? enabledAgents
     : [
         {
           id: "codex",
@@ -195,9 +198,9 @@ export function NewThreadModal({
           : {
               // 非 Codex agent 不使用 codex 的权限/沙箱/personality 字段。
               reasoningEffort:
-                agentId === "opencode"
-                  ? form.reasoningEffort || undefined
-                  : undefined,
+                agentId === "claude"
+                  ? undefined
+                  : form.reasoningEffort || undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
@@ -264,6 +267,7 @@ export function NewThreadModal({
                 disabled={!agent.online && !agent.starting}
               >
                 {agent.name}
+                {agent.fallbackFor ? "（备选）" : ""}
                 {!agent.online
                   ? agent.starting
                     ? "（启动中）"
@@ -385,23 +389,18 @@ export function NewThreadModal({
             <ModelPicker
               agentId={agentId}
               providerId=""
+              cwd={form.cwd}
               model={form.model}
-              reasoningEffort={
-                agentId === "opencode" ? form.reasoningEffort : ""
-              }
+              reasoningEffort={form.reasoningEffort}
               onChange={(next) =>
                 setForm((current) => ({
                   ...current,
                   model: next.model,
-                  ...(agentId === "opencode"
-                    ? {
-                        reasoningEffort: next.reasoningEffort,
-                        // The model id carries the provider, so the thread keeps
-                        // pointing at the right one without a second picker.
-                        ...(opencodeProviderId(next.model)
-                          ? { providerId: opencodeProviderId(next.model) }
-                          : {}),
-                      }
+                  reasoningEffort: next.reasoningEffort,
+                  ...(agentId === "opencode" && opencodeProviderId(next.model)
+                    ? // The model id carries the provider, so the thread keeps
+                      // pointing at the right one without a second picker.
+                      { providerId: opencodeProviderId(next.model) }
                     : {}),
                 }))
               }

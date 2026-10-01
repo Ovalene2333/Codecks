@@ -71,6 +71,17 @@ export interface AcpSessionModeState {
   availableModes: AcpSessionMode[];
 }
 
+export interface AcpSessionModel {
+  modelId: string;
+  name?: string;
+  description?: string;
+}
+
+export interface AcpSessionModelState {
+  currentModelId?: string;
+  availableModels?: AcpSessionModel[];
+}
+
 export interface AcpSessionConfigOption {
   id: string;
   name: string;
@@ -133,6 +144,7 @@ export interface AcpInitializeResult {
 export interface AcpNewSessionResult {
   sessionId: string;
   modes?: AcpSessionModeState | null;
+  models?: AcpSessionModelState | null;
   configOptions?: AcpSessionConfigOption[] | null;
   [key: string]: unknown;
 }

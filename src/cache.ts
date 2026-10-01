@@ -98,11 +98,19 @@ function compactThread(thread: ThreadSummary): ThreadSummary {
     preview: thread.preview,
     cwd: thread.cwd,
     model: thread.model,
+    resolvedModel: thread.resolvedModel,
+    reasoningEffort: thread.reasoningEffort,
     status: thread.status,
+    activeTurnId: thread.activeTurnId,
     updatedAt: thread.updatedAt,
     archived: thread.archived,
     controlMode: thread.controlMode,
     locked: thread.locked,
+    claudeConnected: thread.claudeConnected,
+    permissionMode: thread.permissionMode,
+    sessionMode: thread.sessionMode,
+    sessionId: thread.sessionId,
+    interruptedTurnId: thread.interruptedTurnId,
     forkedFromId: thread.forkedFromId,
   };
 }
@@ -166,7 +174,12 @@ function retainPendingAgentThreads(
   snapshot: Snapshot,
 ) {
   const statuses = new Map(
-    (snapshot.agents || []).map((agent) => [agent.id, agent.historyStatus]),
+    (snapshot.agents || []).map((agent) => [
+      agent.id,
+      // 待命的备选 agent、已停用的 agent：会话是服务端有意不下发的，
+      // 缓存里的旧副本不该留下（否则会永远卡在侧栏里）。
+      agent.standby || agent.enabled === false ? "ready" : agent.historyStatus,
+    ]),
   );
   if (!statuses.size) return incoming;
   const merged = new Map(
@@ -358,8 +371,15 @@ export function writeThreadCache(key: string, data: unknown) {
 export function dedupeThreadLoad<T>(
   key: string,
   load: () => Promise<T>,
+  fresh = false,
 ): Promise<T> {
   const existing = inflightThreads.get(key);
+  // A mutation (revert/unrevert) needs a request started after any older load.
+  // Otherwise the older response can keep the just-removed turns on screen.
+  if (fresh && existing)
+    return existing
+      .catch(() => undefined)
+      .then(() => dedupeThreadLoad(key, load));
   if (existing) return existing as Promise<T>;
   const request = load()
     .then((data) => {

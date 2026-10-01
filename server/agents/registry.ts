@@ -7,22 +7,184 @@ import type {
   AgentId,
   AgentSnapshot,
 } from "./types.js";
-import type { TurnImage } from "../types.js";
+import type { ThreadSummary, TurnImage } from "../types.js";
 import { activeTask } from "../tasks.js";
+
+/** 会话已被本进程接管或正有活动；只有未接管的空闲历史才可能被当作重复项隐藏。 */
+function engaged(thread: ThreadSummary) {
+  return thread.controlMode === "managed" || thread.status !== "idle";
+}
+
+/** 主 agent 能正常提供会话：已启用，已上线或正在启动，且历史读取没有失败。 */
+function usable(agent?: AgentDescriptor) {
+  return Boolean(
+    agent?.available &&
+    agent.enabled !== false &&
+    (agent.starting || (agent.online && agent.historyStatus !== "error")),
+  );
+}
+
+/** 一个 agent 的加载策略，由组装层（index.ts）在注册时给出。 */
+export interface AgentPolicy {
+  /** 能否在设置里停用；缺省 true（Codex 是核心，不可停用）。 */
+  toggleable?: boolean;
+  /** 用户没有显式选择时是否加载；缺省 true。 */
+  defaultEnabled?: boolean;
+  /** defaultEnabled 为 false 时的原因，如「未检测到 kimi 命令」。 */
+  defaultNote?: string;
+}
+
+export interface AgentRegistration extends AgentPolicy {
+  /** 当前是否加载；缺省取 defaultEnabled。 */
+  enabled?: boolean;
+}
+
+interface AgentState {
+  enabled: boolean;
+  toggleable: boolean;
+  defaultEnabled: boolean;
+  defaultNote?: string;
+}
+
+export interface AgentReloadResult {
+  id: AgentId;
+  /** 是否真的执行了重载：有会话在运行且没有 force 时为 false。 */
+  reloaded: boolean;
+  /** 发现的运行中/待审批会话数（force 时即被中断的数量）。 */
+  busyCount: number;
+  error?: string;
+}
+
+export interface AgentToggleResult {
+  /** false 表示因为有会话在运行而没有执行（需要 force）。 */
+  applied: boolean;
+  changed: boolean;
+  busyCount: number;
+}
+
+/**
+ * 待命的备选 agent。备选 agent（`AgentDescriptor.fallbackFor`）与主 agent 共用
+ * 同一份会话存储，同一批会话会在两边各出现一次；主 agent 可用时它待命，
+ * 不再展示自己的历史会话，主 agent 不可用时才完整顶上。
+ */
+function standbyIds(descriptors: AgentDescriptor[]) {
+  const byId = new Map(descriptors.map((agent) => [agent.id, agent]));
+  return new Set(
+    descriptors
+      .filter(
+        (agent) =>
+          agent.fallbackFor &&
+          agent.fallbackFor !== agent.id &&
+          usable(byId.get(agent.fallbackFor)),
+      )
+      .map((agent) => agent.id),
+  );
+}
+
+/**
+ * 待命备选 agent 要隐藏的会话：
+ * - 自己未接管的会话不展示：不是主 agent 会话的重复，就是没有内容的空壳；
+ * - 自己已接管（managed 或有活动）的会话保留，主 agent 里同 id 且未接管的副本让位。
+ */
+function hiddenFallbackThreads(
+  entries: { descriptor: AgentDescriptor; snapshot: AgentSnapshot }[],
+) {
+  const hidden = new Set<ThreadSummary>();
+  const byId = new Map(entries.map((entry) => [entry.descriptor.id, entry]));
+  const all = (entry: (typeof entries)[number]) => [
+    ...(entry.snapshot.threads || []),
+    ...(entry.snapshot.archivedThreads || []),
+  ];
+  for (const entry of entries) {
+    const primary = entry.descriptor.standby
+      ? byId.get(entry.descriptor.fallbackFor ?? "")
+      : undefined;
+    if (!primary) continue;
+    const claimed = new Set<string>();
+    for (const thread of all(entry)) {
+      if (engaged(thread)) claimed.add(thread.id);
+      else hidden.add(thread);
+    }
+    for (const thread of all(primary))
+      if (claimed.has(thread.id) && !engaged(thread)) hidden.add(thread);
+  }
+  return hidden;
+}
 
 export class AgentRegistry extends EventEmitter {
   private adapters = new Map<AgentId, AgentAdapter>();
+  private states = new Map<AgentId, AgentState>();
+  private forwarders = new Map<AgentId, (event: any) => void>();
+  private locks = new Map<AgentId, Promise<unknown>>();
 
   constructor(adapters: AgentAdapter[] = []) {
     super();
     for (const adapter of adapters) this.register(adapter);
   }
 
-  register(adapter: AgentAdapter) {
+  register(adapter: AgentAdapter, options: AgentRegistration = {}) {
     if (this.adapters.has(adapter.id))
       throw new Error(`Agent ${adapter.id} 已注册`);
     this.adapters.set(adapter.id, adapter);
-    adapter.on("event", (event) => this.emit("event", event));
+    this.configure(adapter.id, options);
+    const listener = (event: any) => {
+      if (!this.suppressed(adapter, event)) this.emit("event", event);
+    };
+    this.forwarders.set(adapter.id, listener);
+    adapter.on("event", listener);
+  }
+
+  /** 更新加载策略/当前启用状态，只改状态，不启停后端进程。 */
+  configure(id: AgentId, options: AgentRegistration) {
+    this.get(id);
+    const state = this.states.get(id);
+    const defaultEnabled =
+      options.defaultEnabled ?? state?.defaultEnabled ?? true;
+    this.states.set(id, {
+      toggleable: options.toggleable ?? state?.toggleable ?? true,
+      defaultEnabled,
+      defaultNote:
+        "defaultNote" in options ? options.defaultNote : state?.defaultNote,
+      enabled: options.enabled ?? state?.enabled ?? defaultEnabled,
+    });
+  }
+
+  /** 摘掉一个 agent：先停后端，再解除事件转发。 */
+  async unregister(id: AgentId) {
+    const adapter = this.get(id);
+    await this.serialized(id, async () => {
+      adapter.restart();
+      const listener = this.forwarders.get(id);
+      if (listener) adapter.off("event", listener);
+      this.forwarders.delete(id);
+      this.adapters.delete(id);
+      this.states.delete(id);
+    });
+    this.announce();
+  }
+
+  isEnabled(id: AgentId) {
+    return this.states.get(id)?.enabled !== false;
+  }
+
+  /** 无显式选择时该 agent 是否加载（设置页据此判断要不要清除显式选择）。 */
+  defaultEnabled(id: AgentId) {
+    return this.states.get(id)?.defaultEnabled !== false;
+  }
+
+  /**
+   * 不该到达客户端的事件：
+   * - 已停用 agent 停机过程中的残余事件；
+   * - 已被快照过滤掉的备选会话，不能靠 thread.updated 增量重新冒出来。
+   */
+  private suppressed(adapter: AgentAdapter, event: any) {
+    if (!this.isEnabled(adapter.id)) return true;
+    if (event?.type !== "thread.updated") return false;
+    const thread = event.data as ThreadSummary | undefined;
+    // 有活动的会话（流式事件的绝大多数）先在 engaged 处短路，不必算描述符。
+    return Boolean(
+      thread && !engaged(thread) && standbyIds(this.list()).has(adapter.id),
+    );
   }
 
   get(id: AgentId) {
@@ -31,34 +193,214 @@ export class AgentRegistry extends EventEmitter {
     return adapter;
   }
 
+  private descriptors(): AgentDescriptor[] {
+    return [...this.adapters.values()].map((adapter) => {
+      const raw = adapter.descriptor();
+      const state = this.states.get(adapter.id);
+      if (!state) return raw;
+      if (state.enabled)
+        return { ...raw, enabled: true, toggleable: state.toggleable };
+      return {
+        ...raw,
+        enabled: false,
+        toggleable: state.toggleable,
+        disabledReason: state.defaultEnabled ? "user" : "default",
+        defaultNote: state.defaultEnabled ? undefined : state.defaultNote,
+        // 停用的 agent 不再报告运行状态，监控台不能把它当成故障。
+        online: false,
+        starting: false,
+        error: undefined,
+        historyStatus: undefined,
+        historyError: undefined,
+      };
+    });
+  }
+
+  /**
+   * 描述符列表。registry 在这里补上加载状态（`enabled`/`toggleable`），
+   * 待命的备选 agent 带 `standby: true`（服务端已隐藏其历史会话）。
+   */
   list(): AgentDescriptor[] {
-    return [...this.adapters.values()].map((adapter) => adapter.descriptor());
+    const descriptors = this.descriptors();
+    const standby = standbyIds(descriptors);
+    return descriptors.map((agent) =>
+      standby.has(agent.id) ? { ...agent, standby: true } : agent,
+    );
+  }
+
+  private entries() {
+    const agents = this.list();
+    return [...this.adapters.values()].map((adapter, index) => ({
+      adapter,
+      descriptor: agents[index],
+      snapshot: adapter.snapshot(),
+    }));
   }
 
   snapshot(primaryId: AgentId = "codex") {
-    const snapshots = [...this.adapters.values()].map((adapter) =>
-      adapter.snapshot(),
-    );
+    const entries = this.entries();
+    const hidden = hiddenFallbackThreads(entries);
+    const live = entries.filter((entry) => entry.descriptor.enabled !== false);
+    const shown = (threads: ThreadSummary[] = []) =>
+      threads.filter((thread) => !hidden.has(thread));
     const primary = this.adapters.has(primaryId)
       ? this.get(primaryId).snapshot()
       : ({} as AgentSnapshot);
     return {
       ...primary,
-      agents: this.list(),
-      agentProfiles: [...this.adapters.values()].flatMap(
-        (adapter) => adapter.publicProfiles?.() || [],
+      agents: entries.map((entry) => entry.descriptor),
+      agentProfiles: live.flatMap(
+        (entry) => entry.adapter.publicProfiles?.() || [],
       ),
-      threads: snapshots.flatMap((snapshot) => snapshot.threads || []),
-      archivedThreads: snapshots.flatMap(
-        (snapshot) => snapshot.archivedThreads || [],
+      threads: live.flatMap((entry) => shown(entry.snapshot.threads)),
+      archivedThreads: live.flatMap((entry) =>
+        shown(entry.snapshot.archivedThreads),
       ),
-      approvals: snapshots.flatMap((snapshot) => snapshot.approvals || []),
+      approvals: live.flatMap((entry) => entry.snapshot.approvals || []),
     };
+  }
+
+  /**
+   * 落盘缓存用的会话摘要：与 snapshot 一样不含被备选让位的重复项，但保留
+   * 已停用 agent 的会话——没有历史列举能力的 agent 只能靠这份缓存找回
+   * 会话，停用期间不能把它清掉。
+   */
+  cacheSnapshot() {
+    const entries = this.entries();
+    const hidden = hiddenFallbackThreads(entries);
+    const shown = (threads: ThreadSummary[] = []) =>
+      threads.filter((thread) => !hidden.has(thread));
+    return {
+      threads: entries.flatMap((entry) => shown(entry.snapshot.threads)),
+      archivedThreads: entries.flatMap((entry) =>
+        shown(entry.snapshot.archivedThreads),
+      ),
+    };
+  }
+
+  private enabledAdapters() {
+    return [...this.adapters.values()].filter((adapter) =>
+      this.isEnabled(adapter.id),
+    );
+  }
+
+  /** 让所有客户端立刻看到 registry 自己造成的状态变化（启停/重载）。 */
+  private announce() {
+    this.emit("event", { type: "snapshot", data: this.snapshot() });
+  }
+
+  /** 同一个 agent 的启停/重载串行执行，避免连点造成 stop/start 交叠。 */
+  private serialized<T>(id: AgentId, task: () => Promise<T>): Promise<T> {
+    const run = (this.locks.get(id) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(task);
+    const tail = run.catch(() => undefined);
+    this.locks.set(id, tail);
+    void tail.then(() => {
+      if (this.locks.get(id) === tail) this.locks.delete(id);
+    });
+    return run;
+  }
+
+  private nameOf(id: AgentId) {
+    return this.get(id).descriptor().name || id;
+  }
+
+  /**
+   * 启用/停用一个 agent。停用要停掉后端进程，若它有会话在运行或等待审批，
+   * 没有 force 时不执行、返回 `applied: false` 让调用方确认。
+   */
+  async setEnabled(
+    id: AgentId,
+    enabled: boolean,
+    options: { force?: boolean } = {},
+  ): Promise<AgentToggleResult> {
+    const adapter = this.get(id);
+    if (this.states.get(id)?.toggleable === false)
+      throw new Error(`${this.nameOf(id)} 是核心 Agent，不能停用`);
+    return this.serialized(id, async () => {
+      const state = this.states.get(id);
+      if (!state) throw new Error(`Agent ${id} 不存在`);
+      if (state.enabled === enabled)
+        return { applied: true, changed: false, busyCount: 0 };
+      if (!enabled) {
+        const busy = adapter.busyThreads();
+        if (busy.length && !options.force)
+          return { applied: false, changed: false, busyCount: busy.length };
+        // 先标记停用再停机：停机过程中的残余事件会被 suppressed 丢掉。
+        state.enabled = false;
+        adapter.restart();
+        this.announce();
+        return { applied: true, changed: true, busyCount: busy.length };
+      }
+      state.enabled = true;
+      this.announce();
+      try {
+        await adapter.startAll();
+      } catch {
+        // 启动失败是 agent 自己的状态：原因体现在描述符的 error 上，
+        // 不能让「启用」这个操作本身失败。
+      }
+      this.announce();
+      return { applied: true, changed: true, busyCount: 0 };
+    });
+  }
+
+  /**
+   * 重载一个 agent：重新读取它的配置与会话，不重启 Deck。有会话在运行
+   * 或等待审批时不执行（除非 force），避免打断正在进行的任务。
+   */
+  async reload(
+    id: AgentId,
+    options: { force?: boolean } = {},
+  ): Promise<AgentReloadResult> {
+    const adapter = this.get(id);
+    return this.serialized(id, async () => {
+      if (!this.isEnabled(id))
+        throw new Error(`${this.nameOf(id)} 未启用，请先在设置中启用`);
+      const busy = adapter.busyThreads();
+      if (busy.length && !options.force)
+        return { id, reloaded: false, busyCount: busy.length };
+      try {
+        if (adapter.reload) await adapter.reload();
+        else {
+          adapter.restart();
+          await adapter.startAll();
+        }
+        return { id, reloaded: true, busyCount: busy.length };
+      } catch (error: any) {
+        return {
+          id,
+          reloaded: false,
+          busyCount: busy.length,
+          error: String(error?.message || error),
+        };
+      } finally {
+        this.announce();
+      }
+    });
+  }
+
+  /**
+   * 重载全部：已启用的逐个重载；已停用的确保是停着的（默认策略变化后可能
+   * 刚被关掉）。有会话在运行的 agent 会被跳过，结果里带 busyCount。
+   */
+  async reloadAll(
+    options: { force?: boolean } = {},
+  ): Promise<AgentReloadResult[]> {
+    const results = await Promise.all(
+      [...this.adapters.keys()].map(async (id) => {
+        if (this.isEnabled(id)) return this.reload(id, options);
+        await this.serialized(id, async () => this.adapters.get(id)?.restart());
+        return undefined;
+      }),
+    );
+    return results.filter((item): item is AgentReloadResult => Boolean(item));
   }
 
   async startAll() {
     const results = await Promise.allSettled(
-      [...this.adapters.values()].map((adapter) => adapter.startAll()),
+      this.enabledAdapters().map((adapter) => adapter.startAll()),
     );
     if (
       results.length &&
@@ -74,7 +416,7 @@ export class AgentRegistry extends EventEmitter {
 
   async refreshAll() {
     const results = await Promise.allSettled(
-      [...this.adapters.values()].map((adapter) => adapter.refreshAll()),
+      this.enabledAdapters().map((adapter) => adapter.refreshAll()),
     );
     if (
       results.length &&
@@ -95,12 +437,13 @@ export class AgentRegistry extends EventEmitter {
 
   profiles(id: AgentId) {
     const adapter = this.get(id);
+    if (!this.isEnabled(id)) return [];
     return adapter.publicProfiles?.() || [];
   }
 
-  async models(id: AgentId, providerId?: string) {
+  async models(id: AgentId, providerId?: string, directory?: string) {
     const adapter = this.operation(id, "listModels");
-    return adapter.listModels!(providerId);
+    return adapter.listModels!(providerId, directory);
   }
 
   async createThread(id: AgentId, input: AgentCreateThreadInput) {
@@ -142,10 +485,14 @@ export class AgentRegistry extends EventEmitter {
     return adapter.updateThreadSettings!(thread.providerId, threadId, settings);
   }
 
-  async deleteThread(id: AgentId, threadId: string) {
+  async deleteThread(
+    id: AgentId,
+    threadId: string,
+    options?: { closeConnection?: boolean },
+  ) {
     const adapter = this.operation(id, "deleteThread");
     const thread = this.thread(id, threadId);
-    return adapter.deleteThread!(thread.providerId, threadId);
+    return adapter.deleteThread!(thread.providerId, threadId, options);
   }
 
   async sendTurn(
@@ -170,6 +517,8 @@ export class AgentRegistry extends EventEmitter {
     approvalId: string,
     body: {
       decision?: string;
+      /** ACP：直接选中 agent 给出的 optionId。 */
+      optionId?: string;
       permissions?: unknown;
       scope?: "session" | "turn";
       answers?: unknown;
@@ -186,6 +535,12 @@ export class AgentRegistry extends EventEmitter {
     const adapter = this.operation(id, "listSessionCommands");
     const thread = this.thread(id, threadId);
     return adapter.listSessionCommands!(thread.providerId, threadId);
+  }
+
+  async listSkills(id: AgentId, threadId: string, forceReload = false) {
+    const adapter = this.operation(id, "listSkills");
+    const thread = this.thread(id, threadId);
+    return adapter.listSkills!(thread.providerId, threadId, forceReload);
   }
 
   async runSessionCommand(
@@ -252,7 +607,7 @@ export class AgentRegistry extends EventEmitter {
 
   async listTasks() {
     const tasks = await Promise.all(
-      [...this.adapters.values()].flatMap((adapter) =>
+      this.enabledAdapters().flatMap((adapter) =>
         adapter.busyThreads().map(async (thread) => {
           const [detail, terminals] = await Promise.all([
             adapter.readThread
@@ -298,9 +653,7 @@ export class AgentRegistry extends EventEmitter {
   }
 
   busyThreads() {
-    return [...this.adapters.values()].flatMap((adapter) =>
-      adapter.busyThreads(),
-    );
+    return this.enabledAdapters().flatMap((adapter) => adapter.busyThreads());
   }
 
   stopAll() {
@@ -309,6 +662,8 @@ export class AgentRegistry extends EventEmitter {
 
   private operation<K extends keyof AgentAdapter>(id: AgentId, key: K) {
     const adapter = this.get(id);
+    if (!this.isEnabled(id))
+      throw new Error(`${this.nameOf(id)} 未启用，请先在设置中启用`);
     if (typeof adapter[key] !== "function")
       throw new Error(`Agent ${id} 不支持此操作`);
     return adapter;

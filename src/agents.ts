@@ -29,6 +29,11 @@ export function agentIdFor(value?: { agentId?: AgentId }): AgentId {
   return value?.agentId || "codex";
 }
 
+/** 旧服务端不带 enabled 字段，缺省按已启用处理。 */
+export function isAgentEnabled(agent?: Pick<AgentDescriptor, "enabled">) {
+  return agent?.enabled !== false;
+}
+
 export type AgentProtocol = "native" | "acp";
 
 /**
@@ -53,12 +58,14 @@ export function defaultAgentId(
   preferred?: AgentId,
 ): AgentId {
   if (!agents.length) return "codex";
-  const preferredAgent = agents.find((agent) => agent.id === preferred);
+  // 已停用的 agent 不参与默认选择：不能新建会话，哪怕它是上次用的那个。
+  const usable = agents.filter(isAgentEnabled);
+  const preferredAgent = usable.find((agent) => agent.id === preferred);
   if (preferredAgent?.online || preferredAgent?.starting)
     return preferredAgent.id;
   return (
-    agents.find((agent) => agent.online)?.id ||
-    agents.find((agent) => agent.starting)?.id ||
+    usable.find((agent) => agent.online)?.id ||
+    usable.find((agent) => agent.starting)?.id ||
     preferred ||
     "codex"
   );
@@ -83,7 +90,6 @@ export function capabilitiesFor(
       review: false,
       sessionSettings: false,
       shell: false,
-      skills: false,
     };
   // 未知/ACP agent：descriptor 未就绪前的保守能力集。
   return {

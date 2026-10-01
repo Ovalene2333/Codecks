@@ -158,7 +158,7 @@ export interface ApprovalQuestion {
   prompt?: string;
   header?: string;
   question?: string;
-  options?: { label: string; value?: string; isOther?: boolean }[];
+  options?: { label: string; value?: string; description?: string; isOther?: boolean }[];
   isOther?: boolean;
   multiple?: boolean;
   custom?: boolean;
@@ -223,6 +223,8 @@ export interface ThreadSummary {
   compacting?: boolean;
   migratedFrom?: { providerId: string; threadId: string };
   controlMode?: "managed" | "history";
+  /** Claude SDK process remains connected between turns. */
+  claudeConnected?: boolean;
   /**
    * 会话被其它进程占用（如 devin 的 session lock）。置位时 Deck 只能展示
    * 缓存历史，load/resume/prompt 会被 agent 拒绝；下一次 session/list
@@ -265,6 +267,76 @@ export interface ActiveTask {
   commands: ActiveTaskCommand[];
   processControl: boolean;
   detailError?: string;
+}
+
+/**
+ * 监控台用的精简 item：只保留拼一行“正在做什么”所需的字段，
+ * 不带输出/diff/大段 input，避免高频广播把快照撑大。
+ */
+export interface ActivityItem {
+  id: string;
+  type: string;
+  status?: string;
+  command?: string;
+  tool?: string;
+  server?: string;
+  title?: string;
+  agent?: string;
+  activity?: string;
+  query?: string;
+  path?: string;
+  input?: Record<string, string>;
+  commandActions?: {
+    type: string;
+    path?: string;
+    query?: string;
+    name?: string;
+    command?: string;
+  }[];
+  changes?: { path: string; kind?: string }[];
+  changeCount?: number;
+}
+
+export interface ThreadActivity {
+  agentId: AgentId;
+  threadId: string;
+  turnId?: string;
+  /** 本轮开始时间；Deck 启动前就在跑的回合近似取会话 updatedAt。 */
+  turnStartedAt?: number;
+  /** 最近一次收到该会话流式事件的时间（心跳节流，精度约 10 秒）。 */
+  lastEventAt: number;
+  /** 当前进行中的步骤；缺省表示在等模型响应。 */
+  step?: { item: ActivityItem; startedAt: number };
+  /** 上一轮的起止与结果，空闲会话据此显示上次耗时。 */
+  lastTurn?: { startedAt: number; endedAt: number; status: string };
+}
+
+export interface ActivityUpdate {
+  agentId: AgentId;
+  threadId: string;
+  /** null = 会话已删除，前端移除对应条目。 */
+  activity: ThreadActivity | null;
+}
+
+export interface HostStats {
+  platform: string;
+  arch: string;
+  cpuCount: number;
+  /** 两次采样间的整机 CPU 占用百分比；首次采样为启动以来均值。 */
+  cpuPercent?: number;
+  loadavg: number[];
+  memTotal: number;
+  /** Linux 取 MemAvailable（含可回收缓存），其余平台为 os.freemem()。 */
+  memAvailable: number;
+  uptimeSec: number;
+  deck: {
+    pid: number;
+    rss: number;
+    heapUsed: number;
+    uptimeSec: number;
+    node: string;
+    clients: number;
+  };
 }
 
 export interface RuntimeStatus {
