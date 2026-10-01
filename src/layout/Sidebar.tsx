@@ -4,8 +4,10 @@ import {
   BarChart3,
   BellRing,
   Bot,
+  FileText,
   Gauge,
   GitBranch,
+  Monitor,
   Plus,
   RefreshCw,
   Search,
@@ -59,6 +61,8 @@ export function Sidebar({
   onLibrary,
   onQuery,
   onStatusFilter,
+  monitorOpen,
+  onToggleMonitor,
   onToggleProject,
   onSelect,
   onAddInProject,
@@ -105,6 +109,8 @@ export function Sidebar({
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
   onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
+  monitorOpen: boolean;
+  onToggleMonitor: () => void;
   onToggleProject: (key: string) => void;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
@@ -128,11 +134,16 @@ export function Sidebar({
     : library === "archived"
       ? "archived"
       : "none";
-  const visibleSessions = library === "archived" ? archivedCount : sessionCount;
   const matchCount = projects.reduce(
     (sum, project) => sum + project.sessions.length,
     0,
   );
+  const activeCount = counts.running + counts.waiting;
+  const attentionCount = counts.waiting + counts.errors;
+  const showActivity =
+    (library === "active" &&
+      (activeCount > 0 || attentionCount > 0 || counts.unseen > 0)) ||
+    statusFilter !== "all";
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -181,9 +192,7 @@ export function Sidebar({
         <img className="brand-logo" src={deckLogo} alt="" />
         <div>
           <b>Codex Deck</b>
-          <small>REMOTE WORKSPACE</small>
         </div>
-        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <button className="icon-btn" onClick={onClose}>
           <X />
         </button>
@@ -237,6 +246,16 @@ export function Sidebar({
         >
           <RefreshCw />
         </button>
+        <button
+          type="button"
+          className={`icon-btn monitor-entry ${monitorOpen ? "active" : ""}`}
+          onClick={onToggleMonitor}
+          title={monitorOpen ? "返回对话" : "打开监控台"}
+          aria-label={monitorOpen ? "关闭监控台" : "打开监控台"}
+          aria-pressed={monitorOpen}
+        >
+          <Monitor />
+        </button>
       </div>
       <div className="sidebar-meta">
         <span>
@@ -246,47 +265,61 @@ export function Sidebar({
               ? `同步中 · ${projectCount} 项目`
               : searching
                 ? `${matchCount} 个匹配 · ${projects.length} 个项目${contentSearchPending ? " · 检索中" : contentSearchProgress?.building ? ` · 已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
-                : `${projectCount} 项目 · ${visibleSessions} 会话`}
+                : library === "archived"
+                  ? `${projects.length} 个归档项目`
+                  : `${projectCount} 个项目`}
         </span>
-        <div className="watch-strip">
-          <button
-            type="button"
-            className={statusFilter === "active" ? "active" : ""}
-            aria-pressed={statusFilter === "active"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "active" ? "all" : "active")
-            }
-          >
-            <span className="watch-dot running" />
-            运行
-            <b>{counts.running}</b>
-          </button>
-          <button
-            type="button"
-            className={statusFilter === "attention" ? "active" : ""}
-            aria-pressed={statusFilter === "attention"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "attention" ? "all" : "attention")
-            }
-          >
-            <span className="watch-dot waiting" />
-            待确认
-            <b>{counts.waiting}</b>
-            {counts.errors > 0 && <em>{counts.errors}</em>}
-          </button>
-          <button
-            type="button"
-            className={statusFilter === "unseen" ? "active" : ""}
-            aria-pressed={statusFilter === "unseen"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "unseen" ? "all" : "unseen")
-            }
-          >
-            <span className="watch-dot unseen" />
-            新回复
-            <b>{counts.unseen}</b>
-          </button>
-        </div>
+        {showActivity && (
+          <div className="watch-strip" role="group" aria-label="会话状态筛选">
+            {(activeCount > 0 || statusFilter === "active") && (
+              <button
+                type="button"
+                className={statusFilter === "active" ? "active" : ""}
+                aria-pressed={statusFilter === "active"}
+                onClick={() =>
+                  onStatusFilter(statusFilter === "active" ? "all" : "active")
+                }
+              >
+                <span className="watch-dot running" />
+                进行中
+                <b>{activeCount}</b>
+              </button>
+            )}
+            {(attentionCount > 0 || statusFilter === "attention") && (
+              <button
+                type="button"
+                className={statusFilter === "attention" ? "active" : ""}
+                aria-pressed={statusFilter === "attention"}
+                title={`待确认 ${counts.waiting} · 异常 ${counts.errors}`}
+                onClick={() =>
+                  onStatusFilter(
+                    statusFilter === "attention" ? "all" : "attention",
+                  )
+                }
+              >
+                <span
+                  className={`watch-dot ${counts.errors > 0 && counts.waiting === 0 ? "error" : "waiting"}`}
+                />
+                需处理
+                <b>{attentionCount}</b>
+              </button>
+            )}
+            {(counts.unseen > 0 || statusFilter === "unseen") && (
+              <button
+                type="button"
+                className={statusFilter === "unseen" ? "active" : ""}
+                aria-pressed={statusFilter === "unseen"}
+                onClick={() =>
+                  onStatusFilter(statusFilter === "unseen" ? "all" : "unseen")
+                }
+              >
+                <span className="watch-dot unseen" />
+                新回复
+                <b>{counts.unseen}</b>
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {archiveError && library === "archived" && (
         <p className="error-banner archive-error">{archiveError}</p>
@@ -356,6 +389,7 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-footer">
+        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <div className="sidebar-footer-actions">
           <button
             type="button"
@@ -419,6 +453,20 @@ export function Sidebar({
                   <span>
                     <b>Git 管理</b>
                     <small>改动、提交与分支</small>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setToolsOpen(false);
+                    onTools("/text-editor");
+                  }}
+                >
+                  <FileText />
+                  <span>
+                    <b>文本编辑器</b>
+                    <small>查看与编辑宿主机文件</small>
                   </span>
                 </button>
                 <button

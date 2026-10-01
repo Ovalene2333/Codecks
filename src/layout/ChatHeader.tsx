@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
+  Minimize2,
   MoreHorizontal,
   SunMoon,
 } from "lucide-react";
@@ -43,6 +44,22 @@ export function ChatHeader({
     thread.tokenUsage?.used != null && thread.tokenUsage.limit != null
       ? `${formatTokens(thread.tokenUsage.used)}/${formatTokens(thread.tokenUsage.limit)}`
       : formatTokens(thread.tokenUsage?.used ?? thread.tokenUsage?.limit);
+  const contextPercent =
+    thread.tokenUsage?.used != null &&
+    thread.tokenUsage.limit != null &&
+    thread.tokenUsage.limit > 0
+      ? Math.min(
+          100,
+          Math.round((thread.tokenUsage.used / thread.tokenUsage.limit) * 100),
+        )
+      : undefined;
+  const hasUsage =
+    thread.tokenUsage?.used != null || thread.tokenUsage?.limit != null;
+  const canSwitchProvider =
+    !thread.agentId ||
+    thread.agentId === "codex" ||
+    thread.agentId === "claude";
+  const showStatus = thread.compacting || thread.status !== "idle";
 
   return (
     <header className="chat-header">
@@ -52,7 +69,39 @@ export function ChatHeader({
         </button>
         <div className="chat-title">
           <div className="chat-title-row">
+            <span
+              className="desktop-chat-project"
+              title={thread.cwd || undefined}
+            >
+              {basename(thread.cwd) || "项目"}
+            </span>
+            <span className="desktop-chat-separator" aria-hidden="true">
+              /
+            </span>
             <h2 title={thread.name}>{thread.name}</h2>
+            {showStatus && (
+              <Status
+                status={thread.compacting ? "running" : thread.status}
+                compact
+                label={thread.compacting ? "正在运行" : undefined}
+              />
+            )}
+            {thread.agentId === "claude" && (
+              <span className={`claude-connection ${thread.claudeConnected ? "connected" : ""}`}
+                title={thread.claudeConnected
+                  ? "Deck 当前持有此会话的 Claude SDK 连接"
+                  : "Deck 当前没有持有此会话的 Claude SDK 连接"}>
+                Deck {thread.claudeConnected ? "已连接" : "未连接"}
+              </span>
+            )}
+            {!canSwitchProvider && (
+              <span
+                className="desktop-chat-agent"
+                title={provider?.name || agentName}
+              >
+                {provider?.name || agentName}
+              </span>
+            )}
             <span
               className={`mobile-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
               title={`${agentName} 任务`}
@@ -63,49 +112,40 @@ export function ChatHeader({
               <mark className="pending-count">{pendingCount}</mark>
             )}
           </div>
-          <p className="chat-title-meta">
-            <Status
-              status={thread.compacting ? "running" : thread.status}
-              compact
-              label={thread.compacting ? "正在运行" : undefined}
-            />
-            <span className="chat-location">
-              {basename(thread.cwd)}
-              {provider?.name
-                ? ` · ${provider.name}`
-                : thread.agentId === "claude"
-                  ? ` · ${agentName}`
-                  : ""}
-            </span>
-          </p>
         </div>
         <div className="chat-header-actions">
-          <span
-            className={`chat-agent-badge agent-badge agent-${thread.agentId || "codex"}`}
-            title={`${agentName} 任务`}
-          >
-            {agentBadgeLabel(thread.agentId, agentName)}
-          </span>
-          <div
-            className="desktop-context"
-            title={`上下文 ${contextLabel || "未知"}`}
-          >
-            <span className="desktop-context-label">上下文</span>
-            <ContextBar
-              usage={thread.tokenUsage}
-              compacting={thread.compacting}
-              onCompact={onCompact}
-              showUnknown
-            />
-          </div>
-          {(!thread.agentId ||
-            thread.agentId === "codex" ||
-            thread.agentId === "claude") && (
+          {hasUsage || thread.compacting ? (
+            <div
+              className="desktop-context"
+              title={`上下文 ${contextLabel || "未知"}`}
+            >
+              <span className="desktop-context-label">上下文</span>
+              <ContextBar
+                usage={thread.tokenUsage}
+                compacting={thread.compacting}
+                onCompact={onCompact}
+                showUnknown
+              />
+            </div>
+          ) : onCompact ? (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onCompact}
+              title="压缩上下文"
+              aria-label="压缩上下文"
+            >
+              <Minimize2 />
+            </button>
+          ) : null}
+          {canSwitchProvider && (
             <button
               className="provider-switch secondary"
               onClick={onSwitchProvider}
-              disabled={locked}
-              title="为此 Session 切换供应商"
+              disabled={locked || (thread.agentId === "claude" && thread.claudeConnected)}
+              title={thread.agentId === "claude" && thread.claudeConnected
+                ? "Claude 会话仍保持连接；可创建分支并为分支选择其他供应商"
+                : "为此 Session 切换供应商"}
             >
               <ArrowRightLeft />
               <span>
@@ -135,17 +175,23 @@ export function ChatHeader({
         </div>
       </div>
       <div className="mobile-chat-meta">
-        <Status
-          status={thread.compacting ? "running" : thread.status}
-          compact
-          label={thread.compacting ? "正在运行" : undefined}
-        />
-        <span
-          className="mobile-context"
-          title={`上下文 ${contextLabel || "未知"}`}
-        >
-          {contextLabel || "--/--"}
-        </span>
+        {thread.agentId === "claude" && (
+          <span className="mobile-claude-connection">
+            Deck {thread.claudeConnected ? "已连接" : "未连接"}
+          </span>
+        )}
+        {showStatus && (
+          <Status
+            status={thread.compacting ? "running" : thread.status}
+            compact
+            label={thread.compacting ? "正在运行" : undefined}
+          />
+        )}
+        {contextLabel ? (
+          <span className="mobile-context" title={`上下文 ${contextLabel}`}>
+            {contextPercent != null ? `${contextPercent}%` : contextLabel}
+          </span>
+        ) : null}
         <span className="mobile-project" title={thread.cwd || "项目未知"}>
           {basename(thread.cwd) || "项目未知"}
         </span>

@@ -29,24 +29,66 @@ function contentParts(record: ClaudeRecord): ClaudeRecord[] {
 }
 
 function mainChain(records: ClaudeRecord[]) {
-  const messages = records.filter(
-    (record) =>
-      (record.type === "user" || record.type === "assistant") && record.uuid,
-  );
-  const byId = new Map(messages.map((record) => [record.uuid, record]));
-  const declaredLeaf = [...records]
-    .reverse()
-    .find((record) => record.type === "last-prompt")?.leafUuid;
-  let current =
-    (declaredLeaf && byId.get(declaredLeaf)) || messages.at(-1) || undefined;
-  const chain: ClaudeRecord[] = [];
-  const seen = new Set<string>();
-  while (current?.uuid && !seen.has(current.uuid)) {
-    seen.add(current.uuid);
-    chain.push(current);
-    current = current.parentUuid ? byId.get(current.parentUuid) : undefined;
+  // Claude Code >=2.1 会把 attachment/system 记录编进 parentUuid 链，
+  // compact_boundary 之后还会另起一条 parentUuid=null 的新链。因此先按
+  // 链根分组，再从每段最后一条记录向前回溯，沿途只收集主线上的
+  // user/assistant；sidechain（Task 子代理）只穿过不收集。
+  const byUuid = new Map<string, ClaudeRecord>();
+  for (const record of records)
+    if (record.uuid) byUuid.set(record.uuid, record);
+  const rootOf = new Map<string, string>();
+  const rootFor = (record: ClaudeRecord) => {
+    const known = rootOf.get(record.uuid);
+    if (known) return known;
+    let current: ClaudeRecord | undefined = record;
+    const trail: string[] = [];
+    const seen = new Set<string>();
+    while (current?.uuid && !seen.has(current.uuid)) {
+      const memoized = rootOf.get(current.uuid);
+      if (memoized) {
+        current = { uuid: memoized };
+        break;
+      }
+      seen.add(current.uuid);
+      trail.push(current.uuid);
+      current = current.parentUuid
+        ? byUuid.get(current.parentUuid)
+        : undefined;
+    }
+    const root = current?.uuid || trail.at(-1) || record.uuid;
+    for (const uuid of trail) rootOf.set(uuid, root);
+    return root;
+  };
+  // 每个链根的规范叶节点取该链在文件里的最后一条记录：文件本身是追加写的，
+  // 尾部即最新主链末梢；被丢弃的重试分支不在这条回溯路径上。
+  const leaves = new Map<string, ClaudeRecord>();
+  for (const record of records) {
+    if (!record.uuid) continue;
+    leaves.set(rootFor(record), record);
   }
-  return chain.reverse();
+  const chain: ClaudeRecord[] = [];
+  for (const [root, leaf] of leaves) {
+    const segment: ClaudeRecord[] = [];
+    const seen = new Set<string>();
+    let current: ClaudeRecord | undefined = leaf;
+    while (
+      current?.uuid &&
+      !seen.has(current.uuid) &&
+      rootOf.get(current.uuid) === root
+    ) {
+      seen.add(current.uuid);
+      if (
+        (current.type === "user" || current.type === "assistant") &&
+        !current.isSidechain
+      )
+        segment.push(current);
+      current = current.parentUuid
+        ? byUuid.get(current.parentUuid)
+        : undefined;
+    }
+    chain.push(...segment.reverse());
+  }
+  return chain;
 }
 
 function usageFrom(records: ClaudeRecord[]): TokenUsage | undefined {
@@ -98,7 +140,7 @@ export function claudeTodos(input: any): any[] {
     );
 }
 
-function toolItem(part: ClaudeRecord, record: ClaudeRecord) {
+export function claudeToolItem(part: ClaudeRecord, record: ClaudeRecord) {
   const id = String(part.id || record.uuid);
   const input = part.input && typeof part.input === "object" ? part.input : {};
   if (part.name === "TodoWrite") {
@@ -143,6 +185,116 @@ function toolItem(part: ClaudeRecord, record: ClaudeRecord) {
     ...(part.name && part.name !== "Bash" ? { tool: part.name } : {}),
     ...(Object.keys(input).length ? { input } : {}),
   };
+}
+
+function isUserPromptRecord(record: ClaudeRecord) {
+  const parts = contentParts(record);
+  return (
+    record.type === "user" &&
+    !record.isMeta &&
+    !record.isSynthetic &&
+    !record.isSidechain &&
+    parts.every((part) => part?.type !== "tool_result")
+  );
+}
+
+function parseRecords(source: string) {
+  return source
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line) as ClaudeRecord];
+      } catch {
+        return [];
+      }
+    });
+}
+
+/**
+ * 回滚锚点：turnUuid 是主链上某个 user prompt 的 uuid（即 turns 里的
+ * turn.id）。返回该 prompt 之前最后一条主链消息的 uuid——以此为界截断
+ * 文件即 Claude Code rewind/fork 的语义：目标 turn 及其后所有记录留在
+ * 原文件里成为孤儿分支。null = 目标是首条消息（回滚到会话开头）；
+ * undefined = 该 uuid 不是当前主链上的 prompt（已被回退或传错）。
+ */
+export function rewindAnchorUuid(
+  source: string,
+  turnUuid: string,
+): string | null | undefined {
+  const chain = mainChain(parseRecords(source));
+  const index = chain.findIndex(
+    (record) => record.uuid === turnUuid && isUserPromptRecord(record),
+  );
+  if (index < 0) return undefined;
+  const anchor = chain[index - 1];
+  return anchor?.uuid ? String(anchor.uuid) : null;
+}
+
+/**
+ * turn 末尾锚点：turnUuid 所属 turn 的最后一条主链消息（下一个 user
+ * prompt 的前一条；末轮则为主链末梢）。用于「包含该 turn」的整段分支。
+ */
+export function turnEndUuid(
+  source: string,
+  turnUuid: string,
+): string | undefined {
+  const chain = mainChain(parseRecords(source));
+  const index = chain.findIndex(
+    (record) => record.uuid === turnUuid && isUserPromptRecord(record),
+  );
+  if (index < 0) return undefined;
+  for (let i = index + 1; i < chain.length; i++)
+    if (isUserPromptRecord(chain[i])) {
+      const anchor = chain[i - 1];
+      return anchor?.uuid ? String(anchor.uuid) : undefined;
+    }
+  const leaf = chain.at(-1);
+  return leaf?.uuid ? String(leaf.uuid) : undefined;
+}
+
+/**
+ * 生成分支会话的 JSONL 内容：把 sessionId 重写为新会话 id。
+ * - 不传 anchorUuid：整份复制（文件级 fork，原会话原样保留）。
+ * - 传 anchorUuid：只保留锚点行及之前按文件顺序写入的记录，外加无 uuid
+ *   的元数据行（ai-title/custom-title 等；last-prompt 除外，它引用的
+ *   叶节点可能已被裁掉）。被丢弃的旧分支记录留在原文件，不受影响。
+ * 锚点不在文件里时返回 undefined。
+ */
+export function branchClaudeHistory(
+  source: string,
+  newSessionId: string,
+  anchorUuid?: string,
+): string | undefined {
+  const lines = source.split(/\r?\n/).filter(Boolean);
+  let cut = lines.length;
+  if (anchorUuid !== undefined) {
+    const at = lines.findIndex((line) => {
+      try {
+        return JSON.parse(line)?.uuid === anchorUuid;
+      } catch {
+        return false;
+      }
+    });
+    if (at < 0) return undefined;
+    cut = at + 1;
+  }
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let record: ClaudeRecord;
+    try {
+      record = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (anchorUuid !== undefined) {
+      if (record.type === "last-prompt") continue;
+      if (i >= cut && record.uuid) continue;
+    }
+    if (typeof record.sessionId === "string") record.sessionId = newSessionId;
+    out.push(JSON.stringify(record));
+  }
+  return `${out.join("\n")}\n`;
 }
 
 function normalizeTurns(chain: ClaudeRecord[]) {
@@ -191,7 +343,7 @@ function normalizeTurns(chain: ClaudeRecord[]) {
             summary: part.thinking,
           });
         else if (part?.type === "tool_use") {
-          const item = toolItem(part, record);
+          const item = claudeToolItem(part, record);
           tools.set(String(part.id), item);
           current.items.push(item);
         }
@@ -274,7 +426,8 @@ export function parseClaudeHistory(
     ),
     preview,
     cwd,
-    model,
+    model: "default",
+    ...(model !== "default" ? { resolvedModel: model } : {}),
     status: "idle",
     updatedAt,
     sessionId,

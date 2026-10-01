@@ -75,9 +75,14 @@ export function parseComposerCommand(
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
   if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
-  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释。
-  if (agentId !== "codex" && agentId !== "claude")
+  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释；/model 例外，
+  // agent 暴露模型目录（configOptions/models spec）时走 Deck 的模型面板，
+  // 没有目录时再回落为透传文本。
+  if (agentId !== "codex" && agentId !== "claude") {
+    if (key === "model" || key === "models")
+      return { kind: "model", model: arg || undefined };
     return { kind: "agent-command", command: key, args: arg };
+  }
   if (key === "compact") return { kind: "compact" };
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
@@ -133,7 +138,7 @@ export function parseComposerCommand(
   return undefined;
 }
 
-const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
+const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps", "/skills"]);
 
 /** P0 OpenCode 内置命令（`/` 补全用；自定义命令运行时从服务端追加）。 */
 export const OPENCODE_COMMANDS = [
@@ -142,6 +147,7 @@ export const OPENCODE_COMMANDS = [
   { name: "/redo", hint: "恢复已撤回的内容（需确认）" },
   { name: "/init", hint: "生成或更新 AGENTS.md" },
   { name: "/models", hint: "选择模型" },
+  { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/new", hint: "新建会话（回到列表创建）" },
   { name: "/sessions", hint: "在左侧列表切换会话" },
   { name: "/details", hint: "工具执行细节（可展开查看）" },
@@ -159,6 +165,7 @@ function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
   if (key === "undo") return { kind: "undo" };
   if (key === "redo") return { kind: "redo" };
   if (key === "model" || key === "models") return { kind: "model" };
+  if (key === "skills") return { kind: "skills", query: arg };
   if (key === "status") return { kind: "status" };
   if (key === "ps") return { kind: "ps" };
   if (key === "usage") return { kind: "usage" };

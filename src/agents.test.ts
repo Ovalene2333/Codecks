@@ -5,6 +5,7 @@ import {
   approvalPath,
   capabilitiesFor,
   defaultAgentId,
+  isAgentEnabled,
   opencodeProviderId,
   providerForThread,
   threadActionPath,
@@ -115,7 +116,10 @@ test("OpenCode archive and delete go through the generic Agent API", () => {
   );
   // Codex keeps the legacy manager routes.
   assert.equal(
-    threadArchivePath({ id: "t1", agentId: "codex", providerId: "deck_x" }, "archive"),
+    threadArchivePath(
+      { id: "t1", agentId: "codex", providerId: "deck_x" },
+      "archive",
+    ),
     "/threads/deck_x/t1/archive",
   );
   assert.equal(
@@ -172,5 +176,37 @@ test("OpenCode sessions resolve their provider from the model in use", () => {
       model: "default",
     })?.name,
     "OpenAI",
+  );
+});
+
+test("agents count as enabled unless the server says otherwise", () => {
+  assert.equal(isAgentEnabled(undefined), true);
+  // 旧服务端不带 enabled 字段。
+  assert.equal(isAgentEnabled({}), true);
+  assert.equal(isAgentEnabled({ enabled: true }), true);
+  assert.equal(isAgentEnabled({ enabled: false }), false);
+});
+
+test("a disabled Agent is never the default for new sessions", () => {
+  const descriptor = (id: string, extra: object = {}) => ({
+    id,
+    name: id,
+    available: true,
+    online: true,
+    capabilities: capabilitiesFor(undefined, { agentId: id }),
+    ...extra,
+  });
+  const agents = [
+    descriptor("codex"),
+    // 即使它是上次用的那个、描述符里还残留 online，也不能选。
+    descriptor("kimi", { enabled: false }),
+  ];
+  assert.equal(defaultAgentId(agents, "kimi"), "codex");
+  assert.equal(
+    defaultAgentId(
+      [descriptor("kimi", { enabled: false }), descriptor("goose")],
+      "kimi",
+    ),
+    "goose",
   );
 });

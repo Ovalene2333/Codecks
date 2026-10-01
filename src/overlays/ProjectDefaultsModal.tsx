@@ -15,6 +15,7 @@ import {
   settingsForSandboxMode,
 } from "../codexLabels";
 import { Modal } from "../ui";
+import { OpenCodeAgentsSection } from "./OpenCodeAgentsSection";
 
 export type ProjectDefaultsSave = Omit<
   ProjectDefaults,
@@ -244,6 +245,7 @@ export function ProjectDefaultsModal({
               />
             </label>
           </div>
+          <OpenCodeAgentsSection cwd={project.cwd} />
           {error && <p className="error-text">{error}</p>}
         </div>
         <div className="form-actions">

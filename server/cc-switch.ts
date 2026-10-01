@@ -141,22 +141,30 @@ export class CcSwitchSource {
           ),
         );
         const baseUrl = env.ANTHROPIC_BASE_URL?.trim();
-        const official =
-          !baseUrl ||
-          (() => {
-            try {
-              const hostname = new URL(baseUrl).hostname.toLowerCase();
-              return (
-                hostname === "api.anthropic.com" ||
-                hostname.endsWith(".anthropic.com")
-              );
-            } catch {
-              return true;
-            }
-          })();
-        const supported =
-          !official &&
-          Boolean(env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY);
+        let endpointValid = true;
+        let officialEndpoint = !baseUrl;
+        if (baseUrl) {
+          try {
+            const url = new URL(baseUrl);
+            endpointValid = url.protocol === "https:" || url.protocol === "http:";
+            officialEndpoint =
+              url.hostname.toLowerCase() === "api.anthropic.com";
+          } catch {
+            endpointValid = false;
+          }
+        }
+        const cloudProvider = Boolean(
+          env.CLAUDE_CODE_USE_BEDROCK === "1" ||
+          env.CLAUDE_CODE_USE_VERTEX === "1" ||
+          env.CLAUDE_CODE_USE_FOUNDRY === "1",
+        );
+        const hasCredential = Boolean(
+          env.ANTHROPIC_AUTH_TOKEN ||
+          env.ANTHROPIC_API_KEY ||
+          env.ANTHROPIC_CUSTOM_HEADERS,
+        );
+        const official = officialEndpoint && !hasCredential && !cloudProvider;
+        const supported = endpointValid && (hasCredential || cloudProvider);
         return {
           id: `claude-cc-${row.id}`,
           name: row.name,

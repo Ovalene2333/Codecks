@@ -68,7 +68,7 @@
   --font-mono:
     "Geist Mono", "Cascadia Code", "SFMono-Regular", Consolas,
     "Liberation Mono", monospace;
-  --fs-meta: 11px;
+  --fs-meta: 12px;
   --fs-caption: 12px;
   --fs-small: 12px;
   --fs-ui: 13px;
@@ -78,35 +78,38 @@
   --fs-display: 30px;
 
   /* Surfaces — dark */
-  --bg: #0d1014;
-  --sidebar: #0f1218;
-  --surface: #151a21;
-  --surface-2: #1c222b;
-  --surface-muted: #11161d;
-  --surface-raised: #1a2029;
+  --bg: #090c11;
+  --sidebar: #0d1118;
+  --surface: #131822;
+  --surface-2: #1a212d;
+  --surface-muted: #0f141c;
+  --surface-raised: #1a222e;
   --panel: var(--surface);
   --panel2: var(--surface-2);
   --card: var(--surface);
-  --control: #1a2029;
-  --control-hover: #232b36;
-  --control-border: #343d4b;
+  --control: #1a212c;
+  --control-hover: #242e3c;
+  --control-border: #364052;
 
   /* Lines & text */
-  --line: #262d38;
-  --line-strong: #3d4654;
-  --text: #f2f4f8;
-  --text-soft: #d3d9e1;
-  --text-dim: #95a0af;
-  --text-faint: #6e7987;
+  --line: #222a36;
+  --line-strong: #3c4656;
+  --edge-hi: rgb(255 255 255 / 6%);
+  --text: #f3f5fa;
+  --text-soft: #d5dbe5;
+  --text-dim: #98a2b3;
+  --text-faint: #6d7888;
   --muted: var(--text-dim);
 
   /* Accent & status */
-  --accent: #edf0f3;
-  --accent-text: #161a20;
-  --accent-hover: #ffffff;
-  --accent-active: #d3d7dd;
-  --focus-ring: #93a0b4;
-  --ok: #41d68b;
+  --accent: #6273f2;
+  --accent-grad: linear-gradient(180deg, #7484f6 0%, #5667e6 100%);
+  --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
+  --accent-text: #ffffff;
+  --accent-hover: #7a8af6;
+  --accent-active: #5162de;
+  --focus-ring: #8a9bf7;
+  --ok: #42d392;
   --green: var(--ok);
   --wait: #e6b64f;
   --warn: var(--wait);
@@ -124,19 +127,23 @@
   --mark-text: #ffeab0;
 
   /* Overlays, elevation, glass */
-  --overlay: rgb(3 5 8 / 68%);
-  --overlay-soft: rgb(3 5 8 / 48%);
-  --shadow: rgb(0 0 0 / 50%);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
-  --shadow-md:
-    0 2px 8px rgb(0 0 0 / 26%), 0 12px 32px -4px rgb(0 0 0 / 38%);
-  --shadow-lg:
-    0 8px 24px rgb(0 0 0 / 34%), 0 32px 80px -8px rgb(0 0 0 / 55%);
-  --glass: rgb(19 23 30 / 72%);
-  --glass-strong: rgb(19 23 30 / 90%);
-  --composer-fade: #0d1014;
-  --skeleton-from: #141a23;
-  --skeleton-mid: #1f2733;
+  --overlay: rgb(2 4 7 / 70%);
+  --overlay-soft: rgb(2 4 7 / 50%);
+  --shadow: rgb(0 0 0 / 55%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 34%);
+  --shadow-md: 0 2px 8px rgb(0 0 0 / 30%), 0 14px 36px -6px rgb(0 0 0 / 44%);
+  --shadow-lg: 0 10px 28px rgb(0 0 0 / 40%), 0 36px 90px -10px rgb(0 0 0 / 62%);
+  --glass: rgb(15 19 26 / 70%);
+  --glass-strong: rgb(15 19 26 / 90%);
+  /* 卡片顶部受光：gradient 面层 + 内嵌高亮边，组合出「浮起」的质感 */
+  --card-face: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 5%),
+    rgb(255 255 255 / 0%) 55%
+  );
+  --composer-fade: var(--surface-muted);
+  --skeleton-from: #11161f;
+  --skeleton-mid: #1c232f;
 
   /* Semantic fills */
   --danger-bg: #3a1a26;
@@ -155,17 +162,22 @@
   --terminal-text: #d9e0e3;
   --terminal-selection: #31443e;
 
-  /* Ambient wash on main canvas */
+  /* Ambient wash on main canvas — 呼应 logo 的靛紫/青色光晕 */
   --ambient:
     radial-gradient(
-      1100px 360px at 80% -14%,
-      rgb(110 150 220 / 8%),
-      transparent 62%
+      1200px 480px at 82% -18%,
+      rgb(108 118 240 / 10%),
+      transparent 60%
     ),
     radial-gradient(
-      760px 340px at 6% -18%,
-      rgb(170 120 80 / 6%),
-      transparent 60%
+      820px 400px at 2% -16%,
+      rgb(56 176 216 / 6%),
+      transparent 56%
+    ),
+    radial-gradient(
+      900px 600px at 50% 120%,
+      rgb(140 100 230 / 5%),
+      transparent 62%
     );
 
   --radius-sm: 8px;
@@ -174,30 +186,57 @@
   --radius-xl: 18px;
   --ease: 140ms ease;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* UI 基线：4px 栅格、控件与弹窗尺寸。新界面只引用这些 token，不再写裸 px。
+     组件与规则见 docs/ui-baseline.md，实现在 kit.css / settings.css。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --control-h-sm: 28px;
+  --control-h: 36px;
+  --row-h: 56px;
+  --fs-modal-title: 17px;
+  --modal-w: 560px;
+  --modal-h: 640px;
+}
+
+/* 触屏：控件命中区放大到可舒适点按，其余尺寸不变。 */
+@media (pointer: coarse) {
+  :root {
+    --control-h-sm: 32px;
+    --control-h: 40px;
+    --row-h: 60px;
+  }
 }
 
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: #f2f4f7;
-  --sidebar: #f8f9fb;
+  --bg: #eef0f5;
+  --sidebar: #f7f8fb;
   --surface: #ffffff;
-  --surface-2: #edf0f4;
-  --surface-muted: #f4f6f8;
+  --surface-2: #edf0f5;
+  --surface-muted: #f3f5f8;
   --surface-raised: #ffffff;
-  --control: #f4f6f9;
-  --control-hover: #e9edf2;
-  --control-border: #d6dde6;
-  --line: #e2e6ec;
-  --line-strong: #c6ced9;
+  --control: #f3f5f9;
+  --control-hover: #e8ecf2;
+  --control-border: #d3dae5;
+  --line: #e0e5ec;
+  --line-strong: #c3ccda;
+  --edge-hi: rgb(255 255 255 / 85%);
   --text: #181c23;
   --text-soft: #3c434e;
   --text-dim: #636d7c;
   --text-faint: #8f99a8;
-  --accent: #1c212a;
+  --accent: #4f5ed8;
+  --accent-grad: linear-gradient(180deg, #6876ec 0%, #4a56cd 100%);
+  --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
   --accent-text: #ffffff;
-  --accent-hover: #2e3540;
-  --accent-active: #11151c;
-  --focus-ring: #8b96a7;
+  --accent-hover: #4350c6;
+  --accent-active: #3a46b2;
+  --focus-ring: #5c6ee2;
   --ok: #189e54;
   --wait: #a96e08;
   --danger: #d2435e;
@@ -220,7 +259,12 @@ html[data-theme="light"] {
     0 4px 14px rgb(16 24 40 / 7%), 0 24px 72px -8px rgb(16 24 40 / 16%);
   --glass: rgb(255 255 255 / 72%);
   --glass-strong: rgb(255 255 255 / 90%);
-  --composer-fade: #f2f4f7;
+  --card-face: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 65%),
+    rgb(255 255 255 / 0%) 60%
+  );
+  --composer-fade: var(--surface-muted);
   --skeleton-from: #e8ecf1;
   --skeleton-mid: #f7f9fb;
   --danger-bg: #fdecef;
@@ -240,14 +284,19 @@ html[data-theme="light"] {
   --terminal-selection: #365149;
   --ambient:
     radial-gradient(
-      1100px 360px at 80% -14%,
-      rgb(122 150 205 / 10%),
-      transparent 62%
+      1200px 460px at 82% -18%,
+      rgb(98 110 220 / 11%),
+      transparent 60%
     ),
     radial-gradient(
-      760px 340px at 6% -18%,
-      rgb(196 154 108 / 9%),
-      transparent 60%
+      820px 400px at 2% -16%,
+      rgb(64 160 210 / 8%),
+      transparent 56%
+    ),
+    radial-gradient(
+      900px 600px at 50% 120%,
+      rgb(130 100 220 / 7%),
+      transparent 62%
     );
 }
 

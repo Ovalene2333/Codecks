@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { acpLaunchSpec } from "./acp-client.js";
 import {
@@ -8,6 +11,7 @@ import {
   parseSessionListOutput,
   type AcpAgentSpec,
 } from "./acp-adapter.js";
+import { ThreadSettingsStore } from "../thread-settings.js";
 
 type Json = Record<string, any>;
 
@@ -27,6 +31,8 @@ interface RouteContext {
 function fakeAcpProcess(options: {
   initialize?: Json;
   routes?: Record<string, (params: any, ctx: RouteContext) => void>;
+  /** kill() 之后过多久才触发 exit；真实进程的退出总是滞后的。 */
+  exitDelayMs?: number;
 }) {
   const stdout = new PassThrough();
   const child = new EventEmitter() as any;
@@ -117,7 +123,9 @@ function fakeAcpProcess(options: {
   };
   child.kill = () => {
     child.killed = true;
-    child.emit("exit", 0);
+    if (options.exitDelayMs)
+      setTimeout(() => child.emit("exit", 0), options.exitDelayMs);
+    else child.emit("exit", 0);
     return true;
   };
   return { child, seen, send };
@@ -134,8 +142,9 @@ const SPEC: AcpAgentSpec = {
 function adapterWith(
   fake: ReturnType<typeof fakeAcpProcess>,
   options?: ConstructorParameters<typeof AcpAdapter>[1],
+  spec: AcpAgentSpec = SPEC,
 ) {
-  return new AcpAdapter(SPEC, {
+  return new AcpAdapter(spec, {
     spawnProcess: (() => fake.child) as any,
     killProcessTree: () => {},
     requestTimeoutMs: 5_000,
@@ -238,6 +247,106 @@ test("AcpAdapter starts, lists history and keeps secrets out of snapshot", async
 
   await adapter.restart();
   assert.equal(adapter.descriptor().online, false);
+});
+
+const CACHED_THREAD = {
+  agentId: "devin",
+  id: "t1",
+  providerId: "devin-current",
+  name: "旧会话",
+  preview: "",
+  cwd: "/x",
+  model: "default",
+  status: "idle" as const,
+  updatedAt: 1_600_000_000_000,
+};
+
+test("session/list without timestamps keeps the cached updatedAt", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({
+          sessions: [{ sessionId: "t1", cwd: "/x", title: "旧会话" }],
+        }),
+    },
+  });
+  const adapter = adapterWith(fake, { initialThreads: [CACHED_THREAD] });
+  await adapter.startAll();
+
+  assert.equal(
+    adapter.snapshot().threads[0]?.updatedAt,
+    CACHED_THREAD.updatedAt,
+  );
+});
+
+test("load replay meta updates never refresh updatedAt", async () => {
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({ sessions: [{ sessionId: "t1", cwd: "/x" }] }),
+      "session/load": (_params, ctx) => {
+        ctx.notify("session/update", {
+          sessionId: "t1",
+          update: { sessionUpdate: "session_info_update", title: "回放标题" },
+        });
+        ctx.notify("session/update", {
+          sessionId: "t1",
+          update: { sessionUpdate: "usage_update", used: 10, size: 100 },
+        });
+        ctx.respond({});
+      },
+    },
+  });
+  const adapter = adapterWith(fake, { initialThreads: [CACHED_THREAD] });
+  await adapter.startAll();
+  await adapter.readThread("devin-current", "t1");
+
+  const thread = adapter.snapshot().threads[0];
+  assert.equal(thread?.updatedAt, CACHED_THREAD.updatedAt);
+  assert.equal(thread?.name, "回放标题");
+});
+
+test("listSessions field mapping adapts non-standard CLI output", async () => {
+  const fake = fakeAcpProcess({
+    initialize: {
+      protocolVersion: 1,
+      agentInfo: { name: "fake", version: "0" },
+      agentCapabilities: { loadSession: false, sessionCapabilities: {} },
+      authMethods: [],
+    },
+  });
+  const spec: AcpAgentSpec = {
+    id: "myagent",
+    name: "My Agent",
+    command: "my-agent",
+    args: ["acp"],
+    listSessions: {
+      args: ["sessions", "--json"],
+      fields: { sessionId: "sid", updatedAt: "seen", locked: "held" },
+    },
+  };
+  const adapter = adapterWith(
+    fake,
+    {
+      execListCommand: async () =>
+        JSON.stringify([
+          {
+            sid: "a1",
+            directory: "/work",
+            seen: "2024-05-01T00:00:00Z",
+            held: true,
+          },
+        ]),
+    },
+    spec,
+  );
+  await adapter.startAll();
+
+  const thread = adapter.snapshot().threads[0];
+  assert.equal(thread?.id, "a1");
+  assert.equal(thread?.cwd, "/work");
+  assert.equal(thread?.updatedAt, Date.parse("2024-05-01T00:00:00Z"));
+  assert.equal(thread?.locked, true);
 });
 
 test("createThread maps session/new and carries modes", async () => {
@@ -349,10 +458,21 @@ test("sendTurn streams chunks and completes the turn", async () => {
   assert.equal(thread.status, "idle");
 
   const full = (await adapter.readThread("", "s-2")) as any;
+  // 被工具调用隔开的两段文本应保持交错顺序，而不是黏成一条消息。
+  const types = full.turns[0].items.map((item: any) => item.type);
+  assert.deepEqual(types, [
+    "userMessage",
+    "agentMessage",
+    "commandExecution",
+    "agentMessage",
+  ]);
   const messages = full.turns[0].items.filter(
     (item: any) => item.type === "agentMessage",
   );
-  assert.equal(messages[0].text, "正在处理");
+  assert.deepEqual(
+    messages.map((item: any) => item.text),
+    ["正在", "处理"],
+  );
 });
 
 test("permission request becomes an approval and resolves back to the agent", async () => {
@@ -461,6 +581,113 @@ test("decline maps to reject option; cancel maps to cancelled outcome", async ()
   assert.equal(thread.status, "error"); // refusal → failed turn
 });
 
+test("devin-style minimal toolCall resolves to command card and session option", async () => {
+  const outcomes: any[] = [];
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-6" }),
+      "session/prompt": (_params, ctx) => {
+        // devin 先发完整 tool_call update，request_permission 里的 toolCall
+        // 只剩 {toolCallId,_meta} 快照；kind/title/rawInput 要按 id 补回。
+        ctx.notify("session/update", {
+          sessionId: "s-6",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "call-1",
+            kind: "execute",
+            title: "Read /etc/hostname",
+            rawInput: { command: "cat /etc/hostname" },
+          },
+        });
+        ctx.request(
+          "session/request_permission",
+          {
+            sessionId: "s-6",
+            toolCall: {
+              toolCallId: "call-1",
+              _meta: {
+                "cognition.ai/editableCommand": "cat /etc/hostname",
+              },
+            },
+            // devin 的真实 options：多个选项共享 allow_always kind。
+            options: [
+              { optionId: "allow_once", name: "Allow", kind: "allow_once" },
+              {
+                optionId: "allow_session",
+                name: "Yes, allow `cat` commands (this session)",
+                kind: "allow_always",
+              },
+              {
+                optionId: "allow_always",
+                name: "Yes, always allow `cat` commands in `tmp`",
+                kind: "allow_always",
+              },
+              {
+                optionId: "allow_always_global",
+                name: "Yes, always allow `cat` commands in all projects",
+                kind: "allow_always",
+              },
+              {
+                optionId: "switch_bypass",
+                name: "Yes, switch to bypass mode",
+                kind: "allow_always",
+              },
+              { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+            ],
+          },
+          (answer) => {
+            outcomes.push(answer.result?.outcome);
+            ctx.respond({ stopReason: "end_turn" });
+          },
+        );
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  await adapter.sendTurn("", "s-6", "go");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const approval = adapter.snapshot().approvals[0] as any;
+  assert.ok(approval);
+  // kind 缺失时也要落成 command 卡（决策按钮），不能走 permission 勾选卡——
+  // 那个模板回的是 {permissions,scope}，server 会缺省 decline 全部拒绝。
+  assert.equal(approval.kind, "command");
+  assert.equal(approval.command, "cat /etc/hostname");
+  assert.ok(approval.availableDecisions.includes("acceptForSession"));
+  await adapter.resolveApproval(approval.id, {
+    decision: "acceptForSession",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // 「本会话」必须挑 allow_session，而不是碰巧的第一个 allow_always。
+  assert.deepEqual(outcomes[0], {
+    outcome: "selected",
+    optionId: "allow_session",
+  });
+
+  // 第二轮：前端直接回传 agent 的 optionId，原样透传不映射。
+  await adapter.sendTurn("", "s-6", "again");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const second = adapter.snapshot().approvals[0] as any;
+  assert.ok(second);
+  await assert.rejects(
+    () => adapter.resolveApproval(second.id, { optionId: "nope" }),
+    /选项已失效/,
+  );
+  assert.ok(
+    adapter.snapshot().approvals.length,
+    "无效 optionId 不得消费待审批",
+  );
+  await adapter.resolveApproval(second.id, {
+    optionId: "allow_always_global",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(outcomes[1], {
+    outcome: "selected",
+    optionId: "allow_always_global",
+  });
+});
+
 test("interrupt sends session/cancel", async () => {
   let turnId = "";
   const fake = fakeAcpProcess({
@@ -540,6 +767,52 @@ test("readThread replays session/load history", async () => {
   assert.equal(items[1].text, "旧回答");
   assert.equal(items[2].type, "commandExecution");
   assert.equal(items[2].status, "completed");
+});
+
+test("per-turn model snapshots follow replay turns after a session/load", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-acp-turn-models-"));
+  const settings = new ThreadSettingsStore(dir);
+  await settings.load();
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-m" }),
+      "session/prompt": (_params, ctx) =>
+        ctx.respond({ stopReason: "end_turn" }),
+      "session/load": (params, ctx) => {
+        for (const text of ["一", "二"]) {
+          ctx.notify("session/update", {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "user_message_chunk",
+              content: { type: "text", text },
+            },
+          });
+          ctx.notify("session/update", {
+            sessionId: params.sessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `答${text}` },
+            },
+          });
+        }
+        ctx.respond({});
+      },
+    },
+  });
+  const adapter = adapterWith(fake, { threadSettings: settings });
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "D:\\proj", model: "sol" });
+  await adapter.sendTurn("", "s-m", "一");
+  // 会话中途切换模型：之后的 turn 记新模型。
+  await adapter.updateThreadSettings("", "s-m", { model: "luna" });
+  await adapter.sendTurn("", "s-m", "二");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // session/load 回放把 turn 重建成 acp-replay-N 合成 id，按位置回填快照。
+  const full = (await adapter.readThread("", "s-m")) as any;
+  assert.equal(full.turns.length, 2);
+  assert.equal(full.turns[0].model, "sol");
+  assert.equal(full.turns[1].model, "luna");
 });
 
 test("sendTurn on a history session resumes it first", async () => {
@@ -749,4 +1022,222 @@ test("process exit mid-turn fails the turn and marks thread offline", async () =
   const thread = adapter.snapshot().threads[0];
   assert.equal(thread.status, "error");
   assert.ok(thread.lastError);
+});
+
+test("availableCommands: replay updates apply, session/new seeds, runSessionCommand prompts", async () => {
+  const prompts: any[] = [];
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({ sessions: [{ sessionId: "hist-c", cwd: "D:\\proj" }] }),
+      "session/load": (params, ctx) => {
+        // 回放期间推 available_commands_update，此前会被 replay 吞掉。
+        ctx.notify("session/update", {
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "help", description: "帮助" },
+              { name: "context" },
+            ],
+          },
+        });
+        ctx.notify("session/update", {
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "旧消息" },
+          },
+        });
+        ctx.respond({});
+      },
+      "session/new": (_params, ctx) =>
+        ctx.respond({
+          sessionId: "s-cmd",
+          commands: {
+            availableCommands: [{ name: "btw", description: "旁支" }],
+          },
+        }),
+      "session/prompt": (params, ctx) => {
+        prompts.push(params);
+        ctx.respond({ stopReason: "end_turn" });
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  const events = collectEvents(adapter);
+  await adapter.startAll();
+
+  // load 回放中的 available_commands_update 要落进 session.commands。
+  await adapter.readThread("", "hist-c");
+  const loaded = await adapter.listSessionCommands("", "hist-c");
+  assert.deepEqual(
+    loaded.map((command) => command.name),
+    ["help", "context"],
+  );
+  // 同时推 agent.event 给前端刷新补全。
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "agent.event" &&
+        event.data.method === "session/commands" &&
+        event.data.params.threadId === "hist-c" &&
+        event.data.params.commands.length === 2,
+    ),
+  );
+
+  // session/new 响应里顺带的 commands 也接收。
+  await adapter.createThread("", { cwd: "D:\\proj" });
+  const created = await adapter.listSessionCommands("", "s-cmd");
+  assert.deepEqual(
+    created.map((command) => command.name),
+    ["btw"],
+  );
+
+  // 斜杠命令按 /cmd args 原样作为 prompt 发送。
+  await adapter.runSessionCommand("", "s-cmd", "/btw", "看看进度");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const prompt = prompts.find(
+    (params) => params.sessionId === "s-cmd",
+  );
+  assert.equal(prompt.prompt[0].text, "/btw 看看进度");
+});
+
+test("session/new models feed listModels; set_model and fork work", async () => {
+  const setModelCalls: Json[] = [];
+  const fake = fakeAcpProcess({
+    initialize: {
+      protocolVersion: 1,
+      agentCapabilities: {
+        loadSession: true,
+        promptCapabilities: { image: true },
+        sessionCapabilities: { list: {}, resume: {}, fork: {} },
+      },
+      authMethods: [],
+    },
+    routes: {
+      "session/new": (_params, ctx) =>
+        ctx.respond({
+          sessionId: "s-m",
+          models: {
+            currentModelId: "default",
+            availableModels: [
+              { modelId: "default", name: "Default" },
+              { modelId: "opus", name: "Opus" },
+              { modelId: "haiku", name: "Haiku" },
+            ],
+          },
+        }),
+      "session/set_model": (params, ctx) => {
+        setModelCalls.push(params);
+        ctx.respond({});
+      },
+      "session/fork": (params, ctx) => {
+        assert.equal(params.sessionId, "s-m");
+        ctx.respond({ sessionId: "s-fork" });
+      },
+      "session/list": (_params, ctx) => ctx.respond({ sessions: [] }),
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  const thread = await adapter.createThread("", { cwd: "/tmp" });
+  assert.equal(thread.id, "s-m");
+  assert.equal(thread.resolvedModel, "default");
+  assert.equal(adapter.descriptor().capabilities.models, true);
+  assert.equal(adapter.descriptor().capabilities.fork, true);
+  assert.deepEqual(
+    (await adapter.listModels()).map((model) => model.id),
+    ["default", "opus", "haiku"],
+  );
+
+  await adapter.updateThreadSettings("", "s-m", { model: "opus" });
+  assert.equal(setModelCalls.length, 1);
+  assert.equal(setModelCalls[0].modelId, "opus");
+
+  const forked = (await adapter.forkThread("", "s-m")) as any;
+  assert.equal(forked.id, "s-fork");
+  assert.equal(forked.forkedFromId, "s-m");
+  assert.equal(forked.name.includes("分支"), true);
+});
+
+test("sendTurn during a running turn queues and drains FIFO", async () => {
+  const held: RouteContext[] = [];
+  const prompts: Json[] = [];
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-q" }),
+      // prompt 先不回应，挂起模拟进行中的 turn
+      "session/prompt": (params, ctx) => {
+        prompts.push(params);
+        held.push(ctx);
+      },
+      "session/list": (_params, ctx) => ctx.respond({ sessions: [] }),
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+
+  const first = await adapter.sendTurn("", "s-q", "first");
+  assert.equal(first.turn.status, "inProgress");
+  const second = await adapter.sendTurn("", "s-q", "second");
+  assert.equal(second.turn.status, "queued");
+  const third = await adapter.sendTurn("", "s-q", "third");
+  assert.equal(third.turn.status, "queued");
+  assert.equal(prompts.length, 1);
+
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1].prompt[0].text, "second");
+
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(prompts.length, 3);
+  assert.equal(prompts[2].prompt[0].text, "third");
+
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+});
+
+test("descriptor reports fallbackFor only for fallback agents", () => {
+  const fake = fakeAcpProcess({});
+  assert.equal(adapterWith(fake).descriptor().fallbackFor, undefined);
+
+  const fallback = adapterWith(fake, undefined, {
+    ...SPEC,
+    id: "claude-acp",
+    name: "Claude (ACP)",
+    fallbackFor: "claude",
+  });
+  assert.equal(fallback.descriptor().fallbackFor, "claude");
+});
+
+test("restart() followed by startAll() waits for the old process to exit", async () => {
+  // 第一个进程被 kill 后 40ms 才真正退出；第二个进程正常。
+  const first = fakeAcpProcess({
+    exitDelayMs: 40,
+    routes: { "session/list": (_params, ctx) => ctx.respond({ sessions: [] }) },
+  });
+  const second = fakeAcpProcess({
+    routes: { "session/list": (_params, ctx) => ctx.respond({ sessions: [] }) },
+  });
+  const children = [first.child, second.child];
+  const adapter = new AcpAdapter(SPEC, {
+    spawnProcess: (() => children.shift()) as any,
+    killProcessTree: () => {},
+    requestTimeoutMs: 5_000,
+  });
+  await adapter.startAll();
+  assert.equal(adapter.descriptor().online, true);
+
+  // 重载：不等旧进程退出就拉新进程，旧进程迟到的 exit 不能算到新进程头上。
+  adapter.restart();
+  await adapter.startAll();
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  assert.equal(adapter.descriptor().online, true);
+  assert.equal(adapter.descriptor().error, undefined);
+  await adapter.restart();
 });

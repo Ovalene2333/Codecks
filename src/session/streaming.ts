@@ -13,6 +13,15 @@ export interface StreamedTurnItem {
   item: any;
 }
 
+/**
+ * 文本消息与事件类 item 在事件流里的统一先后序。渲染活跃 turn 的
+ * live 尾巴时按此交错，而不是「先全部 item、再全部文本」分两段。
+ */
+export interface StreamedEntry {
+  kind: "message" | "item";
+  itemId: string;
+}
+
 const LIVE_ITEM_TYPES = new Set([
   "commandExecution",
   "fileChange",
@@ -246,9 +255,24 @@ export function collectStreamed(
   threadId: string,
   activeTurnId?: string,
   agentId: AgentId = "codex",
-): { messages: StreamedAgentMessage[]; items: StreamedTurnItem[] } {
+): {
+  messages: StreamedAgentMessage[];
+  items: StreamedTurnItem[];
+  entries: StreamedEntry[];
+} {
   const messages = new Map<string, StreamedAgentMessage>();
   const items = new Map<string, StreamedTurnItem>();
+  const entries: StreamedEntry[] = [];
+  const seen = new Set<string>();
+  // delta 合并后位于缓冲区尾部 → 文本取「最后一次活动」的位置；
+  // item 的首个事件（item/started）位置不变 → item 取「首次出现」的位置。
+  // 这与持久化历史「按插入位置排列」的语义最接近。
+  const place = (kind: StreamedEntry["kind"], itemId: string) => {
+    const key = `${kind}:${itemId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push({ kind, itemId });
+  };
 
   for (const event of events) {
     if ((event?.agentId || "codex") !== agentId) continue;
@@ -261,12 +285,16 @@ export function collectStreamed(
       const itemId = displayText(event?.params?.itemId) || "agent-message";
       const delta = displayText(event?.params?.delta);
       if (!delta) continue;
+      place("message", itemId);
       const current = messages.get(itemId);
       if (current) current.text += delta;
       else
         messages.set(itemId, {
           itemId,
-          text: delta,
+          text:
+            (items.get(itemId)?.item?.type === "agentMessage"
+              ? displayText(items.get(itemId)?.item?.text)
+              : "") + delta,
           ...(event?.streamCompleted ? { completed: true } : {}),
         });
       continue;
@@ -277,7 +305,14 @@ export function collectStreamed(
       const converted = openCodePartToItem(eventItem);
       const itemId = String(converted?.id || eventItem?.id || "");
       if (!itemId || !converted) continue;
+      place("item", itemId);
       items.set(itemId, { itemId, item: converted });
+      if (converted.type === "agentMessage") {
+        const live = messages.get(itemId);
+        const snapshot = displayText(converted.text);
+        if (live && snapshot.length > live.text.length)
+          live.text = snapshot;
+      }
       continue;
     }
     if (
@@ -286,6 +321,7 @@ export function collectStreamed(
       LIVE_ITEM_TYPES.has(eventItem.type)
     ) {
       const itemId = String(eventItem.id);
+      place("item", itemId);
       const current = items.get(itemId)?.item;
       const status =
         method === "item/started"
@@ -311,7 +347,11 @@ export function collectStreamed(
     }
   }
 
-  return { messages: [...messages.values()], items: [...items.values()] };
+  return {
+    messages: [...messages.values()],
+    items: [...items.values()],
+    entries,
+  };
 }
 
 export function mergeTurnItems(

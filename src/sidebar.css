@@ -1,7 +1,10 @@
 .brand {
-  height: 58px;
+  height: 64px;
+  display: flex;
+  align-items: center;
   gap: 10px;
   padding: 0 14px;
+  border-bottom: 1px solid var(--line);
 }
 .brand > span {
   width: 32px;
@@ -13,6 +16,9 @@
   height: 32px;
   flex: none;
   display: block;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 7%),
+    0 4px 14px -4px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .brand svg {
   width: 16px;
@@ -20,44 +26,9 @@
 .brand b {
   font-size: 15px;
 }
-.brand small {
-  letter-spacing: 0;
-}
 .brand > div {
   min-width: 0;
   flex: 1;
-}
-.brand .usage-chip {
-  margin-left: auto;
-  flex: none;
-  max-width: 118px;
-  min-height: 28px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--fs-caption);
-  cursor: pointer;
-}
-.brand .usage-chip svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.brand .usage-chip.warn {
-  border-color: var(--warning-border);
-  color: var(--warn);
-}
-.brand .usage-chip.danger {
-  border-color: var(--danger-border);
-  color: var(--danger);
-}
-.brand .usage-chip.muted {
-  color: var(--text-dim);
 }
 .usage-chip-metric {
   overflow: hidden;
@@ -124,7 +95,7 @@
   color: var(--text-faint);
   font-style: normal;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-meta {
@@ -158,7 +129,7 @@
   min-width: 0;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
   color: var(--text-dim);
@@ -170,11 +141,12 @@
 }
 .sidebar-meta .watch-strip button b {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 650;
 }
 .sidebar-meta .watch-strip button.active {
-  background: var(--surface);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
   color: var(--text);
   box-shadow: var(--shadow-sm);
 }
@@ -182,7 +154,7 @@
   margin-left: 0;
   color: var(--danger);
   font-style: normal;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .archive-error {
@@ -284,7 +256,7 @@
   border: 0;
   background: transparent;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   text-align: left;
   cursor: pointer;
 }
@@ -300,20 +272,32 @@
   padding: 6px 6px 6px 10px;
   border: 0;
   border-left: 2px solid transparent;
-  border-radius: 0 8px 8px 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color var(--ease),
+    border-color var(--ease),
+    box-shadow var(--ease);
 }
 .session-row:hover,
 .session-row:focus-visible {
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
   outline: none;
 }
 .session-row.selected {
   border-left-color: transparent;
-  background: var(--surface-2);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 13%, transparent),
+      color-mix(in srgb, var(--accent) 4%, transparent) 58%,
+      transparent
+    ),
+    var(--surface);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .session-row .session-search-hit {
   display: flex;
@@ -322,7 +306,7 @@
   min-width: 0;
   margin: 4px 0 0;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.35;
   white-space: normal;
   overflow: visible;
@@ -331,7 +315,7 @@
 .session-search-hit small {
   flex: none;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 .session-search-hit span {
   display: -webkit-box;
@@ -378,7 +362,7 @@
 .session-row p {
   margin: 2px 0 3px;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -436,7 +420,7 @@
   align-items: center;
   gap: 6px;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {
@@ -472,7 +456,7 @@
   padding: 0 6px;
   border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
   border-radius: 4px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 15px;
   white-space: nowrap;
@@ -492,9 +476,13 @@
 }
 
 .sidebar-footer {
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
 }
 .sidebar-footer button {
   width: 100%;
@@ -512,7 +500,7 @@
   text-transform: none;
   letter-spacing: 0;
   font-weight: 500;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .status.unseen {
   color: var(--info);
@@ -535,6 +523,10 @@
 }
 
 @media (max-width: 760px) {
+  .brand {
+    height: 60px;
+    padding-inline: 12px;
+  }
   .project-heading,
   .project-menu button {
     min-height: 48px;

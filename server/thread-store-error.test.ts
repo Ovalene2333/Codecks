@@ -29,6 +29,11 @@ test("classifies Codex 0.147 empty-rollout and legacy unmaterialized errors toge
     "unmaterialized",
   );
   assert.equal(isMissingRolloutError(new Error("no rollout found")), true);
+  assert.equal(
+    classifyThreadStoreError(new Error("list_turns is not supported yet")),
+    "unmaterialized",
+  );
+  assert.equal(isMissingRolloutError(new Error("list_turns is not supported yet")), false);
 });
 
 test("classifies missing in-runtime threads separately from empty rollouts", () => {

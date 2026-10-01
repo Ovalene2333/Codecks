@@ -32,6 +32,7 @@ OpenCode 会话的 `parse/matching` 按 `agentId` 分流，不复用 Codex 指�
 | `/compact`（别名 `/summarize`）          | `POST /api/agents/opencode/threads/:id/compact` → `POST /session/:id/summarize`，模型按会话模型/已解析模型/OpenCode 默认的顺序解析；运行中拒绝并提示 |
 | `/init [args]` 及其他自定义命令          | `POST /api/agents/opencode/threads/:id/commands` → `POST /session/:id/command { command, arguments }`，携带会话当前模型/variant；未知命令由服务端校验报错 |
 | `/models`（别名 `/model`）               | 打开现有模型选择器（`PATCH` 会话设置，逻辑与 Codex 共用）                  |
+| `/skills [query]`                        | `GET /api/agents/opencode/threads/:id/skills` → `GET /skill`（按会话目录），选中后将 `/name ` 插入输入框，发送时走既有命令透传调用 |
 | `/new`（别名 `/clear`）、`/sessions`（别名 `/resume`、`/continue`） | Deck 侧指引：新建去左上角，切换点左侧列表，不另调服务端 |
 | `/details`、`/thinking`                  | Deck 等价说明：工具细节/思考过程本就折叠在时间线里，点击展开即可           |
 | `/status`、`/ps`、`/usage`、`/help`      | 状态只显示模型/状态/上下文/供应商/目录/Thread（不显示沙箱/Fast/性格）；`ps/usage` 走现有面板；`help` 列出可用命令 |
@@ -49,15 +50,37 @@ OpenCode 的 revert 是 staging 式撤回（`POST /session/:id/revert` 只落边
 
 门禁：运行中/待审批/已归档一律拒绝（服务端忙时同样拒绝，不只靠前端隐藏）。执行后重读历史并刷新快照；`files=0` 时明确提示"仅回滚了对话"。
 
-### 分支与编辑后重发（非破坏性，OpenCode 原生 fork）
+## 已支持（Claude Code）
+
+| 指令              | Deck 行为                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `/skills [query]` | `GET /api/agents/claude/threads/:id/skills`：活跃连接走 SDK `reload_skills` 控制请求取权威列表，未连接时扫 `<cwd>/.claude/skills` 与 `<claudeHome>/skills` 的 SKILL.md；选中后将 `/name ` 插入输入框，作为普通 prompt 交给 Claude Code 展开 |
+| `/status`、`/ps`、`/usage` | 状态面板与现有面板复用                                                                    |
+| `/model`、`/permissions` | 模型/权限选择器（`sessionSettings` 门禁）                                              |
+
+## 已支持（ACP 通用 agent）
+
+ACP 没有统一的命令执行接口：斜杠命令就是普通 prompt 文本，由 agent 自己解析。Deck 的行为：
+
+| 行为 | 实现 |
+| ---- | ---- |
+| `/cmd args` 透传 | `POST /api/agents/:id/threads/:tid/commands` → `session/prompt` 发送 `/cmd args` 原文，turn 正常流式渲染 |
+| 命令补全 | `GET /commands` 返回 agent 经 `available_commands_update` 自报的列表（name/description）；之后该通知增量到达时通过 `agent.event` 的 `session/commands` 推给前端刷新，无需重新进会话 |
+| 回放会话 | `session/load` 回放期间的 `available_commands_update`/`current_mode_update`/`config_option_update`/`session_info_update`/`usage_update` 同样生效，不被 turn 归一化吞掉 |
+| 兜底 | agent 在 `session/new`/`resume`/`load` 响应里顺带返回的 `commands.availableCommands`（或顶层 `availableCommands`）也会接收 |
+
+### 分支与编辑
+
+「编辑」在当前会话回退到所选消息，原文回填输入框。OpenCode 使用原生
+`session/revert`，Codex 使用原生 `thread/revert`；后者只回退对话历史，不
+恢复工作区文件。Claude 与 ACP 缺少可靠的原会话回退接口，不显示「编辑」。
 
 | 入口 | Deck 行为 |
 | ---- | --------- |
-| 每轮下「从此处分支」 | `POST /api/agents/opencode/threads/:id/fork` → `POST /session/:id/fork { messageID }`，完整复制该轮之前（含该轮）的历史到新分支，原分支保留；分支名带「分支」后缀并记录来源，顶部可跳回源会话 |
-| 每条 user 消息旁「从此重试」 | 两步式：先把原文带回输入框并显示分支提示条，可编辑；按发送才真正 fork + 用新文本重发（直接发送即用原文重试）。目标为首轮时新建空分支再发，不复制历史、不做 revert |
-| 消息旁「编辑」 | 纯编辑：把原文带回输入框，发送后追加为新 turn，不分支 |
+| 每轮下「从此处分支」 | Deck 传入所选 `lastTurnId`，适配器找下一条 user 消息作为 OpenCode fork 的排除边界；新分支保留所选轮次及其回复，原分支保留 |
+| 消息旁「编辑」 | 与 OpenCode TUI 双击 Esc 一致：在原会话 `revert` 所选 user 消息及之后的内容，把该消息原文放回输入框；编辑后发送仍在原会话继续。撤回可用 `/redo` 恢复（再次发送前） |
 
-实现只用 OpenCode 官方接口（fork / 新建会话 / 发消息 / 重命名），不动服务端原有会话存储结构；fork 子会话带 `parentID`，Deck 按 `fork` 字段与 fork 记录识别为可见分支，subagent 子会话仍隐藏并挂回父会话的任务卡片。旧版 OpenCode（无 `/session/:id/fork`，返回 404）会给出升级提示。
+分支使用 OpenCode 官方 fork 接口，原会话保留；编辑调用原生 revert，作用于当前会话。fork 子会话带 `parentID`，Deck 按 `fork` 字段与 fork 记录识别为可见分支，subagent 子会话仍隐藏并挂回父会话的任务卡片。旧版 OpenCode（无 `/session/:id/fork`，返回 404）会给出升级提示。
 
 尚未接入（仍请用原生 TUI）：`/share`、`/unshare`、`/export`、`!cmd`、`/connect`、`/editor`、`/themes`、`/exit`。
 

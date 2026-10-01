@@ -7,6 +7,55 @@ import {
 } from "react";
 import { X } from "lucide-react";
 import type { ThreadSummary } from "./types";
+import { overlayMarkOf } from "./deck-history";
+
+// —— 弹层历史标记 ————————————————————————————————————————————————
+// Modal / Drawer / ActionSheet 打开时压入一条只带 overlay 序号的占位
+// 条目（URL 不变），让浏览器/系统返回先关掉最上层弹层而不是退出页面。
+// 弹层经 UI 关闭时再把占位弹出；占位若被其他导航压在下面（例如在弹层
+// 里又打开了新页面），等它浮到栈顶时自动跳过，不留死档。
+const overlayClosers = new Map<number, () => void>();
+let overlaySeq = 0;
+let overlayHooked = false;
+
+function hookOverlayPop() {
+  if (overlayHooked || typeof window === "undefined") return;
+  overlayHooked = true;
+  window.addEventListener("popstate", () => {
+    const top = overlayMarkOf(window.history.state);
+    // 占位被弹掉的弹层（标记序号大于新栈顶）逐一关闭
+    for (const [id, close] of [...overlayClosers]) if (top < id) close();
+    // 栈顶是无主的死占位（所属弹层已被别的导航关闭）：再退一层跳过
+    if (top && !overlayClosers.has(top)) window.history.back();
+  });
+}
+
+function useOverlayHistory(onClose: () => void) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    hookOverlayPop();
+    const id = ++overlaySeq;
+    overlayClosers.set(id, () => closeRef.current());
+    window.history.pushState(
+      {
+        ...(window.history.state && typeof window.history.state === "object"
+          ? window.history.state
+          : {}),
+        overlay: id,
+      },
+      "",
+    );
+    return () => {
+      overlayClosers.delete(id);
+      // 占位还在栈顶才需要回退；放到微任务里，避开 StrictMode 双挂载
+      // 与同一事务内压入的新页面条目。
+      queueMicrotask(() => {
+        if (overlayMarkOf(window.history.state) === id) window.history.back();
+      });
+    };
+  }, []);
+}
 
 export class RenderErrorBoundary extends Component<
   { resetKey?: string; fallback: ReactNode; children: ReactNode },
@@ -78,6 +127,7 @@ export function Modal({
   className?: string;
   onClose: () => void;
 }) {
+  useOverlayHistory(onClose);
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <section
@@ -164,6 +214,7 @@ export function ActionSheet({
   anchor?: { top: number; right: number };
 }) {
   const sheetRef = useRef<HTMLElement>(null);
+  useOverlayHistory(onClose);
   useEffect(() => {
     const onDoc = (event: MouseEvent) => {
       if (!sheetRef.current?.contains(event.target as Node)) onClose();
@@ -232,6 +283,7 @@ export function Drawer({
   className?: string;
   onClose: () => void;
 }) {
+  useOverlayHistory(onClose);
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
       <section
