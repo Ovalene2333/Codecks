@@ -404,6 +404,94 @@
   font-size: var(--fs-ui);
   text-overflow: ellipsis;
 }
+.wake-watching {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -6px 0 -2px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.wake-watching svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.wake-watching.on {
+  color: var(--ok);
+}
+/* 本会话的 watcher / 失联记录：一行一个，右侧是操作按钮。 */
+.wake-list {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wake-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.wake-item > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.wake-item.on > svg {
+  color: var(--ok);
+}
+.wake-item.lost {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+.wake-item.lost > svg {
+  color: var(--danger);
+}
+.wake-item-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+.wake-item-text b,
+.wake-item-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wake-item-text b {
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.wake-item-text small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.wake-item button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.wake-item button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.wake-item button svg {
+  width: 14px;
+  height: 14px;
+}
 .wake-endpoint {
   display: flex;
   align-items: center;

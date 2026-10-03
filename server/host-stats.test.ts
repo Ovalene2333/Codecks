@@ -28,3 +28,15 @@ test("hostStats includes deck process details", () => {
   assert.ok(stats.memTotal > 0);
   assert.ok(stats.cpuCount > 0);
 });
+
+test(
+  "hostStats reports backend process rss",
+  { skip: process.platform === "win32" },
+  () => {
+    const stats = hostStats(new CpuSampler(), 0, [
+      { agentId: "devin", pid: process.pid },
+    ]);
+    assert.equal(stats.servers?.length, 1);
+    assert.ok((stats.servers?.[0].rss ?? 0) > 0);
+  },
+);

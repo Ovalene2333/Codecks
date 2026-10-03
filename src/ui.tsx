@@ -14,7 +14,9 @@ import { overlayMarkOf } from "./deck-history";
 // 条目（URL 不变），让浏览器/系统返回先关掉最上层弹层而不是退出页面。
 // 弹层经 UI 关闭时再把占位弹出；占位若被其他导航压在下面（例如在弹层
 // 里又打开了新页面），等它浮到栈顶时自动跳过，不留死档。
-const overlayClosers = new Map<number, () => void>();
+// 关闭回调返回 false 表示「拒绝关闭」（如有未保存修改、先弹确认）：
+// 此时把被返回键弹掉的占位重新压回去，弹层与历史栈保持一致。
+const overlayClosers = new Map<number, () => void | boolean>();
 let overlaySeq = 0;
 let overlayHooked = false;
 
@@ -24,13 +26,25 @@ function hookOverlayPop() {
   window.addEventListener("popstate", () => {
     const top = overlayMarkOf(window.history.state);
     // 占位被弹掉的弹层（标记序号大于新栈顶）逐一关闭
-    for (const [id, close] of [...overlayClosers]) if (top < id) close();
+    for (const [id, close] of [...overlayClosers]) {
+      if (top >= id) continue;
+      if (close() === false)
+        window.history.pushState(
+          {
+            ...(window.history.state && typeof window.history.state === "object"
+              ? window.history.state
+              : {}),
+            overlay: id,
+          },
+          "",
+        );
+    }
     // 栈顶是无主的死占位（所属弹层已被别的导航关闭）：再退一层跳过
     if (top && !overlayClosers.has(top)) window.history.back();
   });
 }
 
-function useOverlayHistory(onClose: () => void) {
+export function useOverlayHistory(onClose: () => void | boolean) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
@@ -118,25 +132,36 @@ export function Status({
 
 export function Modal({
   title,
+  leading,
   children,
   className,
   onClose,
 }: {
   title: string;
+  /** 标题前的控件（如二级页的返回按钮）。 */
+  leading?: ReactNode;
   children: React.ReactNode;
   className?: string;
-  onClose: () => void;
+  /** 返回 false 表示拒绝关闭（调用方自己弹确认）。 */
+  onClose: () => void | boolean;
 }) {
   useOverlayHistory(onClose);
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal-backdrop" onMouseDown={() => onClose()}>
       <section
         className={`modal${className ? ` ${className}` : ""}`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header>
+          {leading}
           <h2>{title}</h2>
-          <button className="icon-btn" onClick={onClose}>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="关闭"
+            title="关闭"
+            onClick={() => onClose()}
+          >
             <X />
           </button>
         </header>
@@ -206,6 +231,11 @@ export function ActionSheet({
   title: string;
   actions: {
     label: string;
+    /** 同名条目（如重名项目）时用来区分 React key。 */
+    key?: string;
+    /** 可选图标与副标题：有任一时按「图标 + 两行文字」排版。 */
+    icon?: ReactNode;
+    detail?: string;
     danger?: boolean;
     disabled?: boolean;
     onClick: () => void;
@@ -220,7 +250,10 @@ export function ActionSheet({
       if (!sheetRef.current?.contains(event.target as Node)) onClose();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
     };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
@@ -253,19 +286,36 @@ export function ActionSheet({
           </button>
         </header>
         <div className="action-sheet">
-          {actions.map((action) => (
-            <button
-              key={action.label}
-              className={action.danger ? "danger" : ""}
-              disabled={action.disabled}
-              onClick={() => {
-                onClose();
-                if (!action.disabled) action.onClick();
-              }}
-            >
-              {action.label}
-            </button>
-          ))}
+          {actions.map((action) => {
+            const rich = Boolean(action.icon || action.detail);
+            return (
+              <button
+                key={action.key ?? action.label}
+                className={
+                  [action.danger ? "danger" : "", rich ? "rich" : ""]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
+                disabled={action.disabled}
+                onClick={() => {
+                  onClose();
+                  if (!action.disabled) action.onClick();
+                }}
+              >
+                {rich ? (
+                  <>
+                    {action.icon}
+                    <span>
+                      <b>{action.label}</b>
+                      {action.detail ? <small>{action.detail}</small> : null}
+                    </span>
+                  </>
+                ) : (
+                  action.label
+                )}
+              </button>
+            );
+          })}
         </div>
       </section>
     </div>

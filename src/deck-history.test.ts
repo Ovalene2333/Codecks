@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canonicalDeckPath,
   deckDepth,
   deckEntry,
   deckRewrite,
@@ -35,15 +36,22 @@ test("routeForPath maps workspace, session and tool paths", () => {
     page: "tools",
     view: "workspace",
   });
+  assert.deepEqual(routeForPath("/sessions", isToolPath), {
+    page: "workspace",
+    view: "sessions",
+  });
   assert.deepEqual(routeForPath(sessionPath("codex:p:1"), isToolPath), {
     page: "workspace",
     view: "session",
     session: "codex:p:1",
   });
-  assert.deepEqual(routeForPath("/monitor", isToolPath), {
-    page: "workspace",
-    view: "monitor",
-  });
+});
+
+test("the retired /monitor path folds into the home page", () => {
+  assert.equal(canonicalDeckPath("/monitor"), "/");
+  assert.equal(canonicalDeckPath("/"), "/");
+  assert.equal(canonicalDeckPath("/terminal"), "/terminal");
+  assert.equal(canonicalDeckPath(sessionPath("codex:p:1")), sessionPath("codex:p:1"));
 });
 
 test("deckEntry increments depth across page pushes", () => {

@@ -1,3 +1,5 @@
+import type { ToolDescriptor } from "../plugin/types";
+
 /**
  * Stable agent identifier. Built-in adapters use codex/claude/opencode; ACP
  * agents get arbitrary ids from their descriptors.
@@ -161,6 +163,8 @@ export interface DeckPreferences extends ConnectionOverlay {
   lastApprovalPolicy?: ApprovalPolicy;
   lastApprovalsReviewer?: ApprovalsReviewer;
   lastPermissionMode?: ClaudePermissionMode;
+  /** true=固定默认值（新建会话不回写 last*）；缺省=沿用上次。旧服务端没有该字段。 */
+  pinDefaults?: boolean;
   recentDirs: string[];
 }
 
@@ -284,6 +288,10 @@ export interface ActivityItem {
   activity?: string;
   query?: string;
   path?: string;
+  /** Codex 多代理：subAgentActivity 的 kind 与 agentPath、collab 的 prompt。 */
+  kind?: string;
+  agentPath?: string;
+  prompt?: string;
   input?: Record<string, string>;
   commandActions?: {
     type: string;
@@ -303,7 +311,66 @@ export interface ThreadActivity {
   turnStartedAt?: number;
   lastEventAt: number;
   step?: { item: ActivityItem; startedAt: number };
-  lastTurn?: { startedAt: number; endedAt: number; status: string };
+  lastTurn?: {
+    startedAt: number;
+    endedAt: number;
+    status: string;
+    /** 这一轮最后一条回复的开头（约 240 字），首页“新回复”据此预览；仅内存。 */
+    reply?: string;
+  };
+}
+
+/** 本机正在运行的 deck-wake watcher（只读发现，Deck 不托管其生命周期）。 */
+export interface WakeWatcher {
+  pid: number;
+  code: string;
+  mode: "watch" | "poll";
+  label: string;
+  /** 被执行的命令（watch：阻塞到任务结束；poll：打印任务状态）。 */
+  command: string;
+  intervalSec?: number;
+  startedAt: number;
+  /** poll：日志里最近一次状态（如 RUNNING）及其时间。 */
+  state?: string;
+  stateAt?: number;
+  /** poll：正处于连续连接失败（满 10 次 watcher 报错退出）。 */
+  failures?: number;
+  log?: string;
+  /** 代号当前绑定的会话；代号已被关闭时为空。 */
+  agentId?: AgentId;
+  threadId?: string;
+}
+
+/** 失联的 watcher：进程已不在，却没有发出唤醒，也不是被主动停止的。 */
+export interface LostWakeWatcher extends WakeWatcher {
+  id: string;
+  endedAt: number;
+  reason: string;
+  lastLine?: string;
+}
+
+/** 会话在 deck-wake 下的状态：watching=有 watcher 在盯；lost=有 watcher 失联待处理。 */
+export type SessionWakeState = "watching" | "lost";
+
+/**
+ * 唤醒投递条目（随 snapshot 下发）。pending 仍在后台重试；delivered 已送达；
+ * dead 投递无望、在首页「需要处理」里等人重试或移除。
+ */
+export interface WakeDelivery {
+  id: string;
+  code: string;
+  status: "pending" | "delivered" | "dead";
+  agentId: AgentId;
+  threadId: string;
+  /** 本轮投递已失败次数。 */
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  nextAttemptAt?: number;
+  deliveredAt?: number;
+  lastError?: string;
+  /** prompt 详情的截断摘要。 */
+  preview: string;
 }
 
 export interface ActivityUpdate {
@@ -329,6 +396,8 @@ export interface HostStats {
     node: string;
     clients: number;
   };
+  /** 各已启用 agent 的后端进程（codex app-server、opencode、ACP agent 等）。 */
+  servers?: { agentId: string; pid: number; rss?: number }[];
 }
 
 export interface ApprovalResolveBody {
@@ -367,12 +436,21 @@ export interface RuntimeSnapshot {
   account?: AccountInfo;
   rateLimits?: RateLimits | null;
   rateLimitsError?: string;
+  /** 官方帐号每天消耗的 token（`YYYY-MM-DD` -> tokens），用于按窗口额度反推月度额度。 */
+  accountUsageDaily?: Record<string, number>;
   archiveError?: string;
   runtimeWsl?: boolean;
   modelConfig?: RuntimeModelConfig;
 }
 
 export interface AgentCapabilities {
+  /** 缺字段的旧服务端仍走原发送接口。 */
+  messages?: {
+    busyBehavior: "steer" | "queue" | "reject" | "unknown";
+    interruptScope: "turn" | "session";
+    queueDurability?: "memory";
+    deliveryModes?: MessageDeliveryMode[];
+  };
   approvals: boolean;
   archive: boolean;
   delete: boolean;
@@ -462,6 +540,7 @@ export interface AgentProfile {
 }
 
 export interface Snapshot {
+  messageDeliveries?: MessageDelivery[];
   agents?: AgentDescriptor[];
   agentProfiles?: AgentProfile[];
   providers: Provider[];
@@ -469,7 +548,48 @@ export interface Snapshot {
   archivedThreads?: ThreadSummary[];
   approvals: Approval[];
   activities?: ThreadActivity[];
+  wakeDeliveries?: WakeDelivery[];
+  /** 已开启远程唤醒的会话及其代号。 */
+  wakeCodes?: { code: string; agentId: AgentId; threadId: string }[];
+  /** 本机 deck-wake watcher 列表（服务端 TTL 缓存，滞后数秒属正常）。 */
+  wakeWatchers?: WakeWatcher[];
+  /** 失联待处理的 watcher（服务端台账，旧服务端没有该字段）。 */
+  wakeLost?: LostWakeWatcher[];
   projects?: ProjectRecord[];
   preferences?: DeckPreferences;
   runtime?: RuntimeSnapshot;
+  /** 已注册的工具（终端、Git…）；旧服务端没有该字段，工具页会退回 GET /tools。 */
+  tools?: ToolDescriptor[];
+  /** 服务端静态信息（设置「关于」页）；旧服务端没有该字段。 */
+  server?: ServerInfo;
+}
+
+export type MessageDeliveryMode = "queue" | "feedback";
+
+export interface MessageDelivery {
+  id: string;
+  agentId: string;
+  threadId: string;
+  mode: MessageDeliveryMode;
+  status: "queued" | "interrupting" | "sending" | "delivered" | "failed";
+  preview: string;
+  text?: string;
+  imageCount?: number;
+  createdAt: number;
+  updatedAt: number;
+  turnId?: string;
+  sentAt?: number;
+  disposition?: "started" | "appended" | "queued" | "backend-managed";
+  error?: string;
+  canRetry?: boolean;
+}
+
+export interface ServerInfo {
+  version: string;
+  node: string;
+  platform: string;
+  wsl: boolean;
+  startedAt: number;
+  dataDir: string;
+  ccSwitch: string | null;
 }

@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { post } from "../../src/api";
+import { SwrCache } from "../../src/swr-cache";
 import { copyText } from "../../src/clipboard";
 import { basename } from "../../src/format";
 import { FileMarkdown } from "../../src/session/markdown";
@@ -40,6 +41,13 @@ import {
 } from "./recent-files";
 
 const MARKDOWN_FILE = /\.(md|markdown|mdx)$/i;
+
+/**
+ * 目录列表缓存：进目录先画上次的列表，同时照常重新读取。键是请求时的路径
+ * （首次打开没给路径时用 ""），也按服务端归一化后的路径各存一份。
+ * 只留内存、最多 12 个目录：文件列表变化快，没必要落盘。
+ */
+const listingCache = new SwrCache<FsListing>({ ttlMs: 0, maxEntries: 12 });
 
 interface DocState {
   path: string;
@@ -71,9 +79,11 @@ export function TextFilesView({
   directories,
   onToast,
 }: ToolViewProps) {
-  const [listing, setListing] = useState<FsListing>();
   const [pathInput, setPathInput] = useState(
     initialCwd || directories[0] || tool.defaultCwd || "",
+  );
+  const [listing, setListing] = useState<FsListing | undefined>(
+    () => listingCache.peek(pathInput)?.value,
   );
   const [doc, setDoc] = useState<DocState>();
   const [recentFiles, setRecentFiles] = useState<string[]>(() => {
@@ -120,11 +130,15 @@ export function TextFilesView({
     async (target?: string) => {
       setBusy("list");
       setError("");
+      const cached = listingCache.peek(target || "")?.value;
+      if (cached) setListing(cached);
       try {
         const result = await run<FsListing>(
           "list",
           target ? { path: target } : {},
         );
+        listingCache.set(target || "", result);
+        if (result.path !== (target || "")) listingCache.set(result.path, result);
         setListing(result);
         setPathInput(result.path);
         setCreating("");
@@ -731,7 +745,10 @@ export function TextFilesView({
                   aria-label="查找内容"
                   onChange={(event) => setFindQuery(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Escape") setFindOpen(false);
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setFindOpen(false);
+                    }
                   }}
                 />
                 <button type="submit" disabled={!findQuery.trim()}>
@@ -776,8 +793,13 @@ export function TextFilesView({
                     event.preventDefault();
                     setFindOpen(true);
                   }
-                  if (event.key === "Escape" && !event.nativeEvent.isComposing)
+                  if (
+                    event.key === "Escape" &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault();
                     closeDoc();
+                  }
                 }}
               />
             )}

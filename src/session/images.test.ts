@@ -37,6 +37,37 @@ test("assistantImageParts finds current Codex image view and generation items", 
   );
 });
 
+test("assistantImageParts ignores plain text outputs and non-image paths", () => {
+  for (const item of [
+    { type: "dynamicToolCall", tool: "playwright", output: "screenshot done" },
+    { type: "commandExecution", command: "npm test", output: "all green" },
+    { type: "mcpToolCall", result: "ok" },
+    { type: "dynamicToolCall", output: "Wrote file /tmp/out.png" },
+    { type: "webSearch", url: "https://example.com/article" },
+    { type: "fileChange", data: { path: "/work/src/app.ts" } },
+    { type: "unknown", items: [{ path: "/tmp/report.md" }] },
+  ])
+    assert.deepEqual(assistantImageParts(item), []);
+});
+
+test("assistantImageParts still accepts nested image payloads", () => {
+  assert.deepEqual(
+    assistantImageParts({ type: "dynamicToolCall", output: "/tmp/shot.png" }),
+    [{ url: "/tmp/shot.png" }],
+  );
+  assert.deepEqual(
+    assistantImageParts({
+      type: "mcpToolCall",
+      result: { savedPath: "C:\\shots\\view.jpg" },
+    }),
+    [{ url: "C:\\shots\\view.jpg" }],
+  );
+  assert.deepEqual(
+    assistantImageParts({ data: "https://cdn.test/i/photo.avif?x=1" }),
+    [{ url: "https://cdn.test/i/photo.avif?x=1" }],
+  );
+});
+
 test("userImageParts keeps local image history compatible", () => {
   assert.deepEqual(
     userImageParts({

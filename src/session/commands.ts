@@ -34,7 +34,7 @@ export const SLASH_COMMANDS = [
   { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/status", hint: "查看完整会话状态" },
   { name: "/ps", hint: "查看运行任务与后台终端" },
-  { name: "/usage", hint: "查看账号额度" },
+  { name: "/usage", hint: "查看 Codex 额度" },
   { name: "/mention", hint: "搜索并引用工作区文件" },
   { name: "/fast", hint: "切换 Fast 模式" },
   { name: "/mcp", hint: "查看 MCP 服务器状态" },

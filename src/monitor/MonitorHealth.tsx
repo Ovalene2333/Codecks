@@ -1,15 +1,28 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { HeartPulse } from "lucide-react";
 import { api } from "../api";
+import { SwrCache } from "../swr-cache";
 import type { AgentDescriptor, HostStats, Provider, ThreadSummary } from "../types";
 import { formatBytes, formatDuration } from "./activity";
 import { agentHealth, sessionHealth } from "./health";
 
 const HOST_POLL_MS = 5_000;
+const HOST_KEY = "host";
+/**
+ * 上次读到的本机资源（体积很小，落盘）：从会话返回首页、刷新页面时先显示
+ * 上次的数字，不再每次从“正在读取…”开始；轮询照常立刻刷新。
+ */
+const hostStatsCache = new SwrCache<HostStats>({
+  persist: "host-stats",
+  ttlMs: HOST_POLL_MS,
+  maxEntries: 1,
+});
 
 /** 只在监控台打开且页面可见时轮询本机资源，切到后台即停。 */
 function useHostStats() {
-  const [stats, setStats] = useState<HostStats>();
+  const [stats, setStats] = useState<HostStats | undefined>(
+    () => hostStatsCache.peek(HOST_KEY)?.value,
+  );
   const [error, setError] = useState("");
   useEffect(() => {
     let timer: number | undefined;
@@ -21,10 +34,12 @@ function useHostStats() {
         if (stopped) return;
         // 旧版服务端没有这个接口，请求会落到 index.html 兜底，拿到的不是 JSON。
         if (typeof next?.memTotal !== "number" || !next.deck) {
+          hostStatsCache.delete(HOST_KEY);
           setStats(undefined);
           setError("服务端版本较旧，重启 Deck 后可查看本机资源");
           return;
         }
+        hostStatsCache.set(HOST_KEY, next);
         setStats(next);
         setError("");
       } catch (loadError: any) {
@@ -87,6 +102,29 @@ export function MonitorHealth({
     sessions.offline ? `${sessions.offline} 个离线` : "",
     sessions.connected ? `${sessions.connected} 个 Claude 常驻连接` : "",
   ].filter(Boolean);
+  // 各 agent 的后端进程（app-server / opencode / ACP agent），按 agent 聚合。
+  const serverRows = (() => {
+    const byAgent = new Map<
+      string,
+      { rss: number; measured: boolean; pids: number[] }
+    >();
+    for (const server of stats?.servers || []) {
+      const entry =
+        byAgent.get(server.agentId) || { rss: 0, measured: false, pids: [] };
+      entry.pids.push(server.pid);
+      if (typeof server.rss === "number") {
+        entry.rss += server.rss;
+        entry.measured = true;
+      }
+      byAgent.set(server.agentId, entry);
+    }
+    return [...byAgent].map(([agentId, entry]) => ({
+      agentId,
+      name:
+        agents.find((agent) => agent.id === agentId)?.name || agentId,
+      ...entry,
+    }));
+  })();
 
   const renderRow = ({ agent, health }: (typeof rows)[number]) => {
     const detail =
@@ -159,12 +197,14 @@ export function MonitorHealth({
         </div>
         {stats ? (
           <>
-            <Meter label="CPU" value={cpu != null ? `${cpu}%` : "—"} percent={cpu} />
-            <Meter
-              label="内存"
-              value={`${formatBytes(memUsed)} / ${formatBytes(stats.memTotal)}`}
-              percent={memPercent}
-            />
+            <div className="monitor-meter-pair">
+              <Meter label="CPU" value={cpu != null ? `${cpu}%` : "—"} percent={cpu} />
+              <Meter
+                label="内存"
+                value={`${formatBytes(memUsed)} / ${formatBytes(stats.memTotal)}`}
+                percent={memPercent}
+              />
+            </div>
             <dl className="monitor-health-facts">
               {stats.platform !== "win32" ? (
                 <>
@@ -172,12 +212,26 @@ export function MonitorHealth({
                   <dd>{stats.loadavg.map((value) => value.toFixed(2)).join(" / ")}</dd>
                 </>
               ) : null}
-              <dt>Deck 进程</dt>
-              <dd>
-                {formatBytes(stats.deck.rss)} · 已运行 {formatDuration(stats.deck.uptimeSec * 1_000)}
+              <dt>Deck</dt>
+              <dd title={`Deck 进程 PID ${stats.deck.pid} · Node ${stats.deck.node}`}>
+                {formatBytes(stats.deck.rss)} · 已运行 {formatDuration(stats.deck.uptimeSec * 1_000)} ·{" "}
+                {stats.deck.clients} 个客户端
               </dd>
-              <dt>连接</dt>
-              <dd>{stats.deck.clients} 个客户端</dd>
+              {serverRows.map((row) => (
+                <Fragment key={row.agentId}>
+                  <dt>{row.name}</dt>
+                  <dd
+                    title={`${row.name} 后端进程 ${row.pids
+                      .map((pid) => `PID ${pid}`)
+                      .join("、")}`}
+                  >
+                    {row.measured ? formatBytes(row.rss) : "—"}
+                    {row.pids.length > 1
+                      ? ` · ${row.pids.length} 个进程`
+                      : ` · PID ${row.pids[0]}`}
+                  </dd>
+                </Fragment>
+              ))}
             </dl>
           </>
         ) : (

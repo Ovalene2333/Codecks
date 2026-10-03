@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Lock, ShieldAlert } from "lucide-react";
-import { api, post } from "../api";
+import { api, post, remove } from "../api";
 import { dedupeThreadLoad, readThreadCache, writeThreadCache } from "../cache";
+import { loadModelCatalog, modelCatalogCache } from "../ModelPicker";
+import { SwrCache } from "../swr-cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
 import { SessionToolbar } from "../layout/SessionToolbar";
@@ -18,6 +20,10 @@ import type {
   Provider,
   SandboxMode,
   ThreadSummary,
+  LostWakeWatcher,
+  WakeWatcher,
+  MessageDelivery,
+  MessageDeliveryMode,
 } from "../types";
 import { threadActionPath, threadPath } from "../agents";
 import { approvalBelongsToThread } from "./approvals";
@@ -29,6 +35,10 @@ import {
 } from "../codexLabels";
 import { ConfirmDialog, RenderErrorBoundary } from "../ui";
 import { Composer } from "./Composer";
+import { messageControls } from "./message-controls";
+import { mergeMessageDeliveries } from "./message-deliveries";
+import type { LoadedUserMessage } from "./user-message-reconcile";
+import { renderedMessageTurns } from "./timeline-messages";
 import { CommandModal, type CommandModalKind } from "./CommandModal";
 import { Timeline } from "./Timeline";
 import {
@@ -45,6 +55,7 @@ import {
   type PendingUserMessage,
 } from "./optimistic";
 import {
+  fetchThreadFull,
   shouldKeepLoadedThread,
   shouldSurfaceThreadLoadError,
 } from "./thread-load";
@@ -52,15 +63,38 @@ import { draftFromUserMessage, userMessageText } from "./user-message";
 
 const EMPTY_TURNS: any[] = [];
 
+type SessionCommand = { name: string; hint?: string };
+
+/** agent 自报的 `/` 命令列表（opencode、ACP），按会话缓存、落盘。 */
+const sessionCommandCache = new SwrCache<SessionCommand[]>({
+  persist: "session-commands",
+  ttlMs: 5 * 60_000,
+  maxEntries: 16,
+  maxPersistChars: 50_000,
+});
+
+function normalizeSessionCommands(
+  list: Array<{ name?: unknown; description?: unknown }>,
+): SessionCommand[] {
+  return list
+    .map((item) => ({
+      name: String(item?.name || "").trim(),
+      hint: String(item?.description || "").trim() || undefined,
+    }))
+    .filter((item) => Boolean(item.name));
+}
+
 export function ChatWorkspace({
   thread,
   provider,
   agentName,
   capabilities,
+  messageDeliveries = [],
   approvals,
   events,
   origin,
   searchTarget,
+  wake,
   onBack,
   onSnapshot,
   onSwitchProvider,
@@ -71,11 +105,13 @@ export function ChatWorkspace({
   onTasks,
   onAppearance,
   onOpenOrigin,
+  onWake,
 }: {
   thread: ThreadSummary;
   provider?: Provider | AgentProfile;
   agentName: string;
   capabilities: AgentCapabilities;
+  messageDeliveries?: MessageDelivery[];
   approvals: Approval[];
   events: any[];
   origin?: { name: string; turnLabel?: string; archived?: boolean };
@@ -85,6 +121,8 @@ export function ChatWorkspace({
     query: string;
     request: number;
   };
+  /** deck-wake 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
+  wake?: { code?: string; watcher?: WakeWatcher; lost?: LostWakeWatcher[] };
   onBack: () => void;
   onSnapshot: () => void;
   onSwitchProvider: () => void;
@@ -95,13 +133,26 @@ export function ChatWorkspace({
   onTasks: () => void;
   onAppearance: () => void;
   onOpenOrigin?: () => void;
+  onWake?: () => void;
 }) {
   const threadCacheKey = sessionKey(thread);
+  const commandsKey = `${threadPath(thread)}/commands`;
   const [full, setFull] = useState<any>(
     () => readThreadCache(threadCacheKey) || undefined,
   );
   const [draft, setDraft] = useState(() => readComposerDraft(threadCacheKey));
   const [pendingUsers, setPendingUsers] = useState<PendingUserMessage[]>([]);
+  const [deliveryReceipts, setDeliveryReceipts] = useState<MessageDelivery[]>([]);
+  const observedDeliveryIds = useRef(new Set<string>());
+  const deliveryHistoryBefore = useRef(new Map<string, LoadedUserMessage[]>());
+  const queuedMessages = useMemo(() => mergeMessageDeliveries(messageDeliveries, deliveryReceipts),
+    [messageDeliveries, deliveryReceipts]);
+  useEffect(() => {
+    for (const item of messageDeliveries) observedDeliveryIds.current.add(item.id);
+    setDeliveryReceipts((current) => current.filter((receipt) =>
+      !messageDeliveries.some((item) => item.id === receipt.id),
+    ));
+  }, [messageDeliveries]);
   const [error, setError] = useState("");
   const [threadLoadSettled, setThreadLoadSettled] = useState(false);
   const [statusNote, setStatusNote] = useState("");
@@ -134,7 +185,11 @@ export function ChatWorkspace({
   const load = useCallback(
     (fresh = false) => {
       const version = loadVersion.current;
-      return dedupeThreadLoad(threadCacheKey, () => api(threadPath(thread)), fresh)
+      return dedupeThreadLoad(
+        threadCacheKey,
+        () => fetchThreadFull(thread, threadCacheKey),
+        fresh,
+      )
         .then((data) => {
           if (version !== loadVersion.current) return;
           const next = (thread.agentId || "codex") === "claude" &&
@@ -146,6 +201,7 @@ export function ChatWorkspace({
             reconcilePendingUserMessages(
               Array.isArray(next?.turns) ? next.turns : [],
               current,
+              thread.agentId || "codex",
             ),
           );
           setError("");
@@ -181,28 +237,31 @@ export function ChatWorkspace({
       return;
     }
     let cancelled = false;
-    api<{ commands?: Array<{ name: string; description?: string }> }>(
-      `${threadPath(thread)}/commands`,
-    )
-      .then((data) => {
-        if (cancelled) return;
-        const list = Array.isArray(data?.commands) ? data.commands : [];
-        setSessionCommands(
-          list
-            .map((item) => ({
-              name: String(item?.name || "").trim(),
-              hint: String(item?.description || "").trim() || undefined,
-            }))
-            .filter((item) => Boolean(item.name)),
-        );
+    const key = commandsKey;
+    // 先用上次的命令列表，`/` 补全打开会话就能用；过期才后台刷新。
+    const cached = sessionCommandCache.peek(key);
+    setSessionCommands(cached?.value ?? []);
+    if (sessionCommandCache.isFresh(cached)) return;
+    sessionCommandCache
+      .load(key, () =>
+        api<{ commands?: Array<{ name: string; description?: string }> }>(
+          key,
+        ).then((data) =>
+          normalizeSessionCommands(
+            Array.isArray(data?.commands) ? data.commands : [],
+          ),
+        ),
+      )
+      .then((list) => {
+        if (!cancelled) setSessionCommands(list);
       })
       .catch(() => {
-        if (!cancelled) setSessionCommands([]);
+        if (!cancelled && !cached) setSessionCommands([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [thread.agentId, thread.id, thread.providerId]);
+  }, [commandsKey, thread.agentId]);
   useEffect(() => {
     const id = thread.agentId || "codex";
     // claude/codex 的模型目录走 ModelPicker 自己的链路；opencode 与 ACP
@@ -212,11 +271,14 @@ export function ChatWorkspace({
       return;
     }
     let cancelled = false;
-    api<ModelInfo[]>(
-      `/agents/${encodeURIComponent(id)}/models?providerId=${encodeURIComponent(thread.providerId)}${id === "opencode" && thread.cwd ? `&directory=${encodeURIComponent(thread.cwd)}` : ""}`,
-    )
+    // 与 ModelPicker 共用目录缓存：会话设置里的模型选择器也能直接复用。
+    const path = `/agents/${encodeURIComponent(id)}/models?providerId=${encodeURIComponent(thread.providerId)}${id === "opencode" && thread.cwd ? `&directory=${encodeURIComponent(thread.cwd)}` : ""}`;
+    const cached = modelCatalogCache.peek(path);
+    setModelCatalog(cached?.value ?? []);
+    if (modelCatalogCache.isFresh(cached)) return;
+    loadModelCatalog(path)
       .then((list) => {
-        if (!cancelled) setModelCatalog(Array.isArray(list) ? list : []);
+        if (!cancelled) setModelCatalog(list);
       })
       .catch(() => {});
     return () => {
@@ -230,11 +292,15 @@ export function ChatWorkspace({
   const latestSyncEvent = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const method = String(events[index]?.method || "");
-      if (method && !method.toLowerCase().endsWith("/delta"))
-        return events[index];
+      const event = events[index];
+      if (!method || method.toLowerCase().endsWith("/delta")) continue;
+      if (event?.providerId && event.providerId !== thread.providerId) continue;
+      if ((event?.agentId || "codex") !== (thread.agentId || "codex")) continue;
+      if (event?.params?.threadId && event.params.threadId !== thread.id) continue;
+      return event;
     }
     return undefined;
-  }, [events]);
+  }, [events, thread.providerId, thread.agentId, thread.id]);
   useEffect(() => {
     const event = latestSyncEvent;
     const method = String(event?.method || "");
@@ -244,27 +310,28 @@ export function ChatWorkspace({
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
     // ACP agent 推送的 availableCommands：实时刷新 `/` 补全。
     if (method === "session/commands") {
-      const list = Array.isArray(event?.params?.commands)
-        ? event.params.commands
-        : [];
-      setSessionCommands(
-        list
-          .map((item: any) => ({
-            name: String(item?.name || "").trim(),
-            hint: String(item?.description || "").trim() || undefined,
-          }))
-          .filter((item: { name: string }) => Boolean(item.name)),
+      const list = normalizeSessionCommands(
+        Array.isArray(event?.params?.commands) ? event.params.commands : [],
       );
+      sessionCommandCache.set(commandsKey, list);
+      setSessionCommands(list);
       return;
     }
     const immediate = method === "turn/completed" || method === "error";
     if (immediate) {
-      load();
+      load(true);
       return;
     }
-    const timer = window.setTimeout(() => load(), 300);
+    const timer = window.setTimeout(() => load(true), 300);
     return () => window.clearTimeout(timer);
-  }, [latestSyncEvent, load, thread.id, thread.providerId, thread.agentId]);
+  }, [
+    latestSyncEvent,
+    load,
+    commandsKey,
+    thread.id,
+    thread.providerId,
+    thread.agentId,
+  ]);
   const commandPath = (name: string) =>
     `/threads/${thread.providerId}/${thread.id}/${name}`;
   const runCommand = async (command: ComposerCommand) => {
@@ -500,7 +567,7 @@ export function ChatWorkspace({
     if (command.kind === "plan") return post(commandPath("plan"));
     if (command.kind === "diff") return post(commandPath("diff"));
   };
-  const submit = async (candidate: typeof draft, restoreOnFailure: boolean) => {
+  const submit = async (candidate: typeof draft, restoreOnFailure: boolean, mode?: MessageDeliveryMode) => {
     const value = candidate.text.trim();
     // State updates are batched; Enter and a button click can reach this handler
     // before `sending` renders. Claim the submission synchronously.
@@ -512,6 +579,10 @@ export function ChatWorkspace({
       return;
     }
     if (!command && !value && !candidate.images.length) return;
+    if (!command && messageControls(thread, capabilities, mode).blocked) {
+      setError("会话正在运行，请等待结束或先请求打断");
+      return;
+    }
     // 分支重发意图下只接受正文发送；斜杠命令走正常链路并丢弃分支意图。
     const branchRetry = !command ? retrySource : undefined;
     if (command && retrySource) setRetrySource(undefined);
@@ -521,9 +592,9 @@ export function ChatWorkspace({
     setStatusNote("");
     const pendingImages = candidate.images;
     const pendingId = `${threadCacheKey}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`;
-    const loadedUserMessageCount = loadedUserMessages(
-      Array.isArray(fullRef.current?.turns) ? fullRef.current.turns : [],
-    ).length;
+    const historyBefore = loadedUserMessages(
+      renderedMessageTurns(thread, Array.isArray(fullRef.current?.turns) ? fullRef.current.turns : [], streamedItems),
+    );
     if (restoreOnFailure) {
       if (command) updateDraft({ text: "", images: pendingImages });
       else updateDraft({ text: "", images: [] });
@@ -542,7 +613,7 @@ export function ChatWorkspace({
       return;
     }
     if (!command) {
-      const pendingTurnId = thread.activeTurnId;
+      const pendingTurnId = mode === "queue" ? undefined : thread.activeTurnId;
       const liveItemIds = pendingTurnId
         ? [
             ...new Set(
@@ -569,7 +640,9 @@ export function ChatWorkspace({
           id: pendingId,
           text: value,
           images: pendingImages,
-          loadedUserMessageCount,
+          historyBefore,
+          sentAt: Date.now(),
+          deliveryIdsBefore: queuedMessages.map((item) => item.id),
           turnId: pendingTurnId,
           liveItemIds,
         },
@@ -577,14 +650,33 @@ export function ChatWorkspace({
     }
     try {
       if (command) await runCommand(command);
-      else
-        await post(threadActionPath(thread, "turns"), {
+      else {
+        const receipt = await post(
+          capabilities.messages ? `${threadPath(thread)}/messages` : threadActionPath(thread, "turns"), {
           text: value,
+          ...(mode ? { mode } : {}),
           images: pendingImages.map((image) => ({
             url: image.url,
             name: image.name,
           })),
         });
+        if (mode && receipt?.disposition === "queued") {
+          deliveryHistoryBefore.current.set(receipt.id, historyBefore);
+          setDeliveryReceipts((current) => observedDeliveryIds.current.has(receipt.id) ? current : [...current, {
+            ...receipt, text: value, imageCount: pendingImages.length,
+          }]);
+          setPendingUsers((current) => current.filter((message) => message.id !== pendingId));
+        } else if (receipt?.turnId || receipt?.turn?.id) {
+          const turnId = receipt.turnId || receipt.turn.id;
+          setPendingUsers((current) => current.map((message) => message.id === pendingId
+            ? { ...message, turnId, liveItemIds: message.turnId === turnId ? message.liveItemIds : [] }
+            : message));
+        }
+        if (receipt?.disposition === "queued") {
+          onToast(mode === "feedback" ? "即时反馈已受理" : "消息已追加，当前任务结束后处理");
+          onSnapshot();
+        }
+      }
     } catch (err: any) {
       if (!command) {
         setPendingUsers((current) =>
@@ -600,7 +692,7 @@ export function ChatWorkspace({
       setSending(false);
     }
   };
-  const send = () => submit(draft, true);
+  const send = (mode?: MessageDeliveryMode) => submit(draft, true, mode);
   const readHistoryDraft = (item: any) => {
     const result = draftFromUserMessage(item);
     if (result.skippedImages) onToast("历史图片来自本机路径，请重新选择后发送");
@@ -828,11 +920,17 @@ export function ChatWorkspace({
       : rawErrorInfo && typeof rawErrorInfo === "object"
         ? Object.keys(rawErrorInfo)[0]
         : undefined;
-  const taskError = rawTaskError
-    ? taskErrorCode === "unauthorized"
-      ? `登录状态已失效：${rawTaskError}`
-      : rawTaskError
-    : "";
+  // 手动停止留下的 "Aborted" 类文案不算失败，不弹错误横幅。
+  const abortedError =
+    !taskErrorCode &&
+    (/^aborted$/i.test(rawTaskError.trim()) ||
+      /MessageAbortedError|AbortedError/i.test(rawTaskError));
+  const taskError =
+    rawTaskError && !abortedError
+      ? taskErrorCode === "unauthorized"
+        ? `登录状态已失效：${rawTaskError}`
+        : rawTaskError
+      : "";
   const locked =
     thread.status === "running" ||
     thread.status === "waiting" ||
@@ -864,11 +962,13 @@ export function ChatWorkspace({
         agentName={agentName}
         pendingCount={threadApprovals.length}
         locked={locked}
+        wake={wake}
         onBack={onBack}
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
         onAppearance={onAppearance}
         onCompact={capabilities.sessionSettings ? compact : undefined}
+        onWake={onWake}
       />
       <RenderErrorBoundary
         resetKey={thread.id}
@@ -887,6 +987,18 @@ export function ChatWorkspace({
           streamedItems={streamedItems}
           streamedEntries={streamedEntries}
           pendingUsers={pendingUsers}
+          messageDeliveries={queuedMessages}
+          deliveryHistoryBefore={deliveryHistoryBefore.current}
+          onDeliveryCancel={(id) => remove(`${threadPath(thread)}/messages/${encodeURIComponent(id)}`)
+            .then(onSnapshot).catch((err: Error) => setError(err.message))}
+          onDeliveryRetry={(id) => post(`${threadPath(thread)}/messages/${encodeURIComponent(id)}/retry`)
+            .then(onSnapshot).catch((err: Error) => setError(err.message))}
+          onDeliveryFeedback={capabilities.messages?.deliveryModes?.includes("feedback")
+            ? (id) => post(`${threadPath(thread)}/messages/${encodeURIComponent(id)}/feedback`)
+              .then(() => { onToast("已改为即时反馈"); onSnapshot(); })
+              .catch((err: Error) => { setError(err.message); onSnapshot(); })
+            : undefined}
+          feedbackInterrupts={capabilities.messages?.busyBehavior !== "steer"}
           origin={origin}
           onQuickPrompt={(text) => {
             updateDraft({ ...draft, text });
@@ -937,7 +1049,7 @@ export function ChatWorkspace({
             )}
             {usageLimit && (
               <button className="primary" type="button" onClick={onUsage}>
-                查看额度
+                查看 Codex 额度
               </button>
             )}
           </div>
@@ -963,6 +1075,7 @@ export function ChatWorkspace({
       )}
       <Composer
         thread={thread}
+        capabilities={capabilities}
         text={draft.text}
         images={draft.images}
         sending={sending || reverting}
@@ -990,9 +1103,11 @@ export function ChatWorkspace({
         }
         onError={setError}
         onStop={() =>
-          post(threadActionPath(thread, "interrupt"), {
-            turnId: thread.activeTurnId,
-          })
+          void post(
+            capabilities.messages ? `${threadPath(thread)}/messages/interrupt` : threadActionPath(thread, "interrupt"),
+            capabilities.messages ? { expectedTurnId: thread.activeTurnId } : { turnId: thread.activeTurnId },
+          ).then(() => onToast("已请求停止，等待任务结束"))
+            .catch((err: Error) => setError(err.message))
         }
         focusRequest={composerFocusRequest}
         sessionControls={

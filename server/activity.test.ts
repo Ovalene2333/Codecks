@@ -202,3 +202,53 @@ test("compactActivityItem keeps only whitelisted short input fields", () => {
   assert.deepEqual(item?.input, { file_path: "/repo/src/a.ts" });
   assert.equal(compactActivityItem({ id: "u", type: "userMessage" }), undefined);
 });
+
+test("the last reply of a turn is kept as a short preview", () => {
+  const tracker = new ActivityTracker();
+  tracker.ingest(event("turn/started", { threadId: "t1", turn: { id: "a" } }), 0);
+  // Claude/ACP：只有 delta 带文本，completed 不带。
+  tracker.ingest(event("item/agentMessage/delta", { threadId: "t1", itemId: "m1", delta: "先看一下" }), 10);
+  tracker.ingest(event("item/agentMessage/delta", { threadId: "t1", itemId: "m2", delta: "  已修复重试逻辑，" }), 20);
+  tracker.ingest(event("item/agentMessage/delta", { threadId: "t1", itemId: "m2", delta: "测试全部通过。" }), 30);
+  tracker.ingest(event("item/completed", { threadId: "t1", item: { id: "m2", type: "agentMessage" } }), 40);
+  const done = tracker.ingest(
+    event("turn/completed", { threadId: "t1", turn: { id: "a", status: "completed" } }),
+    50,
+  );
+  assert.equal(done?.activity?.lastTurn?.reply, "已修复重试逻辑，测试全部通过。");
+
+  // 下一轮没有回复：不能沿用上一轮的预览。
+  tracker.ingest(event("turn/started", { threadId: "t1", turn: { id: "b" } }), 100);
+  const quiet = tracker.ingest(
+    event("turn/completed", { threadId: "t1", turn: { id: "b", status: "interrupted" } }),
+    200,
+  );
+  assert.deepEqual(quiet?.activity?.lastTurn, { startedAt: 100, endedAt: 200, status: "interrupted" });
+});
+
+test("full-text reply items replace deltas and long replies are clipped", () => {
+  const tracker = new ActivityTracker();
+  tracker.ingest(event("turn/started", { threadId: "t1", turn: { id: "a" } }, "codex"), 0);
+  tracker.ingest(event("item/agentMessage/delta", { threadId: "t1", itemId: "m1", delta: "草稿" }, "codex"), 10);
+  tracker.ingest(
+    event("item/completed", { threadId: "t1", item: { id: "m1", type: "agentMessage", text: "x".repeat(1_000) } }, "codex"),
+    20,
+  );
+  const done = tracker.ingest(
+    event("turn/completed", { threadId: "t1", turn: { id: "a", status: "completed" } }, "codex"),
+    30,
+  );
+  assert.equal(done?.activity?.lastTurn?.reply, `${"x".repeat(240)}…`);
+});
+
+test("a turn closed by thread status still carries its reply", () => {
+  const tracker = new ActivityTracker();
+  tracker.ingest(event("turn/started", { threadId: "t1", turn: { id: "a" } }), 0);
+  tracker.ingest(event("item/agentMessage/delta", { threadId: "t1", itemId: "m1", delta: "构建失败" }), 10);
+  const closed = tracker.ingest(
+    { type: "thread.updated", data: { id: "t1", agentId: "claude", status: "error", updatedAt: 20 } },
+    20,
+  );
+  assert.equal(closed?.activity?.lastTurn?.status, "failed");
+  assert.equal(closed?.activity?.lastTurn?.reply, "构建失败");
+});

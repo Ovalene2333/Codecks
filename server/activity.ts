@@ -17,6 +17,8 @@ export const ACTIVITY_HEARTBEAT_MS = 10_000;
 const MAX_OPEN_ITEMS = 16;
 const MAX_ENTRIES = 500;
 const TEXT_LIMIT = 300;
+/** 首页“新回复”只预览回复开头，长回复后续的增量直接丢弃。 */
+const REPLY_LIMIT = 240;
 /** thread.updated 可能先于 turn/completed 到达，这个窗口内允许补写结果。 */
 const LATE_RESULT_MS = 5_000;
 
@@ -27,6 +29,7 @@ const TOOL_TYPES = new Set([
   "dynamicToolCall",
   "webSearch",
   "subagent",
+  "subAgentActivity",
   "collabAgentToolCall",
   "imageView",
   "imageGeneration",
@@ -57,6 +60,8 @@ const ACTIVE_STATUSES = new Set(["starting", "running", "waiting"]);
 interface Entry extends ThreadActivity {
   open: Map<string, { item: ActivityItem; startedAt: number }>;
   broadcastAt: number;
+  /** 本轮最近一条回复的开头；回合结束时写进 lastTurn.reply。 */
+  reply?: { id: string; text: string };
 }
 
 function clip(value: unknown, limit = TEXT_LIMIT) {
@@ -104,6 +109,9 @@ export function compactActivityItem(item: any): ActivityItem | undefined {
   text("activity", item.activity);
   text("query", item.query || item.action?.query);
   text("path", item.path);
+  text("kind", item.kind);
+  text("agentPath", item.agentPath ?? item.agent_path);
+  text("prompt", item.prompt);
   const input = compactInput(item.arguments ?? item.input);
   if (input) compact.input = input;
   if (Array.isArray(item.commandActions) && item.commandActions.length)
@@ -144,6 +152,18 @@ function publicView(entry: Entry): ThreadActivity {
   if (entry.step) view.step = entry.step;
   if (entry.lastTurn) view.lastTurn = entry.lastTurn;
   return view;
+}
+
+/** 新 item 从头记；同一 item 的 delta 追加，全文快照覆盖。只留够预览的开头。 */
+function noteReply(entry: Entry, id: string, text: string, append: boolean) {
+  const base = append && entry.reply?.id === id ? entry.reply.text : "";
+  if (base.length > REPLY_LIMIT) return;
+  entry.reply = { id, text: (base + text).slice(0, REPLY_LIMIT + 1) };
+}
+
+function replyOf(entry: Entry) {
+  const reply = clip(entry.reply?.text, REPLY_LIMIT);
+  return reply ? { reply } : {};
 }
 
 function latestOpen(entry: Entry) {
@@ -202,15 +222,22 @@ export class ActivityTracker {
       entry.turnId = params.turn?.id ? String(params.turn.id) : undefined;
       entry.turnStartedAt = now;
       entry.open.clear();
+      entry.reply = undefined;
     } else if (method === "turn/completed") {
       const status = String(params.turn?.status || "completed");
       if (entry.turnStartedAt != null)
-        entry.lastTurn = { startedAt: entry.turnStartedAt, endedAt: now, status };
+        entry.lastTurn = {
+          startedAt: entry.turnStartedAt,
+          endedAt: now,
+          status,
+          ...replyOf(entry),
+        };
       else if (entry.lastTurn && now - entry.lastTurn.endedAt <= LATE_RESULT_MS)
         entry.lastTurn = { ...entry.lastTurn, status };
       entry.turnId = undefined;
       entry.turnStartedAt = undefined;
       entry.open.clear();
+      entry.reply = undefined;
     } else if (
       method === "item/started" ||
       method === "item/updated" ||
@@ -226,9 +253,13 @@ export class ActivityTracker {
         if (isDone(method, raw?.status)) entry.open.delete(item.id);
         else this.open(entry, item, now);
       }
+      // Codex/OpenCode 的回复 item 自带全文；Claude/ACP 只在 delta 里给文本。
+      if (item?.type === "agentMessage" && typeof raw?.text === "string")
+        noteReply(entry, item.id, raw.text, false);
     } else if (method === "item/agentMessage/delta" && params.itemId) {
       const id = String(params.itemId);
       if (!entry.open.has(id)) this.open(entry, { id, type: "agentMessage" }, now);
+      if (typeof params.delta === "string") noteReply(entry, id, params.delta, true);
     } else if (method.startsWith("item/reasoning/") && params.itemId) {
       const id = String(params.itemId);
       if (!entry.open.has(id)) this.open(entry, { id, type: "reasoning" }, now);
@@ -262,11 +293,13 @@ export class ActivityTracker {
         startedAt: entry.turnStartedAt,
         endedAt: now,
         status: thread.status === "error" ? "failed" : "completed",
+        ...replyOf(entry),
       };
       entry.turnId = undefined;
       entry.turnStartedAt = undefined;
       entry.open.clear();
       entry.step = undefined;
+      entry.reply = undefined;
     } else return undefined;
     entry.broadcastAt = now;
     return { agentId, threadId, activity: publicView(entry) };

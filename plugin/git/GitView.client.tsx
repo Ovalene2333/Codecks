@@ -12,8 +12,21 @@ import {
   Server,
 } from "lucide-react";
 import { post } from "../../src/api";
+import { SwrCache } from "../../src/swr-cache";
 import type { ToolViewProps } from "../client-registry";
 import type { GitChange, GitSnapshot } from "./git.types";
+
+/**
+ * 每个目录上次的 git 状态：打开工具页先画上次的改动列表，同时照常重新
+ * `status`（期间操作按钮保持禁用，避免对着旧状态提交）。最多 6 个目录，
+ * 改动列表超过 150KB 的只留内存。
+ */
+const gitStatusCache = new SwrCache<GitSnapshot>({
+  persist: "git-status",
+  ttlMs: 0,
+  maxEntries: 6,
+  maxPersistChars: 150_000,
+});
 
 const statusLabel: Record<string, string> = {
   M: "修改",
@@ -41,7 +54,10 @@ export function GitView({
   const [cwd, setCwd] = useState(
     initialCwd || directories[0] || tool.defaultCwd || "",
   );
-  const [snapshot, setSnapshot] = useState<GitSnapshot>();
+  const [snapshot, setSnapshot] = useState<GitSnapshot | undefined>(() => {
+    const target = (initialCwd || directories[0] || tool.defaultCwd || "").trim();
+    return target ? gitStatusCache.peek(target)?.value : undefined;
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [commitMessage, setCommitMessage] = useState("");
   const [branchName, setBranchName] = useState("");
@@ -67,6 +83,8 @@ export function GitView({
           ...details,
         });
         setSnapshot(next);
+        // 提示语只在本次操作时弹一次，不进缓存。
+        gitStatusCache.set(target, { ...next, message: undefined });
         setSelected(new Set());
         if (next.message) onToast(next.message);
         if (action === "commit") setCommitMessage("");
