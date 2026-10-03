@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, Menu, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, LayoutList, Plus, Search, SunMoon } from "lucide-react";
 import { sessionKey } from "../format";
+import { Button } from "../kit";
 import type { DeckNotificationPermission } from "../notifications";
 import type { ProjectGroup } from "../projects";
 import { approvalBelongsToThread } from "../session/approvals";
@@ -14,17 +15,20 @@ import type {
   SessionSearchMatch,
   ThreadActivity,
   ThreadSummary,
+  LostWakeWatcher,
+  WakeDelivery,
+  WakeWatcher,
 } from "../types";
 import { stalledFor } from "./activity";
 import { activityKey, useActivities, useNow } from "./activity-store";
 import { healthIssueCount } from "./health";
+import { DEFAULT_LAYOUT, isDefaultLayout, useMonitorLayout } from "./layout";
+import { ASIDE_PANEL_META, LayoutEditor, MAIN_PANEL_META } from "./LayoutEditor";
 import { MonitorApprovals } from "./MonitorApprovals";
-import { MonitorCard } from "./MonitorCard";
+import { MonitorBoard } from "./MonitorBoard";
 import { MonitorHealth } from "./MonitorHealth";
+import { MonitorRecent } from "./MonitorRecent";
 import { MonitorUsage } from "./MonitorUsage";
-
-const RECENT_MS = 24 * 60 * 60_000;
-const RECENT_LIMIT = 8;
 
 const activityOf = (
   activities: ReadonlyMap<string, ThreadActivity>,
@@ -35,44 +39,69 @@ function scrollToPanel(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/** 一行状态计数；“疑似卡住”随时间变化，单独订阅秒级节拍。 */
+interface StatusCounts {
+  running: number;
+  waiting: number;
+  error: number;
+  unseen: number;
+}
+
+/**
+ * 一行状态计数，数量为 0 的不显示，点一下滚到对应列表；
+ * “疑似卡住”随时间变化，单独订阅节拍。
+ */
 function StatusStrip({
   counts,
-  active,
+  threads,
   activities,
+  hasApprovals,
 }: {
-  counts: { running: number; waiting: number; error: number; unseen: number; standby: number };
-  active: ThreadSummary[];
+  counts: StatusCounts;
+  threads: ThreadSummary[];
   activities: ReadonlyMap<string, ThreadActivity>;
+  hasApprovals: boolean;
 }) {
-  const now = useNow();
-  const stalled = active.filter(
+  const now = useNow(5_000);
+  const stalled = threads.filter(
     (thread) => stalledFor(thread, activityOf(activities, thread), now) != null,
   ).length;
   const items = [
-    { key: "running", label: "运行中", count: counts.running },
-    { key: "waiting", label: "待处理", count: counts.waiting },
-    { key: "stalled", label: "疑似卡住", count: stalled },
-    { key: "error", label: "异常", count: counts.error },
-    { key: "unseen", label: "新输出", count: counts.unseen },
-    { key: "standby", label: "待命", count: counts.standby },
-  ];
+    {
+      key: "waiting",
+      label: "待处理",
+      count: counts.waiting,
+      target: hasApprovals ? "monitor-approvals" : "home-attention",
+    },
+    { key: "error", label: "异常", count: counts.error, target: "home-attention" },
+    { key: "unseen", label: "新回复", count: counts.unseen, target: "home-unseen" },
+    { key: "running", label: "运行中", count: counts.running, target: "home-running" },
+    { key: "stalled", label: "疑似卡住", count: stalled, target: "home-running" },
+  ].filter((item) => item.count > 0);
   return (
     <div className="monitor-strip" aria-label="会话状态">
-      {items.map((item) => (
-        <span key={item.key} className={`monitor-strip-item ${item.key} ${item.count ? "" : "zero"}`}>
-          <i aria-hidden="true" />
-          {item.label}
-          <b>{item.count}</b>
-        </span>
-      ))}
+      {items.length ? (
+        items.map((item) => (
+          <button
+            type="button"
+            key={item.key}
+            className={`monitor-strip-item ${item.key}`}
+            onClick={() => scrollToPanel(item.target)}
+          >
+            <i aria-hidden="true" />
+            {item.label}
+            <b>{item.count}</b>
+          </button>
+        ))
+      ) : (
+        <span className="monitor-strip-idle">没有需要你处理的事，也没有正在运行的任务</span>
+      )}
     </div>
   );
 }
 
+/** 总览首页：打开 Deck 先看这里——什么在等你、什么刚交回来、什么还在跑。 */
 export function MonitorPanel({
   groups,
-  selected,
   unseenSessions,
   approvals,
   providers,
@@ -80,15 +109,20 @@ export function MonitorPanel({
   runtime,
   threads,
   liveThreads,
-  forkCounts,
+  deliveries,
+  watchers,
+  lostWatchers,
   searchMatches,
   query,
   loading,
   notificationPermission,
   onSelect,
   onOpenThread,
-  onClose,
-  onOpenSidebar,
+  onShowAll,
+  onNew,
+  onAppearance,
+  onMarkSeen,
+  onMarkAllSeen,
   onSessionMenu,
   onHistory,
   onResolveApproval,
@@ -97,8 +131,8 @@ export function MonitorPanel({
   onOpenUsage,
   onOpenAgentSettings,
 }: {
+  /** 现有库的项目分组；搜索时为搜索结果。 */
   groups: ProjectGroup[];
-  selected?: string;
   unseenSessions: ReadonlySet<string>;
   approvals: Approval[];
   providers: Provider[];
@@ -108,15 +142,24 @@ export function MonitorPanel({
   threads: ThreadSummary[];
   /** 未归档会话：用量与健康统计只看这些。 */
   liveThreads: ThreadSummary[];
-  forkCounts: Map<string, number>;
+  /** 唤醒投递队列（snapshot 下发）；「需要处理」展示失败中的条目。 */
+  deliveries: WakeDelivery[];
+  /** deck-wake watcher 列表（snapshot 下发，服务端缓存）。 */
+  watchers?: WakeWatcher[];
+  /** 失联待处理的 watcher（snapshot 下发）。 */
+  lostWatchers?: LostWakeWatcher[];
   searchMatches: ReadonlyMap<string, SessionSearchMatch>;
   query: string;
   loading: boolean;
   notificationPermission: DeckNotificationPermission;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onOpenThread: (thread: ThreadSummary) => void;
-  onClose: () => void;
-  onOpenSidebar: () => void;
+  /** 「查看全部会话」：移动端进 /sessions（桌面端侧栏常驻，按钮不显示）。 */
+  onShowAll: () => void;
+  onNew: () => void;
+  onAppearance: () => void;
+  onMarkSeen: (key: string) => void;
+  onMarkAllSeen: () => void;
   onSessionMenu: (thread: ThreadSummary) => void;
   onHistory: (thread: ThreadSummary) => void;
   onResolveApproval: (id: string, body: ApprovalResolveBody) => void | Promise<void>;
@@ -128,133 +171,52 @@ export function MonitorPanel({
 }) {
   const activities = useActivities();
   const [focusedApproval, setFocusedApproval] = useState<string>();
-  // 固定同一状态组内的顺序；流式输出更新时间时不让卡片来回换位。
-  const firstSeen = useRef(new Map<string, number>());
-  const nextOrder = useRef(0);
-  const { active, recent, older, projectOf, approvalsByThread } =
-    useMemo(() => {
-      const seen = new Set<string>();
-      const projects = new Map<string, ProjectGroup>();
-      const pending = new Map<string, Approval[]>();
-      const active: ThreadSummary[] = [];
-      const recent: ThreadSummary[] = [];
-      const older: ThreadSummary[] = [];
-      const now = Date.now();
-      for (const group of groups) {
-        for (const thread of group.sessions) {
-          const key = sessionKey(thread);
-          seen.add(key);
-          projects.set(key, group);
-          if (!firstSeen.current.has(key))
-            firstSeen.current.set(key, nextOrder.current++);
-          const requests = approvals.filter((item) =>
-            approvalBelongsToThread(item, thread),
-          );
-          if (requests.length) pending.set(key, requests);
-          if (
-            requests.length ||
-            thread.compacting ||
-            thread.status === "running" ||
-            thread.status === "waiting" ||
-            thread.status === "error" ||
-            unseenSessions.has(key)
-          ) {
-            active.push(thread);
-          } else if (now - thread.updatedAt <= RECENT_MS) {
-            recent.push(thread);
-          } else {
-            older.push(thread);
-          }
-        }
+  const { all, projectOf, approvalsByThread, counts } = useMemo(() => {
+    const all: ThreadSummary[] = [];
+    const projects = new Map<string, ProjectGroup>();
+    const pending = new Map<string, Approval[]>();
+    const counts: StatusCounts = { running: 0, waiting: 0, error: 0, unseen: 0 };
+    for (const group of groups) {
+      for (const thread of group.sessions) {
+        const key = sessionKey(thread);
+        all.push(thread);
+        projects.set(key, group);
+        const requests = approvals.filter((item) =>
+          approvalBelongsToThread(item, thread),
+        );
+        if (requests.length) pending.set(key, requests);
+        if (requests.length || thread.status === "waiting") counts.waiting++;
+        else if (thread.status === "error") counts.error++;
+        else if (thread.status === "running" || thread.compacting) counts.running++;
+        else if (unseenSessions.has(key)) counts.unseen++;
       }
-      const order = (a: ThreadSummary, b: ThreadSummary) =>
-        (firstSeen.current.get(sessionKey(a)) || 0) -
-        (firstSeen.current.get(sessionKey(b)) || 0);
-      const priority = (thread: ThreadSummary) => {
-        if (pending.has(sessionKey(thread)) || thread.status === "waiting")
-          return 0;
-        if (thread.status === "error") return 1;
-        if (thread.status === "running" || thread.compacting) return 2;
-        return 3;
-      };
-      active.sort((a, b) => priority(a) - priority(b) || order(a, b));
-      recent.sort((a, b) => b.updatedAt - a.updatedAt || order(a, b));
-      older.sort((a, b) => b.updatedAt - a.updatedAt || order(a, b));
-      for (const key of firstSeen.current.keys()) {
-        if (!seen.has(key)) firstSeen.current.delete(key);
-      }
-      return {
-        active,
-        recent,
-        older,
-        projectOf: projects,
-        approvalsByThread: pending,
-      };
-    }, [groups, approvals, unseenSessions]);
+    }
+    return { all, projectOf: projects, approvalsByThread: pending, counts };
+  }, [groups, approvals, unseenSessions]);
 
-  const other = [...recent, ...older];
-  const pendingOf = (thread: ThreadSummary) =>
-    approvalsByThread.get(sessionKey(thread));
-  const running = active.filter(
-    (thread) =>
-      (thread.status === "running" || thread.compacting) && !pendingOf(thread),
-  ).length;
-  const waiting = active.filter(
-    (thread) => thread.status === "waiting" || pendingOf(thread),
-  ).length;
-  const error = active.filter(
-    (thread) => thread.status === "error" && !pendingOf(thread),
-  ).length;
-  const counts = {
-    running,
-    waiting,
-    error,
-    unseen: Math.max(0, active.length - running - waiting - error),
-    standby: other.length,
-  };
+  const searching = Boolean(query);
+  const byRecency = useMemo(
+    () => (searching ? [...all].sort((a, b) => b.updatedAt - a.updatedAt) : []),
+    [all, searching],
+  );
   const issues = healthIssueCount(agents, providers);
-
-  const focusApproval = useCallback((id: string) => {
-    setFocusedApproval(id);
-    scrollToPanel("monitor-approvals");
-  }, []);
-  const renderCard = (thread: ThreadSummary) => {
-    const key = sessionKey(thread);
-    return (
-      <MonitorCard
-        key={key}
-        thread={thread}
-        activity={activityOf(activities, thread)}
-        selected={selected}
-        unseen={unseenSessions.has(key)}
-        project={projectOf.get(key)}
-        pending={approvalsByThread.get(key) || []}
-        providers={providers}
-        forkCount={forkCounts.get(thread.id) || 0}
-        searchMatch={searchMatches.get(`${thread.agentId || "codex"}:${thread.id}`)}
-        query={query}
-        onSelect={onSelect}
-        onSessionMenu={onSessionMenu}
-        onHistory={onHistory}
-        onResolveApproval={onResolveApproval}
-        onFocusApproval={focusApproval}
-      />
-    );
-  };
+  const openThread = useCallback((thread: ThreadSummary) => onSelect(thread), [onSelect]);
+  const [layout, setLayout] = useMonitorLayout();
+  // 「调整布局」编辑态只是页内临时状态：刷新/返回后回到正常首页即可，不进 URL。
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEditing(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editing]);
 
   return (
     <main className="monitor-view">
       <header className="monitor-header">
-        <button
-          type="button"
-          className="icon-btn monitor-menu"
-          title="打开会话列表"
-          aria-label="打开会话列表"
-          onClick={onOpenSidebar}
-        >
-          <Menu />
-        </button>
-        <h1>监控台</h1>
+        <h1>总览</h1>
         <button
           type="button"
           className={`monitor-health-chip ${issues ? "warn" : ""}`}
@@ -264,83 +226,162 @@ export function MonitorPanel({
           <i aria-hidden="true" />
           {issues ? `${issues} 项异常` : "运行正常"}
         </button>
-        <button type="button" className="monitor-return" onClick={onClose}>
-          <ArrowLeft />
-          返回{selected ? "对话" : "工作区"}
+        <Button variant="primary" size="sm" className="monitor-new" onClick={onNew}>
+          <Plus aria-hidden="true" />
+          <span>新建</span>
+        </Button>
+        <button
+          type="button"
+          className={`icon-btn monitor-layout-toggle${editing ? " active" : ""}`}
+          title={editing ? "完成调整" : "调整布局"}
+          aria-label="调整布局"
+          aria-pressed={editing}
+          onClick={() => setEditing(!editing)}
+        >
+          <LayoutList />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="外观设置"
+          aria-label="外观设置"
+          onClick={onAppearance}
+        >
+          <SunMoon />
         </button>
       </header>
       <div className="monitor-scroll">
         <div className="monitor-content">
-          <StatusStrip counts={counts} active={active} activities={activities} />
+          {editing ? (
+            <div className="monitor-layout-bar">
+              <p>
+                按住拖动或用箭头调整顺序，主栏和右栏各自排列；审批卡片固定在最上方。
+                顺序只保存在这台设备上。
+              </p>
+              <div className="monitor-layout-bar-actions">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={isDefaultLayout(layout)}
+                  onClick={() => setLayout(DEFAULT_LAYOUT)}
+                >
+                  恢复默认
+                </Button>
+                <Button size="sm" variant="primary" onClick={() => setEditing(false)}>
+                  完成
+                </Button>
+              </div>
+            </div>
+          ) : searching ? null : (
+            <StatusStrip
+              counts={counts}
+              threads={all}
+              activities={activities}
+              hasApprovals={approvals.length > 0}
+            />
+          )}
           <div className="monitor-layout">
             <div className="monitor-main">
-              {approvals.length ? (
-                <MonitorApprovals
-                  approvals={approvals}
-                  threads={threads}
-                  activeId={focusedApproval}
-                  onActiveChange={setFocusedApproval}
-                  notificationPermission={notificationPermission}
-                  onRequestNotifications={onRequestNotifications}
-                  onOpenThread={onOpenThread}
-                  onResolve={onResolveApproval}
+              {editing ? (
+                <LayoutEditor
+                  label="主栏"
+                  order={layout.main}
+                  meta={MAIN_PANEL_META}
+                  onChange={(main) => setLayout({ ...layout, main })}
                 />
-              ) : null}
-              {active.length > 0 && (
-                <section className="monitor-section" aria-label="进行中与待处理">
-                  <div className="monitor-section-heading">
-                    <span className="monitor-section-dot active" />
-                    <h2>进行中与待处理</h2>
-                    <span>{active.length}</span>
-                  </div>
-                  <div className="monitor-grid">{active.map(renderCard)}</div>
-                </section>
-              )}
-              {other.length > 0 && (
-                <section className="monitor-section" aria-label="最近会话">
-                  <div className="monitor-section-heading">
-                    <span className="monitor-section-dot" />
-                    <h2>最近会话</h2>
-                    <span>{other.length}</span>
-                  </div>
-                  <div className="monitor-grid">
-                    {other.slice(0, RECENT_LIMIT).map(renderCard)}
-                  </div>
-                  {other.length > RECENT_LIMIT && (
-                    <p className="monitor-more">
-                      另有 {other.length - RECENT_LIMIT} 个会话，可在左侧列表查看
-                    </p>
+              ) : (
+                <>
+                  {approvals.length && !searching ? (
+                    <MonitorApprovals
+                      approvals={approvals}
+                      threads={threads}
+                      activeId={focusedApproval}
+                      onActiveChange={setFocusedApproval}
+                      notificationPermission={notificationPermission}
+                      onRequestNotifications={onRequestNotifications}
+                      onOpenThread={onOpenThread}
+                      onResolve={onResolveApproval}
+                    />
+                  ) : null}
+                  {all.length === 0 ? (
+                    <div className="monitor-empty">
+                      {query ? <Search /> : <Activity />}
+                      <h2>
+                        {loading
+                          ? "正在读取会话…"
+                          : query
+                            ? "没有匹配的会话"
+                            : "暂无会话"}
+                      </h2>
+                      <p>可在会话列表搜索、筛选或新建会话。</p>
+                    </div>
+                  ) : searching ? (
+                    <section className="monitor-section" aria-label="搜索结果">
+                      <div className="monitor-section-heading">
+                        <h2>搜索结果</h2>
+                        <span>{byRecency.length}</span>
+                      </div>
+                      <MonitorRecent
+                        threads={byRecency}
+                        projectOf={projectOf}
+                        searchMatches={searchMatches}
+                        query={query}
+                        onSelect={onSelect}
+                        onSessionMenu={onSessionMenu}
+                        onHistory={onHistory}
+                      />
+                    </section>
+                  ) : (
+                    <MonitorBoard
+                      order={layout.main}
+                      threads={all}
+                      activities={activities}
+                      approvalsByThread={approvalsByThread}
+                      unseenSessions={unseenSessions}
+                      deliveries={deliveries}
+                      watchers={watchers}
+                      lostWatchers={lostWatchers}
+                      projectOf={projectOf}
+                      onOpen={openThread}
+                      onMarkSeen={onMarkSeen}
+                      onMarkAllSeen={onMarkAllSeen}
+                      onSessionMenu={onSessionMenu}
+                      onShowAll={onShowAll}
+                    />
                   )}
-                </section>
-              )}
-              {!active.length && !other.length && (
-                <div className="monitor-empty">
-                  {query ? <Search /> : <Activity />}
-                  <h2>
-                    {loading
-                      ? "正在读取会话…"
-                      : query
-                        ? "没有匹配的会话"
-                        : "暂无会话"}
-                  </h2>
-                  <p>可在左侧列表搜索、筛选或新建会话。</p>
-                </div>
+                </>
               )}
             </div>
             <aside className="monitor-aside">
-              <MonitorUsage
-                threads={liveThreads}
-                runtime={runtime}
-                onSelect={onSelect}
-                onRefreshLimits={onRefreshLimits}
-                onOpenUsage={onOpenUsage}
-              />
-              <MonitorHealth
-                agents={agents}
-                providers={providers}
-                threads={liveThreads}
-                onOpenAgentSettings={onOpenAgentSettings}
-              />
+              {editing ? (
+                <LayoutEditor
+                  label="右栏"
+                  order={layout.aside}
+                  meta={ASIDE_PANEL_META}
+                  onChange={(aside) => setLayout({ ...layout, aside })}
+                />
+              ) : (
+                layout.aside.map((id) =>
+                  id === "usage" ? (
+                    <MonitorUsage
+                      key={id}
+                      threads={liveThreads}
+                      runtime={runtime}
+                      onSelect={onSelect}
+                      onRefreshLimits={onRefreshLimits}
+                      onOpenUsage={onOpenUsage}
+                    />
+                  ) : (
+                    <MonitorHealth
+                      key={id}
+                      agents={agents}
+                      providers={providers}
+                      threads={liveThreads}
+                      onOpenAgentSettings={onOpenAgentSettings}
+                    />
+                  ),
+                )
+              )}
             </aside>
           </div>
         </div>

@@ -12,6 +12,7 @@ import { FALLBACK_EFFORTS, reasoningEffortLabel } from "./codexLabels";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
 import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
+import { SwrCache } from "./swr-cache";
 
 /**
  * Model catalogs change rarely but are read every time a picker mounts (new
@@ -21,8 +22,17 @@ import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
  */
 const CATALOG_TTL = 60_000;
 const CATALOG_TIMEOUT_MS = 8_000;
-const catalogCache = new Map<string, { at: number; models: ModelInfo[] }>();
-const catalogInflight = new Map<string, Promise<ModelInfo[]>>();
+/**
+ * 也落盘：新建会话弹窗冷启动（刷新、桌面端新标签页）时直接用上次的目录，
+ * 不必先转一圈“正在读取”。最多 8 份，单份超过 300KB（OpenCode 全量目录
+ * 可能很大）只留内存。
+ */
+export const modelCatalogCache = new SwrCache<ModelInfo[]>({
+  persist: "model-catalogs",
+  ttlMs: CATALOG_TTL,
+  maxEntries: 8,
+  maxPersistChars: 300_000,
+});
 
 function withTimeout<T>(task: Promise<T>, ms: number, path: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -37,20 +47,12 @@ function withTimeout<T>(task: Promise<T>, ms: number, path: string): Promise<T> 
   });
 }
 
-function loadCatalog(path: string) {
-  const running = catalogInflight.get(path);
-  if (running) return running;
-  const task = withTimeout(api<ModelInfo[]>(path), CATALOG_TIMEOUT_MS, path)
-    .then((list) => {
-      const models = Array.isArray(list) ? list : [];
-      catalogCache.set(path, { at: Date.now(), models });
-      return models;
-    })
-    .finally(() => {
-      catalogInflight.delete(path);
-    });
-  catalogInflight.set(path, task);
-  return task;
+export function loadModelCatalog(path: string) {
+  return modelCatalogCache.load(path, () =>
+    withTimeout(api<ModelInfo[]>(path), CATALOG_TIMEOUT_MS, path).then(
+      (list) => (Array.isArray(list) ? list : []),
+    ),
+  );
 }
 
 /**
@@ -122,6 +124,15 @@ export function ModelPicker({
      its catalog is agent-scoped and needs no providerId; every adapter still
      renders the same grouped, searchable picker with a manual-entry escape. */
   const combinedCatalog = agentId === "opencode";
+  /* 工作目录每敲一个键都会变，而 opencode 的项目目录是按 directory 现查
+     （/provider + /config，绕过服务端缓存）。目录键防抖一档，避免边输入
+     边打出一串请求、选择器反复闪 loading。 */
+  const [debouncedCwd, setDebouncedCwd] = useState(cwd);
+  useEffect(() => {
+    if (cwd === debouncedCwd) return;
+    const timer = setTimeout(() => setDebouncedCwd(cwd), 300);
+    return () => clearTimeout(timer);
+  }, [cwd, debouncedCwd]);
   const effortDatalistId = useId();
   const matched = models.find(
     (item) => item.model === model || item.id === model,
@@ -134,7 +145,7 @@ export function ModelPicker({
     if (!providerId && !combinedCatalog) return;
     let cancelled = false;
     const path = combinedCatalog
-      ? `/agents/${agentId}/models${cwd ? `?directory=${encodeURIComponent(cwd)}` : ""}`
+      ? `/agents/${agentId}/models${debouncedCwd ? `?directory=${encodeURIComponent(debouncedCwd)}` : ""}`
       : agentId !== "codex"
         ? // claude 的 providerId 是配置档 id，ACP agent 是 `${id}-current` 占位；
           // 两者都查 agent 自己的模型目录。
@@ -155,23 +166,24 @@ export function ModelPicker({
           });
       }
     };
-    const cached = catalogCache.get(path);
+    const cached = modelCatalogCache.peek(path);
     if (cached) {
-      apply(cached.models);
-      if (Date.now() - cached.at < CATALOG_TTL) {
+      apply(cached.value);
+      if (modelCatalogCache.isFresh(cached)) {
         setLoading(false);
         return;
       }
     }
-    setLoading(true);
-    loadCatalog(path)
+    // 有旧目录可用时后台刷新即可，不再露出 loading。
+    setLoading(!cached);
+    loadModelCatalog(path)
       .then(apply)
       .catch((error: any) => {
         if (cancelled) return;
         setCatalogError(String(error?.message || "模型目录读取失败"));
         // 卡住/超时时沿用已渲染的旧列表（cached paint），只有真没列表才切手输，
         // 避免把用户已选模型冲掉或被迫提交脏值。
-        if (!catalogCache.get(path)?.models.length) {
+        if (!modelCatalogCache.peek(path)?.value.length) {
           setModels([]);
           setManual(true);
         }
@@ -182,7 +194,7 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [agentId, providerId, combinedCatalog, cwd]);
+  }, [agentId, providerId, combinedCatalog, debouncedCwd]);
 
   const efforts = selected?.supportedReasoningEfforts || [];
   const searchOptions = useMemo<SearchableOption[]>(
@@ -283,13 +295,13 @@ export function ModelPicker({
           {compact ? (
             <span className="toolbar-field-label">推理</span>
           ) : (
-            "Reasoning effort"
+            "推理强度"
           )}
           <select
             value={reasoningEffort}
             disabled={disabled}
-            aria-label="Reasoning effort"
-            title="Reasoning effort"
+            aria-label="推理强度"
+            title="推理强度"
             onChange={(e) =>
               onChange({ model, reasoningEffort: e.target.value })
             }
@@ -314,13 +326,13 @@ export function ModelPicker({
             {compact ? (
               <span className="toolbar-field-label">推理</span>
             ) : (
-              "Reasoning effort"
+              "推理强度"
             )}
             <DraftInput
               value={reasoningEffort}
               disabled={disabled}
-              aria-label="Reasoning effort"
-              title="Reasoning effort（目录无声明时可手填，留空用默认）"
+              aria-label="推理强度"
+              title="推理强度（目录无声明时可手填，留空用默认）"
               list={effortDatalistId}
               onCommit={(next) => onChange({ model, reasoningEffort: next })}
               placeholder="留空默认，可填 low/medium/high"

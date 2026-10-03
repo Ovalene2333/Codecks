@@ -4,6 +4,7 @@
   "private": true,
   "description": "A mobile-first remote console for Codex CLI.",
   "license": "MIT",
+  "repository": "https://github.com/Ovalene2333/Codecks",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",

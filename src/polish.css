@@ -533,12 +533,133 @@ aside,
 }
 
 .approval-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   margin: 18px 0;
   overflow: hidden;
   border: 1px solid var(--warning-border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-md);
+}
+
+.approval-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.approval-reason {
+  margin: 0;
+  padding: 0 15px 12px 56px;
+  color: var(--text-soft);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.approval-file-count {
+  margin: 0 15px var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.approval-permission-hint {
+  margin: 0 15px var(--space-2) 56px;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.approval-resolve-error,
+.approval-resolve-busy {
+  flex: none;
+  margin: 0;
+  padding: var(--space-2) 15px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+}
+
+.approval-resolve-error {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.approval-resolve-busy {
+  color: var(--text-dim);
+}
+
+.approval-card .approval-command-wrap {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
+.approval-copy-command {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  gap: var(--space-1);
+  min-height: 28px;
+  margin: -5px -5px -5px 0;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.approval-copy-command:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.approval-copy-command svg {
+  width: 13px;
+  height: 13px;
+}
+
+.approval-more-options {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0 15px 15px;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.approval-more-options[hidden] {
+  display: none;
+}
+
+.approval-more-options legend {
+  padding: 0 var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+}
+
+.approval-more-options label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.approval-more-options label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.approval-more-options label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .approval-title {
@@ -658,6 +779,22 @@ aside,
   background: color-mix(in srgb, var(--bg) 30%, transparent);
 }
 
+.approval-card .approval-actions {
+  display: flex;
+  flex-direction: row;
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.approval-card .approval-actions > button {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 44px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .approval-actions .approve:not(.session) {
   border-color: var(--accent);
   background: var(--accent);
@@ -673,18 +810,6 @@ aside,
 .approval-actions svg {
   width: 15px;
   height: 15px;
-}
-
-/* ACP 逐档选项（devin 一次给多档）：长文案纵排，左对齐。 */
-.approval-actions.option-list {
-  flex-direction: column;
-  align-items: stretch;
-}
-.approval-actions.option-list > button {
-  justify-content: flex-start;
-  min-width: 0;
-  text-align: left;
-  white-space: normal;
 }
 
 .permission-list,
@@ -835,6 +960,24 @@ aside,
 
   .approval-cwd {
     padding: 0 13px 10px;
+  }
+
+  .approval-reason {
+    padding: 0 13px 10px;
+  }
+
+  .approval-file-count {
+    margin-right: 13px;
+    margin-left: 13px;
+  }
+
+  .approval-permission-hint {
+    margin-left: 13px;
+  }
+
+  .approval-more-options {
+    margin-right: 13px;
+    margin-left: 13px;
   }
 
   .approval-command-wrap {

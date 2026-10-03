@@ -5,6 +5,7 @@ import {
   mergeProjectGroups,
   normalizeProjectPath,
   previewSessions,
+  quickNewProjects,
   resolveNewThreadDefaults,
   threadsForProject,
 } from "./projects";
@@ -272,6 +273,37 @@ test("new Codex tasks default to Workspace Write with Approve for me", () => {
   assert.equal(defaults.approvalsReviewer, "auto_review");
 });
 
+test("explicit Codex provider defaults survive runtime startup and reconnect", () => {
+  const providers = [
+    { id: "official", online: true, current: true },
+    { id: "chosen", online: false },
+  ] as any;
+  const preferences = { lastProviderId: "chosen", recentDirs: [] };
+  assert.equal(resolveNewThreadDefaults({ providers, preferences }).providerId, "chosen");
+  assert.equal(resolveNewThreadDefaults({
+    providers,
+    preferences: { ...preferences, lastProviderId: "official" },
+    project: { key: "/work", cwd: "/work", updatedAt: 1, defaults: { providerId: "chosen" } },
+  }).providerId, "chosen");
+});
+
+test("invalid project providers fall through to the global Codex default", () => {
+  const providers = [{ id: "official", online: true }, { id: "chosen", online: true }] as any;
+  for (const providerId of ["deleted", "claude-current"]) {
+    assert.equal(resolveNewThreadDefaults({
+      providers,
+      preferences: { lastProviderId: "chosen", recentDirs: [] },
+      project: { key: "/work", cwd: "/work", updatedAt: 1, defaults: { providerId } },
+    }).providerId, "chosen");
+  }
+});
+
+test("the current Codex provider is the fallback when no explicit default exists", () => {
+  assert.equal(resolveNewThreadDefaults({ providers: [
+    { id: "first", online: true }, { id: "current", online: true, current: true },
+  ] as any }).providerId, "current");
+});
+
 test("new task path defaults stay unchanged outside --wsl", () => {
   const providers = [
     { id: "official", name: "Official", kind: "official", online: true },
@@ -333,4 +365,23 @@ test("explicit project approval reviewers remain unchanged", () => {
   });
   assert.equal(defaults.approvalPolicy, "never");
   assert.equal(defaults.approvalsReviewer, "user");
+});
+
+test("quickNewProjects keeps pinned-first order and skips hidden or pathless groups", () => {
+  const groups = mergeProjectGroups(
+    [
+      { key: "/a", cwd: "/a", name: "a", pinned: true, updatedAt: 1 },
+      { key: "/h", cwd: "/h", name: "h", hidden: true, updatedAt: 9 },
+    ],
+    [
+      { ...thread("/b", "b1"), updatedAt: 5 },
+      { ...thread("", "none"), updatedAt: 8 },
+      { ...thread("/h", "h1"), updatedAt: 9 },
+    ],
+  );
+  assert.deepEqual(
+    quickNewProjects(groups).map((group) => group.cwd),
+    ["/a", "/b"],
+  );
+  assert.equal(quickNewProjects(groups, 1).length, 1);
 });

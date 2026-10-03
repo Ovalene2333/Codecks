@@ -201,6 +201,10 @@
   --fs-modal-title: 17px;
   --modal-w: 560px;
   --modal-h: 640px;
+  /* 设置：左侧导航 + 内容区，比普通面板宽、略高。 */
+  --settings-w: 840px;
+  --settings-h: 700px;
+  --settings-nav-w: 176px;
 }
 
 /* 触屏：控件命中区放大到可舒适点按，其余尺寸不变。 */

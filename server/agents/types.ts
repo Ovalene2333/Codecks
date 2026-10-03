@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import type { AgentMessageCapabilities, AgentMessageInput, AgentMessageAcceptance } from "./messages.js";
 import type {
   AgentId,
   ApprovalKind,
@@ -14,6 +15,8 @@ export type { AgentId };
 export type AgentHistoryStatus = "cached" | "loading" | "ready" | "error";
 
 export interface AgentCapabilities {
+  /** 缺省表示旧 adapter 未声明通用消息契约。 */
+  messages?: AgentMessageCapabilities;
   approvals: boolean;
   archive: boolean;
   delete: boolean;
@@ -145,6 +148,11 @@ export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
   reload?(): Promise<void>;
   repairHistory?(): Promise<void>;
   busyThreads(): ThreadSummary[];
+  /**
+   * Deck 托管的后端进程 pid（只读）。deck-wake 沿进程树据此判断命令
+   * 来自哪个 agent；没有常驻后端或连的是外部服务时返回空。
+   */
+  runtimePids?(): number[];
   restart(): void;
   publicProfiles?(): AgentPublicProfile[];
   listModels?(
@@ -179,6 +187,15 @@ export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
     text: string,
     images?: TurnImage[],
   ): Promise<unknown>;
+  sendMessage?(
+    providerId: string,
+    threadId: string,
+    input: AgentMessageInput,
+  ): Promise<AgentMessageAcceptance>;
+  /** 摘要已空闲时，adapter 是否也已完成上一个回合的清理。 */
+  messageReady?(threadId: string): boolean;
+  /** 即时反馈先于原有内存队列执行；释放后继续原来的 FIFO。 */
+  holdMessageQueue?(threadId: string): () => void;
   interrupt?(
     providerId: string,
     threadId: string,

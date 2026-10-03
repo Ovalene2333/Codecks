@@ -1,12 +1,14 @@
 import type { ComponentType } from "react";
-import { FilePen, GitBranch, Puzzle, Terminal } from "lucide-react";
+import { FilePen, GitBranch, Puzzle, Terminal, Zap } from "lucide-react";
 import type { ToolDescriptor } from "./types";
 import { GitView } from "./git/GitView.client";
 import { TerminalView } from "./terminal/TerminalView.client";
 import { TextFilesView } from "./text-files/TextFilesView.client";
+import { QuickCommandView } from "./quick-command/QuickCommandView.client";
 import "./git/git.css";
 import "./terminal/terminal.css";
 import "./text-files/text-files.css";
+import "./quick-command/quick-command.css";
 
 export interface ToolViewProps {
   tool: ToolDescriptor;
@@ -24,6 +26,7 @@ const plugins: Record<string, ClientPlugin> = {
   terminal: { icon: Terminal, view: TerminalView },
   git: { icon: GitBranch, view: GitView },
   "text-editor": { icon: FilePen, view: TextFilesView },
+  commands: { icon: Zap, view: QuickCommandView },
 };
 
 export const toolIcon = (id: string) => plugins[id]?.icon || Puzzle;

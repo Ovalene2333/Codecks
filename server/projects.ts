@@ -300,6 +300,24 @@ export class ProjectStore {
   }) {
     const key = normalizeProjectPath(input.cwd);
     const old = this.projects.get(key);
+    const recentDirs = [
+      input.cwd,
+      ...this.prefs.recentDirs.filter(
+        (dir) => normalizeProjectPath(dir) !== key,
+      ),
+    ].slice(0, 20);
+    // 固定默认值：只记最近目录与项目条目本身，不回写 last*，也不替项目
+    // 自动记默认值——否则设置里固定的值新建一次就被冲掉。
+    if (this.prefs.pinDefaults) {
+      this.projects.set(key, {
+        ...(old || { key, cwd: input.cwd }),
+        updatedAt: this.nextUpdatedAt(),
+      });
+      this.prefs = { ...this.prefs, recentDirs };
+      await this.saveProjects();
+      await this.savePrefs();
+      return;
+    }
     const defaults: ProjectDefaults = { ...old?.defaults };
     if (input.agentId) defaults.agentId = input.agentId;
     if (!defaults.providerId && input.providerId)
@@ -324,24 +342,22 @@ export class ProjectStore {
       defaults: Object.keys(defaults).length ? defaults : undefined,
       updatedAt: this.nextUpdatedAt(),
     });
+    // lastProviderId/lastModel 是新建弹窗中 Codex 的默认链；其他 Agent
+    // 按自己的 profiles/model 目录预填，不能把 claude-current 等写进它。
+    const codexDefaults = !input.agentId || input.agentId === "codex";
     this.prefs = {
       ...this.prefs,
       lastAgentId: input.agentId || this.prefs.lastAgentId,
-      lastProviderId: input.providerId || this.prefs.lastProviderId,
-      lastModel: input.model || this.prefs.lastModel,
+      lastProviderId: (codexDefaults && input.providerId) || this.prefs.lastProviderId,
+      lastModel: (codexDefaults && input.model) || this.prefs.lastModel,
       lastReasoningEffort:
-        input.reasoningEffort || this.prefs.lastReasoningEffort,
+        (codexDefaults && input.reasoningEffort) || this.prefs.lastReasoningEffort,
       lastSandbox: input.sandbox || this.prefs.lastSandbox,
       lastApprovalPolicy: input.approvalPolicy || this.prefs.lastApprovalPolicy,
       lastApprovalsReviewer:
         input.approvalsReviewer || this.prefs.lastApprovalsReviewer,
       lastPermissionMode: input.permissionMode || this.prefs.lastPermissionMode,
-      recentDirs: [
-        input.cwd,
-        ...this.prefs.recentDirs.filter(
-          (dir) => normalizeProjectPath(dir) !== key,
-        ),
-      ].slice(0, 20),
+      recentDirs,
     };
     await this.saveProjects();
     await this.savePrefs();

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { assertMessageInput, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
@@ -50,6 +51,7 @@ import {
   branchClaudeHistory,
   claudeToolItem,
   readClaudeHistory,
+  readClaudeHistoryCached,
   rewindAnchorUuid,
   turnEndUuid,
   type ClaudeHistoryThread,
@@ -62,6 +64,7 @@ import type {
 } from "./types.js";
 
 const CLAUDE_CAPABILITIES: AgentCapabilities = {
+  messages: { busyBehavior: "reject", interruptScope: "session" },
   approvals: true,
   archive: false,
   delete: true,
@@ -89,6 +92,25 @@ const CLAUDE_MODELS: ModelInfo[] = [
   { id: "opus", model: "opus", displayName: "Opus" },
   { id: "haiku", model: "haiku", displayName: "Haiku" },
 ];
+
+/** Claude Code budgets Sonnet 5/5.5 at 200K behind an LLM gateway unless the
+ * 1M variant is selected. Direct Anthropic API sessions use their native 1M
+ * window. A persisted gateway profile is required before applying this rule. */
+function gatewaySonnetContextWindow(
+  resolvedModel: string | undefined,
+  selectedModel: string | undefined,
+  env: NodeJS.ProcessEnv,
+) {
+  if (
+    !env.ANTHROPIC_BASE_URL ||
+    !/^claude-sonnet-5(?:-5)?$/.test(resolvedModel || "")
+  )
+    return undefined;
+  if (env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || env.DISABLE_COMPACT)
+    return undefined;
+  if (env.CLAUDE_CODE_DISABLE_1M_CONTEXT === "1") return 200_000;
+  return /\[1m\]/i.test(selectedModel || "") ? 1_000_000 : 200_000;
+}
 
 /** claude `--effort`/flag settings 接受的水平；其他值一律不下发。 */
 const CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -248,6 +270,12 @@ interface ActiveQuery {
   streamMessageId?: string;
   streamBlocks: Map<number, "text" | "thinking" | "tool_use">;
   toolItems: Map<string, any>;
+  /** 最近一次 API 调用自身的用量（真实上下文占用）；result.usage 是整回合各次调用的合计，不能当占用。 */
+  lastCallUsage?: {
+    input: number;
+    cachedInput: number;
+    limit?: number;
+  };
 }
 
 /** Keep stdin open between turns so Claude retains its own background work. */
@@ -682,6 +710,19 @@ export class ClaudeAdapter extends EventEmitter {
         if (home) this.historyHomes.set(parsed.summary.id, home);
         const existing = this.threads.get(parsed.summary.id);
         const live = this.active.get(parsed.summary.id);
+        const settings = this.options.threadSettings?.get(
+          this.id,
+          parsed.summary.id,
+        );
+        const providerId =
+          settings?.providerId ||
+          existing?.providerId ||
+          parsed.summary.providerId;
+        const diskUsage = this.historicalTokenUsage(
+          parsed.summary,
+          providerId,
+          settings?.model || existing?.model || parsed.summary.model,
+        );
         // 连接在但回合间隙（turnId 空）也是 managed；startingTurns 覆盖
         // sendTurn 已置 running、SDK 进程尚未建连的窗口。activeTurnId 只认
         // 活跃回合来源，existing 里的残留不往回带。
@@ -689,12 +730,18 @@ export class ClaudeAdapter extends EventEmitter {
           live?.turnId || this.startingTurns.get(parsed.summary.id)?.turnId;
         this.threads.set(parsed.summary.id, {
           ...parsed.summary,
-          providerId: existing?.providerId || parsed.summary.providerId,
+          providerId,
           model: existing?.model || parsed.summary.model,
           permissionMode: existing?.permissionMode || "default",
           forkedFromId: existing?.forkedFromId,
-          resolvedModel: existing?.resolvedModel,
-          tokenUsage: existing?.tokenUsage,
+          resolvedModel:
+            live || busyTurnId
+              ? existing?.resolvedModel || parsed.summary.resolvedModel
+              : parsed.summary.resolvedModel || existing?.resolvedModel,
+          tokenUsage:
+            live || busyTurnId
+              ? existing?.tokenUsage || diskUsage
+              : diskUsage || existing?.tokenUsage,
           status: live
             ? existing?.status || "running"
             : busyTurnId
@@ -704,7 +751,7 @@ export class ClaudeAdapter extends EventEmitter {
           lastError: existing?.lastError,
           controlMode: live || busyTurnId ? "managed" : "history",
           claudeConnected: Boolean(live),
-          ...this.options.threadSettings?.get(this.id, parsed.summary.id),
+          ...settings,
         });
       });
       for (const [id] of this.threads)
@@ -847,7 +894,8 @@ export class ClaudeAdapter extends EventEmitter {
     if (!summary) throw new Error("Claude Code 会话不存在");
     const file = this.history.get(threadId);
     let parsed: ClaudeHistoryThread | undefined;
-    if (file) parsed = await readClaudeHistory(file);
+    // 打开会话会反复读同一份 JSONL：没变就复用上次的解析结果。
+    if (file) parsed = await readClaudeHistoryCached(file);
     const thread = parsed?.thread || {
       id: threadId,
       cwd: summary.cwd,
@@ -1164,6 +1212,18 @@ export class ClaudeAdapter extends EventEmitter {
     }
   }
 
+  async sendMessage(providerId: string, threadId: string, input: AgentMessageInput): Promise<AgentMessageAcceptance> {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    assertMessageInput(thread, input, CLAUDE_CAPABILITIES.messages!);
+    const result = await this.sendTurn(providerId, threadId, input.text, input.images);
+    return { disposition: "started", turnId: result.turn.id };
+  }
+
+  messageReady(threadId: string) {
+    return !this.isBusy(threadId);
+  }
+
   async sendTurn(
     _providerId: string,
     threadId: string,
@@ -1223,6 +1283,7 @@ export class ClaudeAdapter extends EventEmitter {
     if (current) {
       current.turnId = turnId;
       current.interrupted = false;
+      current.lastCallUsage = undefined;
       current.input.push(inputMessage(thread.id, text, images, turnId));
       this.startingTurns.delete(threadId);
     } else {
@@ -1459,11 +1520,16 @@ export class ClaudeAdapter extends EventEmitter {
             : this.options.claudeBin
               ? { pathToClaudeCodeExecutable: this.options.claudeBin }
               : {}),
-          env: this.runtimeEnv(
-            profile,
-            this.historyHomes.get(thread.id),
-            runtime,
-          ),
+          env: {
+            ...this.runtimeEnv(
+              profile,
+              this.historyHomes.get(thread.id),
+              runtime,
+            ),
+            // 只读的会话标识：deck-wake 据此确认 watcher 属于哪个会话。
+            // 每个 Claude 会话独占一个进程，所以这个值不会串到别的会话。
+            CODEX_DECK_SESSION: `${this.id}:${thread.id}`,
+          },
           stderr: onStderr,
           ...(runtime === "wsl"
             ? {
@@ -1513,8 +1579,41 @@ export class ClaudeAdapter extends EventEmitter {
         const currentTurnId = live.turnId;
         if (currentTurnId) {
           this.onMessage(thread, currentTurnId, message);
-          if (message.type === "result")
+          if (message.type === "result") {
             await this.refreshThreadFromDisk(thread.id).catch(() => undefined);
+            // Claude Code's structured /context summary reports the last main
+            // API call even when streamed assistant usage was incomplete. The
+            // summary mode does not make per-category token-count API calls.
+            if (typeof query.getContextUsage === "function") {
+              let timeout: ReturnType<typeof setTimeout> | undefined;
+              try {
+                const context = await Promise.race([
+                  query.getContextUsage({ detail: "summary" }),
+                  new Promise<undefined>((resolve) => {
+                    timeout = setTimeout(() => resolve(undefined), 1_000);
+                  }),
+                ]);
+                const current = this.currentSummary(thread);
+                if (
+                  !current.activeTurnId &&
+                  this.active.get(thread.id)?.query === query &&
+                  context?.apiUsage
+                ) {
+                  const usage = context.apiUsage;
+                  const used =
+                    (Number(usage.input_tokens) || 0) +
+                    (Number(usage.cache_creation_input_tokens) || 0) +
+                    (Number(usage.cache_read_input_tokens) || 0);
+                  current.tokenUsage = { ...current.tokenUsage, used };
+                  this.broadcast("thread.updated", current);
+                }
+              } catch {
+                // Older CLI builds may not support this control request.
+              } finally {
+                clearTimeout(timeout);
+              }
+            }
+          }
         }
       }
       const live = this.active.get(thread.id);
@@ -1582,6 +1681,47 @@ export class ClaudeAdapter extends EventEmitter {
     return this.threads.get(thread.id) ?? thread;
   }
 
+  private historicalTokenUsage(
+    summary: ThreadSummary,
+    providerId: string,
+    selectedModel: string | undefined,
+  ) {
+    const usage = summary.tokenUsage;
+    if (!usage || usage.limit != null) return usage;
+    // The JSONL has no window field for a standard gateway session. Apply
+    // Claude Code's documented gateway rule only when the saved provider is
+    // still available; a model ID by itself cannot establish this limit.
+    const profile = this.profiles.find((item) => item.id === providerId);
+    if (!profile?.env.ANTHROPIC_BASE_URL) return usage;
+    const limit = gatewaySonnetContextWindow(
+      summary.resolvedModel,
+      selectedModel,
+      { ...process.env, ...profile.env },
+    );
+    return limit ? { ...usage, limit } : usage;
+  }
+
+  private recordCallUsage(thread: ThreadSummary, turnId: string, usage: any) {
+    const current = this.active.get(thread.id);
+    if (!usage || typeof usage !== "object" || current?.turnId !== turnId)
+      return;
+    const input = Number(usage.input_tokens) || 0;
+    const cached = Number(usage.cache_read_input_tokens) || 0;
+    const created = Number(usage.cache_creation_input_tokens) || 0;
+    const limit = Number(usage.context_window) || 0;
+    current.lastCallUsage = {
+      input: input + created,
+      cachedInput: cached,
+      ...(limit > 0 ? { limit } : {}),
+    };
+    thread.tokenUsage = {
+      ...thread.tokenUsage,
+      used: input + cached + created,
+      ...(limit > 0 ? { limit } : {}),
+    };
+    this.broadcast("thread.updated", thread);
+  }
+
   private onMessage(
     thread: ThreadSummary,
     turnId: string,
@@ -1620,13 +1760,20 @@ export class ClaudeAdapter extends EventEmitter {
         // 每回合第一条 API 消息带真实模型 ID——live 连接内换模型后 init
         // 不会再来，靠它把回合快照修到实际模型。
         const apiModel = event.message?.model;
-        if (typeof apiModel === "string" && apiModel) {
+        if (
+          !message.parent_tool_use_id &&
+          typeof apiModel === "string" &&
+          apiModel
+        ) {
           thread.resolvedModel = apiModel;
           this.stampTurnModel(thread, turnId, { model: apiModel });
         }
+        if (!message.parent_tool_use_id)
+          this.recordCallUsage(thread, turnId, event.message?.usage);
         return;
       }
       const current = this.active.get(thread.id);
+      if (event.type === "message_delta") return;
       if (event.type === "content_block_start") {
         if (typeof event.index === "number" && current?.turnId === turnId)
           current.streamBlocks.set(event.index, event.content_block?.type);
@@ -1676,13 +1823,35 @@ export class ClaudeAdapter extends EventEmitter {
     // Complete assistant messages carry the full tool input. Start a live
     // item here; the later SDK user/tool_result completes the same item.
     if (message.type === "assistant") {
+      const current = this.active.get(thread.id);
+      const apiModel = (message.message as any)?.model;
+      if (
+        !message.parent_tool_use_id &&
+        typeof apiModel === "string" &&
+        apiModel &&
+        apiModel !== "<synthetic>"
+      ) {
+        thread.resolvedModel = apiModel;
+        this.stampTurnModel(thread, turnId, { model: apiModel });
+      }
+      // 每条 assistant 消息带本次 API 调用自身的 usage（流式分块时同一
+      // message.id 逐块更新，最后一条最完整）——这是真实上下文占用；
+      // result.usage 是整回合合计，不能当占用。
+      const usage = (message.message as any)?.usage;
+      if (
+        usage &&
+        typeof usage === "object" &&
+        !message.parent_tool_use_id &&
+        current?.turnId === turnId
+      ) {
+        this.recordCallUsage(thread, turnId, usage);
+      }
       const parts = Array.isArray(message.message?.content)
         ? message.message.content
         : [];
       for (const part of parts) {
         if (part?.type !== "tool_use") continue;
         const item = claudeToolItem(part, message);
-        const current = this.active.get(thread.id);
         if (current?.turnId === turnId) current.toolItems.set(item.id, item);
         this.emitAgentEvent(thread, {
           method: item.type === "extension" ? "item/completed" : "item/started",
@@ -1735,20 +1904,37 @@ export class ClaudeAdapter extends EventEmitter {
       return;
     }
     if (message.type === "result") {
+      // usage 是本回合主循环各次 API 调用的合计（每次往返都重发完整
+      // transcript，主要是 cache_read）——是消耗量，不是窗口占用，只能
+      // 累计进 total/input/output。占用取最后一次调用自身的 usage。
       const input = Number(message.usage.input_tokens) || 0;
       const cached = Number(message.usage.cache_read_input_tokens) || 0;
       const created = Number(message.usage.cache_creation_input_tokens) || 0;
       const output = Number(message.usage.output_tokens) || 0;
-      const modelUsage = Object.values(message.modelUsage || {})[0];
+      const last = this.active.get(thread.id)?.lastCallUsage;
+      const previous = thread.tokenUsage;
+      const models = message.modelUsage || {};
+      const resolved = thread.resolvedModel || thread.model;
+      const matchingKey = Object.keys(models).find(
+        (key) => key === resolved || key.startsWith(`${resolved}[`),
+      );
+      const preferred = matchingKey
+        ? models[matchingKey]
+        : Object.keys(models).length === 1
+          ? Object.values(models)[0]
+          : undefined;
+      const limit =
+        Number(preferred?.contextWindow) || last?.limit || previous?.limit;
+      const used = last
+        ? last.input + last.cachedInput
+        : (previous?.used ?? (input + cached + created || undefined));
       thread.tokenUsage = {
-        total: input + cached + created + output,
-        used: input + cached + created + output,
-        ...(modelUsage?.contextWindow
-          ? { limit: modelUsage.contextWindow }
-          : {}),
-        input: input + created,
-        cachedInput: cached,
-        output,
+        total: (previous?.total || 0) + input + cached + created + output,
+        ...(used != null ? { used } : {}),
+        ...(limit ? { limit } : {}),
+        input: (previous?.input || 0) + input + created,
+        cachedInput: (previous?.cachedInput || 0) + cached,
+        output: (previous?.output || 0) + output,
       };
       if (this.active.get(thread.id)?.interrupted) {
         this.completeTurn(thread, turnId);
@@ -2058,7 +2244,7 @@ export class ClaudeAdapter extends EventEmitter {
       const parsed = JSON.parse(
         await readFile(this.options.historyIndexFile, "utf8"),
       );
-      if (parsed?.version !== 3 || !parsed.entries) return;
+      if (parsed?.version !== 6 || !parsed.entries) return;
       for (const [file, entry] of Object.entries(parsed.entries)) {
         const value = entry as ClaudeHistoryIndexEntry;
         if (
@@ -2110,7 +2296,7 @@ export class ClaudeAdapter extends EventEmitter {
     await writeFile(
       temporary,
       JSON.stringify({
-        version: 3,
+        version: 6,
         entries: Object.fromEntries(this.historyIndex),
       }),
       { encoding: "utf8", mode: 0o600 },
@@ -2229,6 +2415,14 @@ export class ClaudeAdapter extends EventEmitter {
     );
     if (!parsed) return;
     const current = this.threads.get(threadId);
+    const settings = this.options.threadSettings?.get(this.id, threadId);
+    const providerId =
+      settings?.providerId || current?.providerId || parsed.summary.providerId;
+    const diskUsage = this.historicalTokenUsage(
+      parsed.summary,
+      providerId,
+      settings?.model || current?.model || parsed.summary.model,
+    );
     // 读盘 await 期间可能插进来新回合（result 后用户立刻续发），也可能
     // 回合刚结束——以连接/待发回合为准，别把 activeTurnId 丢掉或留尸。
     const busyTurnId =
@@ -2236,7 +2430,7 @@ export class ClaudeAdapter extends EventEmitter {
       this.startingTurns.get(threadId)?.turnId;
     this.threads.set(threadId, {
       ...parsed.summary,
-      providerId: current?.providerId || parsed.summary.providerId,
+      providerId,
       model: current?.model || parsed.summary.model,
       status: busyTurnId
         ? current?.status === "waiting"
@@ -2247,13 +2441,19 @@ export class ClaudeAdapter extends EventEmitter {
           : current?.status || parsed.summary.status,
       activeTurnId: busyTurnId,
       lastError: current?.lastError,
-      resolvedModel: current?.resolvedModel,
-      tokenUsage: current?.tokenUsage,
+      resolvedModel:
+        this.active.has(threadId) || busyTurnId
+          ? current?.resolvedModel || parsed.summary.resolvedModel
+          : parsed.summary.resolvedModel || current?.resolvedModel,
+      tokenUsage:
+        this.active.has(threadId) || busyTurnId
+          ? current?.tokenUsage || diskUsage
+          : diskUsage || current?.tokenUsage,
       forkedFromId: current?.forkedFromId,
       permissionMode: current?.permissionMode || "default",
       controlMode: "managed",
       claudeConnected: Boolean(this.active.get(threadId)),
-      ...this.options.threadSettings?.get(this.id, threadId),
+      ...settings,
     });
     this.broadcast("thread.updated", this.threads.get(threadId));
   }

@@ -200,7 +200,7 @@ test("an optimistic steer is inserted before commands that arrive after it", () 
           id: "pending-1",
           text: "追加消息",
           images: [],
-          loadedUserMessageCount: 1,
+          historyBefore: [],
           turnId: "turn-1",
           liveItemIds: ["old-command"],
         },

@@ -21,7 +21,6 @@ import "./polish.css";
 import "./appearance.css";
 import "./task-tools.css";
 import "./deck-ui.css";
-import "./tiled.css";
 import "./search-picker.css";
 
 document.documentElement.dataset.theme = "dark";
@@ -197,7 +196,7 @@ function Harness() {
       <Sidebar
         show
         hiddenOnMobile={false}
-        monitorOpen={false}
+        homeActive
         projectCount={groups.length}
         sessionCount={THREADS.length}
         archivedCount={0}
@@ -228,7 +227,7 @@ function Harness() {
         onLibrary={noop("切换库")}
         onQuery={noop("搜索")}
         onStatusFilter={noop("筛选")}
-        onToggleMonitor={noop("监控台")}
+        onHome={noop("总览")}
         onToggleProject={(key) =>
           setExpanded((current) => {
             const next = new Set(current);

@@ -1,5 +1,7 @@
 # Agent Adapter 开发约定
 
+消息追加、排队与打断的通用 API 契约和后端差异见 [通用消息输送](message-transport.md)。新增 adapter 只有在对应传输行为已验证时才声明 `capabilities.messages`。
+
 Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 必须各自实现 adapter；Deck 不把不同 CLI 的私有协议混进同一个 manager。
 
@@ -301,7 +303,7 @@ adapter 会跳过，`session/list` 却会列出）。此外，搜索索引会对
 
 - 主 agent 可用（在线或正在启动，且历史读取没有失败）时，备选 agent **待命**：
   它未接管的会话（非 `managed` 且状态为 `idle`，含归档库）不进入快照，
-  因此列表、平铺、搜索和索引都看不到，也不会被索引器触发 `session/load`。
+  因此列表、总览、搜索和索引都看不到，也不会被索引器触发 `session/load`。
 - 备选 agent 已接管的会话（`managed` 或有活动）始终可见；此时主 agent 里同 id
   的未接管副本让位，避免同一会话出现两次。两边都被接管则都保留，宁可重复
   也不隐藏活动会话。

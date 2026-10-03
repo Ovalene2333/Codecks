@@ -2,7 +2,14 @@ import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +33,8 @@ import {
 } from "./agents/acp-agents.js";
 import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
+import { registerMessageRoutes } from "./message-api.js";
+import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { formatHost, isIpv6Host, lanAddresses } from "./network.js";
@@ -47,13 +56,26 @@ import { ThreadSettingsStore } from "./thread-settings.js";
 import { AgentSettingsStore } from "./agent-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
-import { WakeDeduper } from "./wake-dedupe.js";
+import { WakeOutbox } from "./wake-outbox.js";
+import {
+  listWakeWatchers,
+  readTail,
+  WakeWatcherCache,
+} from "./wake-watchers.js";
+import { WakeWatcherLedger } from "./wake-ledger.js";
+import {
+  ancestorPids,
+  bindingConflict,
+  describeThread,
+  resolveWakeSession,
+} from "./wake-resolve.js";
 import { resolveThreadImage } from "./thread-image.js";
 import { readOpenCodeConfig, writeOpenCodeConfig } from "./opencode-config.js";
 import { ToolRegistry } from "../plugin/server-registry.js";
 import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
 import { TextFilesTool } from "../plugin/text-files/text-files.server.js";
+import { QuickCommandTool } from "../plugin/quick-command/quick-command.server.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -119,6 +141,10 @@ const token = cli.noToken
 const pairing =
   remote && !cli.noToken && !cli.token ? new Pairing(token) : undefined;
 const pairLimiter = pairing ? new PairRateLimiter() : undefined;
+/** 本机发现目录：url/token 供 deck-wake 读取，watch/ 下是 watcher 日志。 */
+const deckHome = path.resolve(
+  process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
+);
 if (remote && cli.noToken)
   process.stderr.write(
     "\n⚠ 安全警告：--no-token 已关闭鉴权。任何能访问该地址的人都可以操作 Codex、执行命令和修改文件。\n\n",
@@ -208,19 +234,91 @@ const tools = new ToolRegistry([
   new WebTerminalTool({ useWsl, processCwd: projectRoot }),
   new GitTool({ useWsl, processCwd: projectRoot }),
   new TextFilesTool({ useWsl, processCwd: projectRoot }),
+  new QuickCommandTool({
+    useWsl,
+    processCwd: projectRoot,
+    file: path.join(dataDir, "quick-commands.json"),
+  }),
 ]);
 const activity = new ActivityTracker();
 const cpuSampler = new CpuSampler();
+// 唤醒发件箱：POST /api/wake/:code 落盘即 202，送达由它在后台重试到成；
+// 持久化在 .data/wake-outbox.json，Deck 重启不丢。
+const wakeOutbox = new WakeOutbox({
+  file: path.join(dataDir, "wake-outbox.json"),
+  resolve: (code) => threadSettings.findByWakeCode(code),
+  send: (agentId, threadId, prompt) =>
+    agents.sendTurn(agentId, threadId, prompt),
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await wakeOutbox.load();
+const messageDeliveries = new MessageDeliveryQueue({
+  file: path.join(dataDir, "message-deliveries.json"),
+  agents,
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await messageDeliveries.load();
+// watcher 列表走 TTL 缓存：/proc 全量扫描不进每次快照构建，接口轮询、
+// 快照与启动预热共用同一份结果；内容变化时补发快照，让首页和会话页
+// 的 deck-wake 状态即时更新。
+// 台账记住见过的 watcher：进程消失却没留下「已唤醒/已停止」的记为失联，
+// 进首页「需要处理」。Deck 停机期间消失的也能在重启后发现。
+const watcherLedger = new WakeWatcherLedger({
+  file: path.join(dataDir, "wake-watchers.json"),
+  readLog: (file) => readTail(file).catch(() => undefined),
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await watcherLedger.load();
+const watcherCache = new WakeWatcherCache(
+  async () => {
+    const items = (await listWakeWatchers(path.join(deckHome, "watch"))).map(
+      (watcher) => ({
+        ...watcher,
+        ...threadSettings.findByWakeCode(watcher.code),
+      }),
+    );
+    // 只有完整扫描成功才对账（扫描失败会抛错，不会走到这里）。
+    await watcherLedger.observe(items);
+    return items;
+  },
+  { onChange: () => broadcastSnapshotSoon() },
+);
+// 没人打开页面时也要按时对账，失联不能等到下次有人看首页才发现。
+setInterval(() => void watcherCache.current(), 60_000).unref();
+/** 设置「关于」页用的静态信息：随快照下发，几十字节，不另开接口。 */
+const serverInfo = {
+  version: (() => {
+    try {
+      return String(
+        JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"))
+          .version || "",
+      );
+    } catch {
+      return "";
+    }
+  })(),
+  node: process.version,
+  platform: process.platform,
+  wsl: useWsl,
+  startedAt: Date.now(),
+  dataDir,
+};
 const fullSnapshot = () => ({
   ...agents.snapshot(),
+  server: { ...serverInfo, ccSwitch: store.ccSwitchPath || null },
   activities: activity.list(),
   projects: projects.list(),
   preferences: projects.getPreferences(),
+  wakeDeliveries: wakeOutbox.list(),
+  messageDeliveries: messageDeliveries.list(),
+  wakeCodes: threadSettings.listWakeCodes(),
+  wakeWatchers: watcherCache.current(),
+  wakeLost: watcherLedger.lost(),
+  // 工具列表是静态的几条描述：随快照下发 + 前端缓存，工具页（桌面端是新标签页）
+  // 打开即有侧栏和标题，不必再等一次 GET /tools。
+  tools: tools.list(),
 });
 const app = express();
-const wakeDeduper = new WakeDeduper<
-  Awaited<ReturnType<AgentRegistry["sendTurn"]>>
->();
 // 快照/线程全文动辄数 MB，手机弱网下 gzip 是最便宜的收益：只压文本类，
 // 图片走 blob/octet-stream 不会被压缩中间件重复处理。
 app.use(
@@ -354,7 +452,183 @@ app.get(
 );
 app.get(
   "/api/monitor/host",
-  route(async () => hostStats(cpuSampler, wss.clients.size)),
+  route(async () =>
+    hostStats(cpuSampler, wss.clients.size, agents.runtimePids()),
+  ),
+);
+// 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒代号，会与 /api/wake/:code 冲突。
+// 返回缓存结果：客户端轮询顺带驱动过期重扫，变化经快照广播下发。
+app.get(
+  "/api/monitor/watchers",
+  route(async () => ({ items: await watcherCache.ready() })),
+);
+const wakePrepareSchema = z.object({
+  code: z.string().max(40).nullable().optional(),
+  pid: z.number().int().positive().optional(),
+  cwd: z.string().max(4096).optional(),
+  session: z.string().max(300).optional(),
+  codexThread: z.string().max(200).optional(),
+  command: z.string().max(100_000).optional(),
+  force: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
+const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
+  const thread = tryThreadSummary(target.agentId, target.threadId);
+  return `「${thread?.name || target.threadId}」（${target.agentId}）`;
+};
+/**
+ * deck-wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
+ * 代号（不往会话里发任何消息）；给了代号则核对它确实属于发起命令的会话；
+ * 同代号同命令的 watcher 已在跑时拒绝重复挂载。dryRun 只查不改（whoami）。
+ */
+app.post(
+  "/api/monitor/watchers/prepare",
+  route(async (req) => {
+    const input = wakePrepareSchema.parse(req.body || {});
+    const resolution = resolveWakeSession(
+      {
+        session: input.session || undefined,
+        codexThread: input.codexThread || undefined,
+        ancestors: input.pid ? await ancestorPids(input.pid) : [],
+        cwd: input.cwd,
+      },
+      { threads: agents.snapshot().threads, runtimePids: agents.runtimePids() },
+    );
+    let target: { agentId: AgentId; threadId: string };
+    let code: string | null;
+    let via: string;
+    let created = false;
+    if (input.code) {
+      const bound = threadSettings.findByWakeCode(input.code);
+      if (!bound)
+        throw new Error(
+          `代号 ${input.code} 不存在；省略代号即可由 Deck 识别当前会话`,
+        );
+      const conflict = bindingConflict(bound, resolution);
+      if (conflict && !input.force) {
+        const actual = Array.isArray(conflict)
+          ? `来自 ${conflict.join("/")} 的会话`
+          : `来自会话${sessionLabel({ agentId: (conflict.agentId || "codex") as AgentId, threadId: conflict.id })}`;
+        throw new Error(
+          `代号 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略代号即可挂到当前会话；确实要唤醒别的会话请加 -f`,
+        );
+      }
+      target = bound;
+      code = input.code;
+      via = conflict ? "显式代号（-f 强制）" : "显式代号";
+    } else {
+      if (!resolution.ok) {
+        const candidates = resolution.candidates
+          .map((thread) => describeThread(thread))
+          .join("；");
+        throw new Error(
+          `${resolution.error}。请向用户确认唤醒代号后用 deck-wake watch <代号> … 重试${candidates ? `。候选：${candidates}` : ""}`,
+        );
+      }
+      target = { agentId: resolution.agentId, threadId: resolution.threadId };
+      via = resolution.via;
+      const existing =
+        threadSettings.get(target.agentId, target.threadId)?.wakeCode ?? null;
+      if (input.dryRun) code = existing;
+      else {
+        code = await threadSettings.ensureWakeCode(
+          target.agentId,
+          target.threadId,
+        );
+        created = !existing;
+        if (created) broadcastSnapshotSoon();
+      }
+    }
+    let warning: string | undefined;
+    if (!input.dryRun && input.command) {
+      const same = (await watcherCache.ready()).filter(
+        (watcher) => watcher.command === input.command,
+      );
+      const duplicate = same.find((watcher) => watcher.code === code);
+      if (duplicate && !input.force)
+        throw new Error(
+          `代号 ${code} 下已有相同命令的 watcher 在运行（pid ${duplicate.pid}），不重复挂载；确需重复请加 -f`,
+        );
+      const other = same.find((watcher) => watcher.code !== code);
+      if (other)
+        warning = `代号 ${other.code} 也在用相同命令监督（pid ${other.pid}），确认没有挂错会话`;
+    }
+    const summary = input.dryRun
+      ? `当前会话${sessionLabel(target)}，代号 ${code ?? "尚未分配（首次挂 watcher 时自动分配）"}；依据：${via}`
+      : `已绑定会话${sessionLabel(target)}，代号 ${code}${created ? "（新分配）" : ""}；依据：${via}`;
+    return { code, summary, warning, ...target, via, created };
+  }),
+);
+// 只停经扫描确认的 deck-wake 进程；先记账为「主动停止」，消失时不报失联。
+app.post(
+  "/api/monitor/watchers/:pid/stop",
+  route(async (req) => {
+    const pid = Number(param(req.params.pid));
+    if (!Number.isInteger(pid) || pid <= 1) throw new Error("无效 pid");
+    watcherCache.invalidate();
+    const watcher = (await watcherCache.ready()).find(
+      (item) => item.pid === pid,
+    );
+    if (!watcher) throw new Error(`pid ${pid} 不是正在运行的 deck-wake watcher`);
+    watcherLedger.markStopping(watcher);
+    // watcher 由 setsid 拉起，是进程组组长：连同它等待的 ssh 一起停。
+    try {
+      process.kill(-pid, "SIGUSR1");
+    } catch {
+      process.kill(pid, "SIGUSR1");
+    }
+    setTimeout(() => {
+      watcherCache.invalidate();
+      void watcherCache.current();
+    }, 1_500).unref();
+    return { ok: true };
+  }),
+);
+// 失联 watcher：由人决定是否告诉会话（不自动注入）。
+app.post(
+  "/api/monitor/lost-watchers/:id/notify",
+  route(async (req) => {
+    const item = watcherLedger.find(param(req.params.id));
+    if (!item) throw new Error("失联记录不存在");
+    const target = threadSettings.findByWakeCode(item.code);
+    if (!target) throw new Error(`代号 ${item.code} 已解绑，无法通知会话`);
+    const prompt = [
+      `[wake:${item.code}] [${item.label}] watcher 已失联：${item.reason}。`,
+      `$ ${item.command}`,
+      item.log ? `日志 ${item.log}` : "",
+      "请检查远端任务现状，需要时重新挂 watcher。",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const delivery = await wakeOutbox.enqueue({
+      code: item.code,
+      prompt,
+      ...target,
+    });
+    await watcherLedger.dismiss(item.id);
+    return { delivery };
+  }),
+);
+app.delete(
+  "/api/monitor/lost-watchers/:id",
+  route(async (req) => {
+    await watcherLedger.dismiss(param(req.params.id));
+    return { ok: true };
+  }),
+);
+// 投递管理同样不放 /api/wake/* 下：`wake-deliveries` 是合法唤醒代号。
+app.post(
+  "/api/monitor/wake-deliveries/:id/retry",
+  route(async (req) => ({
+    item: await wakeOutbox.retry(param(req.params.id)),
+  })),
+);
+app.delete(
+  "/api/monitor/wake-deliveries/:id",
+  route(async (req) => {
+    await wakeOutbox.dismiss(param(req.params.id));
+    return { ok: true };
+  }),
 );
 app.post(
   "/api/session-search",
@@ -750,6 +1024,7 @@ app.post(
     );
   }),
 );
+registerMessageRoutes(app, agents, messageDeliveries);
 app.post(
   "/api/agents/:agentId/threads/:threadId/interrupt",
   route(async (req) => {
@@ -804,6 +1079,7 @@ app.post(
       })
       .parse(req.body || {});
     const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code);
+    broadcastSnapshotSoon();
     const wakePath = `/api/wake/${wakeCode}`;
     const localUrl = `${localBase}${wakePath}`;
     const result: {
@@ -842,6 +1118,7 @@ app.delete(
       agentId(req.params.agentId),
       param(req.params.threadId),
     );
+    broadcastSnapshotSoon();
     return { ok: true };
   }),
 );
@@ -871,7 +1148,7 @@ app.get(
 );
 app.post(
   "/api/wake/:code",
-  route(async (req) => {
+  route(async (req, res) => {
     const code = param(req.params.code);
     const target = threadSettings.findByWakeCode(code);
     if (!target) throw new Error(`wake code ${code} 不存在`);
@@ -886,10 +1163,10 @@ app.post(
       ? `[wake:${code}] ${detail}`
       : `[wake:${code}] 外部唤醒信号`;
     if (prompt.length > 100_000) throw new Error("wake 载荷过大");
-    const result = await wakeDeduper.run(code, prompt, () =>
-      agents.sendTurn(target.agentId, target.threadId, prompt),
-    );
-    return { code, ...target, result };
+    // 先落盘再应答：脚本只认 2xx，投递由 wakeOutbox 在后台重试到送达。
+    // 此刻进程崩了，重启后队列也会接着投。
+    const delivery = await wakeOutbox.enqueue({ code, prompt, ...target });
+    res.status(202).json({ code, ...target, delivery });
   }),
 );
 app.get(
@@ -1184,6 +1461,7 @@ app.put(
             "bypassPermissions",
           ])
           .optional(),
+        pinDefaults: z.boolean().optional(),
         recentDirs: z.array(z.string()).optional(),
       })
       .merge(connectionOverlaySchema)
@@ -1779,16 +2057,35 @@ try {
 }
 
 console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
+// 启动先暖一轮 watcher 缓存：首个快照与首个接口调用直接命中，不用等扫描。
+void watcherCache.ready();
 // 本机发现文件：deck-wake 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
 try {
-  const deckHome = path.resolve(
-    process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
-  );
   mkdirSync(deckHome, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(deckHome, "url"), `${localBase}\n`, { mode: 0o600 });
   writeFileSync(path.join(deckHome, "token"), `${token}\n`, { mode: 0o600 });
 } catch (error: any) {
   console.error("写入唤醒发现文件失败:", error?.message || error);
+}
+// 与本版服务端配套的 deck-wake 脚本装到 ~/.codex-deck/bin/：各项目里的
+// skill 拷贝会转发到这里，不再因为拷贝过期而与接口脱节。内容相同不重写，
+// 先写临时文件再改名，正在运行的 watcher 读到的始终是完整文件。
+try {
+  const source = readFileSync(
+    path.join(projectRoot, "skills/deck-wake/scripts/deck-wake"),
+    "utf8",
+  );
+  const installed = path.join(deckHome, "bin", "deck-wake");
+  const current = existsSync(installed) ? readFileSync(installed, "utf8") : "";
+  if (current !== source) {
+    mkdirSync(path.dirname(installed), { recursive: true, mode: 0o700 });
+    const temporary = `${installed}.${process.pid}.tmp`;
+    writeFileSync(temporary, source, { mode: 0o755 });
+    chmodSync(temporary, 0o755);
+    renameSync(temporary, installed);
+  }
+} catch (error: any) {
+  console.error("安装 deck-wake 脚本失败:", error?.message || error);
 }
 if (lanListener) {
   const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");
@@ -1868,9 +2165,11 @@ const shutdown = (signal: string) => {
   clearRuntimeLock(dataDir, process.pid);
   pairing?.stop();
   tunnel?.kill();
+  messageDeliveries.close();
   agents.stopAll();
   tools.close();
   sessionSearch.close();
+  wakeOutbox.close();
   // 硬退出兜底：5 秒后无论如何结束进程。
   const hardExit = setTimeout(() => process.exit(0), 5_000);
   void threadSummaries

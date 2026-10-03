@@ -1,4 +1,10 @@
-import { type ButtonHTMLAttributes, type ReactNode } from "react";
+import {
+  useId,
+  useRef,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from "react";
+import { ChevronRight } from "lucide-react";
 import * as RxSwitch from "@radix-ui/react-switch";
 import * as Tabs from "@radix-ui/react-tabs";
 
@@ -177,18 +183,28 @@ export function Section({
   title,
   desc,
   actions,
+  scope,
   children,
 }: {
   title: ReactNode;
   desc?: ReactNode;
   actions?: ReactNode;
-  children: ReactNode;
+  /** 作用范围标注：只标例外——「本设备」（存在浏览器里，换设备不跟随）。 */
+  scope?: "device";
+  children?: ReactNode;
 }) {
   return (
     <section className="ui-section">
       <header className="ui-section__head">
         <div className="ui-section__text">
-          <h3 className="ui-section__title">{title}</h3>
+          <h3 className="ui-section__title">
+            {title}
+            {scope === "device" ? (
+              <Badge title="保存在当前浏览器，换设备或换浏览器不会跟随">
+                本设备
+              </Badge>
+            ) : null}
+          </h3>
           {desc ? <p className="ui-section__desc">{desc}</p> : null}
         </div>
         {actions ? <div className="ui-section__actions">{actions}</div> : null}
@@ -223,7 +239,16 @@ export function Row({
   side,
   dim,
   stack,
+  onOpen,
+  openLabel,
 }: {
+  /**
+   * 点进下一级（如 Agent 详情）：标题区变成按钮，行尾加箭头。右侧控件
+   * 仍各自独立可点，不嵌套在按钮里。
+   */
+  onOpen?: () => void;
+  /** onOpen 按钮的读屏名称，缺省用 title。 */
+  openLabel?: string;
   /** 前导小方块里的文字（如供应商首字母）。 */
   lead?: string;
   leadColor?: string;
@@ -241,8 +266,36 @@ export function Row({
   /** 窄屏时把右侧控件折到下一行（右侧含输入框时用）。 */
   stack?: boolean;
 }) {
+  const body = (
+    <>
+      <div className="ui-row__title">
+        {dot ? <Dot tone={dot} /> : null}
+        {title}
+        {badges}
+      </div>
+      {desc ? (
+        <span
+          className={cx(
+            "ui-row__desc",
+            descTone === "danger" && "is-danger",
+            descTone === "faint" && "is-faint",
+          )}
+          title={descTitle}
+        >
+          {desc}
+        </span>
+      ) : null}
+    </>
+  );
   return (
-    <div className={cx("ui-row", dim && "is-dim", stack && "ui-row--stack")}>
+    <div
+      className={cx(
+        "ui-row",
+        dim && "is-dim",
+        stack && "ui-row--stack",
+        onOpen && "ui-row--link",
+      )}
+    >
       {lead ? (
         <span
           className="ui-row__lead"
@@ -252,39 +305,132 @@ export function Row({
           {lead}
         </span>
       ) : null}
-      <div className="ui-row__main">
-        <div className="ui-row__title">
-          {dot ? <Dot tone={dot} /> : null}
-          {title}
-          {badges}
-        </div>
-        {desc ? (
-          <p
-            className={cx(
-              "ui-row__desc",
-              descTone === "danger" && "is-danger",
-              descTone === "faint" && "is-faint",
-            )}
-            title={descTitle}
-          >
-            {desc}
-          </p>
-        ) : null}
-      </div>
+      {onOpen ? (
+        <button
+          type="button"
+          className="ui-row__main ui-row__open"
+          aria-label={openLabel}
+          onClick={onOpen}
+        >
+          {body}
+        </button>
+      ) : (
+        <div className="ui-row__main">{body}</div>
+      )}
       {side ? <div className="ui-row__side">{side}</div> : null}
+      {onOpen ? (
+        <ChevronRight className="ui-row__chevron" aria-hidden="true" />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * 单选分段控件（role=radiogroup）：用于「二选一 / 三选一」的设置值。
+ * 与 Seg（标签页）外观相同，语义不同——Seg 切换面板，Choice 改一个值。
+ * 方向键在选项间移动并选中（roving tabindex）。
+ */
+export function Choice<T extends string>({
+  items,
+  value,
+  onChange,
+  label,
+  disabled,
+}: {
+  items: { value: T; label: ReactNode; title?: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  /** 读屏名称，如「主题」。 */
+  label: string;
+  disabled?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const index = Math.max(
+    0,
+    items.findIndex((item) => item.value === value),
+  );
+  const move = (offset: number) => {
+    const next = items[(index + offset + items.length) % items.length];
+    onChange(next.value);
+    // 选中后焦点跟到新项上：下一帧它才拿到 tabIndex=0。
+    requestAnimationFrame(() =>
+      ref.current
+        ?.querySelector<HTMLButtonElement>(`[data-value="${next.value}"]`)
+        ?.focus(),
+    );
+  };
+  return (
+    <div
+      ref={ref}
+      className="ui-seg ui-choice"
+      role="radiogroup"
+      aria-label={label}
+      aria-disabled={disabled || undefined}
+      onKeyDown={(event) => {
+        if (disabled) return;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+          event.preventDefault();
+          move(1);
+        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          event.preventDefault();
+          move(-1);
+        }
+      }}
+    >
+      {items.map((item, itemIndex) => {
+        const checked = itemIndex === index;
+        return (
+          <button
+            key={item.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            data-value={item.value}
+            tabIndex={checked ? 0 : -1}
+            title={item.title}
+            disabled={disabled}
+            className={cx("ui-seg__item", checked && "is-active")}
+            onClick={() => onChange(item.value)}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 键帽：快捷键说明里的一个键。 */
+export function Kbd({ children }: { children: ReactNode }) {
+  return <kbd className="ui-kbd">{children}</kbd>;
 }
 
 export function Field({
   label,
   hint,
+  group,
   children,
 }: {
   label: ReactNode;
   hint?: ReactNode;
+  /**
+   * 控件是一组按钮（Choice 等）时用 div 而不是 label：label 会把点击
+   * 转发给第一个按钮，点标签文字就会误改值。
+   */
+  group?: boolean;
   children: ReactNode;
 }) {
+  const id = useId();
+  if (group)
+    return (
+      <div className="ui-field" role="group" aria-labelledby={id}>
+        <span className="ui-field__label" id={id}>
+          {label}
+        </span>
+        {children}
+        {hint ? <span className="ui-field__hint">{hint}</span> : null}
+      </div>
+    );
   return (
     <label className="ui-field">
       <span className="ui-field__label">{label}</span>

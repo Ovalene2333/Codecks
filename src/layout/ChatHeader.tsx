@@ -3,9 +3,16 @@ import {
   ArrowRightLeft,
   Minimize2,
   MoreHorizontal,
+  Radar,
   SunMoon,
 } from "lucide-react";
-import type { AgentProfile, Provider, ThreadSummary } from "../types";
+import type {
+  AgentProfile,
+  Provider,
+  ThreadSummary,
+  LostWakeWatcher,
+  WakeWatcher,
+} from "../types";
 import { Status } from "../ui";
 import { basename, formatTokens } from "../format";
 import { ContextBar } from "../usage/ContextBar";
@@ -23,22 +30,27 @@ export function ChatHeader({
   agentName,
   pendingCount,
   locked,
+  wake,
   onBack,
   onMenu,
   onAppearance,
   onSwitchProvider,
   onCompact,
+  onWake,
 }: {
   thread: ThreadSummary;
   provider?: Provider | AgentProfile;
   agentName: string;
   pendingCount: number;
   locked?: boolean;
+  /** deck-wake 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
+  wake?: { code?: string; watcher?: WakeWatcher; lost?: LostWakeWatcher[] };
   onBack: () => void;
   onMenu: () => void;
   onAppearance: () => void;
   onSwitchProvider: () => void;
   onCompact?: () => void;
+  onWake?: () => void;
 }) {
   const contextLabel =
     thread.tokenUsage?.used != null && thread.tokenUsage.limit != null
@@ -152,6 +164,25 @@ export function ChatHeader({
                 {provider?.name ||
                   (thread.agentId === "claude" ? "Claude 中转" : "供应商")}
               </span>
+            </button>
+          )}
+          {onWake && (
+            <button
+              type="button"
+              className={`icon-btn wake-toggle${wake?.lost?.length ? " lost" : wake?.watcher ? " watching" : wake?.code ? " on" : ""}`}
+              onClick={onWake}
+              title={
+                wake?.lost?.length
+                  ? `deck-wake watcher 失联：${wake.lost[0].label}（点开处理）`
+                  : wake?.watcher
+                  ? `deck-wake 监督中：${wake.watcher.label} · 代号 ${wake.watcher.code}`
+                  : wake?.code
+                    ? `远程唤醒已开启 · 代号 ${wake.code}（本机暂无 watcher）`
+                    : "远程唤醒未开启"
+              }
+              aria-label="远程唤醒"
+            >
+              <Radar />
             </button>
           )}
           <button

@@ -55,10 +55,7 @@ test("OpenCode question cards render native options with descriptions", () => {
         id: "que_1",
         header: "实现方案",
         prompt: "用哪种持久化？",
-        options: [
-          { label: "SQLite" },
-          { label: "JSON 文件" },
-        ],
+        options: [{ label: "SQLite" }, { label: "JSON 文件" }],
       },
     ],
   } as Approval);
@@ -103,8 +100,9 @@ test("ACP permission cards render the agent's own options", () => {
     },
   } as Approval);
 
-  // devin 的每一档都原样渲染，不退化成 拒绝/允许一次/本会话允许 三键。
-  assert.match(html, /option-list/);
+  // devin 的每一档保留原名；较宽的授权范围放进可展开的选项区。
+  assert.match(html, /approval-more-options/);
+  assert.match(html, /aria-label="更多授权选项"/);
   assert.match(html, /Allow/);
   assert.match(html, /this session/);
   assert.match(html, /all projects/);
@@ -126,6 +124,34 @@ test("non-ACP approvals keep the decision buttons", () => {
   assert.doesNotMatch(html, /option-list/);
 });
 
+test("session-wide ACP permission requires choosing its scope", () => {
+  const html = render({
+    id: "acp-session-only",
+    agentId: "devin",
+    providerId: "p",
+    kind: "command",
+    request: {
+      method: "session/request_permission",
+      params: {
+        options: [
+          {
+            optionId: "session",
+            name: "Allow for this session",
+            kind: "allow_always",
+          },
+          { optionId: "reject", name: "Reject", kind: "reject_once" },
+        ],
+      },
+    },
+  } as Approval);
+  assert.match(html, /<fieldset[^>]*hidden=""/);
+  assert.match(html, /Allow for this session/);
+  assert.doesNotMatch(
+    html,
+    /<button[^>]*class="approve"[^>]*>Allow for this session/,
+  );
+});
+
 test("Claude question cards include all four questions and multi-select guidance", () => {
   const html = render({
     id: "claude-question",
@@ -143,4 +169,21 @@ test("Claude question cards include all four questions and multi-select guidance
   assert.match(html, /Question 4\?/);
   assert.match(html, /可多选/);
   assert.equal((html.match(/class="question-card"/g) || []).length, 4);
+});
+
+test("question approval keeps every supplied question and shows progress", () => {
+  const html = render({
+    id: "many-questions",
+    agentId: "claude",
+    providerId: "claude-local",
+    kind: "question",
+    request: { method: "item/requestUserInput", params: {} },
+    questions: Array.from({ length: 5 }, (_, index) => ({
+      id: `q-${index}`,
+      header: `问题 ${index + 1}`,
+      options: [{ label: "同意" }],
+    })),
+  } as Approval);
+  assert.match(html, /已完成 0\/5/);
+  assert.equal((html.match(/class="question-card"/g) || []).length, 5);
 });

@@ -798,6 +798,58 @@ test("OpenCode compaction renders one marker and waits for a new reply before re
   assert.equal((await adapter.readThread("p", "s1") as any).tokenUsage.used, 12_000);
 });
 
+test("OpenCode history keeps synthetic parts out of the user bubble", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [
+              { id: "p1", type: "text", text: "真实提问" },
+              {
+                id: "p2",
+                type: "text",
+                text: "继续，如果还有下一步",
+                synthetic: true,
+              },
+            ],
+          },
+          {
+            info: { id: "m2", role: "user", time: { created: 2 } },
+            parts: [
+              {
+                id: "p3",
+                type: "text",
+                text: "整理一下摘要",
+                synthetic: true,
+              },
+            ],
+          },
+          {
+            info: { id: "m3", role: "assistant" },
+            parts: [{ id: "p4", type: "text", text: "回复" }],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const loaded: any = await adapter.readThread("p", "s1");
+  const texts = loaded.turns.flatMap((turn: any) =>
+    turn.items.flatMap((item: any) =>
+      item.type === "userMessage"
+        ? item.content.map((part: any) => part.text)
+        : [],
+    ),
+  );
+  assert.deepEqual(texts, ["真实提问"]);
+});
+
 test("OpenCode history stamps each turn with the model that answered it", async () => {
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url) => {
@@ -1720,6 +1772,49 @@ test("OpenCode compact resolves the model and clears the compacting flag", async
   await assert.rejects(adapter.compactSession("p", "s1"), /任务结束后/);
 });
 
+test("OpenCode compact clears compacting on the live object when events swap it mid-request", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/summarize") && init?.method === "POST") {
+        // summarize 期间 OpenCode 会推 session.updated，mergeThread 生成新
+        // 对象并把 compacting 拷过去；清理写在旧引用上会让标记永久残留。
+        (adapter as any).onEvent({
+          type: "session.updated",
+          properties: {
+            info: {
+              id: "s1",
+              directory: "/work",
+              title: "s1",
+              time: { updated: 2 },
+            },
+          },
+        });
+        return Response.json(true);
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).configDefault = { providerID: "openai", modelID: "gpt-5" };
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  await adapter.compactSession("p", "s1");
+  const thread: any = adapter.listThreads()[0];
+  assert.equal(thread.compacting, undefined);
+  assert.equal(thread.status, "idle");
+});
+
 test("OpenCode revert targets the last user message and reports the file summary", async () => {
   const posts: Array<{ url: string; body?: string }> = [];
   const adapter = new OpenCodeAdapter({
@@ -2147,6 +2242,39 @@ test("OpenCode session.error finishes the turn and removes its pending approval"
   assert.equal(adapter.listThreads()[0].status, "error");
   assert.deepEqual(events.at(-1)?.data?.params?.turn, {
     id: "turn-1", status: "failed", error: { message: "stopped" },
+  });
+});
+
+test("OpenCode session.error 的 abort 按中断处理，不算失败", () => {
+  const adapter = new OpenCodeAdapter({ idleGraceMs: 0 });
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default",
+    status: "running", activeTurnId: "turn-1", updatedAt: 1,
+  });
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  (adapter as any).onEvent({
+    type: "permission.asked",
+    properties: {
+      id: "per_1", sessionID: "s1", permission: "bash",
+      patterns: ["mkdir ~/learn"], metadata: {}, always: [],
+    },
+  });
+  (adapter as any).onEvent({
+    type: "session.error",
+    properties: {
+      sessionID: "s1",
+      error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+    },
+  });
+  const thread = adapter.listThreads()[0];
+  assert.equal(thread.status, "idle");
+  assert.equal(thread.activeTurnId, undefined);
+  assert.equal(thread.lastError, undefined);
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  assert.deepEqual(events.at(-1)?.data?.params?.turn, {
+    id: "turn-1", status: "interrupted",
   });
 });
 

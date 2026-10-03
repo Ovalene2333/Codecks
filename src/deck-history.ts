@@ -1,10 +1,12 @@
 /**
  * Deck 顶层导航模型：URL 是唯一真源。
  *
- *   /              工作区（列表 / 平铺舞台）
+ *   /              总览首页（待你处理 / 新回复 / 运行中 / 最近会话）
  *   /session/<key> 会话视图（移动端整屏覆盖，桌面端为右栏）
- *   /monitor       监控台（会话实时状态总览）
+ *   /sessions      会话列表（移动端底栏「会话」页；桌面端侧栏常驻，等同首页）
  *   /<toolId>      工具页（terminal、git、text-files…）
+ *
+ * /monitor 是总览并入首页前的旧地址，启动时归一化为 /。
  *
  * history.state 记录条目归属（__codexDeck）、页面种类、会话视图、
  * 页面级导航深度 depth、以及弹层占位标记 overlay。
@@ -15,7 +17,7 @@
  */
 
 export type DeckPage = "workspace" | "tools";
-export type DeckView = "workspace" | "session" | "monitor";
+export type DeckView = "workspace" | "session" | "sessions";
 
 export type DeckHistoryState = {
   __codexDeck?: true;
@@ -33,7 +35,13 @@ export type DeckRoute = {
 };
 
 const SESSION_PREFIX = "/session/";
-export const MONITOR_PATH = "/monitor";
+export const SESSIONS_PATH = "/sessions";
+const LEGACY_HOME_PATHS = new Set(["/monitor"]);
+
+/** 旧地址归一化（工具页别名另由 toolPath 处理）。 */
+export function canonicalDeckPath(pathname: string): string {
+  return LEGACY_HOME_PATHS.has(pathname) ? "/" : pathname;
+}
 
 export function sessionKeyFromPath(pathname: string): string | undefined {
   if (!pathname.startsWith(SESSION_PREFIX)) return undefined;
@@ -56,8 +64,7 @@ export function routeForPath(
 ): DeckRoute {
   const session = sessionKeyFromPath(pathname);
   if (session) return { page: "workspace", view: "session", session };
-  if (pathname === MONITOR_PATH)
-    return { page: "workspace", view: "monitor" };
+  if (pathname === SESSIONS_PATH) return { page: "workspace", view: "sessions" };
   return {
     page: isToolPath(pathname) ? "tools" : "workspace",
     view: "workspace",

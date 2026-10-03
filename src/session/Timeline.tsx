@@ -1,10 +1,13 @@
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Folder, GitBranch, LoaderCircle } from "lucide-react";
-import type { ThreadSummary } from "../types";
+import type { ThreadSummary, MessageDelivery } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { TurnBlock } from "./TurnBlock";
+import { MessageQueue } from "./MessageQueue";
 import { basename } from "../format";
 import type { PendingUserMessage } from "./optimistic";
+import { reconcileTimelineMessages } from "./timeline-messages";
+import type { LoadedUserMessage } from "./user-message-reconcile";
 import type {
   StreamedAgentMessage,
   StreamedEntry,
@@ -16,6 +19,7 @@ const QUICK_PROMPTS = [
   { label: "代码结构", text: "帮我梳理一下代码结构" },
   { label: "Git 改动", text: "检查当前 git 状态和最近的改动" },
 ];
+const EMPTY_DELIVERIES: MessageDelivery[] = [];
 
 export function Timeline({
   thread,
@@ -23,7 +27,13 @@ export function Timeline({
   streamed,
   streamedItems,
   streamedEntries,
-  pendingUsers,
+  pendingUsers: pendingMessages,
+  messageDeliveries: deliveryRecords = EMPTY_DELIVERIES,
+  deliveryHistoryBefore,
+  onDeliveryCancel,
+  onDeliveryRetry,
+  onDeliveryFeedback,
+  feedbackInterrupts,
   origin,
   targetTurnId,
   targetItemId,
@@ -44,6 +54,12 @@ export function Timeline({
   streamedItems: StreamedTurnItem[];
   streamedEntries: StreamedEntry[];
   pendingUsers: PendingUserMessage[];
+  messageDeliveries?: MessageDelivery[];
+  deliveryHistoryBefore?: ReadonlyMap<string, LoadedUserMessage[]>;
+  onDeliveryCancel?: (id: string) => Promise<void>;
+  onDeliveryRetry?: (id: string) => Promise<void>;
+  onDeliveryFeedback?: (id: string) => Promise<void>;
+  feedbackInterrupts?: boolean;
   origin?: { name: string; turnLabel?: string; archived?: boolean };
   targetTurnId?: string;
   targetItemId?: string;
@@ -58,6 +74,27 @@ export function Timeline({
   onQuickPrompt?: (text: string) => void;
   messageActionsDisabled?: boolean;
 }) {
+  const pendingDeliveryIds = useRef(new Set<string>());
+  const reconciled = useMemo(() => reconcileTimelineMessages(
+    thread, turns, streamedItems, pendingMessages, deliveryRecords, deliveryHistoryBefore,
+    pendingDeliveryIds.current,
+  ), [thread, turns, streamedItems, pendingMessages, deliveryRecords, deliveryHistoryBefore]);
+  const syncedDeliveryIds = useRef(new Set<string>());
+  const pendingUsers = reconciled.pendingUsers;
+  const messageDeliveries = useMemo(() => reconciled.messageDeliveries.filter(
+    (item) => !syncedDeliveryIds.current.has(item.id),
+  ), [reconciled.messageDeliveries]);
+  useEffect(() => {
+    const visibleIds = new Set(reconciled.messageDeliveries.map((item) => item.id));
+    // 正文已接管的气泡不因回退/编辑历史再次出现在底部。
+    for (const item of deliveryRecords) {
+      if (item.agentId !== (thread.agentId || "codex") || item.threadId !== thread.id) continue;
+      if (["queued", "interrupting", "sending"].includes(item.status)) pendingDeliveryIds.current.add(item.id);
+      if (item.status === "delivered" && !visibleIds.has(item.id) &&
+        (pendingDeliveryIds.current.has(item.id) || deliveryHistoryBefore?.has(item.id) ||
+          (item.turnId && item.turnId === thread.activeTurnId))) syncedDeliveryIds.current.add(item.id);
+    }
+  }, [reconciled, deliveryRecords, deliveryHistoryBefore, thread.agentId, thread.id, thread.activeTurnId]);
   const timeline = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
   const scrollTop = useRef(0);
@@ -152,6 +189,7 @@ export function Timeline({
     streamed,
     streamedItems,
     pendingUsers,
+    messageDeliveries,
     targetTurnId,
     targetItemId,
     targetRequest,
@@ -181,7 +219,7 @@ export function Timeline({
       turn?.status === "running",
   );
   const hasActiveTurn = activeTurnIndex >= 0;
-  const isEmpty = !turns.length && !pendingUsers.length && !streamed.length;
+  const isEmpty = !turns.length && !pendingUsers.length && !streamed.length && !messageDeliveries.length;
   // 只在首次加载落定后展示 hero，避免缓存/请求在途时空态闪现后被内容替换。
   const showEmpty = isEmpty && targetFallbackReady === true;
   return (
@@ -321,6 +359,13 @@ export function Timeline({
               messageActionsDisabled={messageActionsDisabled}
             />
           )}
+        <MessageQueue
+          items={messageDeliveries}
+          onCancel={onDeliveryCancel}
+          onRetry={onDeliveryRetry}
+          onFeedback={onDeliveryFeedback}
+          feedbackInterrupts={feedbackInterrupts}
+        />
       </div>
     </div>
   );

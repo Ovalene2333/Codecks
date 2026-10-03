@@ -7,7 +7,7 @@ import {
   FileText,
   Gauge,
   GitBranch,
-  Monitor,
+  House,
   Plus,
   RefreshCw,
   Search,
@@ -15,14 +15,17 @@ import {
   Terminal,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import deckLogo from "../assets/logo.svg";
 import type { DeckNotificationPermission } from "../notifications";
+import { useDeckSettings } from "../deck-settings";
 import type { ProjectGroup } from "../projects";
 import type {
   Provider,
   RuntimeSnapshot,
   SessionSearchMatch,
+  SessionWakeState,
   ThreadSummary,
 } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
@@ -42,6 +45,7 @@ export function Sidebar({
   statusFilter,
   counts,
   projects,
+  wakeStates,
   selected,
   unseenSessions,
   expandedProjects,
@@ -61,8 +65,8 @@ export function Sidebar({
   onLibrary,
   onQuery,
   onStatusFilter,
-  monitorOpen,
-  onToggleMonitor,
+  homeActive,
+  onHome,
   onToggleProject,
   onSelect,
   onAddInProject,
@@ -90,6 +94,8 @@ export function Sidebar({
   statusFilter: "all" | "active" | "attention" | "unseen";
   counts: { running: number; waiting: number; errors: number; unseen: number };
   projects: ProjectGroup[];
+  /** 会话的 deck-wake 标记（键为 sessionKey）。 */
+  wakeStates?: ReadonlyMap<string, SessionWakeState>;
   selected?: string;
   unseenSessions: ReadonlySet<string>;
   expandedProjects: Set<string>;
@@ -109,8 +115,9 @@ export function Sidebar({
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
   onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
-  monitorOpen: boolean;
-  onToggleMonitor: () => void;
+  /** 当前停在总览首页（没有打开会话）。 */
+  homeActive: boolean;
+  onHome: () => void;
   onToggleProject: (key: string) => void;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
@@ -128,6 +135,7 @@ export function Sidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const { hiddenTools } = useDeckSettings();
   const searching = Boolean(query.trim());
   const emptyKind = searching
     ? "search"
@@ -169,7 +177,10 @@ export function Sidebar({
     if (!toolsOpen) return;
     const close = (event: PointerEvent | KeyboardEvent) => {
       if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") setToolsOpen(false);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setToolsOpen(false);
+        }
         return;
       }
       if (!toolsMenuRef.current?.contains(event.target as Node)) {
@@ -248,13 +259,13 @@ export function Sidebar({
         </button>
         <button
           type="button"
-          className={`icon-btn monitor-entry ${monitorOpen ? "active" : ""}`}
-          onClick={onToggleMonitor}
-          title={monitorOpen ? "返回对话" : "打开监控台"}
-          aria-label={monitorOpen ? "关闭监控台" : "打开监控台"}
-          aria-pressed={monitorOpen}
+          className={`icon-btn monitor-entry ${homeActive ? "active" : ""}`}
+          onClick={onHome}
+          title="总览"
+          aria-label="回到总览"
+          aria-current={homeActive ? "page" : undefined}
         >
-          <Monitor />
+          <House />
         </button>
       </div>
       <div className="sidebar-meta">
@@ -332,6 +343,7 @@ export function Sidebar({
             library={library}
             selected={selected}
             unseenSessions={unseenSessions}
+            wakeStates={wakeStates}
             collapsed={!searching && !expandedProjects.has(project.key)}
             forkCounts={forkCounts}
             searchQuery={query}
@@ -376,7 +388,7 @@ export function Sidebar({
                 ? "没有匹配的会话"
                 : emptyKind === "archived"
                   ? "归档箱是空的"
-                  : "还没有现有会话"}
+                  : "暂无会话"}
             </p>
             <small>
               {emptyKind === "search"
@@ -427,48 +439,70 @@ export function Sidebar({
                   <b>工具</b>
                   <small>工作区与账号</small>
                 </div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onTools();
-                  }}
-                >
-                  <Terminal />
-                  <span>
-                    <b>终端</b>
-                    <small>打开 Web Terminal</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onTools("/git");
-                  }}
-                >
-                  <GitBranch />
-                  <span>
-                    <b>Git 管理</b>
-                    <small>改动、提交与分支</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onTools("/text-editor");
-                  }}
-                >
-                  <FileText />
-                  <span>
-                    <b>文本编辑器</b>
-                    <small>查看与编辑宿主机文件</small>
-                  </span>
-                </button>
+                {!hiddenTools.includes("terminal") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools();
+                    }}
+                  >
+                    <Terminal />
+                    <span>
+                      <b>终端</b>
+                      <small>打开 Web Terminal</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("git") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/git");
+                    }}
+                  >
+                    <GitBranch />
+                    <span>
+                      <b>Git 管理</b>
+                      <small>改动、提交与分支</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("text-editor") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/text-editor");
+                    }}
+                  >
+                    <FileText />
+                    <span>
+                      <b>文本编辑器</b>
+                      <small>查看与编辑宿主机文件</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("commands") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/commands");
+                    }}
+                  >
+                    <Zap />
+                    <span>
+                      <b>快捷指令</b>
+                      <small>一键执行常用命令</small>
+                    </span>
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -493,8 +527,8 @@ export function Sidebar({
                 >
                   <Gauge />
                   <span>
-                    <b>账号额度</b>
-                    <small>Official 额度状态</small>
+                    <b>Codex 额度</b>
+                    <small>Official 账号额度状态</small>
                   </span>
                 </button>
                 {notificationPermission !== "unsupported" ? (

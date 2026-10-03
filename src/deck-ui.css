@@ -320,8 +320,9 @@
 
 .sidebar-footer .usage-chip-track {
   order: 2;
-  flex: 0 0 64px;
-  min-width: 0;
+  flex: 1;
+  min-width: 40px;
+  height: 4px;
 }
 
 .usage-chip-track b {
@@ -343,8 +344,8 @@
   order: 3;
   flex: none;
   min-width: 0;
-  margin-left: auto;
   text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-footer > .usage-chip .usage-chip-label {
@@ -538,6 +539,36 @@
 .chat-header-actions .icon-btn:hover:not(:disabled) {
   border-color: var(--control-border);
   background: var(--control-hover);
+}
+
+/* deck-wake 入口：灰=未开启，亮色=已有唤醒代号，右上角绿点=本机 watcher 监督中。 */
+.chat-header-actions .wake-toggle {
+  position: relative;
+  color: var(--text-faint);
+}
+.chat-header-actions .wake-toggle.on,
+.chat-header-actions .wake-toggle.watching {
+  color: var(--accent);
+}
+/* 失联：红色图标 + 红点，提示远端任务已经没人盯了。 */
+.chat-header-actions .wake-toggle.lost {
+  color: var(--danger);
+}
+.chat-header-actions .wake-toggle.lost::after,
+.chat-header-actions .wake-toggle.watching::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--ok) 60%, transparent);
+}
+.chat-header-actions .wake-toggle.lost::after {
+  background: var(--danger);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--danger) 60%, transparent);
 }
 
 .desktop-context {

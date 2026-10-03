@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
 import type {
@@ -20,6 +21,8 @@ import type {
 } from "./types.js";
 
 const OPENCODE_CAPABILITIES: AgentCapabilities = {
+  // prompt_async 的 204 只确认受理，不保证它追加到当前回合还是后续执行。
+  messages: { busyBehavior: "unknown", interruptScope: "session" },
   approvals: true,
   // Deck 侧软归档：OpenCode serve 没有原生归档接口，归档态由 Deck
   // 持久化（thread-settings `archived`），服务端会话原样保留。
@@ -300,6 +303,8 @@ const REQUEST_POST_TIMEOUT_MS = 60_000;
 /** 重试次数（不含首次）：GET 最多 3 次，非幂等写操作只发 1 次，绝不重发。 */
 const REQUEST_RETRIES = 2;
 const REQUEST_RETRY_DELAYS_MS = [300, 800];
+/** 读会话正文时最多为项目模型目录多等多久；目录本身最长要 5 秒。 */
+const CATALOG_WAIT_MS = 400;
 
 /**
  * 瞬时网络失败：回环 ECONNRESET/keep-alive 竞态、OpenCode 繁忙瞬间、
@@ -324,6 +329,23 @@ function isTransientRequestError(error: unknown) {
 
 function profileId(session: OpenCodeSession) {
   return `opencode:${session.directory || "current"}`;
+}
+
+/**
+ * 用户手动停止（/session/:id/abort）时 OpenCode 经 session.error 上报
+ * MessageAbortedError（部分版本叫 AbortedError），文案只有 "Aborted"。
+ * 这是预期内的中断而非任务失败，不应走错误态/横幅。
+ */
+function isAbortError(error: any) {
+  if (/abort/i.test(String(error?.name || ""))) return true;
+  const message = String(
+    error?.data?.message || error?.message || error || "",
+  ).trim();
+  return (
+    /^aborted$/i.test(message) ||
+    /^the [\w ]+ was aborted$/i.test(message) ||
+    /MessageAbortedError|AbortedError/.test(message)
+  );
 }
 
 function sessionSummary(
@@ -433,9 +455,13 @@ function normalizeMessages(
               {
                 id: String(message.id || randomUUID()),
                 type: "userMessage",
+                // synthetic part 是系统注入内容（提醒/续接提示等），不是
+                // 用户敲的字，不进用户气泡。
                 content: parts
                   .filter(
-                    (part: any) => part.type === "text" || part.type === "file",
+                    (part: any) =>
+                      !part.synthetic &&
+                      (part.type === "text" || part.type === "file"),
                   )
                   .map((part: any) =>
                     part.type === "file"
@@ -862,6 +888,9 @@ export class OpenCodeAdapter extends EventEmitter {
     const completedTurnId = thread.activeTurnId || "opencode";
     thread.status = "idle";
     thread.activeTurnId = undefined;
+    // 会话已空闲即压缩结束（summarize 自身也走 busy→idle）；遗留的
+    // compacting 在此自愈，避免 UI 永久显示“正在压缩上下文”。
+    thread.compacting = undefined;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
     this.emitAgentEvent(thread, "turn/completed", {
@@ -1265,6 +1294,11 @@ export class OpenCodeAdapter extends EventEmitter {
     );
   }
 
+  runtimePids() {
+    const pid = this.process?.pid;
+    return typeof pid === "number" ? [pid] : [];
+  }
+
   /**
    * 已有 server 且健康检查通过时复用它；事件流必须重建——旧 SSE 可能已静默
    * 断开（服务端关流/网络闪断），不断即永久收不到审批与状态事件。
@@ -1479,6 +1513,13 @@ export class OpenCodeAdapter extends EventEmitter {
 
   async readThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
+    // 项目模型目录（/provider + /config，各自最长 5 秒）只用来补上下文上限和
+    // 实际模型名，不能让它卡住正文：最多等 CATALOG_WAIT_MS，晚到的在落地后
+    // 补算一次用量，经 thread.updated 推给前端。
+    const catalog =
+      thread.cwd && !this.projectCatalogs.has(thread.cwd)
+        ? this.loadProjectCatalog(thread.cwd).catch(() => undefined)
+        : undefined;
     const [allRecords, session] = await Promise.all([
       this.request<any[]>(`/session/${encodeURIComponent(threadId)}/message`, {
         directory: thread.cwd,
@@ -1487,9 +1528,12 @@ export class OpenCodeAdapter extends EventEmitter {
         `/session/${encodeURIComponent(threadId)}`,
         { directory: thread.cwd },
       ),
-      thread.cwd && !this.projectCatalogs.has(thread.cwd)
-        ? this.loadProjectCatalog(thread.cwd).catch(() => undefined)
-        : Promise.resolve(undefined),
+      catalog
+        ? Promise.race([
+            catalog,
+            new Promise((resolve) => setTimeout(resolve, CATALOG_WAIT_MS)),
+          ])
+        : undefined,
     ]);
     // OpenCode stages /revert and keeps the old messages in storage for /redo.
     // Its message list still contains them, so hide the boundary and everything
@@ -1501,8 +1545,16 @@ export class OpenCodeAdapter extends EventEmitter {
         )
       : -1;
     const records = revertedAt >= 0 ? allRecords.slice(0, revertedAt) : allRecords;
-    const renamed = this.applyFirstMessageNaming(thread, records);
+    // await 期间 session.updated 可能已把 threads 里的对象换成新实例，
+    // 命名/用量必须基于现行对象合并，否则会把新字段顶回旧值。
+    const base = this.threads.get(threadId) || thread;
+    const renamed = this.applyFirstMessageNaming(base, records);
     const current = this.applyThreadUsage(renamed, records);
+    if (catalog && !this.projectCatalogs.has(thread.cwd))
+      void catalog.then((loaded) => {
+        const latest = this.threads.get(threadId);
+        if (loaded && latest) this.applyThreadUsage(latest, records);
+      });
     return {
       ...normalizeMessages(
         { id: current.id, directory: current.cwd },
@@ -1531,10 +1583,11 @@ export class OpenCodeAdapter extends EventEmitter {
       body: { title: next },
     });
     this.sessionTitles.set(threadId, next);
-    thread.name = next;
-    thread.updatedAt = Date.now();
-    this.broadcast("thread.updated", thread);
-    return thread;
+    const current = this.threads.get(threadId) || thread;
+    current.name = next;
+    current.updatedAt = Date.now();
+    this.broadcast("thread.updated", current);
+    return current;
   }
 
   /**
@@ -1863,15 +1916,32 @@ export class OpenCodeAdapter extends EventEmitter {
         ...(variant ? { variant } : {}),
       },
     }).catch((error: any) => {
-      if (thread.activeTurnId !== turnId) return;
+      // 命令执行期间 session.updated 等事件会用 mergeThread 换掉 threads
+      // 里的对象，回滚要落在现行对象上，写旧引用会让会话永久卡 running。
+      const current = this.threads.get(thread.id);
+      if (!current || current.activeTurnId !== turnId) return;
       const detail = String(error?.message || error || "OpenCode 命令执行失败");
       this.clearIdleTimer(thread.id);
-      thread.status = "error";
-      thread.activeTurnId = undefined;
-      thread.lastError = detail;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
-      this.emitAgentEvent(thread, "turn/completed", {
+      // 命令运行中被手动停止：同 session.error 的中断语义，不当失败展示。
+      if (isAbortError(error)) {
+        current.status = "idle";
+        current.activeTurnId = undefined;
+        current.lastError = undefined;
+        current.compacting = undefined;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+        this.emitAgentEvent(current, "turn/completed", {
+          threadId,
+          turn: { id: turnId, status: "interrupted" },
+        });
+        return;
+      }
+      current.status = "error";
+      current.activeTurnId = undefined;
+      current.lastError = detail;
+      current.updatedAt = Date.now();
+      this.broadcast("thread.updated", current);
+      this.emitAgentEvent(current, "turn/completed", {
         threadId,
         turn: { id: turnId, status: "failed", error: { message: detail } },
       });
@@ -1906,13 +1976,20 @@ export class OpenCodeAdapter extends EventEmitter {
         directory: thread.cwd,
         body: { providerID: target.providerID, modelID: target.modelID },
       });
+      // summarize 期间的 session.updated / 历史重载会用 mergeThread 换掉
+      // threads 里的对象（compacting 随 ...existing 拷到新对象上），清理
+      // 必须落在现行对象上，写旧引用等于没清、标记会永久残留。
+      const current = this.threads.get(thread.id) || thread;
       // The summary request reports its old input context. A new ordinary
       // reply is needed before there is a trustworthy post-compaction value.
-      delete thread.tokenUsage;
+      delete current.tokenUsage;
     } finally {
-      thread.compacting = undefined;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
+      const current = this.threads.get(thread.id);
+      if (current) {
+        current.compacting = undefined;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+      }
     }
     return { ok: true };
   }
@@ -1979,6 +2056,14 @@ export class OpenCodeAdapter extends EventEmitter {
       directory: thread.cwd,
     });
     return { ok: true as const };
+  }
+
+  async sendMessage(providerId: string, threadId: string, input: AgentMessageInput): Promise<AgentMessageAcceptance> {
+    const thread = this.requireThread(threadId);
+    assertMessageInput(thread, input, OPENCODE_CAPABILITIES.messages!);
+    const busy = messageBusy(thread);
+    const result = await this.sendTurn(providerId, threadId, input.text, input.images);
+    return { disposition: busy ? "backend-managed" : "started", turnId: result.turn.id };
   }
 
   async sendTurn(
@@ -2059,15 +2144,18 @@ export class OpenCodeAdapter extends EventEmitter {
       // 若服务端实际已收下请求，后续 busy 事件会把它置回 running，自愈。
       const detail = String(error?.message || error || "OpenCode 任务发送失败");
       this.clearIdleTimer(thread.id);
-      thread.status = "error";
-      thread.activeTurnId = undefined;
-      thread.lastError = detail;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
-      this.emitAgentEvent(thread, "turn/completed", {
-        threadId,
-        turn: { id: turnId, status: "failed", error: { message: detail } },
-      });
+      const current = this.threads.get(thread.id);
+      if (current) {
+        current.status = "error";
+        current.activeTurnId = undefined;
+        current.lastError = detail;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+        this.emitAgentEvent(current, "turn/completed", {
+          threadId,
+          turn: { id: turnId, status: "failed", error: { message: detail } },
+        });
+      }
       throw error;
     }
     return { turn: { id: turnId, status: "inProgress" } };
@@ -2224,9 +2312,10 @@ export class OpenCodeAdapter extends EventEmitter {
       directory: thread.cwd,
       retry: false,
     }).then((statuses) => {
-      if (thread.status !== "running") return;
+      const current = this.threads.get(thread.id);
+      if (!current || current.status !== "running") return;
       const status = statuses?.[thread.id]?.type;
-      if (!status || status === "idle") this.applyIdle(thread);
+      if (!status || status === "idle") this.applyIdle(current);
     }).catch(() => undefined);
   }
 
@@ -2501,6 +2590,22 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "session.error" && thread) {
       this.clearIdleTimer(thread.id);
       const turnId = thread.activeTurnId || "opencode";
+      // 手动停止走中断分支：idle + turn interrupted，不算失败、不写 lastError。
+      if (isAbortError(body.error)) {
+        thread.status = "idle";
+        thread.activeTurnId = undefined;
+        thread.lastError = undefined;
+        thread.compacting = undefined;
+        thread.updatedAt = Date.now();
+        this.broadcast("thread.updated", thread);
+        for (const [id, approval] of this.approvals)
+          if (approval.sessionID === thread.id) this.clearApproval(id);
+        this.emitAgentEvent(thread, "turn/completed", {
+          threadId: thread.id,
+          turn: { id: turnId, status: "interrupted" },
+        });
+        return;
+      }
       thread.status = "error";
       thread.activeTurnId = undefined;
       thread.lastError = String(
