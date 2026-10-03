@@ -65,6 +65,7 @@ function subscribeNow(listener: Listener) {
   };
 }
 
-export function useNow() {
-  return useSyncExternalStore(subscribeNow, () => now);
+/** step 越大重渲染越少：快照按 step 取整，同一档内不会触发更新。 */
+export function useNow(step = 1_000) {
+  return useSyncExternalStore(subscribeNow, () => Math.floor(now / step) * step);
 }

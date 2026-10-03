@@ -80,12 +80,42 @@ test("persisted Codex usage migrates inclusive input to uncached input", async (
   assert.equal(store.get(threadId)?.input, 10_500);
 });
 
+test("usage deltas accumulate into per-provider daily buckets", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deck-usage-daily-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new CodexUsageStore(root);
+  await store.load();
+
+  const day = "2026-09-30";
+  const at = Date.parse(`${day}T12:00:00Z`);
+  // set 返回的延迟落盘 promise 挂在 unref 定时器上，await 会饿死事件循环——
+  // 桶记账是同步完成的，这里不 await，最后统一 flush。
+  void store.set(threadId, { total: 100 }, { providerId: "official", at });
+  void store.set(threadId, { total: 160 }, { providerId: "official", at });
+  // total 回落或持平不计量；另一 provider 的消耗单独成桶
+  void store.set(threadId, { total: 160 }, { providerId: "official", at });
+  void store.set("other", { total: 50 }, { providerId: "relay", at });
+
+  const official = store.dailyUsage(new Set(["official"]));
+  assert.equal(official[day], 160);
+  assert.equal(official["1970-01-01"], undefined);
+  const all = store.dailyUsage();
+  assert.equal(all[day], 210);
+
+  await store.flush();
+  const reopened = new CodexUsageStore(root);
+  await reopened.load();
+  assert.equal(reopened.dailyUsage(new Set(["official"]))[day], 160);
+});
+
 test("new usage without totals is not normalized twice across restarts", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deck-usage-v2-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const first = new CodexUsageStore(root);
   await first.load();
-  await first.set(threadId, { input: 1_000, cachedInput: 8_000 });
+  // set 的返回 promise 挂在 unref 落盘定时器上，直接 await 会饿死事件循环。
+  void first.set(threadId, { input: 1_000, cachedInput: 8_000 });
+  await first.flush();
 
   const second = new CodexUsageStore(root);
   await second.load();
@@ -112,8 +142,12 @@ test("native rollout recovery reads the latest token_count from the file tail", 
     codexHome: root,
     wanted: new Set([threadId]),
   });
-  assert.equal(restored.get(threadId)?.total, 43_534);
-  assert.equal(restored.get(threadId)?.used, 27_294);
+  assert.equal(restored.get(threadId)?.usage.total, 43_534);
+  assert.equal(restored.get(threadId)?.usage.used, 27_294);
+  assert.equal(
+    restored.get(threadId)?.at,
+    Date.parse("2026-08-15T13:23:48.099Z"),
+  );
 });
 
 test("WSL usage output maps rollout paths back to thread ids", () => {
@@ -121,7 +155,7 @@ test("WSL usage output maps rollout paths back to thread ids", () => {
   const parsed = parseWslCodexUsages(
     `${file}\t${tokenCount(30_000, 12_000)}\n`,
   );
-  assert.equal(parsed.get(threadId)?.limit, 258_400);
+  assert.equal(parsed.get(threadId)?.usage.limit, 258_400);
   assert.equal(threadIdFromRolloutPath(file), threadId);
   assert.equal(
     wslCodexUsageArgs("/home/test/.codex").at(-2),
@@ -143,8 +177,8 @@ test("WSL usage scripts read the latest token_count without quote loss", async (
   const args = wslCodexUsageArgs(root);
   const { stdout } = await execFileAsync("sh", args.slice(2));
   const restored = parseWslCodexUsages(stdout);
-  assert.equal(restored.get(threadId)?.total, 33_000);
-  assert.equal(restored.get(threadId)?.used, 17_000);
+  assert.equal(restored.get(threadId)?.usage.total, 33_000);
+  assert.equal(restored.get(threadId)?.usage.used, 17_000);
 });
 
 test("Codex usage store survives a new server instance", async (t) => {
@@ -152,7 +186,7 @@ test("Codex usage store survives a new server instance", async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   const first = new CodexUsageStore(root);
   await first.load();
-  await first.set(threadId, { total: 30_000, used: 12_000, limit: 258_400 });
+  void first.set(threadId, { total: 30_000, used: 12_000, limit: 258_400 });
   await first.flush();
 
   const second = new CodexUsageStore(root);

@@ -23,6 +23,7 @@ export interface StreamedEntry {
 }
 
 const LIVE_ITEM_TYPES = new Set([
+  "userMessage",
   "commandExecution",
   "fileChange",
   "mcpToolCall",
@@ -31,6 +32,8 @@ const LIVE_ITEM_TYPES = new Set([
   "enteredReviewMode",
   "exitedReviewMode",
   "extension",
+  "subAgentActivity",
+  "collabAgentToolCall",
 ]);
 
 function sameStream(left: any, right: any) {

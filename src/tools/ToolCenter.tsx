@@ -4,28 +4,43 @@ import { api } from "../api";
 import { toolIcon, toolPath, toolView } from "../../plugin/client-registry";
 import { deckRewrite, readDeckState } from "../deck-history";
 import type { ToolDescriptor } from "../../plugin/types";
+import { useDeckSettings } from "../deck-settings";
 
 export function ToolCenter({
+  tools: snapshotTools,
   initialCwd,
   directories,
   onToast,
   onClose,
 }: {
+  /** 快照（含本地缓存）里的工具列表；旧服务端没有时退回 GET /tools。 */
+  tools?: ToolDescriptor[];
   initialCwd?: string;
   directories: string[];
   onToast: (message: string) => void;
   onClose: () => void;
 }) {
-  const [tools, setTools] = useState<ToolDescriptor[]>([]);
+  const [fetchedTools, setFetchedTools] = useState<ToolDescriptor[]>();
+  const tools = snapshotTools ?? fetchedTools ?? [];
   const [selected, setSelected] = useState(
     () => toolPath(location.pathname)?.slice(1) || "terminal",
   );
   const [error, setError] = useState("");
+  const needsFetch = !snapshotTools;
   useEffect(() => {
+    if (!needsFetch) return;
+    let cancelled = false;
     void api<{ tools: ToolDescriptor[] }>("/tools")
-      .then((result) => setTools(result.tools))
-      .catch((loadError) => setError(loadError.message));
-  }, []);
+      .then((result) => {
+        if (!cancelled) setFetchedTools(result.tools);
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(loadError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsFetch]);
   // 浏览器前进/后退在工具页之间跳转时同步当前工具
   useEffect(() => {
     const sync = () => {
@@ -36,6 +51,11 @@ export function ToolCenter({
     return () => window.removeEventListener("popstate", sync);
   }, []);
   const tool = tools.find((item) => item.id === selected);
+  // 设置里隐藏的工具不进侧栏；当前打开的那个（直接走链接进来）仍保留。
+  const { hiddenTools } = useDeckSettings();
+  const listed = tools.filter(
+    (item) => item.id === selected || !hiddenTools.includes(item.id),
+  );
   const View = tool ? toolView(tool.id) : undefined;
 
   return (
@@ -56,7 +76,7 @@ export function ToolCenter({
       </header>
       <div className="tool-page-body">
         <nav className="tool-list" aria-label="可用工具">
-          {tools.map((item) => {
+          {listed.map((item) => {
             const Icon = toolIcon(item.id);
             return (
               <button

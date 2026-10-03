@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { randomUUID } from "node:crypto";
+import { AgentMessageError, assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageReceipt } from "./messages.js";
 import type {
   AgentAdapter,
   AgentCommand,
@@ -116,6 +118,7 @@ export class AgentRegistry extends EventEmitter {
   private states = new Map<AgentId, AgentState>();
   private forwarders = new Map<AgentId, (event: any) => void>();
   private locks = new Map<AgentId, Promise<unknown>>();
+  private messageLocks = new Map<string, Promise<unknown>>();
 
   constructor(adapters: AgentAdapter[] = []) {
     super();
@@ -196,6 +199,15 @@ export class AgentRegistry extends EventEmitter {
   private descriptors(): AgentDescriptor[] {
     return [...this.adapters.values()].map((adapter) => {
       const raw = adapter.descriptor();
+      if (raw.capabilities.messages && adapter.sendMessage) {
+        const deliveryModes: ("queue" | "feedback")[] = ["queue"];
+        if (raw.capabilities.messages.busyBehavior === "steer" ||
+          (raw.capabilities.interrupt && adapter.interrupt)) deliveryModes.push("feedback");
+        raw.capabilities = {
+          ...raw.capabilities,
+          messages: { ...raw.capabilities.messages, deliveryModes },
+        };
+      }
       const state = this.states.get(adapter.id);
       if (!state) return raw;
       if (state.enabled)
@@ -512,6 +524,69 @@ export class AgentRegistry extends EventEmitter {
     return adapter.interrupt!(thread.providerId, threadId, turnId);
   }
 
+  async sendMessage(id: AgentId, threadId: string, input: AgentMessageInput): Promise<AgentMessageReceipt> {
+    // 只串行化受理，不等待模型回合结束；防止两个 start 同时通过空闲检查。
+    const key = JSON.stringify([id, threadId]);
+    const previous = this.messageLocks.get(key) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(async () => {
+      const adapter = this.get(id);
+      const capabilities = adapter.descriptor().capabilities.messages;
+      if (!capabilities || !adapter.sendMessage)
+        throw new AgentMessageError("unsupported", "该 Agent 未声明通用消息能力", 422);
+      this.operation(id, "sendMessage");
+      const thread = this.thread(id, threadId);
+      assertMessageInput(thread, input, capabilities);
+      const acceptance = await adapter.sendMessage(thread.providerId, threadId, input);
+      return { ...acceptance, id: randomUUID(), agentId: id, threadId, status: "accepted" as const };
+    });
+    this.messageLocks.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.messageLocks.get(key) === pending) this.messageLocks.delete(key);
+    }
+  }
+
+  messageState(id: AgentId, threadId: string) {
+    const adapter = this.get(id);
+    const descriptor = this.list().find((item) => item.id === id)!;
+    const thread = this.thread(id, threadId);
+    return {
+      thread,
+      capabilities: descriptor.capabilities,
+      online: descriptor.online && this.isEnabled(id),
+      ready: !messageBusy(thread) && !thread.compacting &&
+        thread.status !== "starting" && thread.status !== "offline" && !thread.locked &&
+        (adapter.messageReady?.(threadId) ?? true),
+    };
+  }
+
+  messageBackendOnline(id: AgentId) {
+    return this.isEnabled(id) && this.get(id).descriptor().online;
+  }
+
+  holdMessageQueue(id: AgentId, threadId: string) {
+    return this.get(id).holdMessageQueue?.(threadId) ?? (() => {});
+  }
+
+  /** 回执只确认打断请求成功发出，最终状态由 turn/completed 等事件确认。 */
+  async interruptMessage(id: AgentId, threadId: string, expectedTurnId: string) {
+    const adapter = this.get(id);
+    const capabilities = adapter.descriptor().capabilities;
+    if (!capabilities.interrupt || !capabilities.messages || !adapter.interrupt)
+      throw new AgentMessageError("unsupported", "该 Agent 未声明通用打断能力", 422);
+    this.operation(id, "interrupt");
+    const thread = this.thread(id, threadId);
+    if (thread.archived)
+      throw new AgentMessageError("archived", "会话已归档，请先恢复再操作");
+    if (!messageBusy(thread) || !thread.activeTurnId)
+      throw new AgentMessageError("no_active_turn", "会话没有正在运行的回合");
+    if (thread.activeTurnId !== expectedTurnId)
+      throw new AgentMessageError("turn_mismatch", "当前回合已变化，未发送打断请求");
+    await adapter.interrupt!(thread.providerId, threadId, expectedTurnId);
+    return { status: "interrupt_requested" as const, agentId: id, threadId, turnId: expectedTurnId, scope: capabilities.messages.interruptScope };
+  }
+
   async resolveApproval(
     id: AgentId,
     approvalId: string,
@@ -654,6 +729,16 @@ export class AgentRegistry extends EventEmitter {
 
   busyThreads() {
     return this.enabledAdapters().flatMap((adapter) => adapter.busyThreads());
+  }
+
+  /** 各已启用 agent 的后端进程 pid（deck-wake 判定会话来源用）。 */
+  runtimePids(): { agentId: AgentId; pid: number }[] {
+    return this.enabledAdapters().flatMap((adapter) =>
+      (adapter.runtimePids?.() || []).map((pid) => ({
+        agentId: adapter.id,
+        pid,
+      })),
+    );
   }
 
   stopAll() {

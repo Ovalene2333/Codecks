@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ThreadSettingsStore } from "../thread-settings.js";
+import { AgentRegistry } from "./registry.js";
+import { MessageDeliveryQueue } from "../message-delivery.js";
 import { readClaudeHistory } from "./claude-history.js";
 import {
   claudeRuntimePreference,
@@ -90,6 +92,106 @@ test("Claude history summaries reuse unchanged files across server instances", a
   assert.equal(third.listThreads().length, 0);
 });
 
+test("Claude refresh replaces an idle cached context with the disk summary", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deck-claude-usage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  await writeFile(file, "history");
+  const adapter = new ClaudeAdapter({
+    historyFiles: async () => [file],
+    initialThreads: [
+      {
+        agentId: "claude",
+        id: "session",
+        providerId: "claude-current",
+        name: "cached",
+        model: "default",
+        status: "idle",
+        updatedAt: 1,
+        tokenUsage: { used: 20, limit: 200_000 },
+      } as any,
+    ],
+    historyReader: async () => ({
+      summary: {
+        agentId: "claude",
+        id: "session",
+        providerId: "claude-current",
+        name: "disk",
+        cwd: "/work",
+        model: "default",
+        status: "idle",
+        updatedAt: 2,
+        resolvedModel: "claude-opus-5-5",
+        tokenUsage: { used: 244_244, limit: 1_000_000 },
+      },
+      thread: { id: "session", cwd: "/work", model: "default", turns: [] },
+    }),
+  });
+  await adapter.startAll();
+  assert.equal(adapter.listThreads()[0].resolvedModel, "claude-opus-5-5");
+  assert.deepEqual(adapter.listThreads()[0].tokenUsage, {
+    used: 244_244,
+    limit: 1_000_000,
+  });
+});
+
+test("Claude history applies the documented Sonnet gateway window only with a saved gateway profile", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "deck-claude-gateway-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "session.jsonl");
+  await writeFile(file, "history");
+  const options = {
+    historyFiles: async () => [file],
+    historyReader: async () => ({
+      summary: {
+        agentId: "claude" as const,
+        id: "session",
+        providerId: relayProfile.id,
+        name: "Sonnet",
+        cwd: "/work",
+        model: "claude-sonnet-5-5",
+        resolvedModel: "claude-sonnet-5-5",
+        status: "idle" as const,
+        updatedAt: 1,
+        tokenUsage: { used: 83_937 },
+      },
+      thread: {
+        id: "session",
+        cwd: "/work",
+        model: "claude-sonnet-5-5",
+        turns: [],
+      },
+    }),
+  };
+  const gateway = new ClaudeAdapter({
+    ...options,
+    initialProfiles: [relayProfile],
+  });
+  await gateway.startAll();
+  assert.deepEqual(gateway.listThreads()[0].tokenUsage, {
+    used: 83_937,
+    limit: 200_000,
+  });
+
+  const unknownProfile = new ClaudeAdapter(options);
+  await unknownProfile.startAll();
+  assert.deepEqual(unknownProfile.listThreads()[0].tokenUsage, {
+    used: 83_937,
+  });
+
+  const overridden = new ClaudeAdapter({
+    ...options,
+    initialProfiles: [
+      {
+        ...relayProfile,
+        env: { ...relayProfile.env, CLAUDE_CODE_MAX_CONTEXT_TOKENS: "500000" },
+      },
+    ],
+  });
+  await overridden.startAll();
+  assert.deepEqual(overridden.listThreads()[0].tokenUsage, { used: 83_937 });
+});
+
 const waitFor = async (check: () => boolean) => {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (check()) return;
@@ -112,12 +214,18 @@ test("Claude keeps one SDK process across turns and keeps its provider bound", a
           const blocks = input.message.content;
           inputs.push(blocks.find((block: any) => block.type === "text")?.text);
           yield {
-            type: "result", subtype: "success", is_error: false,
-            usage: {}, modelUsage: {}, session_id: input.session_id,
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            usage: {},
+            modelUsage: {},
+            session_id: input.session_id,
           };
         }
       })();
-      stream.close = () => { closed = true; };
+      stream.close = () => {
+        closed = true;
+      };
       stream.interrupt = async () => undefined;
       stream.setModel = async () => undefined;
       stream.setPermissionMode = async () => undefined;
@@ -129,7 +237,9 @@ test("Claude keeps one SDK process across turns and keeps its provider bound", a
   await adapter.sendTurn(thread.providerId, thread.id, "first");
   await waitFor(() => adapter.listThreads()[0]?.status === "idle");
   await adapter.sendTurn(thread.providerId, thread.id, "second");
-  await waitFor(() => inputs.length === 2 && adapter.listThreads()[0]?.status === "idle");
+  await waitFor(
+    () => inputs.length === 2 && adapter.listThreads()[0]?.status === "idle",
+  );
   assert.deepEqual(inputs, ["first", "second"]);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.env.ANTHROPIC_AUTH_TOKEN, "relay-secret");
@@ -138,11 +248,15 @@ test("Claude keeps one SDK process across turns and keeps its provider bound", a
     /Deck 当前.*保持 SDK 连接/,
   );
   await assert.rejects(
-    adapter.updateThreadSettings(relayProfile.id, thread.id, { providerId: backupRelayProfile.id }),
+    adapter.updateThreadSettings(relayProfile.id, thread.id, {
+      providerId: backupRelayProfile.id,
+    }),
     /创建分支/,
   );
   assert.equal(closed, false);
-  await adapter.deleteThread(thread.providerId, thread.id, { closeConnection: true });
+  await adapter.deleteThread(thread.providerId, thread.id, {
+    closeConnection: true,
+  });
   assert.equal(closed, true);
   assert.equal(adapter.listThreads().length, 0);
 });
@@ -153,17 +267,34 @@ test("Claude deletion reports the actual external lock owner", async (t) => {
   const file = path.join(root, "external.jsonl");
   const sessions = path.join(root, "sessions");
   await mkdir(sessions);
-  await writeFile(file, JSON.stringify({
-    type: "user", uuid: "external-user", sessionId: "external", cwd: root,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    message: { role: "user", content: "original" },
-  }) + "\n");
-  await writeFile(path.join(sessions, `${process.pid}.json`),
-    JSON.stringify({ sessionId: "external", pid: process.pid, name: "Agent View" }));
-  const adapter = new ClaudeAdapter({ claudeHome: root, historyFiles: async () => [file] });
+  await writeFile(
+    file,
+    JSON.stringify({
+      type: "user",
+      uuid: "external-user",
+      sessionId: "external",
+      cwd: root,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: { role: "user", content: "original" },
+    }) + "\n",
+  );
+  await writeFile(
+    path.join(sessions, `${process.pid}.json`),
+    JSON.stringify({
+      sessionId: "external",
+      pid: process.pid,
+      name: "Agent View",
+    }),
+  );
+  const adapter = new ClaudeAdapter({
+    claudeHome: root,
+    historyFiles: async () => [file],
+  });
   await adapter.startAll();
-  await assert.rejects(adapter.deleteThread("claude-local", "external"),
-    new RegExp(`PID ${process.pid}.*Agent View`));
+  await assert.rejects(
+    adapter.deleteThread("claude-local", "external"),
+    new RegExp(`PID ${process.pid}.*Agent View`),
+  );
   assert.equal(adapter.listThreads().length, 1);
   await rm(path.join(sessions, `${process.pid}.json`));
   await adapter.deleteThread("claude-local", "external");
@@ -174,11 +305,17 @@ test("Claude branch starts disconnected and retains its own provider setting", a
   const root = await mkdtemp(path.join(tmpdir(), "deck-claude-branch-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const file = path.join(root, "source.jsonl");
-  await writeFile(file, JSON.stringify({
-    type: "user", uuid: "source-user", sessionId: "source", cwd: root,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    message: { role: "user", content: "original" },
-  }) + "\n");
+  await writeFile(
+    file,
+    JSON.stringify({
+      type: "user",
+      uuid: "source-user",
+      sessionId: "source",
+      cwd: root,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: { role: "user", content: "original" },
+    }) + "\n",
+  );
   const settings = new ThreadSettingsStore(root);
   await settings.load();
   const adapter = new ClaudeAdapter({
@@ -188,8 +325,14 @@ test("Claude branch starts disconnected and retains its own provider setting", a
     queryFactory: ((params: any) => {
       const stream: any = (async function* () {
         for await (const input of params.prompt)
-          yield { type: "result", subtype: "success", is_error: false,
-            usage: {}, modelUsage: {}, session_id: input.session_id };
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            usage: {},
+            modelUsage: {},
+            session_id: input.session_id,
+          };
       })();
       stream.close = () => undefined;
       stream.interrupt = async () => undefined;
@@ -197,15 +340,25 @@ test("Claude branch starts disconnected and retains its own provider setting", a
     }) as any,
   });
   await adapter.startAll();
-  await adapter.updateThreadSettings(relayProfile.id, "source", { providerId: relayProfile.id });
+  await adapter.updateThreadSettings(relayProfile.id, "source", {
+    providerId: relayProfile.id,
+  });
   await adapter.sendTurn(relayProfile.id, "source", "continue");
-  await waitFor(() => adapter.listThreads().find((item) => item.id === "source")?.claudeConnected === true &&
-    adapter.listThreads().find((item) => item.id === "source")?.status === "idle");
+  await waitFor(
+    () =>
+      adapter.listThreads().find((item) => item.id === "source")
+        ?.claudeConnected === true &&
+      adapter.listThreads().find((item) => item.id === "source")?.status ===
+        "idle",
+  );
   const branch = await adapter.forkThread(relayProfile.id, "source");
   assert.equal(branch.claudeConnected, false);
   assert.equal(branch.controlMode, "history");
   assert.equal(settings.get("claude", branch.id)?.providerId, relayProfile.id);
-  assert.equal(adapter.listThreads().find((item) => item.id === "source")?.claudeConnected, true);
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "source")?.claudeConnected,
+    true,
+  );
   adapter.restart();
 });
 
@@ -221,10 +374,15 @@ test("Claude provider choice persists after a session setting change", async (t)
   });
   await adapter.startAll();
   const thread = await adapter.createThread(relayProfile.id, { cwd: "/work" });
-  await adapter.updateThreadSettings(relayProfile.id, thread.id, { providerId: backupRelayProfile.id });
+  await adapter.updateThreadSettings(relayProfile.id, thread.id, {
+    providerId: backupRelayProfile.id,
+  });
   const restored = new ThreadSettingsStore(root);
   await restored.load();
-  assert.equal(restored.get("claude", thread.id)?.providerId, backupRelayProfile.id);
+  assert.equal(
+    restored.get("claude", thread.id)?.providerId,
+    backupRelayProfile.id,
+  );
 });
 
 test("Claude login failure identifies the selected profile without exposing its secret", async () => {
@@ -234,9 +392,13 @@ test("Claude login failure identifies the selected profile without exposing its 
     initialProfiles: [relayProfile],
     queryFactory: mockQuery(async function* (params) {
       yield {
-        type: "result", subtype: "error_during_execution", is_error: true,
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
         errors: ["Not logged in - Please run /login"],
-        usage: {}, modelUsage: {}, session_id: params.options.extraArgs["session-id"],
+        usage: {},
+        modelUsage: {},
+        session_id: params.options.extraArgs["session-id"],
       };
     }, []),
   });
@@ -350,7 +512,10 @@ function mockQuery(
         const first = await params.prompt[Symbol.asyncIterator]().next();
         const blocks = first.value?.message?.content;
         params.prompt = Array.isArray(blocks)
-          ? blocks.filter((block: any) => block.type === "text").map((block: any) => block.text).join("")
+          ? blocks
+              .filter((block: any) => block.type === "text")
+              .map((block: any) => block.text)
+              .join("")
           : String(blocks || "");
       }
       yield* run(params);
@@ -473,7 +638,7 @@ test("Claude adapter creates, streams, approves, and completes a native session"
   assert.equal(calls[0].options.extraArgs["session-id"], thread.id);
   assert.deepEqual(adapter.listThreads()[0].tokenUsage, {
     total: 19,
-    used: 19,
+    used: 15,
     limit: 200_000,
     input: 13,
     cachedInput: 2,
@@ -855,7 +1020,8 @@ test("Claude adapter retries a historical turn by branching its file", async (t)
           output_tokens: 1,
         },
         modelUsage: {},
-        session_id: params.options.resume || params.options.extraArgs?.["session-id"],
+        session_id:
+          params.options.resume || params.options.extraArgs?.["session-id"],
       };
     }, calls),
     historyFiles: async () => [history],
@@ -902,10 +1068,9 @@ test("Claude adapter retries a historical turn by branching its file", async (t)
     "session-rw",
     {},
   );
-  const forkedRows = (await readFile(
-    path.join(root, `${forked.id}.jsonl`),
-    "utf8",
-  ))
+  const forkedRows = (
+    await readFile(path.join(root, `${forked.id}.jsonl`), "utf8")
+  )
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
@@ -1072,6 +1237,63 @@ test("Claude adapter interrupts an active query", async () => {
   assert.equal(interrupted, true);
 });
 
+test("Claude message API reports started and rejects busy append without claiming SDK queue support", async (t) => {
+  let release!: () => void;
+  let interrupted = false;
+  const queryFactory = (() => {
+    const stream: any = (async function* () {
+      await new Promise<void>((resolve) => { release = resolve; });
+    })();
+    stream.interrupt = async () => { interrupted = true; release(); };
+    return stream;
+  }) as any;
+  const adapter = new ClaudeAdapter({ historyFiles: async () => [], initialProfiles: [relayProfile], queryFactory });
+  t.after(() => adapter.restart());
+  await adapter.startAll();
+  const thread: any = await adapter.createThread("claude-current", { cwd: "/work" });
+  const receipt = await adapter.sendMessage(thread.providerId, thread.id, { text: "wait", mode: "start" });
+  assert.equal(receipt.disposition, "started");
+  assert.equal(adapter.descriptor().capabilities.messages?.busyBehavior, "reject");
+  await assert.rejects(adapter.sendMessage(thread.providerId, thread.id, { text: "more" }), { code: "busy" });
+  await assert.rejects(adapter.sendMessage(thread.providerId, thread.id, { text: "more", mode: "append", expectedTurnId: receipt.turnId }), { code: "unsupported" });
+  await waitFor(() => Boolean(release));
+  await adapter.interrupt(thread.providerId, thread.id, receipt.turnId!);
+  await waitFor(() => adapter.listThreads()[0].status === "idle");
+  assert.equal(interrupted, true);
+});
+
+test("Claude feedback interrupts an SDK turn and then delivers the new user message", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-claude-feedback-"));
+  const prompts: any[] = [];
+  const held: (() => void)[] = [];
+  let interrupts = 0;
+  const queryFactory = ((params: any) => {
+    const stream: any = (async function* () {
+      for await (const message of params.prompt) {
+        prompts.push(message);
+        await new Promise<void>((resolve) => held.push(resolve));
+        yield { type: "result", subtype: "success", is_error: false, usage: {}, modelUsage: {}, session_id: "feedback-session" };
+      }
+    })();
+    stream.interrupt = async () => { interrupts++; held.shift()?.(); };
+    return stream;
+  }) as any;
+  const adapter = new ClaudeAdapter({ historyFiles: async () => [], initialProfiles: [relayProfile], queryFactory });
+  await adapter.startAll();
+  const thread: any = await adapter.createThread("claude-current", { cwd: "/work" });
+  await adapter.sendTurn(thread.providerId, thread.id, "first");
+  await waitFor(() => prompts.length === 1);
+  const deliveries = new MessageDeliveryQueue({ file: path.join(dir, "messages.json"), agents: new AgentRegistry([adapter]), timer: false });
+  await deliveries.load();
+  t.after(async () => { deliveries.close(); held.splice(0).forEach((release) => release()); adapter.restart(); await rm(dir, { recursive: true, force: true }); });
+  await deliveries.enqueue(adapter.id, thread.id, "feedback", { text: "feedback" });
+  await deliveries.tick();
+  await waitFor(() => prompts.length === 2);
+  assert.equal(interrupts, 1);
+  assert.ok(JSON.stringify(prompts[1].message.content).includes("feedback"));
+  assert.equal(deliveries.list()[0].status, "delivered");
+});
+
 test("Claude adapter exposes but rejects Claude Official profiles", async () => {
   const officialProfile = {
     ...relayProfile,
@@ -1220,16 +1442,19 @@ test("Claude adapter streams only assistant text blocks", async () => {
     .filter((event) => event.type === "agent.event")
     .map((event) => event.data);
   assert.deepEqual(
-    live.filter((event) => event.method === "item/agentMessage/delta")
+    live
+      .filter((event) => event.method === "item/agentMessage/delta")
       .map((event) => [event.params.itemId, event.params.delta]),
     [["response-1:1", "Visible answer"]],
   );
   assert.deepEqual(
-    live.filter(
-      (event) =>
-        event.method === "item/completed" &&
-        event.params.item?.type === "agentMessage",
-    ).map((event) => event.params.item.id),
+    live
+      .filter(
+        (event) =>
+          event.method === "item/completed" &&
+          event.params.item?.type === "agentMessage",
+      )
+      .map((event) => event.params.item.id),
     ["response-1:1"],
   );
 });
@@ -1244,8 +1469,18 @@ test("Claude adapter shows tool calls and their results during a turn", async ()
         uuid: "assistant-1",
         message: {
           content: [
-            { type: "tool_use", id: "bash-1", name: "Bash", input: { command: "pwd" } },
-            { type: "tool_use", id: "edit-1", name: "Edit", input: { file_path: "/work/a.ts" } },
+            {
+              type: "tool_use",
+              id: "bash-1",
+              name: "Bash",
+              input: { command: "pwd" },
+            },
+            {
+              type: "tool_use",
+              id: "edit-1",
+              name: "Edit",
+              input: { file_path: "/work/a.ts" },
+            },
           ],
         },
       };
@@ -1271,28 +1506,283 @@ test("Claude adapter shows tool calls and their results during a turn", async ()
   const events: any[] = [];
   adapter.on("event", (event) => events.push(event));
   await adapter.startAll();
-  const thread: any = await adapter.createThread("claude-current", { cwd: "/work" });
+  const thread: any = await adapter.createThread("claude-current", {
+    cwd: "/work",
+  });
   await adapter.sendTurn(thread.providerId, thread.id, "run tools");
   await waitFor(() => adapter.listThreads()[0].status === "idle");
   const items = events
     .filter((event) => event.type === "agent.event")
     .map((event) => event.data)
-    .filter((event) => ["item/started", "item/completed"].includes(event.method))
+    .filter((event) =>
+      ["item/started", "item/completed"].includes(event.method),
+    )
     .map((event) => [event.method, event.params.item]);
-  assert.deepEqual(items.map(([method, item]) => [method, item.id, item.type]), [
-    ["item/started", "bash-1", "commandExecution"],
-    ["item/started", "edit-1", "fileChange"],
-    ["item/completed", "bash-1", "commandExecution"],
-    ["item/completed", "edit-1", "fileChange"],
-  ]);
+  assert.deepEqual(
+    items.map(([method, item]) => [method, item.id, item.type]),
+    [
+      ["item/started", "bash-1", "commandExecution"],
+      ["item/started", "edit-1", "fileChange"],
+      ["item/completed", "bash-1", "commandExecution"],
+      ["item/completed", "edit-1", "fileChange"],
+    ],
+  );
   assert.equal(items[2][1].aggregatedOutput, "/work");
+});
+
+test("Claude adapter reports last-call context usage, not the turn total", async () => {
+  const adapter = new ClaudeAdapter({
+    historyFiles: async () => [],
+    initialProfiles: [relayProfile],
+    queryFactory: ((params: any) => {
+      const stream: any = (async function* () {
+        let turn = 0;
+        for await (const input of params.prompt) {
+          turn += 1;
+          if (turn === 1) {
+            // 同一回合两次 API 调用：第二次的 transcript 已涨到 150K，
+            // result.usage 是两次调用的合计（210K，超过 200K 窗口）。
+            yield {
+              type: "assistant",
+              uuid: "assistant-1",
+              message: {
+                content: [{ type: "text", text: "first call" }],
+                usage: {
+                  input_tokens: 20_000,
+                  cache_read_input_tokens: 40_000,
+                  cache_creation_input_tokens: 0,
+                  output_tokens: 300,
+                  context_window: 200_000,
+                },
+              },
+            };
+            yield {
+              type: "assistant",
+              uuid: "assistant-2",
+              message: {
+                content: [{ type: "text", text: "second call" }],
+                usage: {
+                  input_tokens: 1_000,
+                  cache_read_input_tokens: 148_000,
+                  cache_creation_input_tokens: 500,
+                  output_tokens: 500,
+                  context_window: 200_000,
+                },
+              },
+            };
+            yield {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              usage: {
+                input_tokens: 21_000,
+                cache_read_input_tokens: 188_000,
+                cache_creation_input_tokens: 500,
+                output_tokens: 800,
+              },
+              modelUsage: {
+                "claude-test": {
+                  inputTokens: 21_000,
+                  cacheReadInputTokens: 188_000,
+                  cacheCreationInputTokens: 500,
+                  outputTokens: 800,
+                  contextWindow: 200_000,
+                },
+              },
+              session_id: input.session_id,
+            };
+          } else {
+            // 压缩后的下一回合：占用回落，used 跟着回落而不是继续涨。
+            yield {
+              type: "assistant",
+              uuid: "assistant-3",
+              message: {
+                content: [{ type: "text", text: "after compact" }],
+                usage: {
+                  input_tokens: 5_000,
+                  cache_read_input_tokens: 100_000,
+                  cache_creation_input_tokens: 0,
+                  output_tokens: 200,
+                  context_window: 200_000,
+                },
+              },
+            };
+            yield {
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              usage: {
+                input_tokens: 5_000,
+                cache_read_input_tokens: 100_000,
+                cache_creation_input_tokens: 0,
+                output_tokens: 200,
+              },
+              modelUsage: {
+                "claude-test": {
+                  inputTokens: 26_000,
+                  cacheReadInputTokens: 288_000,
+                  cacheCreationInputTokens: 500,
+                  outputTokens: 1_000,
+                  contextWindow: 200_000,
+                },
+              },
+              session_id: input.session_id,
+            };
+          }
+        }
+      })();
+      stream.interrupt = async () => undefined;
+      stream.close = () => undefined;
+      stream.setModel = async () => undefined;
+      stream.setPermissionMode = async () => undefined;
+      return stream;
+    }) as any,
+  });
+  await adapter.startAll();
+  const thread: any = await adapter.createThread("claude-current", {
+    cwd: "/work",
+  });
+  await adapter.sendTurn(thread.providerId, thread.id, "first turn");
+  await waitFor(() => adapter.listThreads()[0].status === "idle");
+  assert.deepEqual(adapter.listThreads()[0].tokenUsage, {
+    total: 210_300,
+    used: 149_500,
+    limit: 200_000,
+    input: 21_500,
+    cachedInput: 188_000,
+    output: 800,
+  });
+  await adapter.sendTurn(thread.providerId, thread.id, "second turn");
+  await waitFor(
+    () =>
+      adapter.listThreads()[0].status === "idle" &&
+      adapter.listThreads()[0].tokenUsage?.used === 105_000,
+  );
+  assert.deepEqual(adapter.listThreads()[0].tokenUsage, {
+    total: 315_500,
+    used: 105_000,
+    limit: 200_000,
+    input: 26_500,
+    cachedInput: 288_000,
+    output: 1_000,
+  });
+});
+
+test("Claude context follows the main model when a subagent uses another model", async () => {
+  const adapter = new ClaudeAdapter({
+    historyFiles: async () => [],
+    initialProfiles: [relayProfile],
+    queryFactory: ((params: any) => {
+      const stream: any = (async function* () {
+        for await (const input of params.prompt) {
+          yield {
+            type: "stream_event",
+            uuid: "main-start",
+            parent_tool_use_id: null,
+            event: {
+              type: "message_start",
+              message: {
+                id: "main-msg",
+                model: "claude-opus-5-5",
+                usage: {
+                  input_tokens: 2,
+                  cache_read_input_tokens: 990,
+                  output_tokens: 0,
+                },
+              },
+            },
+          };
+          yield {
+            type: "assistant",
+            uuid: "main",
+            parent_tool_use_id: null,
+            message: {
+              id: "main-msg",
+              model: "claude-opus-5-5",
+              content: [],
+              usage: {
+                input_tokens: 2,
+                cache_read_input_tokens: 800,
+                output_tokens: 1,
+              },
+            },
+          };
+          yield {
+            type: "stream_event",
+            uuid: "main-delta",
+            parent_tool_use_id: null,
+            event: { type: "message_delta", usage: { output_tokens: 10 } },
+          };
+          yield {
+            type: "assistant",
+            uuid: "sub",
+            parent_tool_use_id: "tool-1",
+            message: {
+              id: "sub-msg",
+              model: "claude-sonnet-5-5",
+              content: [],
+              usage: {
+                input_tokens: 1,
+                cache_read_input_tokens: 49_000,
+                output_tokens: 100,
+              },
+            },
+          };
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            usage: {
+              input_tokens: 2,
+              cache_read_input_tokens: 990,
+              output_tokens: 10,
+            },
+            modelUsage: {
+              "claude-sonnet-5-5": { contextWindow: 200_000 },
+              "claude-opus-5-5[1m]": { contextWindow: 1_000_000 },
+            },
+            session_id: input.session_id,
+          };
+        }
+      })();
+      stream.interrupt = async () => undefined;
+      stream.close = () => undefined;
+      stream.setModel = async () => undefined;
+      stream.setPermissionMode = async () => undefined;
+      stream.getContextUsage = async () => ({
+        apiUsage: {
+          input_tokens: 2,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 990,
+          output_tokens: 10,
+        },
+      });
+      return stream;
+    }) as any,
+  });
+  await adapter.startAll();
+  const thread: any = await adapter.createThread("claude-current", {
+    cwd: "/work",
+  });
+  await adapter.sendTurn(thread.providerId, thread.id, "use an agent");
+  await waitFor(
+    () =>
+      adapter.listThreads()[0].status === "idle" &&
+      adapter.listThreads()[0].tokenUsage?.used === 992,
+  );
+  const summary = adapter.listThreads()[0];
+  assert.equal(summary.resolvedModel, "claude-opus-5-5");
+  assert.equal(summary.tokenUsage?.used, 992);
+  assert.equal(summary.tokenUsage?.limit, 1_000_000);
 });
 
 test("Claude adapter rejects simultaneous sends to the same session", async () => {
   let release!: () => void;
   const calls: any[] = [];
   const queryFactory = mockQuery(async function* (params) {
-    await new Promise<void>((resolve) => { release = resolve; });
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
     yield {
       type: "result",
       subtype: "success",
@@ -1382,8 +1872,13 @@ test("Claude default model follows CLI configuration across turns", async () => 
   assert.equal(adapter.listThreads()[0].model, "default");
   assert.equal(adapter.listThreads()[0].resolvedModel, "claude-sonnet-current");
   await adapter.sendTurn(thread.providerId, thread.id, "two");
-  await waitFor(() => calls.length === 2 && adapter.listThreads()[0].status === "idle");
-  assert.deepEqual(calls.map((call) => call.options.model), [undefined, undefined]);
+  await waitFor(
+    () => calls.length === 2 && adapter.listThreads()[0].status === "idle",
+  );
+  assert.deepEqual(
+    calls.map((call) => call.options.model),
+    [undefined, undefined],
+  );
 });
 
 test("Claude question approval returns the answer map expected by AskUserQuestion", async () => {
@@ -1440,14 +1935,22 @@ test("Claude remains waiting until every concurrent permission is resolved", asy
     initialProfiles: [relayProfile],
     queryFactory: mockQuery(async function* (params) {
       await Promise.all([
-        params.options.canUseTool("Bash", { command: "first" }, {
-          signal: new AbortController().signal,
-          toolUseID: "tool-1",
-        }),
-        params.options.canUseTool("Bash", { command: "second" }, {
-          signal: new AbortController().signal,
-          toolUseID: "tool-2",
-        }),
+        params.options.canUseTool(
+          "Bash",
+          { command: "first" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-1",
+          },
+        ),
+        params.options.canUseTool(
+          "Bash",
+          { command: "second" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-2",
+          },
+        ),
       ]);
       yield {
         type: "result",
@@ -1613,7 +2116,10 @@ test("Claude applies reasoning effort live and stamps it per turn", async (t) =>
   await waitFor(() =>
     adapter
       .listModels(thread.providerId)
-      .some((model) => model.model === "sonnet" && model.supportedReasoningEfforts?.length),
+      .some(
+        (model) =>
+          model.model === "sonnet" && model.supportedReasoningEfforts?.length,
+      ),
   );
   const sonnet = adapter
     .listModels(thread.providerId)
@@ -1630,10 +2136,7 @@ test("Claude applies reasoning effort live and stamps it per turn", async (t) =>
   });
   assert.deepEqual(flagSettings, [{ effortLevel: "high" }]);
   assert.equal(adapter.listThreads()[0].reasoningEffort, "high");
-  assert.equal(
-    settings.get("claude", thread.id)?.reasoningEffort,
-    "high",
-  );
+  assert.equal(settings.get("claude", thread.id)?.reasoningEffort, "high");
 
   // 目录之外的值直接拒绝，不下发给 CLI。
   await assert.rejects(
@@ -1790,9 +2293,7 @@ test("Claude 回合进行中刷新历史不会遗留幽灵运行态", async (t) 
   );
   files.push(file);
   await adapter.sendTurn(thread.providerId, thread.id, "run");
-  await waitFor(
-    () => adapter.listThreads()[0]?.claudeConnected === true,
-  );
+  await waitFor(() => adapter.listThreads()[0]?.claudeConnected === true);
   // 回合进行中重建摘要：map 换上新对象，回合闭包的旧引用不许再往里写。
   await adapter.refreshAll();
   const running = adapter.listThreads()[0];
@@ -1873,9 +2374,7 @@ test("Claude 历史回填撞上紧接着的新回合不丢 activeTurnId", async 
     gatedRead,
   ]);
   await adapter.sendTurn(thread.providerId, thread.id, "two");
-  await waitFor(
-    () => adapter.listThreads()[0]?.activeTurnId !== undefined,
-  );
+  await waitFor(() => adapter.listThreads()[0]?.activeTurnId !== undefined);
   openGate!();
   await waitFor(() => adapter.listThreads()[0]?.status === "idle");
   const done = adapter.listThreads()[0];

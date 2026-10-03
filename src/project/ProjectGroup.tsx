@@ -7,11 +7,17 @@ import {
   MoreHorizontal,
   Pin,
   Plus,
+  Radar,
 } from "lucide-react";
 import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
-import type { Provider, SessionSearchMatch, ThreadSummary } from "../types";
+import type {
+  Provider,
+  SessionSearchMatch,
+  SessionWakeState,
+  ThreadSummary,
+} from "../types";
 import { Status } from "../ui";
 import { relativeTime, sessionKey } from "../format";
 import { ProjectMenu } from "./ProjectMenu";
@@ -21,6 +27,7 @@ export function ProjectGroupView({
   library,
   selected,
   unseenSessions,
+  wakeStates,
   collapsed,
   forkCounts,
   searchQuery,
@@ -43,6 +50,8 @@ export function ProjectGroupView({
   library: "active" | "archived";
   selected?: string;
   unseenSessions: ReadonlySet<string>;
+  /** 会话的 deck-wake 标记（键为 sessionKey）。 */
+  wakeStates?: ReadonlyMap<string, SessionWakeState>;
   collapsed: boolean;
   forkCounts: Map<string, number>;
   searchQuery: string;
@@ -143,6 +152,7 @@ export function ProjectGroupView({
       {visible.map((thread) => {
         const key = sessionKey(thread);
         const unseen = unseenSessions.has(key);
+        const wake = wakeStates?.get(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
         const searchMatch = searchMatches.get(
@@ -250,6 +260,19 @@ export function ProjectGroupView({
                 >
                   <Lock />
                   占用中
+                </small>
+              ) : null}
+              {wake ? (
+                <small
+                  className={`wake-badge ${wake}`}
+                  title={
+                    wake === "lost"
+                      ? "deck-wake watcher 已失联，远端任务没人盯了"
+                      : "deck-wake 正在监督远端任务"
+                  }
+                >
+                  <Radar aria-hidden="true" />
+                  {wake === "lost" ? "失联" : "监督中"}
                 </small>
               ) : null}
               {forks > 0 && <small>{forks} 分支</small>}

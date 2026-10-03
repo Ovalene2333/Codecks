@@ -363,6 +363,10 @@
 }
 
 .ui-section .ui-section__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   color: var(--text);
   font-size: var(--fs-ui);
@@ -414,16 +418,16 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
   background: color-mix(
     in srgb,
     var(--lead, var(--text-faint)) 18%,
     var(--surface)
   );
   color: var(--lead, var(--text-dim));
-  font-size: var(--fs-caption);
+  font-size: var(--fs-ui);
   font-weight: 700;
 }
 
@@ -449,6 +453,7 @@
 }
 
 .ui-row__desc {
+  display: block;
   margin: 2px 0 0;
   color: var(--text-dim);
   font-size: var(--fs-caption);
@@ -474,6 +479,92 @@
 
 .ui-row.is-dim .ui-row__title {
   color: var(--text-dim);
+}
+
+/* 可点进下一级的行：标题区是按钮，整行悬停高亮，行尾一个箭头。 */
+.ui-row--link {
+  transition: background-color var(--ease);
+}
+
+.ui-row--link:hover {
+  background: var(--control-hover);
+}
+
+.ui-row__open {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin: calc(var(--space-3) * -1) 0;
+  padding: var(--space-3) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-row__open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.ui-row__chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: calc(var(--space-1) * -1);
+  color: var(--text-faint);
+}
+
+/* Section 内的小标题：把一个表单分成几组（如「Codex」「Claude Code」）。 */
+.ui-subhead {
+  margin: var(--space-2) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+/* 单选分段：放在行尾时按内容收缩，不撑满。 */
+.ui-choice {
+  display: inline-flex;
+  flex: none;
+  max-width: 100%;
+}
+
+.ui-choice .ui-seg__item {
+  flex: 1 0 auto;
+}
+
+.ui-choice .ui-seg__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-choice .ui-seg__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+/* ── Kbd ────────────────────────────────────────────────── */
+.ui-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--control-border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* ── Field / Input ──────────────────────────────────────── */
@@ -526,6 +617,92 @@
   cursor: not-allowed;
 }
 
+/* 原生 select 自带一段内边距和箭头，文字会比同列 input 往右缩。去掉原生
+   外观，用两道渐变画箭头，左内边距与 input 对齐。 */
+select.ui-input {
+  appearance: none;
+  padding-right: calc(var(--space-3) + 18px);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+/* 共用组件（ModelPicker 等）仍输出旧式 <label>文字<控件></label>；在 kit
+   表单里套一层 .ui-form-compat，让它们与 Field / ui-input 视觉一致。 */
+.ui-form-compat label {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.ui-form-compat label > input,
+.ui-form-compat label > select {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background-color: var(--control);
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 400;
+}
+
+.ui-form-compat label > select {
+  appearance: none;
+  padding-right: calc(var(--space-3) + 18px);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.ui-form-compat label > input:focus,
+.ui-form-compat label > select:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+}
+
+.ui-form-compat .search-picker,
+.ui-form-compat .search-picker-trigger {
+  width: 100%;
+}
+
+.ui-form-compat .search-picker-trigger {
+  min-height: var(--control-h);
+  background: var(--control);
+}
+
+/* 「手动输入 / 从目录选择」挪到标签行右端，不再在控件下方多占一行，
+   两列网格里左右两栏的控件才能顶端对齐。 */
+.ui-form-compat .model-manual-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  line-height: 1.4;
+}
+
+.ui-form-compat .toolbar-hint {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+}
+
 .ui-form {
   display: grid;
   gap: var(--space-3);
@@ -553,7 +730,9 @@
 
 /* 触屏输入框用 16px：低于 16px 时 iOS Safari 聚焦会整页放大。 */
 @media (pointer: coarse) {
-  .ui-input {
+  .ui-input,
+  .ui-form-compat label > input,
+  .ui-form-compat label > select {
     font-size: 16px;
   }
 }

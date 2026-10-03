@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -12,6 +12,8 @@ import {
   type AcpAgentSpec,
 } from "./acp-adapter.js";
 import { ThreadSettingsStore } from "../thread-settings.js";
+import { AgentRegistry } from "./registry.js";
+import { MessageDeliveryQueue } from "../message-delivery.js";
 
 type Json = Record<string, any>;
 
@@ -475,6 +477,121 @@ test("sendTurn streams chunks and completes the turn", async () => {
   );
 });
 
+test("tool items do not retain or emit raw ACP payloads", async () => {
+  const big = `${"x".repeat(80 * 1024)}\nTAIL`;
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-big" }),
+      "session/prompt": (_params, ctx) => {
+        ctx.notify("session/update", {
+          sessionId: "s-big",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "edit-1",
+            kind: "edit",
+            status: "in_progress",
+            title: "Write big.ts",
+            rawInput: { fileText: big },
+            content: [
+              { type: "diff", path: "/tmp/big.ts", oldText: big, newText: big },
+            ],
+          },
+        });
+        ctx.notify("session/update", {
+          sessionId: "s-big",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "fetch-1",
+            kind: "fetch",
+            status: "completed",
+            title: "fetch",
+            rawInput: { url: "https://x", blob: big },
+          },
+        });
+        ctx.notify("session/update", {
+          sessionId: "s-big",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "edit-1",
+            status: "completed",
+          },
+        });
+        ctx.respond({ stopReason: "end_turn" });
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  const events = collectEvents(adapter);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  await adapter.sendTurn("", "s-big", "go");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  // __raw/rawInput 字段不再随事件流或 readThread 出栈：此前每个 tool item
+  // 都把整份 ACP 原始载荷推给每个客户端并永久留在 session 里。
+  const wire = JSON.stringify(
+    events.filter((event) => event.type === "agent.event"),
+  );
+  assert.ok(!wire.includes('"__raw"'));
+  assert.ok(!wire.includes("fileText"), "rawInput 不应出现在事件里");
+
+  const full = (await adapter.readThread("", "s-big")) as any;
+  const items = full.turns.flatMap((turn: any) => turn.items);
+  for (const item of items) assert.ok(!("__raw" in item));
+
+  // rawInput 挂到 item 的 input/arguments 前会逐字段截断长字符串。
+  const fetchItem = items.find(
+    (entry: any) => entry.id === "acp-tool-fetch-1",
+  );
+  assert.ok(fetchItem.arguments.blob.length <= 33 * 1024);
+  assert.ok(fetchItem.arguments.blob.endsWith("TAIL"));
+});
+
+test("long tool output keeps only the tail", async () => {
+  const tail = "TAIL-MARKER";
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-out" }),
+      "session/prompt": (_params, ctx) => {
+        ctx.notify("session/update", {
+          sessionId: "s-out",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "sh-1",
+            kind: "execute",
+            status: "completed",
+            title: "flood",
+            rawInput: { command: "flood" },
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "text",
+                  text: `${"y".repeat(600 * 1024)}\n${tail}`,
+                },
+              },
+            ],
+          },
+        });
+        ctx.respond({ stopReason: "end_turn" });
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  await adapter.sendTurn("", "s-out", "go");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const full = (await adapter.readThread("", "s-out")) as any;
+  const item = full.turns[0].items.find(
+    (entry: any) => entry.id === "acp-tool-sh-1",
+  );
+  assert.ok(item.aggregatedOutput.endsWith(tail));
+  assert.ok(item.aggregatedOutput.length < 520 * 1024);
+  assert.ok(item.aggregatedOutput.startsWith("…"));
+});
+
 test("permission request becomes an approval and resolves back to the agent", async () => {
   const fake = fakeAcpProcess({
     routes: {
@@ -767,6 +884,63 @@ test("readThread replays session/load history", async () => {
   assert.equal(items[1].text, "旧回答");
   assert.equal(items[2].type, "commandExecution");
   assert.equal(items[2].status, "completed");
+});
+
+test("readThread does not re-load an already-live session", async () => {
+  let loads = 0;
+  const fake = fakeAcpProcess({
+    routes: {
+      "session/list": (_params, ctx) =>
+        ctx.respond({ sessions: [{ sessionId: "hist-1", cwd: "/x" }] }),
+      "session/load": (params, ctx) => {
+        loads += 1;
+        ctx.notify("session/update", {
+          sessionId: params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "旧问题" },
+          },
+        });
+        ctx.respond({});
+      },
+    },
+  });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.readThread("", "hist-1");
+  await adapter.readThread("", "hist-1");
+  await adapter.readThread("", "hist-1");
+  // agent 端每次 session/load 都会新建一份会话状态；live 会话靠
+  // session/update 流保鲜，重复回放是纯开销。
+  assert.equal(loads, 1);
+});
+
+test("ACP live user messages and replay preserve image parts for bubble reconciliation", async () => {
+  const fake = fakeAcpProcess({ routes: {
+    "session/list": (_params, ctx) => ctx.respond({ sessions: [{ sessionId: "images", cwd: "/x" }] }),
+    "session/load": (params, ctx) => {
+      for (const content of [{ type: "text", text: "看看图片" },
+        { type: "image", mimeType: "image/png", data: "aGVsbG8=" }]) ctx.notify("session/update", {
+        sessionId: params.sessionId, update: { sessionUpdate: "user_message_chunk", content },
+      });
+      ctx.respond({});
+    },
+    "session/prompt": (_params, ctx) => ctx.respond({ stopReason: "end_turn" }),
+  } });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  const replay = await adapter.readThread("", "images") as any;
+  assert.deepEqual(replay.turns[0].items[0].content, [
+    { type: "text", text: "看看图片" },
+    { type: "image", url: "data:image/png;base64,aGVsbG8=", name: undefined },
+  ]);
+  await adapter.sendTurn("", "images", "新图片", [{ url: "data:image/png;base64,aGVsbG8=", name: "sample.png" }]);
+  const live = await adapter.readThread("", "images") as any;
+  assert.deepEqual(live.turns.at(-1).items[0].content, [
+    { type: "text", text: "新图片" },
+    { type: "image", url: "data:image/png;base64,aGVsbG8=", name: "sample.png" },
+  ]);
+  await adapter.restart();
 });
 
 test("per-turn model snapshots follow replay turns after a session/load", async () => {
@@ -1212,6 +1386,66 @@ test("descriptor reports fallbackFor only for fallback agents", () => {
     fallbackFor: "claude",
   });
   assert.equal(fallback.descriptor().fallbackFor, "claude");
+});
+
+test("message API queue remains FIFO after cancelling the active ACP prompt", async (t) => {
+  const held: RouteContext[] = [];
+  const prompts: Json[] = [];
+  const fake = fakeAcpProcess({ routes: {
+    "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-message" }),
+    "session/prompt": (params, ctx) => { prompts.push(params); held.push(ctx); },
+  } });
+  const adapter = adapterWith(fake);
+  t.after(() => adapter.restart());
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  const first = await adapter.sendMessage("", "s-message", { text: "first", mode: "start" });
+  const second = await adapter.sendMessage("", "s-message", { text: "second" });
+  assert.equal(first.disposition, "started");
+  assert.equal(second.disposition, "queued");
+  assert.equal(second.queueDurability, "memory");
+  await assert.rejects(adapter.sendMessage("", "s-message", {
+    text: "strict append", mode: "append", expectedTurnId: first.turnId,
+  }), { code: "unsupported" });
+  await adapter.interrupt("", "s-message", first.turnId!);
+  held.shift()!.respond({ stopReason: "cancelled" });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1].prompt[0].text, "second");
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+});
+
+test("ACP feedback interrupts then runs before legacy queued messages", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-acp-feedback-"));
+  const held: RouteContext[] = [];
+  const prompts: Json[] = [];
+  const fake = fakeAcpProcess({ routes: {
+    "session/new": (_params, ctx) => ctx.respond({ sessionId: "s-feedback" }),
+    "session/prompt": (params, ctx) => { prompts.push(params); held.push(ctx); },
+  } });
+  const adapter = adapterWith(fake);
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  await adapter.sendTurn("", "s-feedback", "first");
+  await adapter.sendTurn("", "s-feedback", "legacy queued");
+  const deliveries = new MessageDeliveryQueue({ file: path.join(dir, "messages.json"), agents: new AgentRegistry([adapter]), timer: false });
+  await deliveries.load();
+  t.after(async () => { deliveries.close(); await adapter.restart(); await rm(dir, { recursive: true, force: true }); });
+  await deliveries.enqueue(adapter.id, "s-feedback", "feedback", { text: "feedback" });
+  const dispatch = deliveries.tick();
+  const deadline = Date.now() + 1000;
+  while (!fake.seen.some((msg) => msg.method === "session/cancel") && Date.now() < deadline)
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.ok(fake.seen.some((msg) => msg.method === "session/cancel"));
+  held.shift()!.respond({ stopReason: "cancelled" });
+  await dispatch;
+  assert.deepEqual(prompts.map((item) => item.prompt[0].text), ["first", "feedback"]);
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(prompts.map((item) => item.prompt[0].text), ["first", "feedback", "legacy queued"]);
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
 });
 
 test("restart() followed by startAll() waits for the old process to exit", async () => {

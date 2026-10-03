@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Folder, Gauge, MessageSquare } from "lucide-react";
 import type { ProjectRecord, RuntimeSnapshot, ThreadSummary } from "../types";
 import {
-  formatResetCountdown,
+  CODEX_QUOTA_TITLE,
+  estimateAccountQuota,
+  formatResetLabel,
   formatWindowLength,
   remainingPercent,
   usageChipMetric,
@@ -30,10 +32,10 @@ export function UsageChip({
     <button
       type="button"
       className={`usage-chip ${tone}`}
-      title="账号额度"
+      title={CODEX_QUOTA_TITLE}
       onClick={onOpen}
     >
-      <span className="usage-chip-label">额度</span>
+      <span className="usage-chip-label">{CODEX_QUOTA_TITLE}</span>
       <span className="usage-chip-metric">{metric}</span>
       {pct != null ? (
         <i className="usage-chip-track" aria-hidden="true">
@@ -63,15 +65,6 @@ export function UsageDrawer({
 }) {
   const [tab, setTab] = useState<UsageView>(initialView);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
-  const usageCost = useMemo(() => {
-    const stats = buildUsageStats(threads, projects);
-    return stats.sessions.reduce(
-      (sum, row) =>
-        sum +
-        estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
-      0,
-    );
-  }, [threads, projects]);
   const refreshLimits = useCallback(
     async (force = false) => {
       setRefreshingLimits(true);
@@ -107,7 +100,7 @@ export function UsageDrawer({
           className={tab === "limits" ? "on" : ""}
           onClick={() => setTab("limits")}
         >
-          账号额度
+          {CODEX_QUOTA_TITLE}
         </button>
       </div>
       {tab === "stats" ? (
@@ -119,7 +112,6 @@ export function UsageDrawer({
       ) : (
         <OfficialLimits
           runtime={runtime}
-          usageCost={usageCost}
           refreshing={refreshingLimits}
           onRefresh={refreshLimits}
         />
@@ -282,20 +274,20 @@ function UsageRow({
 
 function OfficialLimits({
   runtime,
-  usageCost,
   refreshing,
   onRefresh,
 }: {
   runtime?: RuntimeSnapshot;
-  usageCost?: number;
   refreshing: boolean;
   onRefresh: (force?: boolean) => void;
 }) {
   const limits = runtime?.rateLimits;
   const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
   const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
-  const planName = limits?.planName || runtime?.account?.planType || "Official";
-  const price = planPrice(limits?.planName || runtime?.account?.planType);
+  const plan = limits?.planName || runtime?.account?.planType;
+  const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "Codex";
+  const price = planPrice(plan);
+  const quota = estimateAccountQuota(limits, runtime?.accountUsageDaily);
   return (
     <div className="usage-limits">
       <p className="usage-plan">
@@ -303,16 +295,18 @@ function OfficialLimits({
         {price != null ? ` · $${price}/月` : ""}
         {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
       </p>
-      {usageCost != null && usageCost > 0 ? (
-        <p className="usage-plan">
-          已消耗 token 折算 ≈ {formatCost(usageCost)}
+      {quota ? (
+        <p className="usage-plan" title="阶段用量 ÷ 窗口已用百分比，按窗口长度放大到一个月">
+          估算本期额度 ≈ {formatTokens(quota.monthlyQuota)} tok/月
+          （{quota.windowLabel}窗口实测 {formatTokens(quota.stageTokens)} tok ≈{" "}
+          {Math.round(quota.usedPercent)}%）
         </p>
       ) : null}
       {runtime?.rateLimitsError || !limits ? (
         <div className="usage-unavailable" aria-live="polite">
           <p>
             {refreshing
-              ? "正在读取 Official 账号额度…"
+              ? `正在读取 ${CODEX_QUOTA_TITLE}…`
               : runtime?.rateLimitsError || "额度不可用"}
           </p>
           <button
@@ -366,14 +360,14 @@ function UsageWindow({
   const usedPct =
     window.usedPercent != null ? Math.round(window.usedPercent) : null;
   const remainingPct = remainingPercent(window.usedPercent);
-  const reset = formatResetCountdown(window);
+  const reset = formatResetLabel(window);
   return (
     <div
       className={`usage-window ${window.reached || (usedPct ?? 0) >= 85 ? "hot" : ""}`}
     >
       <div>
         <b>{label}</b>
-        <small>{reset ? `重置 ${reset}` : "重置时间未知"}</small>
+        <small>{reset || "重置时间未知"}</small>
       </div>
       <strong>{remainingPct == null ? "—" : `剩余 ${remainingPct}%`}</strong>
       <div className="context-track">

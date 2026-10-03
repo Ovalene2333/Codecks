@@ -10,16 +10,20 @@ import {
   ChevronDown,
   CircleStop,
   ImagePlus,
+  Info,
   Send,
   SlidersHorizontal,
   X,
 } from "lucide-react";
-import type { ThreadSummary } from "../types";
-import { matchingSlashCommands, opensCommandPanel } from "./commands";
+import type { AgentCapabilities, ThreadSummary, MessageDeliveryMode } from "../types";
+import { messageControls } from "./message-controls";
+import { composerEnterAction, useDeckSettings } from "../deck-settings";
+import { matchingSlashCommands, opensCommandPanel, parseComposerCommand } from "./commands";
 import { collectComposerImages, type ComposerImage } from "./images";
 
 export function Composer({
   thread,
+  capabilities,
   text,
   images,
   sending,
@@ -37,6 +41,7 @@ export function Composer({
   onCancelBranch,
 }: {
   thread: ThreadSummary;
+  capabilities?: AgentCapabilities;
   text: string;
   images: ComposerImage[];
   sending: boolean;
@@ -44,7 +49,7 @@ export function Composer({
   extraCommands?: Array<{ name: string; hint?: string }>;
   onChange: (value: string) => void;
   onImages: (images: ComposerImage[]) => void;
-  onSend: () => void;
+  onSend: (mode?: MessageDeliveryMode) => void;
   onCommand: (command: string) => void;
   onStop: () => void;
   onError?: (message: string) => void;
@@ -60,12 +65,18 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   const [activeCmd, setActiveCmd] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpTrigger = useRef<HTMLButtonElement>(null);
+  const { sendKey } = useDeckSettings();
   const settingsId = useId();
+  const helpId = useId();
   const compacting = Boolean(thread.compacting);
-  const running =
-    Boolean(thread.activeTurnId) &&
-    (thread.status === "running" || thread.status === "waiting");
+  const modes = capabilities?.messages?.deliveryModes;
+  const mode = modes?.includes("queue") ? "queue" : modes?.[0];
+  const controls = messageControls(thread, capabilities, mode);
+  const running = controls.busy;
   const composerAgentId = thread.agentId || "codex";
+  const sendBlocked = controls.blocked && !parseComposerCommand(text.trim(), composerAgentId);
   const suggestions = matchingSlashCommands(
     text,
     composerAgentId,
@@ -81,7 +92,10 @@ export function Composer({
     node.style.height = text ? `${Math.min(node.scrollHeight, 160)}px` : "";
   }, [text]);
   useEffect(() => setActiveCmd(0), [text]);
-  useEffect(() => setSettingsOpen(false), [thread.id]);
+  useEffect(() => {
+    setSettingsOpen(false);
+    setHelpOpen(false);
+  }, [thread.id, thread.agentId]);
   // 菜单限高后可滚动：键盘上下移动时让高亮项保持可见。
   useLayoutEffect(() => {
     const container = menu.current;
@@ -132,6 +146,14 @@ export function Composer({
   return (
     <footer
       className={`composer ${running ? "running" : ""} ${compacting ? "compacting" : ""} ${dragOver ? "drag-over" : ""}`}
+      onKeyDown={(event) => {
+        if (helpOpen && event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setHelpOpen(false);
+          helpTrigger.current?.focus();
+        }
+      }}
       onDragEnter={(event) => {
         if (event.dataTransfer?.types.includes("Files")) setDragOver(true);
       }}
@@ -209,19 +231,31 @@ export function Composer({
           )}
         </div>
       )}
-      {sessionControls && (
-        <>
-          {settingsOpen && (
-            <div id={settingsId} className="composer-session-controls">
-              {sessionControls}
-            </div>
-          )}
-          <div className="composer-session-summary">
-            {!settingsOpen && (
-              <span title={thread.resolvedModel || thread.model || "默认模型"}>
-                {thread.resolvedModel || thread.model || "默认模型"}
-              </span>
-            )}
+      {sessionControls && settingsOpen && (
+        <div id={settingsId} className="composer-session-controls">
+          {sessionControls}
+        </div>
+      )}
+      <div className="composer-session-summary">
+        {sessionControls && !settingsOpen && (
+          <span title={thread.resolvedModel || thread.model || "默认模型"}>
+            {thread.resolvedModel || thread.model || "默认模型"}
+          </span>
+        )}
+        <div className="composer-summary-actions">
+          <button
+            ref={helpTrigger}
+            type="button"
+            className="composer-settings-trigger"
+            aria-label="发送说明"
+            aria-expanded={helpOpen}
+            aria-controls={helpId}
+            onClick={() => setHelpOpen((open) => !open)}
+          >
+            <Info />
+            发送说明
+          </button>
+          {sessionControls && (
             <button
               type="button"
               className="composer-settings-trigger"
@@ -234,8 +268,17 @@ export function Composer({
               设置
               <ChevronDown className={settingsOpen ? "open" : ""} />
             </button>
-          </div>
-        </>
+          )}
+        </div>
+      </div>
+      {helpOpen && (
+        <div id={helpId} className="composer-send-help">
+          <dl>
+            <div><dt>追加</dt><dd>默认等当前任务完成后，再处理这条消息。</dd></div>
+            <div><dt>即时反馈</dt><dd>在待发送气泡上点击“即时反馈”，现在介入；必要时会先停止当前任务。</dd></div>
+          </dl>
+          <p>{controls.help}</p>
+        </div>
       )}
       <div className="composer-box">
         <button
@@ -297,21 +340,15 @@ export function Composer({
               selectSuggestion(item, event.key === "Enter");
               return;
             }
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (composerEnterAction(event, sendKey) === "send") {
               event.preventDefault();
-              onSend();
+              if (!compacting && !sendBlocked && canSend && !sending) onSend(mode);
             }
           }}
-          placeholder={
-            compacting
-              ? "正在压缩上下文"
-              : running
-                ? "追加到当前任务…"
-                : "发送新指令…"
-          }
+          placeholder={controls.placeholder}
         />
         <div className="composer-actions">
-          {running && thread.activeTurnId ? (
+          {running && thread.activeTurnId && capabilities?.interrupt !== false ? (
             <button
               type="button"
               className="send stop"
@@ -324,9 +361,9 @@ export function Composer({
           <button
             type="button"
             className="send"
-            title={running ? "追加到当前任务" : "发送新指令"}
-            onClick={onSend}
-            disabled={compacting || !canSend || sending}
+            title={controls.label}
+            onClick={() => onSend(mode)}
+            disabled={compacting || sendBlocked || !canSend || sending}
           >
             <Send />
           </button>

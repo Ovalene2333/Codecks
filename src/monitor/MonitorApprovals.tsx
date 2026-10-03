@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent,
+} from "react";
 import {
   BellRing,
   ChevronLeft,
@@ -7,7 +13,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import type { DeckNotificationPermission } from "../notifications";
-import { ApprovalCard } from "../session/ApprovalCard";
+import { ApprovalCard, type ApprovalDraft } from "../session/ApprovalCard";
 import { threadForApproval } from "../session/approvals";
 import type { Approval, ApprovalResolveBody, ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
@@ -45,7 +51,15 @@ export function MonitorApprovals({
   onResolve: (id: string, body: ApprovalResolveBody) => void | Promise<void>;
 }) {
   const [resolvingId, setResolvingId] = useState<string>();
+  const resolvingRef = useRef(false);
+  const [resolveError, setResolveError] = useState<{
+    id: string;
+    message: string;
+  }>();
+  const [drafts, setDrafts] = useState<Record<string, ApprovalDraft>>({});
   const lastIndex = useRef(0);
+  const scrollPositions = useRef<Record<string, number>>({});
+  const bodyRef = useRef<HTMLDivElement>(null);
   const swipe = useRef<{ x: number; y: number } | undefined>(undefined);
   const found = approvals.findIndex((approval) => approval.id === activeId);
   const index =
@@ -58,8 +72,28 @@ export function MonitorApprovals({
     if (active && active.id !== activeId) onActiveChange(active.id);
   }, [active, activeId, index, onActiveChange]);
 
+  useLayoutEffect(() => {
+    if (!active) return;
+    const content =
+      bodyRef.current?.querySelector<HTMLElement>(".approval-content");
+    if (content) content.scrollTop = scrollPositions.current[active.id] || 0;
+  }, [active?.id]);
+
+  useEffect(() => {
+    const pending = new Set(approvals.map((approval) => approval.id));
+    setDrafts((current) => {
+      if (Object.keys(current).every((id) => pending.has(id))) return current;
+      return Object.fromEntries(
+        Object.entries(current).filter(([id]) => pending.has(id)),
+      );
+    });
+    for (const id of Object.keys(scrollPositions.current)) {
+      if (!pending.has(id)) delete scrollPositions.current[id];
+    }
+  }, [approvals]);
+
   const move = (offset: number) => {
-    if (approvals.length < 2) return;
+    if (approvals.length < 2 || resolvingRef.current) return;
     const next = (index + offset + approvals.length) % approvals.length;
     onActiveChange(approvals[next].id);
   };
@@ -83,11 +117,20 @@ export function MonitorApprovals({
   if (!active) return null;
 
   const resolve = async (id: string, body: ApprovalResolveBody) => {
-    if (resolvingId) return;
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
     setResolvingId(id);
+    setResolveError(undefined);
     try {
       await onResolve(id, body);
+    } catch (error) {
+      setResolveError({
+        id,
+        message:
+          error instanceof Error ? error.message : "审批处理失败，请重试",
+      });
     } finally {
+      resolvingRef.current = false;
       setResolvingId(undefined);
     }
   };
@@ -120,6 +163,7 @@ export function MonitorApprovals({
             <button
               type="button"
               className="icon-btn"
+              disabled={Boolean(resolvingId)}
               onClick={() => move(-1)}
               aria-label="上一条审批"
               title="上一条（←）"
@@ -132,6 +176,7 @@ export function MonitorApprovals({
             <button
               type="button"
               className="icon-btn"
+              disabled={Boolean(resolvingId)}
               onClick={() => move(1)}
               aria-label="下一条审批"
               title="下一条（→）"
@@ -142,10 +187,19 @@ export function MonitorApprovals({
         ) : null}
       </header>
       <div
+        ref={bodyRef}
         className="monitor-approvals-body"
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerCancel={() => (swipe.current = undefined)}
+        onScrollCapture={(event) => {
+          const target = event.target;
+          if (
+            target instanceof HTMLElement &&
+            target.classList.contains("approval-content")
+          )
+            scrollPositions.current[active.id] = target.scrollTop;
+        }}
         aria-live="polite"
       >
         {thread ? (
@@ -170,6 +224,13 @@ export function MonitorApprovals({
             approval={active}
             onResolve={resolve}
             disabled={resolvingId === active.id}
+            error={
+              resolveError?.id === active.id ? resolveError.message : undefined
+            }
+            draft={drafts[active.id]}
+            onDraftChange={(draft) =>
+              setDrafts((current) => ({ ...current, [active.id]: draft }))
+            }
           />
         </RenderErrorBoundary>
       </div>

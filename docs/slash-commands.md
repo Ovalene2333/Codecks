@@ -11,7 +11,7 @@
 | `/skills [query]`                   | 读取当前目录可用 Skill，搜索后将 `$skill-name` 插入输入框                              |
 | `/status`                           | 显示模型、推理强度、状态、权限、Fast、上下文、供应商、目录及线程 ID                    |
 | `/ps`                               | 打开任务中心并筛选当前 Session；支持停止 Turn，Runtime 支持时可单独停止后台终端        |
-| `/usage`                            | 打开 Official 账号额度面板                                                             |
+| `/usage`                            | 打开 Codex 额度面板                                                                    |
 | `/mention [query]`                  | 通过 Runtime 搜索当前工作区文件，将 `@path` 插入输入框                                 |
 | `/fast [on\|off]`                   | 开关当前会话的 Fast service tier；省略参数时切换当前状态                               |
 | `/mcp [verbose]`                    | 查看 MCP 服务器、认证状态及工具；详细模式同时列出资源和模板                            |

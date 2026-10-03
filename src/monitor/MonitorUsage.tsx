@@ -4,15 +4,14 @@ import { formatTokens, sessionKey } from "../format";
 import type { RateLimitWindow, RuntimeSnapshot, ThreadSummary } from "../types";
 import { estimateCost, formatCost } from "../usage/cost";
 import {
-  formatResetCountdown,
-  formatWindowLength,
+  formatResetLabel,
+  rankedQuotaWindows,
   remainingPercent,
 } from "../usage/format";
 import { buildUsageStats } from "../usage/stats";
 import type { UsageView } from "../usage/UsageChip";
 import { contextPercent, contextTone } from "./activity";
 
-const TOP_SESSIONS = 3;
 const CONTEXT_ALERT = 80;
 
 function LimitRow({ label, window }: { label: string; window?: RateLimitWindow }) {
@@ -20,13 +19,13 @@ function LimitRow({ label, window }: { label: string; window?: RateLimitWindow }
   if (left == null) return null;
   const tone =
     window?.reached || left <= 0 ? "danger" : left <= 15 ? "warn" : "";
-  const reset = formatResetCountdown(window);
+  const reset = formatResetLabel(window);
   return (
     <div className={`monitor-meter ${tone}`}>
       <div className="monitor-meter-label">
         <span>{label}</span>
         <b>剩余 {left}%</b>
-        {reset ? <small>{reset} 后重置</small> : null}
+        {reset ? <small>{reset}</small> : null}
       </div>
       <i className="monitor-meter-track" aria-hidden="true">
         <b style={{ width: `${left}%` }} />
@@ -49,7 +48,8 @@ export function MonitorUsage({
   onOpenUsage: (view: UsageView) => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
-  const { totals, cost, top, crowded } = useMemo(() => {
+  // 按会话排行的用量在「明细」抽屉里看，首页右栏只留总量、额度和需要处理的上下文。
+  const { totals, cost, crowded } = useMemo(() => {
     const stats = buildUsageStats(threads);
     const cost = stats.sessions.reduce(
       (sum, row) =>
@@ -63,13 +63,21 @@ export function MonitorUsage({
     return {
       totals: stats.totals,
       cost,
-      top: stats.sessions.slice(0, TOP_SESSIONS),
       crowded,
     };
   }, [threads]);
   const limits = runtime?.rateLimits;
-  const primary = formatWindowLength(limits?.primary?.windowDurationMins);
-  const secondary = formatWindowLength(limits?.secondary?.windowDurationMins);
+  // 只展示最容易触顶的两个窗口（一般就是 5h 和 7d），按窗口时长短到长排。
+  const quotaRows = rankedQuotaWindows(limits)
+    .slice(0, 2)
+    .sort(
+      (a, b) =>
+        (a.durationMins ?? Number.MAX_SAFE_INTEGER) -
+          (b.durationMins ?? Number.MAX_SAFE_INTEGER) ||
+        a.remaining - b.remaining,
+    );
+  const plan = limits?.planName || runtime?.account?.planType;
+  const planLabel = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "";
   const hasLimits = Boolean(limits || runtime?.rateLimitsError);
   const refresh = async () => {
     setRefreshing(true);
@@ -113,7 +121,7 @@ export function MonitorUsage({
       {hasLimits ? (
         <div className="monitor-usage-block">
           <div className="monitor-usage-subhead">
-            <span>{limits?.planName || runtime?.account?.planType || "Official"} 额度</span>
+            <span>Codex{planLabel ? ` ${planLabel}` : ""} 额度</span>
             <button
               type="button"
               className="icon-btn"
@@ -129,12 +137,9 @@ export function MonitorUsage({
             <p className="monitor-muted">{runtime?.rateLimitsError || "额度不可用"}</p>
           ) : (
             <>
-              <LimitRow label={primary ? `主窗口 · ${primary}` : "主窗口"} window={limits.primary} />
-              <LimitRow
-                label={secondary ? `次窗口 · ${secondary}` : "次窗口"}
-                window={limits.secondary}
-              />
-              <LimitRow label="月度" window={limits.monthly} />
+              {quotaRows.map((row) => (
+                <LimitRow key={row.id} label={row.label} window={row.window} />
+              ))}
             </>
           )}
         </div>
@@ -153,24 +158,6 @@ export function MonitorUsage({
             >
               <span title={thread.name}>{thread.name}</span>
               <b>{percent}%</b>
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {top.length ? (
-        <div className="monitor-usage-block">
-          <div className="monitor-usage-subhead">
-            <span>用量最多</span>
-          </div>
-          {top.map((row) => (
-            <button
-              type="button"
-              key={row.key}
-              className="monitor-usage-row"
-              onClick={() => onSelect(row.thread)}
-            >
-              <span title={row.thread.name}>{row.thread.name}</span>
-              <b>{formatTokens(row.totals.total)}</b>
             </button>
           ))}
         </div>

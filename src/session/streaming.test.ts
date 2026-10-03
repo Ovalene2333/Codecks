@@ -26,6 +26,18 @@ const delta = (
   ...overrides,
 });
 
+test("user message start/completion events are collected for immediate rendering and reconciliation", () => {
+  const item = { id: "user-live", type: "userMessage", content: [{ type: "text", text: "问题" }] };
+  const events = ["item/started", "item/completed"].map((method) => ({
+    method, providerId: "official", params: { threadId: "thread-1", turnId: "turn-1", item },
+  }));
+  const live = collectStreamed(events, "official", "thread-1", "turn-1");
+  assert.equal(live.items.length, 1);
+  assert.equal(live.items[0].item.type, "userMessage");
+  assert.equal(live.items[0].item.status, "completed");
+  assert.deepEqual(live.entries, [{ kind: "item", itemId: "user-live" }]);
+});
+
 test("streaming keeps separate agent items separate and ordered", () => {
   assert.deepEqual(
     collectStreamedAgentMessages(

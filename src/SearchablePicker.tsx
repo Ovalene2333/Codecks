@@ -203,7 +203,10 @@ export function SearchablePicker({
       closePanel(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closePanel();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePanel();
+      }
     };
     window.addEventListener("resize", refreshAnchor);
     document.addEventListener("scroll", refreshAnchor, true);

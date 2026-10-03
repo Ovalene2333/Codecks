@@ -18,7 +18,7 @@ export function ProviderSwitchModal({
   providers: Provider[];
   agentProfiles: AgentProfile[];
   onClose: () => void;
-  onCreated: (providerId: string, threadId: string) => void;
+  onCreated: (providerId: string, threadId: string, thread?: any) => void;
 }) {
   const isClaude = thread.agentId === "claude";
   const choices = isClaude
@@ -61,7 +61,7 @@ export function ProviderSwitchModal({
             reasoningEffort: reasoningEffort || undefined,
           },
         );
-        onCreated(targetProviderId, created.id);
+        onCreated(targetProviderId, created.id, created);
       }
       onClose();
     } catch (err: any) {
@@ -86,7 +86,7 @@ export function ProviderSwitchModal({
               {isClaude
                 ? "Claude 会保留当前 Session ID 和完整历史；切换只修改此会话的 relay 绑定，不会更改 CC Switch 当前项。"
                 : unsent
-                  ? "此会话还没有发送过消息，没有可 fork 的历史。切换后会在目标供应商下沿用当前项目目录和会话设置。"
+                  ? "此会话尚未发送过消息，没有可 fork 的历史。切换后将在目标供应商下沿用当前项目目录与会话设置。"
                   : "Codex 会 fork 当前 Session 的完整历史，并让新分支使用目标供应商；原分支保留，运行中或待审批时不能切换。"}
             </p>
           </div>

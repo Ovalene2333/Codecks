@@ -8,6 +8,7 @@ import {
   FolderSearch,
   GitFork,
   Pencil,
+  Puzzle,
   RotateCcw,
   ScanSearch,
   Undo2,
@@ -31,12 +32,18 @@ import {
 import { userMessageText } from "./user-message";
 import type { PendingUserMessage } from "./optimistic";
 import {
+  collabAgentStateLabel,
+  collabReceiverNames,
+  collabToolLabel,
   commandPresentation,
   fileChangeGroupLabel,
   groupTurnItems,
   isTrivialToolOutput,
   openCodeFileTarget,
   reasoningText,
+  subAgentActivityName,
+  subAgentKindLabel,
+  subAgentKindVerb,
   toolCallPresentation,
   turnReadTargets,
   type TurnRenderEntry,
@@ -52,11 +59,72 @@ function UnknownItem({ item }: { item: any }) {
   } catch {
     raw = String(item?.type || "unknown");
   }
+  const type = displayText(item?.type) || "unknown";
+  // 兜底行也走 tool-row 语言：类型名当动作，挑一个最像“对象”的字段当目标。
+  const hint = displayText(
+    item?.title || item?.command || item?.path || item?.tool || item?.name,
+  );
   return (
-    <details className="unknown-item">
-      <summary>{item?.type || "unknown"}</summary>
+    <details className="tool-row unknown-item">
+      <summary>
+        <Puzzle />
+        <span className="tool-action">{type}</span>
+        {hint ? (
+          <code className="tool-command" title={hint}>
+            {hint}
+          </code>
+        ) : null}
+      </summary>
       <pre>{raw}</pre>
     </details>
+  );
+}
+
+/**
+ * 子代理卡片：OpenCode 的 task、Codex 的 collabAgentToolCall 与
+ * subAgentActivity 共用同一副面孔——Bot 图标 + 状态色竖条 + 标题 +
+ * 右侧标签 + 可展开输出。
+ */
+function SubAgentCard({
+  state,
+  action,
+  title,
+  tag,
+  output,
+  activity,
+}: {
+  state: "running" | "failed" | "interrupted" | "ok";
+  action: string;
+  title?: string;
+  tag?: string;
+  output?: string;
+  activity?: string;
+}) {
+  return (
+    <div className={`tool-row subagent-row ${state}`}>
+      <details>
+        <summary>
+          <Bot />
+          <span className="tool-action">{action}</span>
+          {title ? (
+            <code className="tool-command" title={title}>
+              {title}
+            </code>
+          ) : null}
+          {tag ? (
+            <span className="subagent-agent" title={tag}>
+              {tag}
+            </span>
+          ) : null}
+        </summary>
+        {output ? <pre>{output}</pre> : null}
+      </details>
+      {state === "running" && activity ? (
+        <div className="subagent-activity" title={activity}>
+          {activity}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -91,6 +159,8 @@ function TurnItemInner({
   if (item.type === "userMessage") {
     const images = userImageParts(item);
     const text = userText(item);
+    // 整条都是注入上下文/控制回显的消息剥净后为空，不渲染空气泡。
+    if (!text && !images.length) return null;
     return (
       <div className="user-message-wrap">
         <div className="message user">
@@ -195,22 +265,6 @@ function TurnItemInner({
       </div>
     );
   }
-  const standaloneImages = assistantImageParts(item);
-  if (standaloneImages.length > 0)
-    return (
-      <div className="message agent image-message">
-        <div className="message-images assistant-images">
-          {standaloneImages.map((image, index) => (
-            <DeferredImage
-              key={`${image.url}-${index}`}
-              src={image.url}
-              alt={image.alt || "生成或引用的图片"}
-              thread={thread}
-            />
-          ))}
-        </div>
-      </div>
-    );
   if (item.type === "reasoning")
     return (
       <details className="tool-row reasoning">
@@ -228,39 +282,95 @@ function TurnItemInner({
         : item.status === "failed"
           ? "failed"
           : "ok";
-    const title = displayText(item.title) || "子代理";
-    const agent = displayText(item.agent);
-    const activity = displayText(item.activity);
-    const output = displayText(item.aggregatedOutput);
     return (
-      <div className={`tool-row subagent-row ${state}`}>
-        <details>
-          <summary>
-            <Bot />
-            <span className="tool-action">
-              {state === "running"
-                ? "子代理执行中"
-                : state === "failed"
-                  ? "子代理失败"
-                  : "子代理"}
-            </span>
-            <code className="tool-command" title={title}>
-              {title}
-            </code>
-            {agent ? (
-              <span className="subagent-agent" title={agent}>
-                {agent}
-              </span>
-            ) : null}
-          </summary>
-          {output ? <pre>{output}</pre> : null}
-        </details>
-        {state === "running" && activity ? (
-          <div className="subagent-activity" title={activity}>
-            {activity}
-          </div>
-        ) : null}
-      </div>
+      <SubAgentCard
+        state={state}
+        action={
+          state === "running"
+            ? "子代理执行中"
+            : state === "failed"
+              ? "子代理失败"
+              : "子代理"
+        }
+        title={displayText(item.title) || "子代理"}
+        tag={displayText(item.agent)}
+        output={displayText(item.aggregatedOutput)}
+        activity={displayText(item.activity)}
+      />
+    );
+  }
+  // Codex 多代理：subAgentActivity 是子代理生命周期的 tick
+  // （{kind, agentThreadId, agentPath}），展开给路径与线程 id 方便对照。
+  if (item.type === "subAgentActivity") {
+    const kind = String(item.kind || "");
+    const name = subAgentActivityName(item);
+    const path = displayText(item.agentPath ?? item.agent_path);
+    const threadRef = displayText(item.agentThreadId ?? item.agent_thread_id);
+    return (
+      <SubAgentCard
+        state={kind === "interrupted" ? "interrupted" : "ok"}
+        action={subAgentKindLabel(kind)}
+        title={name || threadRef}
+        output={[path, threadRef].filter(Boolean).join("\n")}
+      />
+    );
+  }
+  // collabAgentToolCall 是父代理侧的协作工具调用（spawn/sendInput/
+  // resume/wait/close），prompt 与 agentsStates 放进展开详情。
+  if (item.type === "collabAgentToolCall") {
+    const state =
+      item.status === "inProgress"
+        ? "running"
+        : item.status === "failed"
+          ? "failed"
+          : "ok";
+    const tool = String(item.tool || "");
+    const prompt = displayText(item.prompt).trim();
+    const receivers = (
+      Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []
+    )
+      .map((id: any) => String(id || ""))
+      .filter(Boolean);
+    const receiverNames = collabReceiverNames(item);
+    const states: Record<string, any> =
+      item.agentsStates && typeof item.agentsStates === "object"
+        ? item.agentsStates
+        : {};
+    const agentIds = [...new Set([...receivers, ...Object.keys(states)])];
+    const agentName = (id: string) => receiverNames.get(id) || id.slice(0, 8);
+    const agentLines = agentIds.map((id) =>
+      [
+        agentName(id),
+        collabAgentStateLabel(states[id]?.status),
+        displayText(states[id]?.message).trim(),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    const meta = [
+      displayText(item.model),
+      displayText(item.reasoningEffort),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const title =
+      prompt ||
+      (agentIds.length === 1
+        ? agentName(agentIds[0])
+        : agentIds.length > 1
+          ? `${agentIds.length} 个子代理`
+          : "");
+    return (
+      <SubAgentCard
+        state={state}
+        action={collabToolLabel(tool, state === "running")}
+        title={title}
+        tag={displayText(item.model)}
+        output={[meta, prompt, agentLines.join("\n")]
+          .filter(Boolean)
+          .join("\n\n")}
+        activity={agentLines.join(" · ")}
+      />
     );
   }
   if (item.type === "commandExecution") {
@@ -363,6 +473,25 @@ function TurnItemInner({
       </details>
     );
   }
+  // 裸图片项（imageView/imageGeneration 等没有专属渲染器的类型）兜底——
+  // 必须排在已知类型之后，否则带 output/result/path 字段的工具项会被
+  // 误识别成图片卡片。
+  const standaloneImages = assistantImageParts(item);
+  if (standaloneImages.length > 0)
+    return (
+      <div className="message agent image-message">
+        <div className="message-images assistant-images">
+          {standaloneImages.map((image, index) => (
+            <DeferredImage
+              key={`${image.url}-${index}`}
+              src={image.url}
+              alt={image.alt || "生成或引用的图片"}
+              thread={thread}
+            />
+          ))}
+        </div>
+      </div>
+    );
   return <UnknownItem item={item} />;
 }
 
@@ -454,6 +583,46 @@ function ToolGroup({
               <code title={file}>{file}</code>
               {status ? <span className="tool-status">{status}</span> : null}
               {showOutput ? <pre>{showOutput}</pre> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
+/** 连续的 subAgentActivity tick 收成一行；展开看每条的种类与目标代理。 */
+function SubAgentTickGroup({ items }: { items: any[] }) {
+  const kinds = [...new Set(items.map((item) => String(item?.kind || "")))];
+  const label =
+    kinds.length === 1 ? subAgentKindLabel(kinds[0]) : "子代理动态";
+  const names = [
+    ...new Set(items.map(subAgentActivityName).filter(Boolean)),
+  ];
+  return (
+    <details
+      className={`tool-row subagent-row subagent-ticks ${kinds.includes("interrupted") ? "interrupted" : "ok"}`}
+    >
+      <summary>
+        <Bot />
+        <span className="tool-action">{label}</span>
+        <span className="file-change-count">{items.length} 条</span>
+        {names.length ? (
+          <code className="tool-command" title={names.join("、")}>
+            {names.join("、")}
+          </code>
+        ) : null}
+      </summary>
+      <ul>
+        {items.map((item, index) => {
+          const name = subAgentActivityName(item);
+          const path = displayText(item?.agentPath ?? item?.agent_path);
+          return (
+            <li key={String(item?.id || index)}>
+              <span className="tool-status">
+                {subAgentKindVerb(item?.kind) || "动态"}
+              </span>
+              <code title={path}>{name}</code>
             </li>
           );
         })}
@@ -684,7 +853,9 @@ function TurnBlockInner({
     const sentIds = new Set(message.liveItemIds || []);
     const index = renderEntries.findIndex((entry) => {
       const ids: string[] =
-        entry.kind === "fileChangeGroup" || entry.kind === "toolGroup"
+        entry.kind === "fileChangeGroup" ||
+        entry.kind === "toolGroup" ||
+        entry.kind === "subAgentGroup"
           ? entry.items.map((item: any) => String(item?.id || ""))
           : entry.kind === "item"
             ? [String(entry.item?.id || "")]
@@ -754,6 +925,13 @@ function TurnBlockInner({
                 files={entry.files}
                 cwd={thread.cwd}
               />
+            </Fragment>
+          );
+        if (entry.kind === "subAgentGroup")
+          return (
+            <Fragment key={`subagent-group-${entry.items[0]?.id || itemIndex}`}>
+              {pendingMarkup}
+              <SubAgentTickGroup items={entry.items} />
             </Fragment>
           );
         const item = entry.item;

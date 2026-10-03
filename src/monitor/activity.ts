@@ -1,5 +1,10 @@
 import { displayCommand, shortenPath } from "../format";
-import { commandPresentation } from "../session/turn-items";
+import {
+  collabToolLabel,
+  commandPresentation,
+  subAgentKindLabel,
+  subAgentName,
+} from "../session/turn-items";
 import type {
   ActivityItem,
   ThreadActivity,
@@ -87,13 +92,24 @@ export function describeStep(item: ActivityItem, cwd?: string): StepDescription 
     case "webSearch":
       return { kind: "web", label: "网页搜索", target: item.query || "" };
     case "subagent":
-    case "collabAgentToolCall":
       return {
         kind: "agent",
         label: "子代理",
         target: [item.title || item.agent || item.tool, item.activity]
           .filter(Boolean)
           .join(" · "),
+      };
+    case "collabAgentToolCall":
+      return {
+        kind: "agent",
+        label: collabToolLabel(item.tool, item.status === "inProgress"),
+        target: item.prompt || "",
+      };
+    case "subAgentActivity":
+      return {
+        kind: "agent",
+        label: subAgentKindLabel(item.kind),
+        target: subAgentName(item.agentPath),
       };
     case "imageView":
       return { kind: "read", label: "查看图片", target: shortenPath(item.path || "", cwd) };

@@ -303,15 +303,17 @@
   opacity: 0.62;
   cursor: wait;
 }
+/* 错误提示按通知条处理：muted 底 + 细线框，左侧一条 danger 竖线提示级别。 */
 .task-error {
   display: flex;
-  gap: 11px;
-  margin: 18px 0;
-  padding: 13px 14px;
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-lg);
-  background: var(--danger-bg);
-  color: var(--danger-text);
+  gap: 10px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--text-dim);
 }
 .provider-switch {
   display: flex;
@@ -506,24 +508,26 @@
   flex: 1;
 }
 .task-error > svg {
-  width: 19px;
-  height: 19px;
+  width: 15px;
+  height: 15px;
   flex: none;
+  margin-top: 1px;
+  color: var(--danger);
 }
 .task-error b {
   display: block;
-  color: var(--danger-text);
+  color: var(--text-soft);
   font-size: 12px;
 }
 .task-error p {
-  margin: 5px 0;
-  color: var(--danger-text);
+  margin: 4px 0 0;
+  color: var(--text-dim);
   font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }
 .task-error small {
-  color: var(--text-dim);
+  color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
 }
