@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import { Image as ImageIcon, RotateCcw } from "lucide-react";
 import { unwrapAssistantMarkup } from "../codexLabels";
 import { getBlob } from "../api";
+import { copyText } from "../clipboard";
 
 const LOCAL_IMAGE_PATH = /^(?:[A-Za-z]:[\\/]|\/)/;
 
@@ -56,8 +57,18 @@ export const DeferredImage = memo(function DeferredImage({
         }}
         title={failed ? "重新加载图片" : "点击加载图片"}
       >
-        {failed ? <RotateCcw aria-hidden="true" /> : <ImageIcon aria-hidden="true" />}
-        <span>{failed ? "重新加载图片" : requested ? "正在加载图片" : "点击加载图片"}</span>
+        {failed ? (
+          <RotateCcw aria-hidden="true" />
+        ) : (
+          <ImageIcon aria-hidden="true" />
+        )}
+        <span>
+          {failed
+            ? "重新加载图片"
+            : requested
+              ? "正在加载图片"
+              : "点击加载图片"}
+        </span>
       </button>
     );
   return (
@@ -87,8 +98,7 @@ function CopyablePreInner({
         className="copy-code"
         onClick={async () => {
           const text = ref.current?.innerText || "";
-          await navigator.clipboard.writeText(text);
-          onCopy?.();
+          if (await copyText(text)) onCopy?.();
         }}
       >
         复制
@@ -105,9 +115,89 @@ const MARKDOWN_BASE_COMPONENTS = {
   img: ({ src, alt }: { src?: string; alt?: string }) => (
     <DeferredImage src={src} alt={alt} />
   ),
-  h1: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
-  h2: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div
+      className="message-table-scroll"
+      role="region"
+      aria-label="消息表格"
+      tabIndex={0}
+    >
+      <table>{children}</table>
+    </div>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => {
+    const text = Array.isArray(children)
+      ? children.join("")
+      : String(children ?? "");
+    const numeric =
+      /^\s*[~≈]?\s*[-+]?[\d,.]+(?:\s*(?:[KMGT]?B|ms|s|%|倍))?\s*$/i.test(text);
+    return (
+      <td className={numeric ? "message-table-number" : undefined}>
+        {children}
+      </td>
+    );
+  },
 };
+
+function FileImage({ src, alt }: { src?: string; alt?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed)
+    return (
+      <span className="markdown-image-missing" title={String(src || "")}>
+        图片无法显示{alt || src ? `：${alt || src}` : ""}
+      </span>
+    );
+  return (
+    <img
+      className="markdown-image"
+      src={String(src)}
+      alt={alt || ""}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
+const FILE_MARKDOWN_BASE_COMPONENTS = {
+  // 文件预览里 http(s) 链接可点击；相对路径/锚点点击会破坏应用路由，降级为文本。
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) =>
+    href && /^https?:\/\//i.test(href) ? (
+      <a href={href} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span title={href}>{children}</span>
+    ),
+  img: ({ src, alt }: { src?: string; alt?: string }) => (
+    <FileImage src={src} alt={alt} />
+  ),
+};
+
+export const FileMarkdown = memo(function FileMarkdown({
+  text,
+  onCopy,
+}: {
+  text: string;
+  onCopy?: () => void;
+}) {
+  const components = useMemo(
+    () => ({
+      ...FILE_MARKDOWN_BASE_COMPONENTS,
+      pre: ({ children }: { children?: React.ReactNode }) => (
+        <CopyablePre onCopy={onCopy}>{children}</CopyablePre>
+      ),
+    }),
+    [onCopy],
+  );
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={components}>
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+});
 
 export const AssistantMarkdown = memo(
   function AssistantMarkdown({

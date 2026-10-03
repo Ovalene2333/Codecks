@@ -91,3 +91,18 @@ test("findCcSwitchDb uses an explicit path and does not fall through", async () 
   assert.equal(await findCcSwitchDb(file), file);
   assert.equal(await findCcSwitchDb(path.join(dir, "missing.db")), undefined);
 });
+
+test("Claude profiles accept API keys, cloud providers, and gateway headers", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "cc-switch-auth-"));
+  const file = path.join(dir, "cc-switch.db");
+  const db = new DatabaseSync(file);
+  db.exec("create table providers (id text, app_type text, name text, settings_config text, icon_color text, is_current integer, sort_index integer)");
+  const insert = db.prepare("insert into providers values (?, 'claude', ?, ?, null, 0, ?)");
+  insert.run("api", "API key", JSON.stringify({ env: { ANTHROPIC_API_KEY: "key" } }), 0);
+  insert.run("bedrock", "Bedrock", JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: "1" } }), 1);
+  insert.run("gateway", "Gateway", JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway.test", ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer token" } }), 2);
+  insert.run("invalid", "Invalid", JSON.stringify({ env: { ANTHROPIC_BASE_URL: "not-a-url", ANTHROPIC_API_KEY: "key" } }), 3);
+  db.close();
+  const profiles = new CcSwitchSource(file).readClaudeProfiles();
+  assert.deepEqual(profiles.map((profile) => profile.supported), [true, true, true, false]);
+});

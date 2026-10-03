@@ -7,7 +7,8 @@ import type {
   ThreadSummary,
 } from "./types";
 
-export type AgentId = "codex" | "claude" | "opencode";
+export type { AgentId } from "./types";
+import type { AgentId } from "./types";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -28,17 +29,43 @@ export function agentIdFor(value?: { agentId?: AgentId }): AgentId {
   return value?.agentId || "codex";
 }
 
+/** 旧服务端不带 enabled 字段，缺省按已启用处理。 */
+export function isAgentEnabled(agent?: Pick<AgentDescriptor, "enabled">) {
+  return agent?.enabled !== false;
+}
+
+export type AgentProtocol = "native" | "acp";
+
+/**
+ * Agent 的启动协议分组。旧快照没有 protocol 字段时按 id 兜底：
+ * 内置 adapter 是原生协议，动态注册的 id 一律视作 ACP。
+ */
+export function agentProtocol(
+  agent: Pick<AgentDescriptor, "id"> &
+    Partial<Pick<AgentDescriptor, "protocol">>,
+): AgentProtocol {
+  if (agent.protocol === "acp" || agent.protocol === "native")
+    return agent.protocol;
+  return agent.id === "codex" ||
+    agent.id === "claude" ||
+    agent.id === "opencode"
+    ? "native"
+    : "acp";
+}
+
 export function defaultAgentId(
   agents: AgentDescriptor[],
   preferred?: AgentId,
 ): AgentId {
   if (!agents.length) return "codex";
-  const preferredAgent = agents.find((agent) => agent.id === preferred);
+  // 已停用的 agent 不参与默认选择：不能新建会话，哪怕它是上次用的那个。
+  const usable = agents.filter(isAgentEnabled);
+  const preferredAgent = usable.find((agent) => agent.id === preferred);
   if (preferredAgent?.online || preferredAgent?.starting)
     return preferredAgent.id;
   return (
-    agents.find((agent) => agent.online)?.id ||
-    agents.find((agent) => agent.starting)?.id ||
+    usable.find((agent) => agent.online)?.id ||
+    usable.find((agent) => agent.starting)?.id ||
     preferred ||
     "codex"
   );
@@ -49,23 +76,36 @@ export function capabilitiesFor(
   value?: { agentId?: AgentId },
 ) {
   const id = agentIdFor(value);
-  return (
-    agents?.find((agent) => agent.id === id)?.capabilities ||
-    (id === "codex"
-      ? CODEX_CAPABILITIES
-      : {
-          ...CODEX_CAPABILITIES,
-          archive: false,
-          delete: false,
-          fork: false,
-          mcp: false,
-          models: false,
-          review: false,
-          sessionSettings: false,
-          shell: false,
-          skills: false,
-        })
-  );
+  if (agents?.find((agent) => agent.id === id)?.capabilities)
+    return agents.find((agent) => agent.id === id)!.capabilities;
+  if (id === "codex") return CODEX_CAPABILITIES;
+  if (id === "claude" || id === "opencode")
+    return {
+      ...CODEX_CAPABILITIES,
+      archive: false,
+      delete: false,
+      fork: false,
+      mcp: false,
+      models: false,
+      review: false,
+      sessionSettings: false,
+      shell: false,
+    };
+  // 未知/ACP agent：descriptor 未就绪前的保守能力集。
+  return {
+    approvals: true,
+    archive: true,
+    delete: false,
+    fork: false,
+    images: false,
+    interrupt: true,
+    mcp: false,
+    models: false,
+    review: false,
+    sessionSettings: false,
+    shell: false,
+    skills: false,
+  };
 }
 
 export function agentName(
@@ -75,8 +115,22 @@ export function agentName(
   const id = agentIdFor(value);
   return (
     agents?.find((agent) => agent.id === id)?.name ||
-    (id === "claude" ? "Claude Code" : id === "opencode" ? "OpenCode" : "Codex")
+    (id === "claude"
+      ? "Claude Code"
+      : id === "opencode"
+        ? "OpenCode"
+        : id === "codex"
+          ? "Codex"
+          : agentShortName(id))
   );
+}
+
+/** 没有 agents 列表可用的场景（侧栏 badge 等）：按 id 给可读短名。 */
+export function agentShortName(id: string | undefined) {
+  if (!id || id === "codex") return "Codex";
+  if (id === "claude") return "Claude";
+  if (id === "opencode") return "OpenCode";
+  return id.slice(0, 1).toUpperCase() + id.slice(1);
 }
 
 export function providerForThread(

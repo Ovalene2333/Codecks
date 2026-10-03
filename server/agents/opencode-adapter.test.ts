@@ -12,7 +12,7 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
       calls.push({ url: value, init });
       if (value.includes("/config"))
         return Response.json({
-          model: { providerID: "openai", modelID: "gpt-5" },
+          model: "openai/gpt-5",
         });
       if (value.includes("/provider"))
         return Response.json({
@@ -93,7 +93,7 @@ test("OpenCode adapter rejects image attachments on text-only models", async () 
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url, init) => {
       const value = String(url);
-      if (value.includes("/message") && init?.method === "POST") {
+      if (value.includes("/prompt_async") && init?.method === "POST") {
         messagePosts.push({ url: value, init });
         return Response.json({ id: "msg" });
       }
@@ -256,6 +256,28 @@ test("OpenCode keeps the created model, hides subagent sessions and drops replay
   );
   assert.equal(items.length, 1);
   assert.equal(items[0].data.params.item.id, "part-assistant");
+  (adapter as any).onEvent({
+    type: "message.part.delta",
+    properties: {
+      sessionID: "new-session", messageID: "msg-user",
+      partID: "part-user", field: "text", delta: " again",
+    },
+  });
+  (adapter as any).onEvent({
+    type: "message.part.delta",
+    properties: {
+      sessionID: "new-session", messageID: "msg-assistant",
+      partID: "part-assistant", field: "text", delta: " there",
+    },
+  });
+  const deltas = events.filter(
+    (event) => event.type === "agent.event" &&
+      event.data.method === "item/agentMessage/delta",
+  );
+  assert.deepEqual(deltas.map((event) => event.data.params), [{
+    threadId: "new-session", turnId: undefined,
+    itemId: "part-assistant", delta: " there",
+  }]);
 });
 
 test("OpenCode replays subagent activity onto the parent task card", async () => {
@@ -474,6 +496,46 @@ test("OpenCode ranks connected providers ahead of the rest of the catalog", asyn
   );
 });
 
+test("OpenCode model catalog uses the selected project's provider and default model", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const parsed = new URL(String(url));
+      assert.equal(parsed.searchParams.get("directory"), "/project");
+      if (parsed.pathname === "/provider")
+        return Response.json({
+          all: { local: { id: "local", name: "Local", models: {
+            custom: { name: "Custom", limit: { context: 300_000 } },
+          } } },
+          connected: ["local"],
+        });
+      if (parsed.pathname === "/config")
+        return Response.json({ model: "local/custom" });
+      if (parsed.pathname === "/session/s1/message")
+        return Response.json([
+          { info: { id: "u1", role: "user" }, parts: [{ id: "p1", type: "text", text: "hello" }] },
+          { info: {
+            id: "a1", role: "assistant", providerID: "local", modelID: "custom",
+            tokens: { input: 9_000, output: 1_000 },
+          }, parts: [{ id: "p2", type: "text", text: "hi" }] },
+        ]);
+      if (parsed.pathname === "/session/s1")
+        return Response.json({ id: "s1", directory: "/project" });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  const models = await adapter.listModels(undefined, "/project");
+  assert.equal(models.find((item) => item.model === "local/custom")?.isDefault, true);
+  assert.equal(models.find((item) => item.model === "local/custom")?.connected, true);
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/project", model: "default", status: "idle", updatedAt: 1,
+  });
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.tokenUsage.limit, 300_000);
+  assert.equal(loaded.resolvedModel, "local/custom");
+});
+
 test("OpenCode resolves the concrete model id and context usage from the last reply", async () => {
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url) => {
@@ -670,6 +732,174 @@ test("OpenCode sessions without any token records show no context usage", async 
   assert.equal(loaded.tokenUsage, undefined);
 });
 
+test("OpenCode compaction renders one marker and waits for a new reply before reporting context", async () => {
+  const records: any[] = [
+    {
+      info: { id: "m1", role: "user", time: { created: 1 } },
+      parts: [{ id: "p1", type: "text", text: "继续" }],
+    },
+    {
+      info: {
+        id: "m2", role: "assistant", providerID: "yapi", modelID: "opus",
+        tokens: { input: 17_000, output: 600, cache: { read: 340_000 } },
+      },
+      parts: [{ id: "p2", type: "text", text: "压缩前的回复" }],
+    },
+  ];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/message")) return Response.json(records);
+      if (value.includes("/session/s1"))
+        return Response.json({ id: "s1", directory: "/work" });
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  assert.equal((await adapter.readThread("p", "s1") as any).tokenUsage.used, 357_600);
+
+  records.push(
+    {
+      info: { id: "m3", role: "user", time: { created: 3 } },
+      parts: [{ id: "p3", type: "compaction", auto: false }],
+    },
+    {
+      info: {
+        id: "m4", role: "assistant", providerID: "yapi", modelID: "opus",
+        summary: true,
+        tokens: { input: 64_000, output: 1_800, cache: { read: 190_000 } },
+      },
+      parts: [{ id: "p4", type: "text", text: "压缩后的摘要" }],
+    },
+  );
+  const compacted: any = await adapter.readThread("p", "s1");
+  assert.equal(compacted.tokenUsage, undefined);
+  assert.deepEqual(compacted.turns.at(-1).items, [{
+    id: "p3", type: "contextCompaction", text: "压缩后的摘要",
+  }]);
+  assert.equal(adapter.listThreads()[0]?.tokenUsage, undefined);
+
+  records.push(
+    {
+      info: { id: "m5", role: "user", time: { created: 5 } },
+      parts: [{ id: "p5", type: "text", text: "下一步" }],
+    },
+    {
+      info: {
+        id: "m6", role: "assistant", providerID: "yapi", modelID: "opus",
+        tokens: { input: 10_000, output: 500, cache: { read: 1_500 } },
+      },
+      parts: [{ id: "p6", type: "text", text: "正常回复" }],
+    },
+  );
+  assert.equal((await adapter.readThread("p", "s1") as any).tokenUsage.used, 12_000);
+});
+
+test("OpenCode history keeps synthetic parts out of the user bubble", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [
+              { id: "p1", type: "text", text: "真实提问" },
+              {
+                id: "p2",
+                type: "text",
+                text: "继续，如果还有下一步",
+                synthetic: true,
+              },
+            ],
+          },
+          {
+            info: { id: "m2", role: "user", time: { created: 2 } },
+            parts: [
+              {
+                id: "p3",
+                type: "text",
+                text: "整理一下摘要",
+                synthetic: true,
+              },
+            ],
+          },
+          {
+            info: { id: "m3", role: "assistant" },
+            parts: [{ id: "p4", type: "text", text: "回复" }],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const loaded: any = await adapter.readThread("p", "s1");
+  const texts = loaded.turns.flatMap((turn: any) =>
+    turn.items.flatMap((item: any) =>
+      item.type === "userMessage"
+        ? item.content.map((part: any) => part.text)
+        : [],
+    ),
+  );
+  assert.deepEqual(texts, ["真实提问"]);
+});
+
+test("OpenCode history stamps each turn with the model that answered it", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "先问" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4-5",
+            },
+            parts: [{ id: "p2", type: "text", text: "答一" }],
+          },
+          {
+            info: { id: "m3", role: "user", time: { created: 2 } },
+            parts: [{ id: "p3", type: "text", text: "再问" }],
+          },
+          {
+            info: {
+              id: "m4",
+              role: "assistant",
+              providerID: "openai",
+              modelID: "gpt-5",
+              variant: "high",
+            },
+            parts: [{ id: "p4", type: "text", text: "答二" }],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.turns[0].model, "anthropic/claude-sonnet-4-5");
+  assert.equal(loaded.turns[0].reasoningEffort, undefined);
+  assert.equal(loaded.turns[1].model, "openai/gpt-5");
+  assert.equal(loaded.turns[1].reasoningEffort, "high");
+});
+
 test("OpenCode sessions fall back to the generated slug and expose effort variants", async () => {
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url) => {
@@ -746,7 +976,7 @@ test("OpenCode sends the picked effort as a variant the model advertises", async
     } as any,
     fetcher: (async (url, init) => {
       const value = String(url);
-      if (value.includes("/message") && init?.method === "POST") {
+      if (value.includes("/prompt_async") && init?.method === "POST") {
         posts.push({ body: init.body ? String(init.body) : undefined });
         return Response.json({ id: "msg" });
       }
@@ -816,6 +1046,7 @@ test("OpenCode normalization keeps todo tool payloads and hides step metadata", 
 test("OpenCode history binds the latest turn to the active Deck turn", async () => {
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url) => {
+      if (!String(url).includes("/message")) return Response.json({ id: "s1" });
       assert.match(String(url), /\/message/);
       return Response.json([
         {
@@ -898,6 +1129,7 @@ test("OpenCode native questions surface as answerable approval cards", async () 
     approval.questions[0].options.map((option: any) => option.label),
     ["SQLite", "JSON 文件"],
   );
+  assert.equal(approval.questions[0].options[0].description, "嵌入式");
   assert.equal(adapter.listThreads()[0].status, "waiting");
 
   await adapter.resolveApproval(approval.id, {
@@ -917,6 +1149,109 @@ test("OpenCode native questions surface as answerable approval cards", async () 
   const second: any = adapter.snapshot().approvals[0];
   await adapter.resolveApproval(second.id, { decision: "decline" });
   assert.match(posts[1].url, /\/question\/que_2\/reject/);
+});
+
+test("OpenCode recovers pending questions after an event stream reconnect", async () => {
+  let pending: any[] = [{
+    id: "que_1", sessionID: "s1",
+    questions: [{ question: "继续吗？", options: [{ label: "继续" }] }],
+  }];
+  const adapter = new OpenCodeAdapter({
+    idleGraceMs: 0,
+    fetcher: (async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/question") return Response.json(pending);
+      if (path === "/permission") return Response.json([]);
+      if (path === "/session/status") return Response.json({ s1: { type: "idle" } });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "n",
+    preview: "", cwd: "/work", model: "default", status: "running", updatedAt: 1,
+  });
+  await (adapter as any).syncPendingPermissions();
+  assert.equal(adapter.snapshot().approvals[0]?.request?.method, "opencode/question");
+  assert.equal(adapter.listThreads()[0].status, "waiting");
+  pending = [];
+  await (adapter as any).syncPendingPermissions();
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(adapter.listThreads()[0].status, "idle");
+});
+
+test("OpenCode keeps a native question available when its reply fails", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) =>
+      String(url).includes("/question/") && init?.method === "POST"
+        ? Response.json({ error: "unavailable" }, { status: 503 })
+        : Response.json([])) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "n",
+    preview: "", cwd: "/work", model: "default", status: "running", updatedAt: 1,
+  });
+  (adapter as any).onEvent({
+    type: "question.asked",
+    properties: { id: "que_1", sessionID: "s1", questions: [{ question: "继续吗？" }] },
+  });
+  await assert.rejects(
+    adapter.resolveApproval("s1:que_1", { answers: [{ value: "继续" }] }),
+    /OpenCode API 503/,
+  );
+  assert.equal(adapter.snapshot().approvals.length, 1);
+  assert.equal(adapter.listThreads()[0].status, "waiting");
+});
+
+test("OpenCode permission.asked can be answered through the current permission API", async () => {
+  const posts: Array<{ url: string; body: unknown }> = [];
+  let pending: any[] = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/permission/") && init?.method === "POST") {
+        posts.push({ url: value, body: JSON.parse(String(init.body)) });
+        return Response.json(true);
+      }
+      if (value.includes("/permission")) return Response.json(pending);
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "n",
+    preview: "", cwd: "/work", model: "default", status: "running", updatedAt: 1,
+  });
+  const request = {
+    id: "per_1", sessionID: "s1", permission: "bash",
+    patterns: ["mkdir -p ~/learn"], metadata: { command: "mkdir -p ~/learn" },
+    always: ["mkdir -p ~/learn"],
+  };
+  (adapter as any).onEvent({ type: "permission.asked", properties: request });
+  const approval: any = adapter.snapshot().approvals[0];
+  assert.equal(approval.request.method, "opencode/permission.v2");
+  assert.equal(approval.command, "mkdir -p ~/learn");
+  assert.equal(adapter.listThreads()[0].status, "waiting");
+
+  await adapter.resolveApproval(approval.id, { decision: "acceptForSession" });
+  assert.match(posts[0].url, /\/permission\/per_1\/reply/);
+  assert.deepEqual(posts[0].body, { reply: "always" });
+  assert.equal(adapter.snapshot().approvals.length, 0);
+
+  pending = [request];
+  await (adapter as any).syncPendingPermissions();
+  assert.equal(adapter.snapshot().approvals.length, 1);
+  pending = [];
+  await (adapter as any).syncPendingPermissions();
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  (adapter as any).onEvent({ type: "permission.asked", properties: request });
+  (adapter as any).onEvent({
+    type: "permission.replied",
+    properties: { sessionID: "s1", requestID: "per_1", reply: "reject" },
+  });
+  assert.equal(adapter.snapshot().approvals.length, 0);
 });
 
 test("OpenCode restart kills the Windows process tree, not just cmd", async () => {
@@ -1144,7 +1479,7 @@ test("OpenCode sendTurn names slug threads optimistically but keeps manual renam
     new OpenCodeAdapter({
       fetcher: (async (url, init) => {
         const value = String(url);
-        if (value.includes("/message") && init?.method === "POST") return Response.json({ id: "msg" });
+        if (value.includes("/prompt_async") && init?.method === "POST") return new Response(null, { status: 204 });
         if (value.includes("/provider")) return Response.json({ all: {} });
         if (value.includes("/config")) return Response.json({});
         if (value.includes("/session"))
@@ -1254,15 +1589,18 @@ test("OpenCode archive refuses running sessions and archived sessions refuse new
 
 test("OpenCode lists server commands and runs one with the session model", async () => {
   const posts: Array<{ url: string; body?: string }> = [];
+  const lists: string[] = [];
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url, init) => {
       const value = String(url);
-      if (value.endsWith("/command") && !init?.method)
+      if (value.includes("/command") && !init?.method) {
+        lists.push(value);
         return Response.json([
           { name: "init", description: "Setup AGENTS.md" },
           { command: "deploy" },
           "plain",
         ]);
+      }
       if (value.includes("/command") && init?.method === "POST") {
         posts.push({ url: value, body: init.body ? String(init.body) : undefined });
         return Response.json({ info: { id: "m1" }, parts: [] });
@@ -1291,6 +1629,7 @@ test("OpenCode lists server commands and runs one with the session model", async
     { name: "init", description: "Setup AGENTS.md" },
     { name: "plain" },
   ]);
+  assert.match(lists[0], /[?&]directory=%2Fwork/);
 
   await adapter.runSessionCommand("p", "s1", "/init", "AGENTS.md");
   assert.equal(posts.length, 1);
@@ -1304,6 +1643,94 @@ test("OpenCode lists server commands and runs one with the session model", async
     (adapter.listThreads().find((item) => item.id === "s1") as any)?.status,
     "running",
   );
+});
+
+test("OpenCode long-running command returns immediately and reports a later API error", async () => {
+  let rejectCommand!: (error: Error) => void;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (_url, init) => {
+      if (init?.method === "POST")
+        return new Promise<Response>((_resolve, reject) => {
+          rejectCommand = reject;
+        });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default", status: "idle", updatedAt: 1,
+  });
+  const result = await Promise.race([
+    adapter.runSessionCommand("p", "s1", "deploy"),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("command blocked Deck")), 100)),
+  ]);
+  assert.equal(result.turn.status, "inProgress");
+  rejectCommand(new Error("server failed"));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(adapter.listThreads()[0].status, "error");
+});
+
+test("OpenCode lists skills from GET /skill and marks project scope", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (/\/skill(\?|$)/.test(value))
+        return Response.json([
+          {
+            name: "release",
+            description: "发版流程",
+            location: "/work/.opencode/skills/release/SKILL.md",
+          },
+          {
+            name: "team",
+            location: "/home/u/.config/opencode/skills/team/SKILL.md",
+          },
+          { id: "legacy" },
+        ]);
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+  const result = await adapter.listSkills("p", "s1");
+  assert.deepEqual(result.skills, [
+    {
+      name: "legacy",
+      description: undefined,
+      path: undefined,
+      scope: "global",
+      enabled: true,
+    },
+    {
+      name: "release",
+      description: "发版流程",
+      path: "/work/.opencode/skills/release/SKILL.md",
+      scope: "project",
+      enabled: true,
+    },
+    {
+      name: "team",
+      description: undefined,
+      path: "/home/u/.config/opencode/skills/team/SKILL.md",
+      scope: "global",
+      enabled: true,
+    },
+  ]);
+  assert.equal(adapter.descriptor().capabilities.skills, true);
 });
 
 test("OpenCode compact resolves the model and clears the compacting flag", async () => {
@@ -1330,6 +1757,7 @@ test("OpenCode compact resolves the model and clears the compacting flag", async
     model: "default",
     status: "idle",
     updatedAt: 1,
+    tokenUsage: { used: 357_600 },
   });
 
   await adapter.compactSession("p", "s1");
@@ -1338,9 +1766,53 @@ test("OpenCode compact resolves the model and clears the compacting flag", async
     modelID: "gpt-5",
   });
   assert.equal((adapter.listThreads()[0] as any)?.compacting, undefined);
+  assert.equal(adapter.listThreads()[0]?.tokenUsage, undefined);
 
   (adapter as any).threads.get("s1").status = "running";
   await assert.rejects(adapter.compactSession("p", "s1"), /任务结束后/);
+});
+
+test("OpenCode compact clears compacting on the live object when events swap it mid-request", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/summarize") && init?.method === "POST") {
+        // summarize 期间 OpenCode 会推 session.updated，mergeThread 生成新
+        // 对象并把 compacting 拷过去；清理写在旧引用上会让标记永久残留。
+        (adapter as any).onEvent({
+          type: "session.updated",
+          properties: {
+            info: {
+              id: "s1",
+              directory: "/work",
+              title: "s1",
+              time: { updated: 2 },
+            },
+          },
+        });
+        return Response.json(true);
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).configDefault = { providerID: "openai", modelID: "gpt-5" };
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode",
+    id: "s1",
+    providerId: "p",
+    name: "s1",
+    preview: "s1",
+    cwd: "/work",
+    model: "default",
+    status: "idle",
+    updatedAt: 1,
+  });
+
+  await adapter.compactSession("p", "s1");
+  const thread: any = adapter.listThreads()[0];
+  assert.equal(thread.compacting, undefined);
+  assert.equal(thread.status, "idle");
 });
 
 test("OpenCode revert targets the last user message and reports the file summary", async () => {
@@ -1408,6 +1880,34 @@ test("OpenCode revert targets the last user message and reports the file summary
   (adapter as any).threads.get("s1").status = "idle";
   (adapter as any).threads.get("s1").archived = true;
   await assert.rejects(adapter.revertSession("p", "s1"), /归档/);
+});
+
+test("OpenCode history hides reverted turns until unrevert", async () => {
+  let reverted = "m2";
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/message"))
+        return Response.json([
+          { info: { id: "m1", role: "user", time: { created: 1 } }, parts: [{ type: "text", text: "第一轮" }] },
+          { info: { id: "m2", role: "user", time: { created: 2 } }, parts: [{ type: "text", text: "已撤回" }] },
+        ]);
+      if (value.includes("/session/s1"))
+        return Response.json({ id: "s1", revert: reverted ? { messageID: reverted } : undefined });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default", status: "idle", updatedAt: 1,
+  });
+
+  assert.deepEqual((await adapter.readThread("p", "s1")).turns.map((turn: any) => turn.id), ["m1"]);
+  reverted = "m1";
+  assert.deepEqual((await adapter.readThread("p", "s1")).turns, []);
+  reverted = "";
+  assert.deepEqual((await adapter.readThread("p", "s1")).turns.map((turn: any) => turn.id), ["m1", "m2"]);
 });
 
 test("OpenCode unrevert posts once and refuses busy sessions", async () => {
@@ -1486,7 +1986,37 @@ test("OpenCode forkThread 调原生 fork 接口并记录 forkedFromId", async ()
   await assert.rejects(adapter.forkThread("p", "s1"), /运行/);
 });
 
-test("OpenCode retryFromTurn 从上一条 user 消息 fork 后在新分支发送", async () => {
+test("OpenCode fork after a turn uses the next user message as the exclusive boundary", async () => {
+  const bodies: unknown[] = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/message") && !init?.method)
+        return Response.json([
+          { info: { id: "m1", role: "user" }, parts: [] },
+          { info: { id: "a1", role: "assistant" }, parts: [] },
+          { info: { id: "m2", role: "user" }, parts: [] },
+        ]);
+      if (value.includes("/fork") && init?.method === "POST") {
+        bodies.push(init.body ? JSON.parse(String(init.body)) : undefined);
+        return Response.json({ id: `branch${bodies.length}`, directory: "/work" });
+      }
+      return Response.json({ id: "ok" });
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default", status: "idle", updatedAt: 1,
+  });
+
+  await adapter.forkThread("p", "s1", { lastTurnId: "m1" });
+  await adapter.forkThread("p", "s1", { lastTurnId: "m2" });
+  assert.deepEqual(bodies, [{ messageID: "m2" }, undefined]);
+  await assert.rejects(adapter.forkThread("p", "s1", { lastTurnId: "missing" }), /找不到/);
+});
+
+test("OpenCode retryFromTurn excludes the selected user message", async () => {
   const posts: Array<{ url: string; body?: string }> = [];
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url, init) => {
@@ -1508,7 +2038,7 @@ test("OpenCode retryFromTurn 从上一条 user 消息 fork 后在新分支发送
       }
       if (value.includes("/session/branch2") && init?.method === "PATCH")
         return Response.json({ id: "branch2" });
-      if (value.includes("/session/branch2/message") && init?.method === "POST") {
+      if (value.includes("/session/branch2/prompt_async") && init?.method === "POST") {
         posts.push({ url: value, body: init.body ? String(init.body) : undefined });
         return Response.json({ info: { id: "m3", role: "user" }, parts: [] });
       }
@@ -1528,9 +2058,9 @@ test("OpenCode retryFromTurn 从上一条 user 消息 fork 后在新分支发送
     updatedAt: 1,
   });
 
-  // 以 m2 为目标重试：fork 边界应为上一条 m1，再在新分支发送新文本。
+  // OpenCode fork 的 messageID 是排除边界；替换 m2 就要传 m2 自身。
   const branch: any = await adapter.retryFromTurn("p", "s1", "m2", "改后的问法");
-  assert.deepEqual(JSON.parse(posts[0].body!), { messageID: "m1" });
+  assert.deepEqual(JSON.parse(posts[0].body!), { messageID: "m2" });
   assert.match(posts[1].body!, /改后的问法/);
   assert.equal(branch.forkedFromId, "s1");
 
@@ -1567,7 +2097,7 @@ test("OpenCode 首轮重试走空分支，不 revert、不碰原历史", async (
         posts.push(`fork:${value}`);
         return Response.json({ id: "should-not-happen", directory: "/work" });
       }
-      if (value.includes("/message") && init?.method === "POST")
+      if (value.includes("/prompt_async") && init?.method === "POST")
         return Response.json({ info: { id: "m9", role: "user" }, parts: [] });
       return Response.json([]);
     }) as typeof fetch,
@@ -1649,14 +2179,19 @@ test("OpenCode session.status idle 防抖：步骤间隙不闪断运行态", asy
     properties: { sessionID: "s1", status: { type: "busy" } },
   });
   assert.equal(thread.status, "running");
+  (adapter as any).onEvent({
+    type: "session.status",
+    properties: { sessionID: "s1", status: { type: "retry", attempt: 1 } },
+  });
+  assert.equal(thread.status, "running");
   const turnId = thread.activeTurnId;
   assert.ok(turnId);
 
   // 步骤间隙的单个 idle 不得直接翻成 idle / 发 turn/completed。
   const before = events.length;
   (adapter as any).onEvent({
-    type: "session.status",
-    properties: { sessionID: "s1", status: { type: "idle" } },
+    type: "session.idle",
+    properties: { sessionID: "s1" },
   });
   assert.equal(thread.status, "running");
   assert.equal(thread.activeTurnId, turnId);
@@ -1680,6 +2215,66 @@ test("OpenCode session.status idle 防抖：步骤间隙不闪断运行态", asy
   assert.deepEqual(events.at(-1)?.data?.params?.turn, {
     id: turnId,
     status: "completed",
+  });
+});
+
+test("OpenCode session.error finishes the turn and removes its pending approval", () => {
+  const adapter = new OpenCodeAdapter({ idleGraceMs: 0 });
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default",
+    status: "running", activeTurnId: "turn-1", updatedAt: 1,
+  });
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  (adapter as any).onEvent({
+    type: "permission.asked",
+    properties: {
+      id: "per_1", sessionID: "s1", permission: "bash",
+      patterns: ["mkdir ~/learn"], metadata: {}, always: [],
+    },
+  });
+  (adapter as any).onEvent({
+    type: "session.error",
+    properties: { sessionID: "s1", error: { message: "stopped" } },
+  });
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  assert.equal(adapter.listThreads()[0].status, "error");
+  assert.deepEqual(events.at(-1)?.data?.params?.turn, {
+    id: "turn-1", status: "failed", error: { message: "stopped" },
+  });
+});
+
+test("OpenCode session.error 的 abort 按中断处理，不算失败", () => {
+  const adapter = new OpenCodeAdapter({ idleGraceMs: 0 });
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "s1",
+    preview: "s1", cwd: "/work", model: "default",
+    status: "running", activeTurnId: "turn-1", updatedAt: 1,
+  });
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  (adapter as any).onEvent({
+    type: "permission.asked",
+    properties: {
+      id: "per_1", sessionID: "s1", permission: "bash",
+      patterns: ["mkdir ~/learn"], metadata: {}, always: [],
+    },
+  });
+  (adapter as any).onEvent({
+    type: "session.error",
+    properties: {
+      sessionID: "s1",
+      error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+    },
+  });
+  const thread = adapter.listThreads()[0];
+  assert.equal(thread.status, "idle");
+  assert.equal(thread.activeTurnId, undefined);
+  assert.equal(thread.lastError, undefined);
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  assert.deepEqual(events.at(-1)?.data?.params?.turn, {
+    id: "turn-1", status: "interrupted",
   });
 });
 
@@ -1786,7 +2381,7 @@ test("OpenCode POST is never retried so turns cannot be sent twice", async () =>
   let posts = 0;
   const adapter = new OpenCodeAdapter({
     fetcher: (async (url, init) => {
-      if (String(url).includes("/message") && init?.method === "POST") {
+      if (String(url).includes("/prompt_async") && init?.method === "POST") {
         posts += 1;
         throw new TypeError("fetch failed");
       }

@@ -38,23 +38,23 @@
 .danger-btn {
   min-height: 36px;
   padding: 0 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #18202b;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-border);
+  background: var(--control);
   cursor: pointer;
 }
 .danger-btn {
-  border-color: #7a3144;
-  background: #3a1520;
-  color: #ffc0cb;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 .action-sheet {
   display: grid;
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #121821;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 .action-sheet-modal {
   width: min(360px, 100%);
@@ -68,7 +68,7 @@
   min-height: 42px;
   padding: 0 12px;
   border: 0;
-  border-bottom: 1px solid #1c2430;
+  border-bottom: 1px solid var(--line);
   border-radius: 0;
   background: transparent;
   color: var(--text);
@@ -80,7 +80,7 @@
   border-bottom: 0;
 }
 .action-sheet button:hover {
-  background: #1d2632;
+  background: var(--control-hover);
 }
 .action-sheet button:disabled {
   opacity: 0.38;
@@ -93,7 +93,7 @@
   position: fixed;
   inset: 0;
   z-index: 55;
-  background: #03050888;
+  background: var(--overlay-soft);
   overflow: hidden;
 }
 .usage-drawer {
@@ -106,7 +106,7 @@
   overflow: auto;
   padding: 18px;
   border-left: 1px solid var(--line);
-  background: #10161e;
+  background: var(--surface);
   transform: none;
   animation: drawer-in 200ms ease both;
 }
@@ -154,9 +154,9 @@
 }
 .usage-level em {
   margin-left: 4px;
-  color: var(--muted);
+  color: var(--text-faint);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-style: normal;
 }
 .usage-summary {
@@ -188,8 +188,8 @@
 }
 .usage-summary-grid small {
   margin-bottom: 3px;
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
 }
 .usage-summary-grid b {
   overflow: hidden;
@@ -243,8 +243,8 @@
   font-size: 12px;
 }
 .usage-rank-main small {
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
 }
 .usage-rank-main > strong {
   flex: none;
@@ -254,7 +254,7 @@
 .usage-rank-main > em {
   flex: none;
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-style: normal;
 }
 .usage-rank-track {
@@ -272,8 +272,8 @@
 }
 .usage-rank-row > p {
   margin: 5px 0 0 34px;
-  color: var(--muted);
-  font-size: 10px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
 }
 .usage-empty {
   display: grid;
@@ -292,7 +292,7 @@
   font-size: 13px;
 }
 .usage-empty span {
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .usage-limits {
   padding-top: 2px;
@@ -302,7 +302,7 @@
   margin: 0 0 12px;
 }
 .usage-unavailable {
-  color: var(--warn);
+  color: var(--wait);
 }
 .usage-unavailable p {
   margin: 0;
@@ -328,11 +328,11 @@
 .usage-window {
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #0c1219;
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
 }
 .usage-window.hot {
-  border-color: #8a6a22;
+  border-color: var(--warning-border);
 }
 .usage-window > div {
   display: flex;
@@ -360,6 +360,297 @@
     transform: translateX(0);
     opacity: 1;
   }
+}
+/* —— 远程唤醒 —— */
+.wake-form {
+  gap: 14px;
+}
+.wake-form .form-hint code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.wake-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wake-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--ok);
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+.wake-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.wake-code {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-ui);
+  text-overflow: ellipsis;
+}
+.wake-watching {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -6px 0 -2px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.wake-watching svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.wake-watching.on {
+  color: var(--ok);
+}
+/* 本会话的 watcher / 失联记录：一行一个，右侧是操作按钮。 */
+.wake-list {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.wake-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.wake-item > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.wake-item.on > svg {
+  color: var(--ok);
+}
+.wake-item.lost {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+.wake-item.lost > svg {
+  color: var(--danger);
+}
+.wake-item-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+.wake-item-text b,
+.wake-item-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wake-item-text b {
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.wake-item-text small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.wake-item button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.wake-item button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.wake-item button svg {
+  width: 14px;
+  height: 14px;
+}
+.wake-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.wake-endpoint span {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.wake-endpoint code {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wake-caption {
+  margin: -6px 0 -8px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.wake-curl {
+  margin: 0;
+  padding: 10px 11px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.wake-actions {
+  display: flex;
+  gap: 8px;
+}
+.wake-actions button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+.wake-actions button:hover:not(:disabled) {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.wake-actions button svg {
+  width: 14px;
+  height: 14px;
+}
+.wake-actions .danger-btn {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+.wake-actions .danger-btn:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  filter: brightness(1.12);
+}
+/* 通知开关行：标题+说明在左，iOS 式 switch 在右 */
+.form label.wake-notify {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+.wake-notify-text {
+  display: grid;
+  gap: 2px;
+}
+.wake-notify-text b {
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.wake-notify-text small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+}
+.switch input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.switch i {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--control);
+  transition:
+    background var(--ease),
+    border-color var(--ease);
+}
+.switch i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition:
+    transform var(--ease),
+    background var(--ease);
+}
+.switch input[type="checkbox"]:checked + i {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.switch input[type="checkbox"]:checked + i::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+.switch input[type="checkbox"]:focus-visible + i {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 25%, transparent);
 }
 @media (max-width: 760px) {
   .usage-drawer {

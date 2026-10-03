@@ -2,7 +2,15 @@ import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvFile } from "node:process";
@@ -18,7 +26,15 @@ import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
 import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
+import { AcpAdapter } from "./agents/acp-adapter.js";
+import {
+  ensureAcpAgentsExample,
+  loadAcpAgentEntries,
+} from "./agents/acp-agents.js";
+import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
+import { registerMessageRoutes } from "./message-api.js";
+import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentId } from "./agents/types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { formatHost, isIpv6Host, lanAddresses } from "./network.js";
@@ -34,13 +50,32 @@ import {
 } from "./runtime-lock.js";
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
+import { ActivityTracker } from "./activity.js";
+import { CpuSampler, hostStats } from "./host-stats.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
+import { AgentSettingsStore } from "./agent-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
+import { WakeOutbox } from "./wake-outbox.js";
+import {
+  listWakeWatchers,
+  readTail,
+  WakeWatcherCache,
+} from "./wake-watchers.js";
+import { WakeWatcherLedger } from "./wake-ledger.js";
+import {
+  ancestorPids,
+  bindingConflict,
+  describeThread,
+  resolveWakeSession,
+} from "./wake-resolve.js";
 import { resolveThreadImage } from "./thread-image.js";
+import { readOpenCodeConfig, writeOpenCodeConfig } from "./opencode-config.js";
 import { ToolRegistry } from "../plugin/server-registry.js";
 import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
+import { TextFilesTool } from "../plugin/text-files/text-files.server.js";
+import { QuickCommandTool } from "../plugin/quick-command/quick-command.server.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -106,6 +141,10 @@ const token = cli.noToken
 const pairing =
   remote && !cli.noToken && !cli.token ? new Pairing(token) : undefined;
 const pairLimiter = pairing ? new PairRateLimiter() : undefined;
+/** 本机发现目录：url/token 供 deck-wake 读取，watch/ 下是 watcher 日志。 */
+const deckHome = path.resolve(
+  process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
+);
 if (remote && cli.noToken)
   process.stderr.write(
     "\n⚠ 安全警告：--no-token 已关闭鉴权。任何能访问该地址的人都可以操作 Codex、执行命令和修改文件。\n\n",
@@ -115,11 +154,13 @@ const store = new ProviderStore(dataDir, codexHome);
 const projects = new ProjectStore(dataDir);
 const threadSummaries = new ThreadSummaryCache(dataDir);
 const threadSettings = new ThreadSettingsStore(dataDir);
+const agentSettings = new AgentSettingsStore(dataDir);
 const [, , cachedThreads] = await Promise.all([
   store.load(),
   projects.load(),
   threadSummaries.load(),
   threadSettings.load(),
+  agentSettings.load(),
 ]);
 const initialThreads = [
   ...cachedThreads.threads,
@@ -158,7 +199,33 @@ const opencode = new OpenCodeAdapter({
   ],
   threadSettings,
 });
-const agents = new AgentRegistry([manager, claude, opencode]);
+// ACP agents（devin acp、kimi acp 等）：descriptor 驱动，启动失败的 agent
+// 只在 startAll 里表现为 offline，不影响其它 adapter。
+await ensureAcpAgentsExample(dataDir);
+const acpDirectories = () =>
+  [
+    ...projects.list().map((project) => project.cwd),
+    ...projects.getPreferences().recentDirs,
+    ...initialThreads.map((thread) => thread.cwd),
+  ].filter(Boolean);
+// Codex 是核心 agent（供应商/Runtime 都挂在它上面），不可停用；其余 agent
+// 按用户在设置里的显式选择加载，没有选择过就走默认（见 loadAcpAgentEntries）。
+const agents = new AgentRegistry();
+agents.register(manager, { toggleable: false });
+agents.register(claude, { enabled: agentSettings.enabled("claude") });
+agents.register(opencode, { enabled: agentSettings.enabled("opencode") });
+const acpHost = new AcpAgentHost({
+  registry: agents,
+  settings: agentSettings,
+  load: () => loadAcpAgentEntries(dataDir),
+  create: (spec, carried) =>
+    new AcpAdapter(spec, {
+      threadSettings,
+      initialThreads: carried ?? initialThreads,
+      directories: acpDirectories(),
+    }),
+});
+await acpHost.sync();
 const sessionSearch = new SessionSearchIndexer(
   new SessionSearchStore(dataDir),
   agents,
@@ -166,11 +233,90 @@ const sessionSearch = new SessionSearchIndexer(
 const tools = new ToolRegistry([
   new WebTerminalTool({ useWsl, processCwd: projectRoot }),
   new GitTool({ useWsl, processCwd: projectRoot }),
+  new TextFilesTool({ useWsl, processCwd: projectRoot }),
+  new QuickCommandTool({
+    useWsl,
+    processCwd: projectRoot,
+    file: path.join(dataDir, "quick-commands.json"),
+  }),
 ]);
+const activity = new ActivityTracker();
+const cpuSampler = new CpuSampler();
+// 唤醒发件箱：POST /api/wake/:code 落盘即 202，送达由它在后台重试到成；
+// 持久化在 .data/wake-outbox.json，Deck 重启不丢。
+const wakeOutbox = new WakeOutbox({
+  file: path.join(dataDir, "wake-outbox.json"),
+  resolve: (code) => threadSettings.findByWakeCode(code),
+  send: (agentId, threadId, prompt) =>
+    agents.sendTurn(agentId, threadId, prompt),
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await wakeOutbox.load();
+const messageDeliveries = new MessageDeliveryQueue({
+  file: path.join(dataDir, "message-deliveries.json"),
+  agents,
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await messageDeliveries.load();
+// watcher 列表走 TTL 缓存：/proc 全量扫描不进每次快照构建，接口轮询、
+// 快照与启动预热共用同一份结果；内容变化时补发快照，让首页和会话页
+// 的 deck-wake 状态即时更新。
+// 台账记住见过的 watcher：进程消失却没留下「已唤醒/已停止」的记为失联，
+// 进首页「需要处理」。Deck 停机期间消失的也能在重启后发现。
+const watcherLedger = new WakeWatcherLedger({
+  file: path.join(dataDir, "wake-watchers.json"),
+  readLog: (file) => readTail(file).catch(() => undefined),
+  onChanged: () => broadcastSnapshotSoon(),
+});
+await watcherLedger.load();
+const watcherCache = new WakeWatcherCache(
+  async () => {
+    const items = (await listWakeWatchers(path.join(deckHome, "watch"))).map(
+      (watcher) => ({
+        ...watcher,
+        ...threadSettings.findByWakeCode(watcher.code),
+      }),
+    );
+    // 只有完整扫描成功才对账（扫描失败会抛错，不会走到这里）。
+    await watcherLedger.observe(items);
+    return items;
+  },
+  { onChange: () => broadcastSnapshotSoon() },
+);
+// 没人打开页面时也要按时对账，失联不能等到下次有人看首页才发现。
+setInterval(() => void watcherCache.current(), 60_000).unref();
+/** 设置「关于」页用的静态信息：随快照下发，几十字节，不另开接口。 */
+const serverInfo = {
+  version: (() => {
+    try {
+      return String(
+        JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8"))
+          .version || "",
+      );
+    } catch {
+      return "";
+    }
+  })(),
+  node: process.version,
+  platform: process.platform,
+  wsl: useWsl,
+  startedAt: Date.now(),
+  dataDir,
+};
 const fullSnapshot = () => ({
   ...agents.snapshot(),
+  server: { ...serverInfo, ccSwitch: store.ccSwitchPath || null },
+  activities: activity.list(),
   projects: projects.list(),
   preferences: projects.getPreferences(),
+  wakeDeliveries: wakeOutbox.list(),
+  messageDeliveries: messageDeliveries.list(),
+  wakeCodes: threadSettings.listWakeCodes(),
+  wakeWatchers: watcherCache.current(),
+  wakeLost: watcherLedger.lost(),
+  // 工具列表是静态的几条描述：随快照下发 + 前端缓存，工具页（桌面端是新标签页）
+  // 打开即有侧栏和标题，不必再等一次 GET /tools。
+  tools: tools.list(),
 });
 const app = express();
 // 快照/线程全文动辄数 MB，手机弱网下 gzip 是最便宜的收益：只压文本类，
@@ -277,8 +423,16 @@ const route =
   };
 const param = (value: string | string[]) =>
   Array.isArray(value) ? value[0] : value;
+// agentId 是路由与 JSON 字段里的资源标识符：小写字母数字加 -/_，
+// 与 acp-agents.ts 的 descriptor id 约束一致；具体合法性由 registry.get 校验。
+const AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+const agentIdSchema = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(AGENT_ID_RE, "agentId 只能包含小写字母、数字、-、_");
 const agentId = (value: string | string[]) =>
-  z.enum(["codex", "claude", "opencode"]).parse(param(value)) as AgentId;
+  agentIdSchema.parse(param(value)) as AgentId;
 
 app.get(
   "/api/snapshot",
@@ -286,7 +440,195 @@ app.get(
 );
 app.get(
   "/api/tasks",
-  route(async () => ({ tasks: await agents.listTasks() })),
+  route(async () => ({
+    // registry 只知道会话 updatedAt；活动追踪器记下的才是本轮真实开始时间。
+    tasks: (await agents.listTasks()).map((task) => ({
+      ...task,
+      startedAt:
+        activity.get(task.agentId, task.threadId)?.turnStartedAt ??
+        task.startedAt,
+    })),
+  })),
+);
+app.get(
+  "/api/monitor/host",
+  route(async () =>
+    hostStats(cpuSampler, wss.clients.size, agents.runtimePids()),
+  ),
+);
+// 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒代号，会与 /api/wake/:code 冲突。
+// 返回缓存结果：客户端轮询顺带驱动过期重扫，变化经快照广播下发。
+app.get(
+  "/api/monitor/watchers",
+  route(async () => ({ items: await watcherCache.ready() })),
+);
+const wakePrepareSchema = z.object({
+  code: z.string().max(40).nullable().optional(),
+  pid: z.number().int().positive().optional(),
+  cwd: z.string().max(4096).optional(),
+  session: z.string().max(300).optional(),
+  codexThread: z.string().max(200).optional(),
+  command: z.string().max(100_000).optional(),
+  force: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
+const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
+  const thread = tryThreadSummary(target.agentId, target.threadId);
+  return `「${thread?.name || target.threadId}」（${target.agentId}）`;
+};
+/**
+ * deck-wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
+ * 代号（不往会话里发任何消息）；给了代号则核对它确实属于发起命令的会话；
+ * 同代号同命令的 watcher 已在跑时拒绝重复挂载。dryRun 只查不改（whoami）。
+ */
+app.post(
+  "/api/monitor/watchers/prepare",
+  route(async (req) => {
+    const input = wakePrepareSchema.parse(req.body || {});
+    const resolution = resolveWakeSession(
+      {
+        session: input.session || undefined,
+        codexThread: input.codexThread || undefined,
+        ancestors: input.pid ? await ancestorPids(input.pid) : [],
+        cwd: input.cwd,
+      },
+      { threads: agents.snapshot().threads, runtimePids: agents.runtimePids() },
+    );
+    let target: { agentId: AgentId; threadId: string };
+    let code: string | null;
+    let via: string;
+    let created = false;
+    if (input.code) {
+      const bound = threadSettings.findByWakeCode(input.code);
+      if (!bound)
+        throw new Error(
+          `代号 ${input.code} 不存在；省略代号即可由 Deck 识别当前会话`,
+        );
+      const conflict = bindingConflict(bound, resolution);
+      if (conflict && !input.force) {
+        const actual = Array.isArray(conflict)
+          ? `来自 ${conflict.join("/")} 的会话`
+          : `来自会话${sessionLabel({ agentId: (conflict.agentId || "codex") as AgentId, threadId: conflict.id })}`;
+        throw new Error(
+          `代号 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略代号即可挂到当前会话；确实要唤醒别的会话请加 -f`,
+        );
+      }
+      target = bound;
+      code = input.code;
+      via = conflict ? "显式代号（-f 强制）" : "显式代号";
+    } else {
+      if (!resolution.ok) {
+        const candidates = resolution.candidates
+          .map((thread) => describeThread(thread))
+          .join("；");
+        throw new Error(
+          `${resolution.error}。请向用户确认唤醒代号后用 deck-wake watch <代号> … 重试${candidates ? `。候选：${candidates}` : ""}`,
+        );
+      }
+      target = { agentId: resolution.agentId, threadId: resolution.threadId };
+      via = resolution.via;
+      const existing =
+        threadSettings.get(target.agentId, target.threadId)?.wakeCode ?? null;
+      if (input.dryRun) code = existing;
+      else {
+        code = await threadSettings.ensureWakeCode(
+          target.agentId,
+          target.threadId,
+        );
+        created = !existing;
+        if (created) broadcastSnapshotSoon();
+      }
+    }
+    let warning: string | undefined;
+    if (!input.dryRun && input.command) {
+      const same = (await watcherCache.ready()).filter(
+        (watcher) => watcher.command === input.command,
+      );
+      const duplicate = same.find((watcher) => watcher.code === code);
+      if (duplicate && !input.force)
+        throw new Error(
+          `代号 ${code} 下已有相同命令的 watcher 在运行（pid ${duplicate.pid}），不重复挂载；确需重复请加 -f`,
+        );
+      const other = same.find((watcher) => watcher.code !== code);
+      if (other)
+        warning = `代号 ${other.code} 也在用相同命令监督（pid ${other.pid}），确认没有挂错会话`;
+    }
+    const summary = input.dryRun
+      ? `当前会话${sessionLabel(target)}，代号 ${code ?? "尚未分配（首次挂 watcher 时自动分配）"}；依据：${via}`
+      : `已绑定会话${sessionLabel(target)}，代号 ${code}${created ? "（新分配）" : ""}；依据：${via}`;
+    return { code, summary, warning, ...target, via, created };
+  }),
+);
+// 只停经扫描确认的 deck-wake 进程；先记账为「主动停止」，消失时不报失联。
+app.post(
+  "/api/monitor/watchers/:pid/stop",
+  route(async (req) => {
+    const pid = Number(param(req.params.pid));
+    if (!Number.isInteger(pid) || pid <= 1) throw new Error("无效 pid");
+    watcherCache.invalidate();
+    const watcher = (await watcherCache.ready()).find(
+      (item) => item.pid === pid,
+    );
+    if (!watcher) throw new Error(`pid ${pid} 不是正在运行的 deck-wake watcher`);
+    watcherLedger.markStopping(watcher);
+    // watcher 由 setsid 拉起，是进程组组长：连同它等待的 ssh 一起停。
+    try {
+      process.kill(-pid, "SIGUSR1");
+    } catch {
+      process.kill(pid, "SIGUSR1");
+    }
+    setTimeout(() => {
+      watcherCache.invalidate();
+      void watcherCache.current();
+    }, 1_500).unref();
+    return { ok: true };
+  }),
+);
+// 失联 watcher：由人决定是否告诉会话（不自动注入）。
+app.post(
+  "/api/monitor/lost-watchers/:id/notify",
+  route(async (req) => {
+    const item = watcherLedger.find(param(req.params.id));
+    if (!item) throw new Error("失联记录不存在");
+    const target = threadSettings.findByWakeCode(item.code);
+    if (!target) throw new Error(`代号 ${item.code} 已解绑，无法通知会话`);
+    const prompt = [
+      `[wake:${item.code}] [${item.label}] watcher 已失联：${item.reason}。`,
+      `$ ${item.command}`,
+      item.log ? `日志 ${item.log}` : "",
+      "请检查远端任务现状，需要时重新挂 watcher。",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const delivery = await wakeOutbox.enqueue({
+      code: item.code,
+      prompt,
+      ...target,
+    });
+    await watcherLedger.dismiss(item.id);
+    return { delivery };
+  }),
+);
+app.delete(
+  "/api/monitor/lost-watchers/:id",
+  route(async (req) => {
+    await watcherLedger.dismiss(param(req.params.id));
+    return { ok: true };
+  }),
+);
+// 投递管理同样不放 /api/wake/* 下：`wake-deliveries` 是合法唤醒代号。
+app.post(
+  "/api/monitor/wake-deliveries/:id/retry",
+  route(async (req) => ({
+    item: await wakeOutbox.retry(param(req.params.id)),
+  })),
+);
+app.delete(
+  "/api/monitor/wake-deliveries/:id",
+  route(async (req) => {
+    await wakeOutbox.dismiss(param(req.params.id));
+    return { ok: true };
+  }),
 );
 app.post(
   "/api/session-search",
@@ -344,8 +686,145 @@ app.get(
       typeof req.query.providerId === "string"
         ? req.query.providerId
         : undefined,
+      typeof req.query.directory === "string" ? req.query.directory : undefined,
     ),
   ),
+);
+/**
+ * Agent 启停与重载（不重启 Deck 主服务）：
+ * - PUT  /agents/:id/enabled  启用/停用；有会话在运行时返回 applied:false，
+ *   带 force 才会中断它们。显式选择落盘在 agent-settings.json。
+ * - POST /agents/:id/reload   重启该 agent 的后端进程并重读配置与会话。
+ * - POST /agents/reload       先按 acp-agents.json 增删改 ACP agent，再重载全部。
+ */
+const agentForceSchema = z.object({ force: z.boolean().optional() });
+app.put(
+  "/api/agents/:agentId/enabled",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = agentForceSchema
+      .extend({ enabled: z.boolean() })
+      .parse(req.body);
+    const result = await agents.setEnabled(id, input.enabled, {
+      force: input.force,
+    });
+    // 与默认一致时清掉显式选择：默认（如「命令已安装」）之后能继续跟随实际情况。
+    if (result.applied)
+      await agentSettings.setEnabled(
+        id,
+        input.enabled === agents.defaultEnabled(id) ? null : input.enabled,
+      );
+    return { ...result, snapshot: fullSnapshot() };
+  }),
+);
+app.post(
+  "/api/agents/reload",
+  route(async (req) => {
+    const input = agentForceSchema.parse(req.body ?? {});
+    const sync = await acpHost.sync({ force: input.force });
+    const results = await agents.reloadAll({ force: input.force });
+    return { sync, results, snapshot: fullSnapshot() };
+  }),
+);
+app.post(
+  "/api/agents/:agentId/reload",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = agentForceSchema.parse(req.body ?? {});
+    const result = await agents.reload(id, { force: input.force });
+    return { result, snapshot: fullSnapshot() };
+  }),
+);
+/**
+ * OpenCode 代理配置：读 = 全局/项目 opencode.json + server 的 GET /agent；
+ * 写 = 落盘到对应 opencode.json（全局与项目同一 schema），在线时再
+ * PATCH /config 让运行中的 server 立即生效。
+ */
+app.get(
+  "/api/agents/opencode/config",
+  route(async (req) => {
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    const [globalConfig, projectConfig, catalog] = await Promise.all([
+      readOpenCodeConfig("global"),
+      directory
+        ? readOpenCodeConfig("project", directory)
+        : Promise.resolve(undefined),
+      opencode.isOnline()
+        ? opencode.agentCatalog(directory).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    return {
+      online: opencode.isOnline(),
+      global: globalConfig,
+      project: projectConfig,
+      agents: catalog,
+    };
+  }),
+);
+app.put(
+  "/api/agents/opencode/config",
+  route(async (req) => {
+    const input = z
+      .object({
+        scope: z.enum(["global", "project"]),
+        directory: z.string().min(1).optional(),
+        agent: z
+          .record(
+            z.string(),
+            z.object({
+              model: z.string().nullable().optional(),
+              disable: z.boolean().nullable().optional(),
+              prompt: z.string().nullable().optional(),
+              temperature: z.number().nullable().optional(),
+            }),
+          )
+          .optional(),
+        model: z.string().nullable().optional(),
+        smallModel: z.string().nullable().optional(),
+      })
+      .parse(req.body);
+    if (input.scope === "project" && !input.directory?.trim())
+      throw new Error("项目范围必须提供 directory");
+    const directory = input.directory?.trim() || undefined;
+    const file = await writeOpenCodeConfig(input.scope, directory, {
+      agent: input.agent,
+      model: input.model,
+      smallModel: input.smallModel,
+    });
+    // 在线时同步 PATCH 让改动立即生效；失败不影响落盘结果。
+    let applied = false;
+    let applyError: string | undefined;
+    if (opencode.isOnline()) {
+      const patch: Record<string, unknown> = {};
+      if (input.agent) {
+        const agents: Record<string, Record<string, unknown>> = {};
+        for (const [name, entry] of Object.entries(input.agent)) {
+          const cleaned: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(entry)) {
+            if (value === undefined || value === null) continue;
+            cleaned[key] = value;
+          }
+          if (entry.disable === false) cleaned.disable = false;
+          if (Object.keys(cleaned).length) agents[name] = cleaned;
+        }
+        if (Object.keys(agents).length) patch.agent = agents;
+      }
+      if (input.model) patch.model = input.model;
+      if (input.smallModel) patch.small_model = input.smallModel;
+      if (Object.keys(patch).length) {
+        try {
+          await opencode.patchRuntimeConfig(patch, directory);
+          applied = true;
+        } catch (error: any) {
+          applyError = error?.message || String(error);
+        }
+      }
+    }
+    return { path: file.path, applied, applyError };
+  }),
 );
 app.post(
   "/api/agents/:agentId/threads",
@@ -373,6 +852,7 @@ app.post(
         sandbox: z
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
+        sessionMode: z.string().max(100).optional(),
       })
       .parse(req.body);
     if (id === "codex" && !input.providerId)
@@ -436,7 +916,7 @@ app.patch(
         settings: z
           .object({
             providerId: z.string().min(1).optional(),
-            model: z.string().min(1).optional(),
+            model: z.string().optional(),
             reasoningEffort: z.string().optional(),
             personality: z.enum(["friendly", "pragmatic", "none"]).optional(),
             approvalPolicy: z
@@ -456,6 +936,7 @@ app.patch(
                 "bypassPermissions",
               ])
               .optional(),
+            sessionMode: z.string().max(100).optional(),
           })
           .optional(),
       })
@@ -490,7 +971,10 @@ app.delete(
   route(async (req) => {
     const id = agentId(req.params.agentId);
     const threadId = param(req.params.threadId);
-    await agents.deleteThread(id, threadId);
+    const options = z
+      .object({ closeConnection: z.boolean().optional() })
+      .parse(req.body || {});
+    await agents.deleteThread(id, threadId, options);
     await threadSettings.remove(id, threadId);
     return fullSnapshot();
   }),
@@ -540,6 +1024,7 @@ app.post(
     );
   }),
 );
+registerMessageRoutes(app, agents, messageDeliveries);
 app.post(
   "/api/agents/:agentId/threads/:threadId/interrupt",
   route(async (req) => {
@@ -551,6 +1036,139 @@ app.post(
     );
   }),
 );
+const findThreadSummary = (id: AgentId, threadId: string) => {
+  const snapshot = agents.get(id).snapshot();
+  return [...snapshot.threads, ...(snapshot.archivedThreads || [])].find(
+    (item) => item.id === threadId,
+  );
+};
+// adapter 已被移除时代号本体仍要返回，便于排查悬挂映射。
+const tryThreadSummary = (id: AgentId, threadId: string) => {
+  try {
+    return findThreadSummary(id, threadId);
+  } catch {
+    return undefined;
+  }
+};
+// watcher 通常就跑在 deck 本机（agent 的 bash 亦然），回环直连
+// 即可，无需绕公网/tunnel。
+const localBase = `http://${formatHost(
+  host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host,
+)}:${port}`;
+app.get(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    const code =
+      threadSettings.get(
+        agentId(req.params.agentId),
+        param(req.params.threadId),
+      )?.wakeCode ?? null;
+    return { code, localUrl: code ? `${localBase}/api/wake/${code}` : null };
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    if (!findThreadSummary(id, threadId)) throw new Error("会话不存在");
+    const { code, notify } = z
+      .object({
+        code: z.string().max(40).optional(),
+        notify: z.boolean().optional(),
+      })
+      .parse(req.body || {});
+    const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code);
+    broadcastSnapshotSoon();
+    const wakePath = `/api/wake/${wakeCode}`;
+    const localUrl = `${localBase}${wakePath}`;
+    const result: {
+      code: string;
+      path: string;
+      localUrl: string;
+      notified?: boolean;
+    } = { code: wakeCode, path: wakePath, localUrl };
+    if (notify) {
+      // 只告诉会话代号与用法；地址和令牌由本机发现文件提供，
+      // 令牌不进入会话上下文。
+      try {
+        await agents.sendTurn(
+          id,
+          threadId,
+          [
+            `[deck] 本会话已开启远程唤醒，代号 ${wakeCode}。`,
+            `在远端启动长任务后，用 deck-wake skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
+            `没有该 skill 时可直接调用：curl -X POST "$(cat ~/.codex-deck/url)${wakePath}" -H "Authorization: Bearer $(cat ~/.codex-deck/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
+            "本条仅需确认收到，无需其它操作。",
+          ].join("\n"),
+        );
+        result.notified = true;
+      } catch (error: any) {
+        // 通知失败不影响代号生效（例如会话正忙、进程未起），UI 另行提示。
+        result.notified = false;
+      }
+    }
+    return result;
+  }),
+);
+app.delete(
+  "/api/agents/:agentId/threads/:threadId/wake",
+  route(async (req) => {
+    await threadSettings.clearWakeCode(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    );
+    broadcastSnapshotSoon();
+    return { ok: true };
+  }),
+);
+app.get(
+  "/api/wake",
+  route(async () => ({
+    items: threadSettings.listWakeCodes().map((target) => {
+      const thread = tryThreadSummary(target.agentId, target.threadId);
+      return {
+        ...target,
+        name: thread?.name,
+        cwd: thread?.cwd,
+        status: thread?.status,
+      };
+    }),
+  })),
+);
+app.get(
+  "/api/wake/:code",
+  route(async (req) => {
+    const code = param(req.params.code);
+    const target = threadSettings.findByWakeCode(code);
+    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const thread = tryThreadSummary(target.agentId, target.threadId);
+    return { code, ...target, name: thread?.name, status: thread?.status };
+  }),
+);
+app.post(
+  "/api/wake/:code",
+  route(async (req, res) => {
+    const code = param(req.params.code);
+    const target = threadSettings.findByWakeCode(code);
+    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const body = (
+      req.body && typeof req.body === "object" ? req.body : {}
+    ) as Record<string, unknown>;
+    const { text, ...rest } = body;
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    const detail =
+      trimmed || (Object.keys(rest).length ? JSON.stringify(rest) : "");
+    const prompt = detail
+      ? `[wake:${code}] ${detail}`
+      : `[wake:${code}] 外部唤醒信号`;
+    if (prompt.length > 100_000) throw new Error("wake 载荷过大");
+    // 先落盘再应答：脚本只认 2xx，投递由 wakeOutbox 在后台重试到送达。
+    // 此刻进程崩了，重启后队列也会接着投。
+    const delivery = await wakeOutbox.enqueue({ code, prompt, ...target });
+    res.status(202).json({ code, ...target, delivery });
+  }),
+);
 app.get(
   "/api/agents/:agentId/threads/:threadId/commands",
   route(async (req) => ({
@@ -559,6 +1177,16 @@ app.get(
       param(req.params.threadId),
     ),
   })),
+);
+app.get(
+  "/api/agents/:agentId/threads/:threadId/skills",
+  route(async (req) =>
+    agents.listSkills(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+      req.query.reload === "1",
+    ),
+  ),
 );
 app.post(
   "/api/agents/:agentId/threads/:threadId/commands",
@@ -593,7 +1221,11 @@ app.post(
     const input = z
       .object({ messageID: z.string().min(1).max(200).optional() })
       .parse(req.body || {});
-    return agents.revertSession(id, param(req.params.threadId), input.messageID);
+    return agents.revertSession(
+      id,
+      param(req.params.threadId),
+      input.messageID,
+    );
   }),
 );
 app.post(
@@ -608,7 +1240,6 @@ app.post(
   "/api/agents/:agentId/threads/:threadId/fork",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    if (id !== "opencode") throw new Error("该 Agent 请使用会话分支旧接口");
     const input = z
       .object({
         messageID: z.string().min(1).max(200).optional(),
@@ -622,7 +1253,6 @@ app.post(
   "/api/agents/:agentId/threads/:threadId/retry",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    if (id !== "opencode") throw new Error("该 Agent 请使用会话重试旧接口");
     const input = z
       .object({
         turnId: z.string().min(1).max(200),
@@ -655,6 +1285,7 @@ app.post(
         decision: z
           .enum(["accept", "acceptForSession", "decline", "cancel"])
           .optional(),
+        optionId: z.string().optional(),
         permissions: z.unknown().optional(),
         scope: z.enum(["session", "turn"]).optional(),
         answers: z.unknown().optional(),
@@ -678,6 +1309,7 @@ app.post(
   "/api/runtime/reload",
   route(async () => {
     const ccs = await store.refreshCcSwitch();
+    await claude.reloadProfiles(store.ccSwitchPath);
     manager.emit("event", { type: "snapshot", data: fullSnapshot() });
     const busy = manager.busyThreads();
     let restarted = false;
@@ -747,7 +1379,7 @@ app.put(
         hidden: z.boolean().optional(),
         defaults: z
           .object({
-            agentId: z.enum(["codex", "claude", "opencode"]).optional(),
+            agentId: agentIdSchema.optional(),
             providerId: z.string().optional(),
             model: z.string().optional(),
             reasoningEffort: z.string().optional(),
@@ -809,7 +1441,7 @@ app.put(
   route(async (req) => {
     const input = z
       .object({
-        lastAgentId: z.enum(["codex", "claude", "opencode"]).optional(),
+        lastAgentId: agentIdSchema.optional(),
         lastProviderId: z.string().optional(),
         lastModel: z.string().optional(),
         lastReasoningEffort: z.string().optional(),
@@ -829,6 +1461,7 @@ app.put(
             "bypassPermissions",
           ])
           .optional(),
+        pinDefaults: z.boolean().optional(),
         recentDirs: z.array(z.string()).optional(),
       })
       .merge(connectionOverlaySchema)
@@ -1243,7 +1876,7 @@ app.post(
 );
 app.post(
   "/api/runtime/rate-limits",
-  route(async () => manager.loadOfficialUsage()),
+  route(async (req) => manager.loadOfficialUsage(Boolean(req.query?.force))),
 );
 
 const webDir = path.join(projectRoot, "dist-web");
@@ -1357,18 +1990,25 @@ agents.on("event", (event) => {
     });
     return;
   }
+  const activityUpdate = activity.ingest(event);
+  if (activityUpdate)
+    broadcast(
+      JSON.stringify({ type: "activity.updated", data: activityUpdate }),
+    );
   if (
     event.type === "snapshot" ||
     event.type === "thread.updated" ||
     event.type === "thread.deleted"
   ) {
-    const snapshot = agents.snapshot();
-    const archived = snapshot.archivedThreads || [];
-    const historiesReady = snapshot.agents.every(
-      (agent) => agent.historyStatus === "ready",
-    );
-    if (snapshot.threads.length || archived.length || historiesReady)
-      threadSummaries.schedule(snapshot.threads, archived);
+    // 落盘的是 cacheSnapshot：已停用 agent 的会话摘要也要保留，重新启用前不能丢。
+    const cache = agents.cacheSnapshot();
+    const historiesReady = agents
+      .list()
+      .every(
+        (agent) => agent.enabled === false || agent.historyStatus === "ready",
+      );
+    if (cache.threads.length || cache.archivedThreads.length || historiesReady)
+      threadSummaries.schedule(cache.threads, cache.archivedThreads);
     sessionSearch.reconcileSoon();
   }
   // snapshot 走合并窗口；thread.updated/deleted 与 codex.event 本就是增量小包，
@@ -1417,6 +2057,36 @@ try {
 }
 
 console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
+// 启动先暖一轮 watcher 缓存：首个快照与首个接口调用直接命中，不用等扫描。
+void watcherCache.ready();
+// 本机发现文件：deck-wake 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
+try {
+  mkdirSync(deckHome, { recursive: true, mode: 0o700 });
+  writeFileSync(path.join(deckHome, "url"), `${localBase}\n`, { mode: 0o600 });
+  writeFileSync(path.join(deckHome, "token"), `${token}\n`, { mode: 0o600 });
+} catch (error: any) {
+  console.error("写入唤醒发现文件失败:", error?.message || error);
+}
+// 与本版服务端配套的 deck-wake 脚本装到 ~/.codex-deck/bin/：各项目里的
+// skill 拷贝会转发到这里，不再因为拷贝过期而与接口脱节。内容相同不重写，
+// 先写临时文件再改名，正在运行的 watcher 读到的始终是完整文件。
+try {
+  const source = readFileSync(
+    path.join(projectRoot, "skills/deck-wake/scripts/deck-wake"),
+    "utf8",
+  );
+  const installed = path.join(deckHome, "bin", "deck-wake");
+  const current = existsSync(installed) ? readFileSync(installed, "utf8") : "";
+  if (current !== source) {
+    mkdirSync(path.dirname(installed), { recursive: true, mode: 0o700 });
+    const temporary = `${installed}.${process.pid}.tmp`;
+    writeFileSync(temporary, source, { mode: 0o755 });
+    chmodSync(temporary, 0o755);
+    renameSync(temporary, installed);
+  }
+} catch (error: any) {
+  console.error("安装 deck-wake 脚本失败:", error?.message || error);
+}
 if (lanListener) {
   const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");
   if (urls.length) {
@@ -1495,9 +2165,11 @@ const shutdown = (signal: string) => {
   clearRuntimeLock(dataDir, process.pid);
   pairing?.stop();
   tunnel?.kill();
+  messageDeliveries.close();
   agents.stopAll();
   tools.close();
   sessionSearch.close();
+  wakeOutbox.close();
   // 硬退出兜底：5 秒后无论如何结束进程。
   const hardExit = setTimeout(() => process.exit(0), 5_000);
   void threadSummaries
@@ -1511,4 +2183,5 @@ const shutdown = (signal: string) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 // Windows Ctrl+Break 只在 win32 上存在，其他平台注册会报错，故加守卫。
-if (process.platform === "win32") process.on("SIGBREAK", () => shutdown("SIGBREAK"));
+if (process.platform === "win32")
+  process.on("SIGBREAK", () => shutdown("SIGBREAK"));

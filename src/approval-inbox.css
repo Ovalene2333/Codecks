@@ -3,15 +3,21 @@
   z-index: 40;
   top: 104px;
   right: 18px;
-  width: min(380px, calc(100vw - 36px));
+  display: flex;
+  flex-direction: column;
+  width: min(var(--modal-w), calc(100vw - 36px));
   min-width: 0;
   max-height: calc(100dvh - 122px);
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: 0 22px 64px rgb(0 0 0 / 48%);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
   animation: approval-inbox-in 160ms ease both;
+}
+
+.approval-inbox-backdrop {
+  display: none;
 }
 
 .approval-inbox-handle {
@@ -20,6 +26,7 @@
 
 .approval-inbox-header {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 9px;
   min-height: 48px;
@@ -75,6 +82,7 @@
 
 .approval-session-link {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 12px;
   width: calc(100% - 24px);
@@ -120,6 +128,10 @@
 }
 
 .approval-inbox .approval-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   margin: 0;
   border: 0;
   border-radius: 0;
@@ -128,16 +140,41 @@
 }
 
 .approval-inbox .approval-title {
+  flex: none;
   padding-top: 12px;
 }
 
+.approval-inbox .approval-icon {
+  display: none;
+}
+
+.approval-inbox .approval-reason,
+.approval-inbox .approval-cwd,
+.approval-inbox .permission-list {
+  padding-left: 15px;
+}
+
+.approval-inbox .approval-permission-hint {
+  margin-left: 15px;
+}
+
+.approval-inbox .approval-content {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .approval-inbox .approval-actions {
+  flex: none;
   padding: 11px 12px 12px;
+  background: var(--surface-raised);
 }
 
 .approval-inbox .approval-actions > button {
   min-width: 0;
   flex: 1 1 0;
+  width: 0;
 }
 
 .approval-notification-opt-in {
@@ -177,9 +214,10 @@
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--wait) 35%, var(--line));
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--glass-strong);
+  backdrop-filter: blur(14px);
   color: var(--wait);
-  box-shadow: 0 12px 36px rgb(0 0 0 / 40%);
+  box-shadow: var(--shadow-md);
   font-size: var(--fs-caption);
   font-weight: 600;
   cursor: pointer;
@@ -205,14 +243,26 @@
 }
 
 @media (max-width: 760px) {
+  .approval-inbox-backdrop {
+    position: fixed;
+    z-index: 39;
+    inset: 0;
+    display: block;
+    background: var(--overlay-soft);
+  }
+
   .approval-inbox {
-    top: 82px;
-    right: 10px;
-    bottom: calc(132px + env(safe-area-inset-bottom));
-    left: 10px;
-    width: auto;
-    max-height: none;
-    border-radius: 14px;
+    top: auto;
+    right: 0;
+    bottom: var(--approval-visual-inset, 0px);
+    left: 0;
+    width: 100%;
+    max-height: min(
+      90dvh,
+      calc(100dvh - var(--approval-visual-inset, 0px) - var(--space-2))
+    );
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
 
   .approval-inbox-handle {
@@ -221,7 +271,7 @@
     height: 4px;
     margin: 7px auto 1px;
     border-radius: 999px;
-    background: #555d68;
+    background: var(--line-strong);
   }
 
   .approval-inbox-header {
@@ -233,12 +283,26 @@
     min-height: 48px;
   }
 
+  .approval-inbox .approval-reason,
+  .approval-inbox .approval-cwd,
+  .approval-inbox .permission-list {
+    padding-left: 13px;
+  }
+
   .approval-inbox .approval-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   .approval-inbox .approval-actions > button {
     min-height: 48px;
+    width: 0;
+    flex: 1 1 0;
+  }
+
+  .approval-inbox .approval-actions > button.approve {
+    flex-grow: 2;
   }
 
   .approval-inbox-trigger {
@@ -256,5 +320,17 @@
 @media (prefers-reduced-motion: reduce) {
   .approval-inbox {
     animation: none;
+  }
+}
+
+@media (max-height: 500px) {
+  .approval-inbox {
+    top: var(--space-2);
+    right: var(--space-2);
+    bottom: calc(var(--space-2) + var(--approval-visual-inset, 0px));
+    left: var(--space-2);
+    width: auto;
+    max-height: none;
+    border-radius: var(--radius-lg);
   }
 }

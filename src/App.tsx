@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, KeyRound, Menu, SunMoon } from "lucide-react";
+import {
+  Activity,
+  ArrowLeft,
+  BarChart3,
+  BellRing,
+  FileText,
+  Folder,
+  FolderPlus,
+  Gauge,
+  GitBranch,
+  KeyRound,
+  SunMoon,
+  Terminal,
+  Zap,
+} from "lucide-react";
 import {
   api,
   getHealth,
@@ -12,9 +26,12 @@ import {
   setToken,
 } from "./api";
 import { useAppearance } from "./appearance";
+import { copyText } from "./clipboard";
 import type {
+  AgentId,
   ProjectRecord,
   RuntimeSnapshot,
+  SessionWakeState,
   Snapshot,
   ApprovalResolveBody,
   SessionSearchMatch,
@@ -24,17 +41,24 @@ import type {
 import {
   filterProjectGroups,
   mergeProjectGroups,
+  normalizeProjectPath,
+  quickNewProjects,
   threadsForProject,
   type ProjectGroup,
 } from "./projects";
 import { sessionKey } from "./format";
 import {
+  cachedThreadKeys,
+  dedupeThreadLoad,
   hasSidebarData,
+  isThreadUncacheable,
   mergeStaleSnapshot,
   readSnapshotCache,
+  readThreadCache,
   readUiCache,
   reconcileSnapshot,
   writeSnapshotCache,
+  writeThreadCache,
   writeUiCache,
 } from "./cache";
 import {
@@ -44,12 +68,20 @@ import {
   ToastStack,
 } from "./ui";
 import { Sidebar } from "./layout/Sidebar";
+import { MobileTabBar, useMobileLayout } from "./layout/MobileNav";
+import { MonitorPanel } from "./monitor/MonitorPanel";
+import {
+  activityKey,
+  applyActivityUpdate,
+  resetActivities,
+} from "./monitor/activity-store";
 import { ChatWorkspace } from "./session/ChatWorkspace";
 import { Welcome } from "./welcome/Welcome";
 import { NewThreadModal } from "./overlays/NewThreadModal";
-import { ProviderModal } from "./overlays/ProviderModal";
+import { SettingsModal, type SettingsTab } from "./settings/SettingsModal";
 import { ProviderSwitchModal } from "./overlays/ProviderSwitchModal";
 import { RenameModal } from "./overlays/RenameModal";
+import { WakeModal } from "./overlays/WakeModal";
 import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
 import { UsageDrawer, type UsageView } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
@@ -64,11 +96,21 @@ import {
   threadPath,
   threadRemovePath,
 } from "./agents";
-import { AppearanceSettingsModal } from "./overlays/AppearanceSettingsModal";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
 import { TaskCenter } from "./tasks/TaskCenter";
 import { ToolCenter } from "./tools/ToolCenter";
 import { toolPath } from "../plugin/client-registry";
+import {
+  canonicalDeckPath,
+  deckDepth,
+  deckEntry,
+  deckRewrite,
+  readDeckState,
+  routeForPath,
+  sessionKeyFromPath,
+  sessionPath,
+  SESSIONS_PATH,
+} from "./deck-history";
 import {
   completedThreads,
   readUnseenSessions,
@@ -78,76 +120,46 @@ import {
   writeUnseenSessions,
 } from "./session/activity";
 import { approvalPreview, threadForApproval } from "./session/approvals";
+import { fetchThreadFull } from "./session/thread-load";
 import {
   requestSystemNotifications,
   sendSystemNotification,
   systemNotificationPermission,
 } from "./notifications";
+import { useDeckShortcuts } from "./shortcuts";
+import { getDeckSettings, useDeckSettings } from "./deck-settings";
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 const isToolPath = (pathname: string) => Boolean(toolPath(pathname));
-const mobileViewportQuery = "(max-width: 760px)";
-
-type DeckHistoryState = {
-  __codexDeck?: true;
-  page?: "workspace" | "tools";
-  view?: "workspace" | "session";
-  session?: string;
-};
-
-const readDeckHistoryState = () => {
-  const state = window.history.state;
-  return state && typeof state === "object"
-    ? (state as DeckHistoryState)
-    : undefined;
-};
-
-const isDeckSessionState = (
-  state: DeckHistoryState | undefined,
-): state is DeckHistoryState & { view: "session"; session: string } =>
-  state?.__codexDeck === true &&
-  state.view === "session" &&
-  Boolean(state.session);
-
-const currentHistoryUrl = () =>
-  `${window.location.pathname}${window.location.search}${window.location.hash}`;
-
-const nextDeckHistoryState = (
-  patch: Pick<DeckHistoryState, "page" | "view" | "session">,
-) => ({
-  ...(window.history.state && typeof window.history.state === "object"
-    ? window.history.state
-    : {}),
-  __codexDeck: true as const,
-  ...patch,
-});
+const readDeckHistoryState = () => readDeckState(window.history.state);
 
 export function App() {
   const appearance = useAppearance();
-  const [isMobileViewport, setIsMobileViewport] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia(mobileViewportQuery).matches,
-  );
-  const [snapshot, setSnapshot] = useState(() => readSnapshotCache() || empty);
+  const { hiddenTools } = useDeckSettings();
+  const [snapshot, setSnapshot] = useState(() => {
+    const cached = readSnapshotCache();
+    // 首页“运行中”的步骤、“新回复”的预览靠活动数据：用缓存先画出来，
+    // 实时快照到了再整体替换，避免这两块刷新后先空着再跳出来。
+    if (cached?.activities) resetActivities(cached.activities);
+    return cached || empty;
+  });
   const [loading, setLoading] = useState(
     () => !hasSidebarData(readSnapshotCache()),
   );
-  const [selected, setSelected] = useState<string | undefined>(() => {
-    if (
-      typeof window === "undefined" ||
-      !window.matchMedia(mobileViewportQuery).matches
-    )
-      return undefined;
-    const state = readDeckHistoryState();
-    return isDeckSessionState(state) ? state.session : undefined;
-  });
+  const [selected, setSelected] = useState<string | undefined>(() =>
+    typeof window === "undefined"
+      ? undefined
+      : sessionKeyFromPath(window.location.pathname),
+  );
   const [library, setLibrary] = useState<"active" | "archived">("active");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(readUiCache().expandedProjects),
   );
   const [events, setEvents] = useState<any[]>([]);
-  const [providerModal, setProviderModal] = useState(false);
+  // false = 关闭；对象 = 打开，可指定落在哪个标签（监控台的「管理」直达 Agent 页）。
+  const [settingsModal, setSettingsModal] = useState<
+    false | { tab?: SettingsTab }
+  >(false);
   const [threadModal, setThreadModal] = useState<{
     cwd?: string;
     project?: ProjectRecord;
@@ -170,7 +182,14 @@ export function App() {
   const [notificationPermission, setNotificationPermission] = useState(
     systemNotificationPermission,
   );
-  const [sidebar, setSidebar] = useState(true);
+  // 当前停在 /sessions：移动端会话列表是底栏「会话」页（整屏侧栏），
+  // 桌面端侧栏常驻，此时工作区照常显示总览。
+  const [sessionsView, setSessionsView] = useState(
+    () => routeForPath(location.pathname, isToolPath).view === "sessions",
+  );
+  const mobile = useMobileLayout();
+  // 移动端底栏的两个就地面板：工具列表、新建时的项目快选。
+  const [mobileSheet, setMobileSheet] = useState<"tools" | "new" | null>(null);
   const [authError, setAuthError] = useState(false);
   const [pairingAvailable, setPairingAvailable] = useState(false);
   const [pairMessage, setPairMessage] = useState("");
@@ -191,9 +210,9 @@ export function App() {
   const [projectEdit, setProjectEdit] = useState<ProjectRecord | null>(null);
   const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
+  const [wakeThread, setWakeThread] = useState<ThreadSummary | null>(null);
   const [phoneSettings, setPhoneSettings] = useState(false);
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
-  const [taskScope, setTaskScope] = useState<string | null>();
+    const [taskScope, setTaskScope] = useState<string | null>();
   const [page, setPage] = useState(() =>
     isToolPath(location.pathname) ? "tools" : "workspace",
   );
@@ -202,18 +221,11 @@ export function App() {
     project?: ProjectRecord;
   }) => {
     setThreadModal(next);
-    if (window.matchMedia(mobileViewportQuery).matches) setSidebar(false);
   };
   const previousThreadStatuses = useRef(threadStatusMap(snapshot.threads));
   const notifiedApprovals = useRef(new Set<string>());
-
-  useEffect(() => {
-    const media = window.matchMedia(mobileViewportQuery);
-    const syncViewport = () => setIsMobileViewport(media.matches);
-    syncViewport();
-    media.addEventListener("change", syncViewport);
-    return () => media.removeEventListener("change", syncViewport);
-  }, []);
+  // 会话选中时间点：新建会话到其进 snapshot 之间有窗口期，失效守卫据此宽限
+  const selectedAtRef = useRef(0);
 
   const pushToast = useCallback((message: string) => {
     const id = Date.now() + Math.random();
@@ -225,98 +237,88 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // URL 归一化：老别名、非本应用条目、旧版缺 depth 的条目都重写一遍
+    // toolPath 返回别名归一化后的规范路径（/page/terminal→/terminal、
+    // /text-files→/text-editor）；/monitor 并入首页后归一化为 /。
     const canonicalPath =
-      location.pathname === "/page/terminal"
-        ? "/terminal"
-        : currentHistoryUrl();
-    const initialPage = isToolPath(
-      location.pathname === "/page/terminal" ? "/terminal" : location.pathname,
-    )
-      ? "tools"
-      : "workspace";
-    const initialState = readDeckHistoryState();
+      toolPath(location.pathname) || canonicalDeckPath(location.pathname);
+    const initial = readDeckHistoryState();
     if (
-      location.pathname === "/page/terminal" ||
-      !initialState?.__codexDeck ||
-      !initialState.view
+      canonicalPath !== location.pathname ||
+      !initial?.__codexDeck ||
+      initial.depth === undefined
     ) {
       window.history.replaceState(
-        nextDeckHistoryState({ page: initialPage, view: "workspace" }),
+        deckRewrite(initial, routeForPath(canonicalPath, isToolPath)),
         "",
         canonicalPath,
       );
     }
-    const syncPage = () => {
-      setPage(isToolPath(location.pathname) ? "tools" : "workspace");
-      if (!isMobileViewport) {
-        if (isDeckSessionState(readDeckHistoryState()))
-          window.history.replaceState(
-            nextDeckHistoryState({
-              page: isToolPath(location.pathname) ? "tools" : "workspace",
-              view: "workspace",
-            }),
-            "",
-            currentHistoryUrl(),
-          );
-        setSelected(undefined);
-        setSidebar(true);
-        return;
-      }
-      const state = readDeckHistoryState();
-      if (isDeckSessionState(state)) {
-        setSelected(state.session);
-        setSidebar(false);
-      } else {
-        setSelected(undefined);
-        setSidebar(true);
-      }
+    const syncRoute = () => {
+      const apply = () => {
+        const route = routeForPath(location.pathname, isToolPath);
+        setPage(route.page);
+        setSelected(route.session);
+        setSessionsView(route.view === "sessions");
+      };
+      apply();
     };
-    window.addEventListener("popstate", syncPage);
-    syncPage();
-    return () => window.removeEventListener("popstate", syncPage);
-  }, [isMobileViewport]);
+    window.addEventListener("popstate", syncRoute);
+    syncRoute();
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
 
-  useEffect(() => {
-    if (!isMobileViewport) {
-      if (selected) setSidebar(false);
-      return;
-    }
+  // 应用内“返回”：栈里还有本应用的上一级页面就真正回退；
+  // 直接进入/刷新出来的单级条目则原地改写回工作区，避免退出循环。
+  const leaveToWorkspace = useCallback(() => {
     const state = readDeckHistoryState();
-    const url = currentHistoryUrl();
-    const historyPage = isToolPath(location.pathname) ? "tools" : "workspace";
-    if (selected) {
-      const nextState = nextDeckHistoryState({
-        page: "workspace",
-        view: "session",
-        session: selected,
-      });
-      if (isDeckSessionState(state))
-        window.history.replaceState(nextState, "", url);
-      else window.history.pushState(nextState, "", url);
-      setSidebar(false);
+    if (state && deckDepth(state) > 1) {
+      window.history.back();
       return;
     }
-    if (isDeckSessionState(state))
-      window.history.replaceState(
-        nextDeckHistoryState({ page: historyPage, view: "workspace" }),
-        "",
-        url,
-      );
-  }, [isMobileViewport, selected]);
-
-  const openPage = useCallback((pathname: string) => {
-    window.history.pushState(
-      nextDeckHistoryState({
-        page: isToolPath(pathname) ? "tools" : "workspace",
-        view: "workspace",
-      }),
+    window.history.replaceState(
+      deckRewrite(state, routeForPath("/", isToolPath)),
       "",
-      pathname,
+      "/",
     );
     setSelected(undefined);
-    setSidebar(true);
-    setPage(isToolPath(pathname) ? "tools" : "workspace");
+    setSessionsView(false);
+    setPage("workspace");
   }, []);
+
+  // 「总览」入口：首页是一级页面，从会话过去 = 压入 / 条目；
+  // 从 /sessions 回来走返回语义（它由首页压入），不在两个一级页之间来回堆栈。
+  const goHome = useCallback(() => {
+    if (location.pathname === SESSIONS_PATH) {
+      leaveToWorkspace();
+      return;
+    }
+    setSessionsView(false);
+    if (location.pathname === "/") return;
+    window.history.pushState(
+      deckEntry(readDeckHistoryState(), routeForPath("/", isToolPath)),
+      "",
+      "/",
+    );
+    setSelected(undefined);
+  }, [leaveToWorkspace]);
+
+  // 移动端「会话」页：压入 /sessions，系统返回回到总览。
+  const openSessions = useCallback(() => {
+    if (location.pathname === SESSIONS_PATH) return;
+    window.history.pushState(
+      deckEntry(readDeckHistoryState(), {
+        page: "workspace",
+        view: "sessions",
+      }),
+      "",
+      SESSIONS_PATH,
+    );
+    setSelected(undefined);
+    setSessionsView(true);
+  }, []);
+
+  useDeckShortcuts({ goHome });
 
   const markSessionSeen = useCallback((key: string) => {
     setUnseenSessions((current) => {
@@ -328,31 +330,63 @@ export function App() {
     });
   }, []);
 
+  const markAllSeen = useCallback(() => {
+    setUnseenSessions((current) => {
+      if (!current.size) return current;
+      const next = new Set<string>();
+      writeUnseenSessions(next);
+      return next;
+    });
+  }, []);
+
   // 快照竞态守卫：并发的 GET /snapshot 可能乱序返回；且请求在途时落地的
   // WS 事件比响应更新。seq 丢弃被取代的旧请求，wsClock 区分“干净响应”
   // （整体 reconcile）与“中途有 WS 事件”（保守合并，见 mergeStaleSnapshot）。
   const refreshSeqRef = useRef(0);
   const wsClockRef = useRef(0);
 
-  const openSession = useCallback(
-    (thread: ThreadSummary) => {
-      const key = sessionKey(thread);
+  // 打开会话 = 压入 /session/<key> 条目；已在该会话页时只同步视图
+  const openSessionKey = useCallback(
+    (key: string) => {
       markSessionSeen(key);
+      selectedAtRef.current = Date.now();
       setSelected(key);
-      setLibrary(thread.archived ? "archived" : "active");
-      setSidebar(false);
+      setSessionsView(false);
+      if (sessionKeyFromPath(location.pathname) !== key)
+        window.history.pushState(
+          deckEntry(readDeckHistoryState(), {
+            page: "workspace",
+            view: "session",
+            session: key,
+          }),
+          "",
+          sessionPath(key),
+        );
     },
     [markSessionSeen],
   );
 
-  const refreshOfficialUsage = useCallback(async () => {
-    try {
-      const runtime = await post<RuntimeSnapshot>("/runtime/rate-limits");
-      setSnapshot((current) => ({ ...current, runtime }));
-    } catch (error: any) {
-      pushToast(error?.message || "Official 额度刷新失败");
-    }
-  }, [pushToast]);
+  const openSession = useCallback(
+    (thread: ThreadSummary) => {
+      openSessionKey(sessionKey(thread));
+      setLibrary(thread.archived ? "archived" : "active");
+    },
+    [openSessionKey],
+  );
+
+  const refreshOfficialUsage = useCallback(
+    async (force = false) => {
+      try {
+        const runtime = await post<RuntimeSnapshot>(
+          `/runtime/rate-limits${force ? "?force=1" : ""}`,
+        );
+        setSnapshot((current) => ({ ...current, runtime }));
+      } catch (error: any) {
+        pushToast(error?.message || "Official 额度刷新失败");
+      }
+    },
+    [pushToast],
+  );
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -362,6 +396,9 @@ export function App() {
       .then((next) => {
         // 已有更新的刷新在途：旧响应直接丢弃，避免回退新状态。
         if (seq !== refreshSeqRef.current) return;
+        // 期间收到过 WS 消息时，响应里的活动可能比已推送的旧，交给 WS 为准。
+        if (wsClockRef.current === startClock && next.activities)
+          resetActivities(next.activities);
         setSnapshot((current) => {
           const reconciled =
             wsClockRef.current === startClock
@@ -401,10 +438,7 @@ export function App() {
       window.history.replaceState(
         state?.__codexDeck
           ? state
-          : nextDeckHistoryState({
-              page: isToolPath(location.pathname) ? "tools" : "workspace",
-              view: "workspace",
-            }),
+          : deckRewrite(undefined, routeForPath(location.pathname, isToolPath)),
         "",
         `${location.pathname}${location.search}`,
       );
@@ -412,9 +446,59 @@ export function App() {
     refresh();
   }, [refresh]);
 
+  // 快照落盘节流：流式输出时 thread.updated 一秒好几条，每条都整份
+  // stringify 写 localStorage 很费主线程。停顿 1 秒再写；页面切走/关闭时立刻写。
+  const pendingSnapshotWrite = useRef<Snapshot | null>(null);
   useEffect(() => {
-    if (hasSidebarData(snapshot)) writeSnapshotCache(snapshot);
+    if (!hasSidebarData(snapshot)) return;
+    pendingSnapshotWrite.current = snapshot;
+    const timer = window.setTimeout(() => {
+      pendingSnapshotWrite.current = null;
+      writeSnapshotCache(snapshot);
+    }, 1_000);
+    return () => window.clearTimeout(timer);
   }, [snapshot]);
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingSnapshotWrite.current;
+      if (!pending) return;
+      pendingSnapshotWrite.current = null;
+      writeSnapshotCache(pending);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  // 后台预取最近会话的全文，暖 localStorage 线程缓存：隧道高延迟下点开即见。
+  // 只补完全没有缓存的会话（快照本身已按 updatedAt 排序）；已缓存的交给
+  // 打开时的条件 GET（If-None-Match/304）刷新，避免反复拉全文。
+  // 只看缓存索引、不解析正文，免得为了判断“有没有”把每个会话都读进内存。
+  useEffect(() => {
+    const cachedKeys = cachedThreadKeys();
+    const timers = (snapshot.threads || [])
+      .filter(
+        (thread) =>
+          !cachedKeys.has(sessionKey(thread)) &&
+          !isThreadUncacheable(sessionKey(thread)),
+      )
+      .slice(0, 8)
+      .map((thread, index) =>
+        window.setTimeout(() => {
+          const key = sessionKey(thread);
+          dedupeThreadLoad(key, () => fetchThreadFull(thread, key)).catch(
+            () => {},
+          );
+        }, 500 + index * 300),
+      );
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [snapshot.threads]);
 
   useEffect(() => {
     writeUiCache({
@@ -473,9 +557,12 @@ export function App() {
     });
     previousThreadStatuses.current = threadStatusMap(snapshot.threads);
 
+    const notify = getDeckSettings();
     for (const thread of completed) {
       const key = sessionKey(thread);
       if (visible && selected === key) continue;
+      if (!notify.notifyReplies || (notify.notifyOnlyHidden && visible))
+        continue;
       sendSystemNotification({
         title: "Codex Deck · 有新回复",
         body: `${thread.name}\n任务已经执行完成`,
@@ -503,9 +590,14 @@ export function App() {
     // 已决议的 id 及时摘除，否则 Set 随运行时间无限增长。
     for (const id of [...notifiedApprovals.current])
       if (!liveIds.has(id)) notifiedApprovals.current.delete(id);
+    const notify = getDeckSettings();
+    const visible = document.visibilityState === "visible";
     for (const approval of snapshot.approvals) {
       if (notifiedApprovals.current.has(approval.id)) continue;
+      // 先记账再判断开关：关着时到达的审批，之后打开开关也不补发。
       notifiedApprovals.current.add(approval.id);
+      if (!notify.notifyApprovals || (notify.notifyOnlyHidden && visible))
+        continue;
       const thread = threadForApproval(approval, threads);
       sendSystemNotification({
         title: "Codex Deck · 需要确认",
@@ -540,8 +632,11 @@ export function App() {
         // 任何 WS 消息都可能携带比在途 HTTP 快照更新的状态，先推进时钟，
         // 让 refresh 响应落地时能选择保守合并而非整体覆盖。
         wsClockRef.current += 1;
-        if (message.type === "snapshot")
+        if (message.type === "snapshot") {
+          if (message.data.activities) resetActivities(message.data.activities);
           setSnapshot((current) => reconcileSnapshot(current, message.data));
+        } else if (message.type === "activity.updated")
+          applyActivityUpdate(message.data);
         else if (message.type === "thread.updated") {
           const next = message.data as ThreadSummary;
           const same = (thread: ThreadSummary) =>
@@ -747,13 +842,23 @@ export function App() {
         .length,
       waiting: snapshot.threads.filter((thread) => thread.status === "waiting")
         .length,
-      errors: snapshot.threads.filter((thread) => thread.status === "error")
-        .length,
+      errors:
+        snapshot.threads.filter((thread) => thread.status === "error").length +
+        // 投递无望的唤醒也是「异常」：侧栏角标要与首页需要处理一致。
+        (snapshot.wakeDeliveries || []).filter((d) => d.status === "dead")
+          .length +
+        // 失联的 watcher 同理：远端任务没人盯了。
+        (snapshot.wakeLost || []).length,
       unseen: snapshot.threads.filter((thread) =>
         unseenSessions.has(sessionKey(thread)),
       ).length,
     }),
-    [snapshot.threads, unseenSessions],
+    [
+      snapshot.threads,
+      snapshot.wakeDeliveries,
+      snapshot.wakeLost,
+      unseenSessions,
+    ],
   );
 
   const allThreads = useMemo(
@@ -772,6 +877,75 @@ export function App() {
 
   const current = allThreads.find((thread) => sessionKey(thread) === selected);
 
+  /** 会话的 deck-wake 状态：唤醒代号绑定（wakeCodes）+ 本机 watcher（wakeWatchers）。 */
+  const wakeFor = (thread: ThreadSummary) => {
+    const key = activityKey(thread.agentId, thread.id);
+    const mine = (item: { agentId?: AgentId; threadId?: string }) =>
+      Boolean(item.threadId) &&
+      activityKey(item.agentId, item.threadId!) === key;
+    const watchers = (snapshot.wakeWatchers || []).filter(mine);
+    return {
+      code: (snapshot.wakeCodes || []).find(mine)?.code,
+      watcher: watchers[0],
+      watchers,
+      lost: (snapshot.wakeLost || []).filter(mine),
+    };
+  };
+
+  /** 侧栏会话行的 deck-wake 标记，键为 sessionKey。失联优先于监督中。 */
+  const wakeStates = useMemo(() => {
+    const byAgentKey = new Map<string, SessionWakeState>();
+    for (const watcher of snapshot.wakeWatchers || [])
+      if (watcher.threadId)
+        byAgentKey.set(activityKey(watcher.agentId, watcher.threadId), "watching");
+    for (const lost of snapshot.wakeLost || [])
+      if (lost.threadId)
+        byAgentKey.set(activityKey(lost.agentId, lost.threadId), "lost");
+    const map = new Map<string, SessionWakeState>();
+    if (!byAgentKey.size) return map;
+    for (const thread of allThreads) {
+      const state = byAgentKey.get(activityKey(thread.agentId, thread.id));
+      if (state) map.set(sessionKey(thread), state);
+    }
+    return map;
+  }, [snapshot.wakeWatchers, snapshot.wakeLost, allThreads]);
+
+  const allThreadsRef = useRef(allThreads);
+  allThreadsRef.current = allThreads;
+
+  // selected 与会话 URL 漂移时原地重写条目：供应商切换改了 key、
+  // 会话被程序性关闭（删除/归档）都不会留下死 URL。
+  useEffect(() => {
+    const urlKey = sessionKeyFromPath(location.pathname);
+    if (!urlKey || selected === urlKey) return;
+    window.history.replaceState(
+      deckRewrite(
+        readDeckHistoryState(),
+        selected
+          ? { page: "workspace", view: "session", session: selected }
+          : routeForPath("/", isToolPath),
+      ),
+      "",
+      selected ? sessionPath(selected) : "/",
+    );
+  }, [selected]);
+
+  // URL 指向的会话已不存在（过期/被删）：宽限期后退回工作区。
+  // 宽限覆盖“新建会话尚未出现在 snapshot”的窗口。
+  useEffect(() => {
+    if (!selected || !sessionKeyFromPath(location.pathname)) return;
+    if (allThreads.some((thread) => sessionKey(thread) === selected)) return;
+    const grace = Math.max(500, 4000 - (Date.now() - selectedAtRef.current));
+    const timer = window.setTimeout(() => {
+      setSelected((now) =>
+        now && !allThreadsRef.current.some((t) => sessionKey(t) === now)
+          ? undefined
+          : now,
+      );
+    }, grace);
+    return () => window.clearTimeout(timer);
+  }, [selected, allThreads]);
+
   const recentProjects = useMemo(() => {
     const fromPrefs = (snapshot.preferences?.recentDirs || [])
       .map((cwd) =>
@@ -780,9 +954,7 @@ export function App() {
         ),
       )
       .filter(Boolean) as ProjectGroup[];
-    const fromSessions = activeGroups.filter(
-      (group) => group.sessions.length,
-    );
+    const fromSessions = activeGroups.filter((group) => group.sessions.length);
     const seen = new Set<string>();
     const list: ProjectGroup[] = [];
     for (const group of [...fromPrefs, ...fromSessions]) {
@@ -793,6 +965,14 @@ export function App() {
     }
     return list;
   }, [snapshot.preferences, activeGroups]);
+
+  // 一个会话都没有（首次使用）时首页退回 Welcome：总览此时没有可看的。
+  const showWelcome =
+    !current &&
+    !query &&
+    !loading &&
+    !historySyncing &&
+    snapshot.threads.length === 0;
 
   const saveProject = async (
     project: { key: string; cwd: string },
@@ -973,12 +1153,16 @@ export function App() {
     );
   };
 
+  const submitApproval = async (id: string, body: ApprovalResolveBody) => {
+    const approval = snapshot.approvals.find((item) => item.id === id);
+    if (!approval) throw new Error("审批请求已不存在");
+    await post(approvalPath(approval), body);
+    await refresh();
+  };
+
   const resolveApproval = async (id: string, body: ApprovalResolveBody) => {
     try {
-      const approval = snapshot.approvals.find((item) => item.id === id);
-      if (!approval) throw new Error("审批请求已不存在");
-      await post(approvalPath(approval), body);
-      await refresh();
+      await submitApproval(id, body);
     } catch (error: any) {
       pushToast(error?.message || "审批处理失败");
     }
@@ -989,7 +1173,7 @@ export function App() {
     const source = allThreads.find((item) => item.id === thread.forkedFromId);
     if (!source) return;
     setLibrary(source.archived ? "archived" : "active");
-    setSelected(sessionKey(source));
+    openSessionKey(sessionKey(source));
   };
 
   const origin = current?.forkedFromId
@@ -1005,6 +1189,74 @@ export function App() {
           : { name: "源会话" };
       })()
     : undefined;
+
+  const chatWorkspace = current ? (
+    <RenderErrorBoundary
+      resetKey={sessionKey(current)}
+      fallback={
+        <main className="chat">
+          <header className="chat-header">
+            <div className="chat-header-row1">
+              <button
+                className="icon-btn mobile-back"
+                onClick={leaveToWorkspace}
+                title="返回"
+              >
+                <ArrowLeft />
+              </button>
+              <div className="chat-title">
+                <h2>会话无法显示</h2>
+              </div>
+            </div>
+          </header>
+          <p className="error-banner">
+            这个会话的内容触发了渲染错误。请返回列表，或刷新后再试。
+          </p>
+        </main>
+      }
+    >
+      <ChatWorkspace
+        key={sessionKey(current)}
+        thread={current}
+        provider={providerForThread(
+          snapshot.providers,
+          snapshot.agentProfiles,
+          current,
+        )}
+        agentName={agentName(snapshot.agents, current)}
+        capabilities={capabilitiesFor(snapshot.agents, current)}
+        messageDeliveries={snapshot.messageDeliveries}
+        approvals={snapshot.approvals}
+        events={events}
+        origin={origin}
+        searchTarget={
+          searchTarget?.session === sessionKey(current)
+            ? searchTarget
+            : undefined
+        }
+        onBack={leaveToWorkspace}
+        onSnapshot={refresh}
+        onSwitchProvider={() => setSwitchThread(current)}
+        onMenu={() => setSheet(current)}
+        onSelectThread={(providerId, threadId) =>
+          openSessionKey(
+            sessionKey({
+              agentId: current.agentId,
+              providerId,
+              id: threadId,
+            }),
+          )
+        }
+        onToast={pushToast}
+        onUsage={() => setUsageOpen("stats")}
+        onTasks={() => setTaskScope(current.id)}
+        onAppearance={() => setSettingsModal({ tab: "interface" })}
+        onOpenOrigin={() => openOrigin(current)}
+        wake={wakeFor(current)}
+        onWake={() => setWakeThread(current)}
+      />
+    </RenderErrorBoundary>
+  ) : undefined;
 
   if (authError)
     return (
@@ -1069,11 +1321,7 @@ export function App() {
               refresh();
             }}
           >
-            <input
-              name="token"
-              type="password"
-              placeholder="访问令牌"
-            />
+            <input name="token" type="password" placeholder="访问令牌" />
             <button className="primary">连接</button>
           </form>
         </div>
@@ -1084,6 +1332,7 @@ export function App() {
     return (
       <>
         <ToolCenter
+          tools={snapshot.tools}
           initialCwd={current?.cwd}
           directories={[
             ...(current?.cwd ? [current.cwd] : []),
@@ -1095,17 +1344,43 @@ export function App() {
               Boolean(value) && values.indexOf(value) === index,
           )}
           onToast={pushToast}
-          onClose={() => openPage("/")}
+          onClose={leaveToWorkspace}
         />
         <ToastStack toasts={toasts} />
       </>
     );
 
+  // 桌面端工具默认新开浏览器页：同源 localStorage 共享令牌，不占当前会话的
+  // 导航栈。移动端（尤其装成 PWA 时）新标签页会跳出应用，改为应用内压栈打开。
+  const openTool = (pathname = "/terminal") => {
+    if (!mobile && getDeckSettings().toolOpenTarget === "tab") {
+      window.open(`${location.origin}${pathname}`, "_blank", "noopener");
+      return;
+    }
+    window.history.pushState(
+      deckEntry(readDeckHistoryState(), { page: "tools", view: "workspace" }),
+      "",
+      pathname,
+    );
+    setSelected(undefined);
+    setSessionsView(false);
+    setPage("tools");
+  };
+
+  const quickProjects = quickNewProjects(activeGroups);
+  const openNewFromTabBar = () => {
+    // 没有可选项目时直接进新建弹窗，省掉一层空面板。
+    if (quickProjects.length) setMobileSheet("new");
+    else setThreadModal({});
+  };
+  const showTabBar = mobile && !current;
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell${showTabBar ? " has-tabbar" : ""}`}>
       <Sidebar
-        show={sidebar}
+        show={sessionsView}
         hiddenOnMobile={Boolean(current)}
+        homeActive={!current}
         projectCount={activeGroups.length}
         sessionCount={snapshot.threads.length}
         archivedCount={(snapshot.archivedThreads || []).length}
@@ -1125,6 +1400,7 @@ export function App() {
         statusFilter={statusFilter}
         counts={counts}
         projects={projects}
+        wakeStates={wakeStates}
         selected={selected}
         unseenSessions={unseenSessions}
         expandedProjects={expandedProjects}
@@ -1133,17 +1409,18 @@ export function App() {
         notificationPermission={notificationPermission}
         archiveError={snapshot.runtime?.archiveError}
         loading={loading || historySyncing}
-        onClose={() => setSidebar(false)}
+        onClose={goHome}
         onNew={() => openThreadModalFromSidebar({})}
         onRefresh={refresh}
-        onProviders={() => setProviderModal(true)}
+        onProviders={() => setSettingsModal({})}
         onUsage={setUsageOpen}
         onTasks={() => setTaskScope(null)}
-        onTools={(pathname) => openPage(pathname || "/terminal")}
+        onTools={openTool}
         onNotifications={enableSystemNotifications}
         onLibrary={setLibrary}
         onQuery={setQuery}
         onStatusFilter={setStatusFilter}
+        onHome={goHome}
         onToggleProject={(key) =>
           setExpandedProjects((currentSet) => {
             const next = new Set(currentSet);
@@ -1182,92 +1459,20 @@ export function App() {
         providers={snapshot.providers}
       />
       <section className="workspace">
-        {!current && (
+        {showWelcome && (
           <button
             type="button"
             className="icon-btn appearance-trigger appearance-trigger-home"
-            onClick={() => setAppearanceOpen(true)}
+            onClick={() => setSettingsModal({ tab: "interface" })}
             title="外观设置"
             aria-label="外观设置"
           >
             <SunMoon />
           </button>
         )}
-        {!sidebar && !current && (
-          <button className="floating-menu" onClick={() => setSidebar(true)}>
-            <Menu />
-          </button>
-        )}
         {current ? (
-          <RenderErrorBoundary
-            resetKey={sessionKey(current)}
-            fallback={
-              <main className="chat">
-                <header className="chat-header">
-                  <div className="chat-header-row1">
-                    <button
-                      className="icon-btn mobile-back"
-                      onClick={() => {
-                        setSelected(undefined);
-                        setSidebar(true);
-                      }}
-                      title="返回"
-                    >
-                      <ArrowLeft />
-                    </button>
-                    <div className="chat-title">
-                      <h2>会话无法显示</h2>
-                    </div>
-                  </div>
-                </header>
-                <p className="error-banner">
-                  这个会话的内容触发了渲染错误。请返回列表，或刷新后再试。
-                </p>
-              </main>
-            }
-          >
-            <ChatWorkspace
-              key={sessionKey(current)}
-              thread={current}
-              provider={providerForThread(
-                snapshot.providers,
-                snapshot.agentProfiles,
-                current,
-              )}
-              agentName={agentName(snapshot.agents, current)}
-              capabilities={capabilitiesFor(snapshot.agents, current)}
-              approvals={snapshot.approvals}
-              events={events}
-              origin={origin}
-              searchTarget={
-                searchTarget?.session === sessionKey(current)
-                  ? searchTarget
-                  : undefined
-              }
-              onBack={() => {
-                setSelected(undefined);
-                setSidebar(true);
-              }}
-              onSnapshot={refresh}
-              onSwitchProvider={() => setSwitchThread(current)}
-              onMenu={() => setSheet(current)}
-              onSelectThread={(providerId, threadId) => {
-                const key = sessionKey({
-                  agentId: current.agentId,
-                  providerId,
-                  id: threadId,
-                });
-                markSessionSeen(key);
-                setSelected(key);
-              }}
-              onToast={pushToast}
-              onUsage={() => setUsageOpen("stats")}
-              onTasks={() => setTaskScope(current.id)}
-              onAppearance={() => setAppearanceOpen(true)}
-              onOpenOrigin={() => openOrigin(current)}
-            />
-          </RenderErrorBoundary>
-        ) : (
+          chatWorkspace
+        ) : showWelcome ? (
           <Welcome
             recent={recentProjects}
             runtime={snapshot.runtime}
@@ -1283,17 +1488,175 @@ export function App() {
             }
             onUsage={() => setUsageOpen("stats")}
           />
+        ) : (
+          <MonitorPanel
+            groups={query ? projects : activeGroups}
+            unseenSessions={unseenSessions}
+            approvals={snapshot.approvals}
+            providers={snapshot.providers}
+            agents={snapshot.agents || []}
+            runtime={snapshot.runtime}
+            threads={allThreads}
+            liveThreads={snapshot.threads}
+            deliveries={snapshot.wakeDeliveries || []}
+            watchers={snapshot.wakeWatchers}
+            lostWatchers={snapshot.wakeLost || []}
+            searchMatches={contentMatches}
+            query={query}
+            loading={loading || historySyncing}
+            notificationPermission={notificationPermission}
+            onSelect={selectThread}
+            onOpenThread={openSession}
+            onShowAll={openSessions}
+            onNew={() => setThreadModal({})}
+            onAppearance={() => setSettingsModal({ tab: "interface" })}
+            onMarkSeen={markSessionSeen}
+            onMarkAllSeen={markAllSeen}
+            onSessionMenu={setSheet}
+            onHistory={setHistoryHelp}
+            onResolveApproval={submitApproval}
+            onRequestNotifications={enableSystemNotifications}
+            onRefreshLimits={refreshOfficialUsage}
+            onOpenUsage={setUsageOpen}
+            onOpenAgentSettings={() => setSettingsModal({ tab: "agents" })}
+          />
         )}
       </section>
-      {providerModal && (
-        <ProviderModal
-          providers={snapshot.providers}
-          agents={snapshot.agents || []}
-          runtime={snapshot.runtime}
+      {showTabBar && (
+        <MobileTabBar
+          active={sessionsView ? "sessions" : "home"}
+          homeBadge={counts.waiting + counts.errors}
+          sessionsBadge={counts.unseen}
+          onHome={goHome}
+          onSessions={openSessions}
+          onNew={openNewFromTabBar}
+          onTools={() => setMobileSheet("tools")}
+          onSettings={() => setSettingsModal({})}
+        />
+      )}
+      {mobileSheet === "tools" && (
+        <ActionSheet
+          title="工具"
+          onClose={() => setMobileSheet(null)}
+          actions={[
+            ...[
+              {
+                id: "terminal",
+                label: "终端",
+                detail: "打开 Web Terminal",
+                icon: <Terminal />,
+                onClick: () => openTool("/terminal"),
+              },
+              {
+                id: "git",
+                label: "Git 管理",
+                detail: "改动、提交与分支",
+                icon: <GitBranch />,
+                onClick: () => openTool("/git"),
+              },
+              {
+                id: "text-editor",
+                label: "文本编辑器",
+                detail: "查看与编辑宿主机文件",
+                icon: <FileText />,
+                onClick: () => openTool("/text-editor"),
+              },
+              {
+                id: "commands",
+                label: "快捷指令",
+                detail: "在指定目录一键执行常用指令",
+                icon: <Zap />,
+                onClick: () => openTool("/commands"),
+              },
+            ]
+              .filter((item) => !hiddenTools.includes(item.id))
+              .map(({ id: _id, ...item }) => item),
+            {
+              label: "任务",
+              detail:
+                counts.running + counts.waiting > 0
+                  ? `${counts.running + counts.waiting} 个进行中`
+                  : "后台任务与进度",
+              icon: <Activity />,
+              onClick: () => setTaskScope(null),
+            },
+            {
+              label: "用量统计",
+              detail: "按会话与项目查看",
+              icon: <BarChart3 />,
+              onClick: () => setUsageOpen("stats"),
+            },
+            {
+              label: "Codex 额度",
+              detail: "Official 账号额度状态",
+              icon: <Gauge />,
+              onClick: () => setUsageOpen("limits"),
+            },
+            ...(notificationPermission !== "unsupported"
+              ? [
+                  {
+                    label: "系统提醒",
+                    detail:
+                      notificationPermission === "granted"
+                        ? "已开启"
+                        : notificationPermission === "denied"
+                          ? "浏览器已阻止"
+                          : "审批与任务通知",
+                    icon: <BellRing />,
+                    disabled: notificationPermission === "denied",
+                    onClick: enableSystemNotifications,
+                  },
+                ]
+              : []),
+          ]}
+        />
+      )}
+      {mobileSheet === "new" && (
+        <ActionSheet
+          title="新建会话"
+          onClose={() => setMobileSheet(null)}
+          actions={[
+            ...quickProjects.map((project) => ({
+              key: project.key,
+              label: project.name,
+              detail: project.cwd,
+              icon: <Folder />,
+              onClick: () =>
+                setThreadModal({
+                  cwd: project.cwd,
+                  project: snapshot.projects?.find(
+                    (item) => item.key === project.key,
+                  ),
+                }),
+            })),
+            {
+              key: "__other",
+              label: "其他目录…",
+              detail: "手动输入或浏览路径",
+              icon: <FolderPlus />,
+              onClick: () => setThreadModal({}),
+            },
+          ]}
+        />
+      )}
+      {settingsModal && (
+        <SettingsModal
+          snapshot={snapshot}
+          appearance={appearance}
+          notificationPermission={notificationPermission}
           defaultCwd={current?.cwd}
-          onClose={() => setProviderModal(false)}
+          initialTab={settingsModal.tab}
+          onRequestNotifications={enableSystemNotifications}
+          onOpenTool={(path) => {
+            // 在当前页打开工具会切走整个工作区，设置一并收起。
+            if (mobile || getDeckSettings().toolOpenTarget === "inline")
+              setSettingsModal(false);
+            openTool(path);
+          }}
+          onClose={() => setSettingsModal(false)}
           onSaved={setSnapshot}
           onToast={pushToast}
+          onConfirm={(spec, run) => setConfirm({ ...spec, run })}
           onConfirmDelete={(provider, run) =>
             setConfirm({
               title: "删除供应商",
@@ -1325,14 +1688,19 @@ export function App() {
       {threadModal && (
         <NewThreadModal
           agents={snapshot.agents || []}
+          agentProfiles={snapshot.agentProfiles || []}
           providers={snapshot.providers}
           initialCwd={threadModal.cwd}
           project={threadModal.project}
           preferences={snapshot.preferences}
           runtimeWsl={Boolean(snapshot.runtime?.runtimeWsl)}
           onClose={() => setThreadModal(null)}
-          onCreated={(agentId, providerId, id) => {
-            setSelected(sessionKey({ agentId, providerId, id }));
+          onCreated={(agentId, providerId, id, thread) => {
+            const key = sessionKey({ agentId, providerId, id });
+            // POST 响应已带会话元数据：先回种缓存，ChatWorkspace 首帧即渲染，
+            // 随后的 GET 只做后台刷新，隧道下不再空屏等往返。
+            writeThreadCache(key, { ...thread, turns: [] });
+            openSessionKey(key);
             setLibrary("active");
             setTimeout(refresh, 400);
           }}
@@ -1344,14 +1712,19 @@ export function App() {
           providers={snapshot.providers}
           agentProfiles={snapshot.agentProfiles || []}
           onClose={() => setSwitchThread(null)}
-          onCreated={(providerId, threadId) => {
-            setSelected(
-              sessionKey({
-                agentId: switchThread.agentId,
-                providerId,
-                id: threadId,
-              }),
-            );
+          onCreated={(providerId, threadId, thread) => {
+            const key = sessionKey({
+              agentId: switchThread.agentId,
+              providerId,
+              id: threadId,
+            });
+            if (thread) writeThreadCache(key, { ...thread, turns: [] });
+            else {
+              // Claude 换供应商不改会话内容：把旧 key 的缓存搬到新 key。
+              const cached = readThreadCache(sessionKey(switchThread));
+              if (cached) writeThreadCache(key, cached);
+            }
+            openSessionKey(key);
             setTimeout(refresh, 300);
           }}
         />
@@ -1383,7 +1756,9 @@ export function App() {
       {projectEdit && (
         <ProjectDefaultsModal
           project={projectEdit}
+          agents={snapshot.agents || []}
           providers={snapshot.providers}
+          preferences={snapshot.preferences}
           onClose={() => setProjectEdit(null)}
           onSave={async (defaults, name) => {
             const next = await saveProject(projectEdit, { defaults, name });
@@ -1391,7 +1766,7 @@ export function App() {
               next.connectionApplied
                 ? "已保存，并已应用到 Runtime"
                 : next.connectionPending
-                  ? "已保存。有会话在跑，空闲后在供应商设置中应用"
+                  ? "已保存。有会话在运行，空闲后可在「设置 › 供应商」中应用"
                   : "以后在此目录新建将使用这些设置",
             );
           }}
@@ -1410,8 +1785,8 @@ export function App() {
               const result = await api<{ command: string }>(
                 `/runtime/terminal-command?cwd=${encodeURIComponent(historyHelp.cwd)}`,
               );
-              await navigator.clipboard.writeText(result.command);
-              pushToast("已复制");
+              if (await copyText(result.command)) pushToast("已复制");
+              else pushToast("复制失败");
             }}
           >
             复制 --remote 命令
@@ -1423,6 +1798,23 @@ export function App() {
           title={sheet.name}
           onClose={() => setSheet(null)}
           actions={[
+            ...(sheet.cwd
+              ? [
+                  {
+                    label: "在此项目新建会话",
+                    onClick: () => {
+                      const key = normalizeProjectPath(sheet.cwd);
+                      setThreadModal({
+                        cwd: sheet.cwd,
+                        project: snapshot.projects?.find(
+                          (item) =>
+                            normalizeProjectPath(item.key || item.cwd) === key,
+                        ),
+                      });
+                    },
+                  },
+                ]
+              : []),
             {
               label: "重命名",
               disabled: !capabilitiesFor(snapshot.agents, sheet)
@@ -1431,17 +1823,27 @@ export function App() {
             },
             {
               label: "会话设置",
-              disabled: !capabilitiesFor(snapshot.agents, sheet)
-                .sessionSettings,
+              // 设置面板绑定当前打开的会话；从总览/列表对别的会话点开时不可用。
+              disabled:
+                !capabilitiesFor(snapshot.agents, sheet).sessionSettings ||
+                sessionKey(sheet) !== selected,
               onClick: () => setPhoneSettings(true),
             },
             {
+              label: "远程唤醒",
+              onClick: () => setWakeThread(sheet),
+            },
+            {
               label: "压缩上下文",
-              disabled: sheet.agentId === "claude",
+              disabled:
+                (sheet.agentId || "codex") !== "codex" &&
+                sheet.agentId !== "opencode",
               onClick: () =>
-                post(`/threads/${sheet.providerId}/${sheet.id}/compact`).then(
-                  refresh,
-                ),
+                post(
+                  sheet.agentId === "opencode"
+                    ? `${threadPath(sheet)}/compact`
+                    : `/threads/${sheet.providerId}/${sheet.id}/compact`,
+                ).then(refresh),
             },
             {
               label: "审查当前改动",
@@ -1462,7 +1864,7 @@ export function App() {
                   `/threads/${sheet.providerId}/${sheet.id}/fork`,
                   {},
                 );
-                setSelected(
+                openSessionKey(
                   sessionKey({
                     agentId: sheet.agentId,
                     providerId: sheet.providerId,
@@ -1475,7 +1877,10 @@ export function App() {
             {
               label: "切换供应商",
               disabled:
-                sheet.status === "running" || sheet.status === "waiting",
+                sheet.status === "running" ||
+                sheet.status === "waiting" ||
+                ((sheet.agentId || "codex") !== "codex" &&
+                  sheet.agentId !== "claude"),
               onClick: () => setSwitchThread(sheet),
             },
             {
@@ -1505,25 +1910,50 @@ export function App() {
             {
               label: "永久删除",
               danger: true,
-              disabled: !capabilitiesFor(snapshot.agents, sheet).delete,
+              disabled:
+                !capabilitiesFor(snapshot.agents, sheet).delete ||
+                (sheet.agentId === "claude" &&
+                  (sheet.status === "running" || sheet.status === "waiting")),
               onClick: () =>
                 setConfirm({
                   title: "永久删除会话",
                   body: (
                     <p>
                       确定永久删除 <b>{sheet.name}</b>？此操作不可恢复。
+                      {sheet.agentId === "claude" && sheet.claudeConnected && (
+                        <>
+                          Deck 当前持有此会话的 Claude
+                          连接。删除会先终止该连接及其中仍在运行的后台任务。
+                        </>
+                      )}
                     </p>
                   ),
-                  confirmLabel: "删除",
+                  confirmLabel:
+                    sheet.agentId === "claude" && sheet.claudeConnected
+                      ? "关闭连接并删除"
+                      : "删除",
                   danger: true,
                   run: async () => {
-                    await remove(threadPath(sheet));
+                    await remove(
+                      threadPath(sheet),
+                      sheet.agentId === "claude" && sheet.claudeConnected
+                        ? { closeConnection: true }
+                        : undefined,
+                    );
                     if (sessionKey(sheet) === selected) setSelected(undefined);
                     refresh();
                   },
                 }),
             },
           ]}
+        />
+      )}
+      {wakeThread && (
+        <WakeModal
+          thread={wakeThread}
+          watchers={wakeFor(wakeThread).watchers}
+          lost={wakeFor(wakeThread).lost}
+          onClose={() => setWakeThread(null)}
         />
       )}
       {phoneSettings &&
@@ -1586,14 +2016,6 @@ export function App() {
           onClose={() => setTaskScope(undefined)}
         />
       )}
-      {appearanceOpen && (
-        <AppearanceSettingsModal
-          preferences={appearance.preferences}
-          resolved={appearance.resolved}
-          onChange={appearance.update}
-          onClose={() => setAppearanceOpen(false)}
-        />
-      )}
       {confirm && (
         <ConfirmDialog
           title={confirm.title}
@@ -1611,14 +2033,17 @@ export function App() {
           }}
         />
       )}
-      <ApprovalInbox
-        approvals={snapshot.approvals}
-        threads={allThreads}
-        notificationPermission={notificationPermission}
-        onRequestNotifications={enableSystemNotifications}
-        onOpenThread={openSession}
-        onResolve={resolveApproval}
-      />
+      {/* 总览首页自带审批卡片，浮窗再叠一份就重复了；搜索时首页让给结果。 */}
+      {(current || query || showWelcome || (mobile && sessionsView)) && (
+        <ApprovalInbox
+          approvals={snapshot.approvals}
+          threads={allThreads}
+          notificationPermission={notificationPermission}
+          onRequestNotifications={enableSystemNotifications}
+          onOpenThread={openSession}
+          onResolve={submitApproval}
+        />
+      )}
       <ToastStack toasts={toasts} />
     </div>
   );

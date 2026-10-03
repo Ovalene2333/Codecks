@@ -1,4 +1,4 @@
-import type { ReviewTarget } from "../types";
+import type { AgentId, ReviewTarget } from "../types";
 
 export type ComposerCommand =
   | { kind: "compact" }
@@ -19,6 +19,7 @@ export type ComposerCommand =
   | { kind: "review"; target: ReviewTarget }
   | { kind: "shell"; command: string }
   | { kind: "opencode-command"; command: string; args: string }
+  | { kind: "agent-command"; command: string; args: string }
   | { kind: "new-session" }
   | { kind: "sessions" }
   | { kind: "thinking" }
@@ -33,7 +34,7 @@ export const SLASH_COMMANDS = [
   { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/status", hint: "查看完整会话状态" },
   { name: "/ps", hint: "查看运行任务与后台终端" },
-  { name: "/usage", hint: "查看账号额度" },
+  { name: "/usage", hint: "查看 Codex 额度" },
   { name: "/mention", hint: "搜索并引用工作区文件" },
   { name: "/fast", hint: "切换 Fast 模式" },
   { name: "/mcp", hint: "查看 MCP 服务器状态" },
@@ -61,7 +62,7 @@ export function opensCommandPanel(name: string) {
 
 export function parseComposerCommand(
   raw: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
 ): ComposerCommand | undefined {
   const text = raw.trim();
   if (text.startsWith("!")) {
@@ -74,6 +75,14 @@ export function parseComposerCommand(
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
   if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
+  // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释；/model 例外，
+  // agent 暴露模型目录（configOptions/models spec）时走 Deck 的模型面板，
+  // 没有目录时再回落为透传文本。
+  if (agentId !== "codex" && agentId !== "claude") {
+    if (key === "model" || key === "models")
+      return { kind: "model", model: arg || undefined };
+    return { kind: "agent-command", command: key, args: arg };
+  }
   if (key === "compact") return { kind: "compact" };
   if (key === "init") return { kind: "init" };
   if (key === "diff") return { kind: "diff" };
@@ -129,7 +138,7 @@ export function parseComposerCommand(
   return undefined;
 }
 
-const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps"]);
+const CLAUDE_COMMANDS = new Set(["/status", "/usage", "/ps", "/skills"]);
 
 /** P0 OpenCode 内置命令（`/` 补全用；自定义命令运行时从服务端追加）。 */
 export const OPENCODE_COMMANDS = [
@@ -138,6 +147,7 @@ export const OPENCODE_COMMANDS = [
   { name: "/redo", hint: "恢复已撤回的内容（需确认）" },
   { name: "/init", hint: "生成或更新 AGENTS.md" },
   { name: "/models", hint: "选择模型" },
+  { name: "/skills", hint: "查看并引用可用 Skill" },
   { name: "/new", hint: "新建会话（回到列表创建）" },
   { name: "/sessions", hint: "在左侧列表切换会话" },
   { name: "/details", hint: "工具执行细节（可展开查看）" },
@@ -155,6 +165,7 @@ function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
   if (key === "undo") return { kind: "undo" };
   if (key === "redo") return { kind: "redo" };
   if (key === "model" || key === "models") return { kind: "model" };
+  if (key === "skills") return { kind: "skills", query: arg };
   if (key === "status") return { kind: "status" };
   if (key === "ps") return { kind: "ps" };
   if (key === "usage") return { kind: "usage" };
@@ -171,7 +182,7 @@ function parseOpenCodeCommand(key: string, arg: string): ComposerCommand {
 
 export function matchingSlashCommands(
   text: string,
-  agentId: "codex" | "claude" | "opencode" = "codex",
+  agentId: AgentId = "codex",
   extraCommands: Array<{ name: string; hint?: string }> = [],
 ) {
   const value = text.trim();
@@ -179,6 +190,23 @@ export function matchingSlashCommands(
   if (value === "!") return SLASH_COMMANDS.filter((item) => item.name === "!");
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
+  // ACP 等通用 agent：只补全 agent 自报的 availableCommands。
+  if (agentId !== "codex" && agentId !== "claude" && agentId !== "opencode") {
+    const seen = new Set<string>();
+    const items: SlashMenuItem[] = [];
+    for (const extra of extraCommands) {
+      const raw = String(extra?.name || "").trim();
+      if (!raw) continue;
+      const name = raw.startsWith("/") ? raw : `/${raw}`;
+      if (!name.toLowerCase().startsWith(query) || seen.has(name)) continue;
+      seen.add(name);
+      items.push({
+        name,
+        hint: String(extra?.hint || "Agent 命令").slice(0, 80),
+      });
+    }
+    return items;
+  }
   if (agentId === "opencode") {
     const seen = new Set<string>();
     const items: SlashMenuItem[] = [];

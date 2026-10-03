@@ -1,30 +1,27 @@
-import { displayText } from "../format";
 import type { ComposerImage } from "./images";
-import { userImageParts } from "./images";
+import {
+  loadedUserMessages,
+  matchingUserMessageIndex,
+  type LoadedUserMessage,
+} from "./user-message-reconcile";
+
+export { loadedUserMessages } from "./user-message-reconcile";
 
 export interface PendingUserMessage {
   id: string;
   text: string;
   images: ComposerImage[];
-  loadedUserMessageCount: number;
+  historyBefore: LoadedUserMessage[];
+  deliveryIdsBefore?: string[];
   turnId?: string;
+  sentAt?: number;
   liveItemIds?: string[];
-}
-
-export function loadedUserMessages(turns: any[]) {
-  return turns.flatMap((turn) =>
-    (Array.isArray(turn?.items) ? turn.items : [])
-      .filter((item: any) => item?.type === "userMessage")
-      .map((item: any) => ({
-        text: displayText(item?.text ?? item?.content).trim(),
-        imageCount: userImageParts(item).length,
-      })),
-  );
 }
 
 export function reconcilePendingUserMessages(
   turns: any[],
   pending: PendingUserMessage[],
+  agentId = "codex",
 ) {
   if (!pending.length) return pending;
   const loaded = loadedUserMessages(turns);
@@ -33,23 +30,15 @@ export function reconcilePendingUserMessages(
   const matchedIndexes = new Set<number>();
   const unmatched: PendingUserMessage[] = [];
   for (const message of pending) {
-    const match = loaded.findIndex(
-      (actual, index) =>
-        index >= message.loadedUserMessageCount &&
-        !matchedIndexes.has(index) &&
-        actual.text === message.text.trim() &&
-        (message.images.length === 0 ||
-          actual.imageCount === message.images.length),
+    const match = matchingUserMessageIndex(
+      loaded,
+      { ...message, imageCount: message.images.length },
+      matchedIndexes,
+      message.historyBefore,
+      agentId,
     );
     if (match >= 0) matchedIndexes.add(match);
-    else
-      unmatched.push({
-        ...message,
-        loadedUserMessageCount: Math.max(
-          message.loadedUserMessageCount,
-          loaded.length,
-        ),
-      });
+    else unmatched.push(message);
   }
   return unmatched;
 }

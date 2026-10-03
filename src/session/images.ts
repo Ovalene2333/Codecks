@@ -89,6 +89,23 @@ function isRenderableImageUrl(url: string) {
   );
 }
 
+const IMAGE_TARGET_PREFIX_RE = /^(?:https?:\/\/|\/|~\/|\.{1,2}\/|[a-z]:[\\/])/i;
+const IMAGE_TARGET_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|avif)(?:[?#].*)?$/i;
+
+/**
+ * 无类型嵌套扫描（item.result/output/data/items 里的负载）的判据：
+ * 必须长得像真实图片地址——data:image/blob URI，或以路径/URL 开头、
+ * 以图片扩展名结尾。普通文本输出、任意 http(s) 链接、.ts 之类的文件
+ * 路径都不算，否则工具结果里的字符串会被误识别为图片。
+ */
+function looksLikeImageTarget(url: string) {
+  return (
+    /^data:image\//i.test(url) ||
+    /^blob:/i.test(url) ||
+    (IMAGE_TARGET_PREFIX_RE.test(url) && IMAGE_TARGET_EXT_RE.test(url))
+  );
+}
+
 function collectImageParts(item: any, requireImageType: boolean) {
   const parts: MessageImage[] = [];
   const push = (part: any) => {
@@ -111,7 +128,10 @@ function collectImageParts(item: any, requireImageType: boolean) {
     )
       return;
     const url = imageUrl(part);
-    if (url && (!requireImageType || isRenderableImageUrl(url))) {
+    if (
+      url &&
+      (requireImageType ? isRenderableImageUrl(url) : looksLikeImageTarget(url))
+    ) {
       const alt = part.name || part.alt || part.title;
       parts.push(alt ? { url, alt } : { url });
     }

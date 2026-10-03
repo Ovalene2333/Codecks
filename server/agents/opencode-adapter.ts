@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
 import type {
@@ -12,9 +13,16 @@ import type {
   TurnImage,
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
-import type { AgentCapabilities, AgentDescriptor, AgentId } from "./types.js";
+import type {
+  AgentCapabilities,
+  AgentDescriptor,
+  AgentId,
+  AgentSkill,
+} from "./types.js";
 
 const OPENCODE_CAPABILITIES: AgentCapabilities = {
+  // prompt_async 的 204 只确认受理，不保证它追加到当前回合还是后续执行。
+  messages: { busyBehavior: "unknown", interruptScope: "session" },
   approvals: true,
   // Deck 侧软归档：OpenCode serve 没有原生归档接口，归档态由 Deck
   // 持久化（thread-settings `archived`），服务端会话原样保留。
@@ -30,7 +38,9 @@ const OPENCODE_CAPABILITIES: AgentCapabilities = {
   review: false,
   sessionSettings: true,
   shell: false,
-  skills: false,
+  // `GET /skill` 枚举 SKILL.md 目录；skill 同时被 `Command.list()` 并入
+  // 可调命令（`skill:true`），`/name` 透传即可调用。
+  skills: true,
 };
 
 type Fetcher = typeof fetch;
@@ -96,6 +106,12 @@ type OpenCodeProfile = {
   id: string;
   name: string;
   models?: Record<string, OpenCodeModelMeta>;
+};
+
+type OpenCodeCatalog = {
+  profiles: OpenCodeProfile[];
+  connected: Set<string>;
+  defaultModel?: { providerID: string; modelID: string };
 };
 
 type OpenCodeModelMeta = {
@@ -180,14 +196,67 @@ function connectedProviderIds(value: unknown): Set<string> {
 }
 
 function configDefaultModel(config: unknown) {
+  const configured = (config as any)?.model;
+  if (typeof configured === "string") {
+    const model = configured.trim();
+    const separator = model.indexOf("/");
+    if (separator > 0 && separator < model.length - 1)
+      return {
+        providerID: model.slice(0, separator),
+        modelID: model.slice(separator + 1),
+      };
+  }
   const providerID = String(
-    (config as any)?.model?.providerID ?? "",
+    configured?.providerID ?? "",
   ).trim();
-  const modelID = String((config as any)?.model?.modelID ?? "").trim();
+  const modelID = String(configured?.modelID ?? "").trim();
   return providerID && modelID ? { providerID, modelID } : undefined;
 }
 
 type OpenCodeCommandInfo = { name: string; description?: string };
+
+/**
+ * `GET /skill` 返回 Skill.Info[]（name/description/location）。location
+ * 是 SKILL.md 的路径；按是否在会话目录内标注 project/global。
+ */
+function normalizeSkills(value: unknown, cwd?: string): AgentSkill[] {
+  const list = Array.isArray(value)
+    ? value
+    : value && typeof value === "object"
+      ? ((value as { skills?: unknown; data?: unknown }).skills ??
+        (value as { data?: unknown }).data)
+      : undefined;
+  if (!Array.isArray(list)) return [];
+  const root = String(cwd || "")
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  const seen = new Set<string>();
+  const skills: AgentSkill[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const name = String(
+      (item as any)?.name ?? (item as any)?.id ?? "",
+    ).trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const location = String(
+      (item as any)?.location ??
+        (item as any)?.path ??
+        (item as any)?.directory ??
+        "",
+    ).trim();
+    const normalized = location.replaceAll("\\", "/");
+    skills.push({
+      name,
+      description:
+        String((item as any)?.description ?? "").trim() || undefined,
+      path: location || undefined,
+      scope: root && normalized.startsWith(`${root}/`) ? "project" : "global",
+      enabled: (item as any)?.enabled !== false,
+    });
+  }
+  return skills.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 function normalizeCommands(value: unknown): OpenCodeCommandInfo[] {
   const list = Array.isArray(value)
@@ -234,6 +303,8 @@ const REQUEST_POST_TIMEOUT_MS = 60_000;
 /** 重试次数（不含首次）：GET 最多 3 次，非幂等写操作只发 1 次，绝不重发。 */
 const REQUEST_RETRIES = 2;
 const REQUEST_RETRY_DELAYS_MS = [300, 800];
+/** 读会话正文时最多为项目模型目录多等多久；目录本身最长要 5 秒。 */
+const CATALOG_WAIT_MS = 400;
 
 /**
  * 瞬时网络失败：回环 ECONNRESET/keep-alive 竞态、OpenCode 繁忙瞬间、
@@ -258,6 +329,23 @@ function isTransientRequestError(error: unknown) {
 
 function profileId(session: OpenCodeSession) {
   return `opencode:${session.directory || "current"}`;
+}
+
+/**
+ * 用户手动停止（/session/:id/abort）时 OpenCode 经 session.error 上报
+ * MessageAbortedError（部分版本叫 AbortedError），文案只有 "Aborted"。
+ * 这是预期内的中断而非任务失败，不应走错误态/横幅。
+ */
+function isAbortError(error: any) {
+  if (/abort/i.test(String(error?.name || ""))) return true;
+  const message = String(
+    error?.data?.message || error?.message || error || "",
+  ).trim();
+  return (
+    /^aborted$/i.test(message) ||
+    /^the [\w ]+ was aborted$/i.test(message) ||
+    /MessageAbortedError|AbortedError/.test(message)
+  );
 }
 
 function sessionSummary(
@@ -350,30 +438,57 @@ function normalizeMessages(
     const message = record?.info || record?.message || record;
     const parts = Array.isArray(record?.parts) ? record.parts : [];
     if (message?.role === "user") {
+      const compaction = parts.find((part: any) => part?.type === "compaction");
       turn = {
         id: String(message.id || randomUUID()),
         status: "completed",
         startedAt: Number(message.time?.created || Date.now()),
-        items: [
-          {
-            id: String(message.id || randomUUID()),
-            type: "userMessage",
-            content: parts
-              .filter(
-                (part: any) => part.type === "text" || part.type === "file",
-              )
-              .map((part: any) =>
-                part.type === "file"
-                  ? { type: "image", url: part.url, name: part.filename }
-                  : textPart(String(part.text || "")),
-              ),
-          },
-        ],
+        items: compaction
+          ? [
+              {
+                id: String(compaction.id || message.id || randomUUID()),
+                type: "contextCompaction",
+                text: "",
+              },
+            ]
+          : [
+              {
+                id: String(message.id || randomUUID()),
+                type: "userMessage",
+                // synthetic part 是系统注入内容（提醒/续接提示等），不是
+                // 用户敲的字，不进用户气泡。
+                content: parts
+                  .filter(
+                    (part: any) =>
+                      !part.synthetic &&
+                      (part.type === "text" || part.type === "file"),
+                  )
+                  .map((part: any) =>
+                    part.type === "file"
+                      ? { type: "image", url: part.url, name: part.filename }
+                      : textPart(String(part.text || "")),
+                  ),
+              },
+            ],
       };
       turns.push(turn);
       continue;
     }
     if (message?.role !== "assistant" || !turn) continue;
+    // 每条 assistant 消息记录真实运行的 provider/model（以及 effort
+    // variant）；同一 turn 有多条时后者覆盖，时间线按回合显示当时模型。
+    const providerID = String(message.providerID || "").trim();
+    const modelID = String(message.modelID || "").trim();
+    if (providerID && modelID) turn.model = `${providerID}/${modelID}`;
+    if (typeof message.variant === "string" && message.variant.trim())
+      turn.reasoningEffort = message.variant.trim();
+    if (message.summary === true && turn.items[0]?.type === "contextCompaction") {
+      turn.items[0].text = parts
+        .filter((part: any) => part?.type === "text")
+        .map((part: any) => String(part.text || ""))
+        .join("\n\n");
+      continue;
+    }
     for (const part of parts) {
       const mapped = openCodePartToItem(part);
       if (mapped) turn.items.push(mapped);
@@ -411,6 +526,13 @@ function lastAssistantWithUsage(records: any[]) {
   for (let index = (records || []).length - 1; index >= 0; index -= 1) {
     const record = records[index];
     const info = record?.info || record?.message || record;
+    // The summary reply measures the compression request's input, not the
+    // context available after compression. Wait for the next normal reply.
+    if (
+      info?.role === "user" &&
+      record?.parts?.some((part: any) => part?.type === "compaction")
+    ) return undefined;
+    if (info?.summary === true) continue;
     if (info?.role !== "assistant") continue;
     const tokens = info.tokens || {};
     const cache = tokens.cache || {};
@@ -622,9 +744,11 @@ export class OpenCodeAdapter extends EventEmitter {
   private profiles: OpenCodeProfile[] = [];
   private connected = new Set<string>();
   private configDefault?: { providerID: string; modelID: string };
+  private projectCatalogs = new Map<string, OpenCodeCatalog>();
   private approvals = new Map<string, any>();
   /** Role of the last seen OpenCode message, used to skip replayed user parts. */
   private messageRoles = new Map<string, string>();
+  private partTypes = new Map<string, string>();
   /**
    * OpenCode 服务端的 `title`（手动重命名才有）。有它时首条消息
    * 不得覆盖用户起的名字；没它时才用首条消息对齐 Codex。
@@ -672,6 +796,7 @@ export class OpenCodeAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "OpenCode",
+      protocol: "native",
       available: Boolean(
         this.options.bin || process.env.OPENCODE_BIN || "opencode",
       ),
@@ -763,6 +888,9 @@ export class OpenCodeAdapter extends EventEmitter {
     const completedTurnId = thread.activeTurnId || "opencode";
     thread.status = "idle";
     thread.activeTurnId = undefined;
+    // 会话已空闲即压缩结束（summarize 自身也走 busy→idle）；遗留的
+    // compacting 在此自愈，避免 UI 永久显示“正在压缩上下文”。
+    thread.compacting = undefined;
     thread.updatedAt = Date.now();
     this.broadcast("thread.updated", thread);
     this.emitAgentEvent(thread, "turn/completed", {
@@ -813,15 +941,65 @@ export class OpenCodeAdapter extends EventEmitter {
     }));
   }
 
-  listModels(providerId?: string): ModelInfo[] {
+  listModels(providerId?: string, directory?: string): ModelInfo[] | Promise<ModelInfo[]> {
+    if (directory)
+      return this.loadProjectCatalog(directory, true).then((catalog) =>
+        this.modelList(
+          providerId,
+          catalog.profiles,
+          catalog.connected,
+          catalog.defaultModel,
+        ),
+      );
+    return this.modelList(providerId, this.profiles, this.connected, this.configDefault);
+  }
+
+  private async loadProjectCatalog(directory: string, refresh = false) {
+    const cached = this.projectCatalogs.get(directory);
+    if (cached && !refresh) return cached;
+    const [providers, config] = await Promise.all([
+      this.request<unknown>("/provider", {
+        directory, retry: false, timeoutMs: 5_000,
+      }),
+      this.request<unknown>("/config", {
+        directory, retry: false, timeoutMs: 5_000,
+      }),
+    ]);
+    const catalog: OpenCodeCatalog = {
+      profiles: normalizeProfiles(providers),
+      connected: connectedProviderIds(providers),
+      defaultModel: configDefaultModel(config),
+    };
+    this.projectCatalogs.set(directory, catalog);
+    return catalog;
+  }
+
+  private modelList(
+    providerId: string | undefined,
+    profiles: OpenCodeProfile[],
+    connected: Set<string>,
+    defaultModel: { providerID: string; modelID: string } | undefined,
+  ): ModelInfo[] {
+    const ranked = profiles
+      .map((profile, index) => ({
+        profile,
+        index,
+        rank: defaultModel?.providerID === profile.id
+          ? 0
+          : connected.has(profile.id)
+            ? 1
+            : 2,
+      }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.profile);
     const matched = providerId
-      ? this.profiles.filter((item) => item.id === providerId)
-      : this.rankedProfiles();
-    const scope = matched.length ? matched : this.rankedProfiles();
+      ? profiles.filter((item) => item.id === providerId)
+      : ranked;
+    const scope = matched.length ? matched : ranked;
     const entries: ModelInfo[] = [];
     for (const profile of scope) {
       const groupName = profile.name || profile.id;
-      const connected = this.connected.has(profile.id);
+      const isConnected = connected.has(profile.id);
       for (const [id, model] of Object.entries(profile.models || {})) {
         entries.push({
           id: `${profile.id}/${id}`,
@@ -829,11 +1007,11 @@ export class OpenCodeAdapter extends EventEmitter {
           displayName: model.name || model.displayName || id,
           groupName,
           isDefault:
-            this.configDefault?.providerID === profile.id &&
-            this.configDefault.modelID === id
+            defaultModel?.providerID === profile.id &&
+            defaultModel.modelID === id
               ? true
               : undefined,
-          ...(connected ? { connected: true } : {}),
+          ...(isConnected ? { connected: true } : {}),
           supportedReasoningEfforts: modelVariants(model),
           supportsImages: modelSupportsImages(model),
         });
@@ -844,10 +1022,48 @@ export class OpenCodeAdapter extends EventEmitter {
         id: "default",
         model: "default",
         displayName: "跟随 OpenCode 默认",
-        isDefault: !this.configDefault ? true : undefined,
+        isDefault: !defaultModel ? true : undefined,
       },
       ...entries,
     ];
+  }
+
+  isOnline() {
+    return this.online;
+  }
+
+  /**
+   * `GET /agent`：当前目录下可见的全部 agent（primary + subagent），
+   * 含 name/mode/description。server 未启动时返回空数组，调用方按
+   * “离线”处理而不是报错。
+   */
+  async agentCatalog(directory?: string): Promise<any[]> {
+    const value = await this.request<unknown>("/agent", { directory }).catch(
+      () => [],
+    );
+    const list = Array.isArray(value)
+      ? value
+      : ((value as { agents?: unknown; data?: unknown })?.agents ??
+        (value as { data?: unknown })?.data);
+    return Array.isArray(list) ? list : [];
+  }
+
+  /**
+   * `PATCH /config`：把配置写进运行中的 server。OpenCode 会把它持久化到
+   * 工作区配置文件；调用方负责先写目标文件，这里只是让在线实例立即生效。
+   */
+  async patchRuntimeConfig(
+    config: Record<string, unknown>,
+    directory?: string,
+  ) {
+    const result = await this.request("/config", {
+      method: "PATCH",
+      directory,
+      body: config,
+    });
+    if (directory) this.projectCatalogs.delete(directory);
+    else this.projectCatalogs.clear();
+    return result;
   }
 
   startAll() {
@@ -1020,6 +1236,7 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   async refreshAll() {
+    this.projectCatalogs.clear();
     const directories = new Set(
       [
         ...(this.options.initialDirectories || []),
@@ -1075,6 +1292,11 @@ export class OpenCodeAdapter extends EventEmitter {
     return this.listThreads().filter(
       (thread) => thread.status === "running" || thread.status === "waiting",
     );
+  }
+
+  runtimePids() {
+    const pid = this.process?.pid;
+    return typeof pid === "number" ? [pid] : [];
   }
 
   /**
@@ -1210,6 +1432,8 @@ export class OpenCodeAdapter extends EventEmitter {
    * used", next to the context window the model itself advertises.
    */
   private applyThreadUsage(thread: ThreadSummary, records: any[]) {
+    const catalog = this.projectCatalogs.get(thread.cwd);
+    const defaultModel = catalog?.defaultModel || this.configDefault;
     const info = lastAssistantInfo(records);
     const usageInfo = lastAssistantWithUsage(records);
     const infoProvider = String(info?.providerID || "").trim();
@@ -1219,8 +1443,8 @@ export class OpenCodeAdapter extends EventEmitter {
         ? `${infoProvider}/${infoModel}`
         : thread.model && thread.model !== "default"
           ? thread.model
-          : this.configDefault
-            ? `${this.configDefault.providerID}/${this.configDefault.modelID}`
+          : defaultModel
+            ? `${defaultModel.providerID}/${defaultModel.modelID}`
             : undefined;
     const providerID = String(usageInfo?.providerID || "").trim();
     const modelID = String(usageInfo?.modelID || "").trim();
@@ -1233,7 +1457,7 @@ export class OpenCodeAdapter extends EventEmitter {
     const used = input + output + reasoning + cachedInput;
     const limit =
       providerID && modelID
-        ? this.modelContextLimit(providerID, modelID)
+        ? this.modelContextLimit(providerID, modelID, thread.cwd)
         : undefined;
     // 只有拿到真实 token 记录才生成用量；仅有上限没有用量时会显示成
     // 误导性的 “0/xxx”，不如不显示。
@@ -1268,7 +1492,8 @@ export class OpenCodeAdapter extends EventEmitter {
     if (!effort) return undefined;
     const parsed = this.modelInput(thread.model || thread.resolvedModel || "");
     if (!parsed) return undefined;
-    const profile = this.profiles.find((item) => item.id === parsed.providerID);
+    const profiles = this.projectCatalogs.get(thread.cwd)?.profiles || this.profiles;
+    const profile = profiles.find((item) => item.id === parsed.providerID);
     if (!profile) return undefined;
     const model = profile.models?.[parsed.modelID];
     if (!model) return undefined;
@@ -1279,20 +1504,57 @@ export class OpenCodeAdapter extends EventEmitter {
     return effort;
   }
 
-  private modelContextLimit(providerID: string, modelID: string) {
-    const profile = this.profiles.find((item) => item.id === providerID);
+  private modelContextLimit(providerID: string, modelID: string, directory?: string) {
+    const profiles = this.projectCatalogs.get(directory || "")?.profiles || this.profiles;
+    const profile = profiles.find((item) => item.id === providerID);
     const limit = profile?.models?.[modelID]?.limit?.context;
     return typeof limit === "number" && limit > 0 ? limit : undefined;
   }
 
   async readThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
-    const records = await this.request<any[]>(
-      `/session/${encodeURIComponent(threadId)}/message`,
-      { directory: thread.cwd },
-    );
-    const renamed = this.applyFirstMessageNaming(thread, records);
+    // 项目模型目录（/provider + /config，各自最长 5 秒）只用来补上下文上限和
+    // 实际模型名，不能让它卡住正文：最多等 CATALOG_WAIT_MS，晚到的在落地后
+    // 补算一次用量，经 thread.updated 推给前端。
+    const catalog =
+      thread.cwd && !this.projectCatalogs.has(thread.cwd)
+        ? this.loadProjectCatalog(thread.cwd).catch(() => undefined)
+        : undefined;
+    const [allRecords, session] = await Promise.all([
+      this.request<any[]>(`/session/${encodeURIComponent(threadId)}/message`, {
+        directory: thread.cwd,
+      }),
+      this.request<OpenCodeSession & { revert?: { messageID?: string } }>(
+        `/session/${encodeURIComponent(threadId)}`,
+        { directory: thread.cwd },
+      ),
+      catalog
+        ? Promise.race([
+            catalog,
+            new Promise((resolve) => setTimeout(resolve, CATALOG_WAIT_MS)),
+          ])
+        : undefined,
+    ]);
+    // OpenCode stages /revert and keeps the old messages in storage for /redo.
+    // Its message list still contains them, so hide the boundary and everything
+    // after it until /unrevert clears the marker.
+    const revertId = String(session?.revert?.messageID || "");
+    const revertedAt = revertId
+      ? allRecords.findIndex((record) =>
+          String((record?.info || record?.message || record)?.id) === revertId,
+        )
+      : -1;
+    const records = revertedAt >= 0 ? allRecords.slice(0, revertedAt) : allRecords;
+    // await 期间 session.updated 可能已把 threads 里的对象换成新实例，
+    // 命名/用量必须基于现行对象合并，否则会把新字段顶回旧值。
+    const base = this.threads.get(threadId) || thread;
+    const renamed = this.applyFirstMessageNaming(base, records);
     const current = this.applyThreadUsage(renamed, records);
+    if (catalog && !this.projectCatalogs.has(thread.cwd))
+      void catalog.then((loaded) => {
+        const latest = this.threads.get(threadId);
+        if (loaded && latest) this.applyThreadUsage(latest, records);
+      });
     return {
       ...normalizeMessages(
         { id: current.id, directory: current.cwd },
@@ -1321,10 +1583,11 @@ export class OpenCodeAdapter extends EventEmitter {
       body: { title: next },
     });
     this.sessionTitles.set(threadId, next);
-    thread.name = next;
-    thread.updatedAt = Date.now();
-    this.broadcast("thread.updated", thread);
-    return thread;
+    const current = this.threads.get(threadId) || thread;
+    current.name = next;
+    current.updatedAt = Date.now();
+    this.broadcast("thread.updated", current);
+    return current;
   }
 
   /**
@@ -1396,8 +1659,9 @@ export class OpenCodeAdapter extends EventEmitter {
 
   /**
    * 非破坏性分支：`POST /session/:id/fork { messageID? }`。
-   * 与 Codex `thread/fork { lastTurnId }` 对齐：Deck turn.id 即 OpenCode
-   * user message id，可直接透传。不传 messageID 即完整复制当前历史。
+   * OpenCode 的 messageID 是排除该消息的边界。公开接口的 lastTurnId
+   * 表示保留所选轮次，因此要找到下一条 user 消息作为原生边界。
+   * 直接传 messageID 时保留原生的排除语义，供历史消息重试使用。
    * 这是 tree/分支的主入口；destructive 的 revert 仍保留为 undo。
    */
   async forkThread(
@@ -1409,9 +1673,21 @@ export class OpenCodeAdapter extends EventEmitter {
     if (source.archived) throw new Error("会话已归档，请先恢复再分支");
     if (source.status === "running" || source.status === "waiting")
       throw new Error("会话正在运行或等待确认，无法分支");
-    const boundary = String(
-      options.messageID || options.lastTurnId || "",
-    ).trim();
+    let boundary = String(options.messageID || "").trim();
+    if (options.lastTurnId) {
+      const selected = String(options.lastTurnId).trim();
+      const records = await this.request<any[]>(
+        `/session/${encodeURIComponent(threadId)}/message`,
+        { directory: source.cwd },
+      );
+      const userIds = records
+        .map((record) => record?.info || record?.message || record)
+        .filter((info) => info?.role === "user" && info?.id)
+        .map((info) => String(info.id));
+      const index = userIds.indexOf(selected);
+      if (index < 0) throw new Error("找不到分支所选的消息");
+      boundary = userIds[index + 1] || "";
+    }
     let forked: OpenCodeSession;
     try {
       forked = await this.request<OpenCodeSession>(
@@ -1478,7 +1754,7 @@ export class OpenCodeAdapter extends EventEmitter {
 
   /**
    * 从指定 user 消息分支并用新文本重试：与 Codex retryFromTurn 一致，
-   * 取目标 turn 的上一条 user 消息做 fork 边界（首轮则空分支），
+   * 以目标 turn 自身作为 OpenCode fork 的排除边界（首轮则空分支），
    * 再在新分支上 sendTurn。原分支完整保留，可随时回看。
    */
   async retryFromTurn(
@@ -1506,7 +1782,7 @@ export class OpenCodeAdapter extends EventEmitter {
     const target = String(turnId || "").trim();
     const targetIndex = target ? userIds.indexOf(target) : -1;
     if (target && targetIndex < 0) throw new Error("找不到这条消息所属的回合");
-    const boundary = targetIndex > 0 ? userIds[targetIndex - 1] : "";
+    const boundary = targetIndex > 0 ? userIds[targetIndex] : "";
     // 有边界用官方 fork 复制历史；首轮则新建空会话再发，不碰原会话的
     // 任何历史与文件快照（不对新分支做 revert，避免副作用工作区文件）。
     const branch = boundary
@@ -1571,9 +1847,28 @@ export class OpenCodeAdapter extends EventEmitter {
    * 自定义命令，归一化为不带 `/` 的名字供 Deck 补全使用。
    */
   async listSessionCommands(_providerId: string, _threadId: string) {
-    this.requireThread(_threadId);
-    const raw = await this.request<unknown>("/command");
+    const thread = this.requireThread(_threadId);
+    const raw = await this.request<unknown>("/command", {
+      directory: thread.cwd,
+    });
     return normalizeCommands(raw);
+  }
+
+  /**
+   * Skill 目录：`GET /skill` 枚举 `.opencode/skills`、`.claude/skills`、
+   * `.agents/skills` 等来源的 SKILL.md。按会话目录带上 `directory` 参数。
+   */
+  async listSkills(_providerId: string, threadId: string) {
+    const thread = this.requireThread(threadId);
+    let raw: unknown;
+    try {
+      raw = await this.request<unknown>("/skill", { directory: thread.cwd });
+    } catch (error: any) {
+      throw new Error(
+        `当前 OpenCode 不支持 Skill 列表：${error?.message || error}`,
+      );
+    }
+    return { skills: normalizeSkills(raw, thread.cwd) };
   }
 
   /**
@@ -1607,31 +1902,50 @@ export class OpenCodeAdapter extends EventEmitter {
       threadId,
       turn: { id: turnId, status: "inProgress" },
     });
-    try {
-      await this.request(`/session/${encodeURIComponent(threadId)}/command`, {
-        method: "POST",
-        directory: thread.cwd,
-        body: {
-          command: name,
-          arguments: String(args ?? ""),
-          ...(parsed ? { model: parsed } : {}),
-          ...(variant ? { variant } : {}),
-        },
-      });
-    } catch (error: any) {
+    // Unlike prompt_async, this endpoint returns only after the command's
+    // entire agent run. Keep the HTTP request alive without blocking Deck's
+    // command response or timing out an active task after 60 seconds.
+    void this.request(`/session/${encodeURIComponent(threadId)}/command`, {
+      method: "POST",
+      directory: thread.cwd,
+      timeoutMs: 0,
+      body: {
+        command: name,
+        arguments: String(args ?? ""),
+        ...(parsed ? { model: parsed } : {}),
+        ...(variant ? { variant } : {}),
+      },
+    }).catch((error: any) => {
+      // 命令执行期间 session.updated 等事件会用 mergeThread 换掉 threads
+      // 里的对象，回滚要落在现行对象上，写旧引用会让会话永久卡 running。
+      const current = this.threads.get(thread.id);
+      if (!current || current.activeTurnId !== turnId) return;
       const detail = String(error?.message || error || "OpenCode 命令执行失败");
       this.clearIdleTimer(thread.id);
-      thread.status = "error";
-      thread.activeTurnId = undefined;
-      thread.lastError = detail;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
-      this.emitAgentEvent(thread, "turn/completed", {
+      // 命令运行中被手动停止：同 session.error 的中断语义，不当失败展示。
+      if (isAbortError(error)) {
+        current.status = "idle";
+        current.activeTurnId = undefined;
+        current.lastError = undefined;
+        current.compacting = undefined;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+        this.emitAgentEvent(current, "turn/completed", {
+          threadId,
+          turn: { id: turnId, status: "interrupted" },
+        });
+        return;
+      }
+      current.status = "error";
+      current.activeTurnId = undefined;
+      current.lastError = detail;
+      current.updatedAt = Date.now();
+      this.broadcast("thread.updated", current);
+      this.emitAgentEvent(current, "turn/completed", {
         threadId,
         turn: { id: turnId, status: "failed", error: { message: detail } },
       });
-      throw error;
-    }
+    });
     return { turn: { id: turnId, status: "inProgress" } };
   }
 
@@ -1649,7 +1963,8 @@ export class OpenCodeAdapter extends EventEmitter {
         ? this.modelInput(thread.model)
         : undefined;
     const resolved = explicit || this.modelInput(thread.resolvedModel || "");
-    const target = resolved || this.configDefault;
+    const target =
+      resolved || this.projectCatalogs.get(thread.cwd)?.defaultModel || this.configDefault;
     if (!target)
       throw new Error("当前没有可用模型用于压缩，请先在会话设置里选择模型");
     thread.compacting = true;
@@ -1661,10 +1976,20 @@ export class OpenCodeAdapter extends EventEmitter {
         directory: thread.cwd,
         body: { providerID: target.providerID, modelID: target.modelID },
       });
+      // summarize 期间的 session.updated / 历史重载会用 mergeThread 换掉
+      // threads 里的对象（compacting 随 ...existing 拷到新对象上），清理
+      // 必须落在现行对象上，写旧引用等于没清、标记会永久残留。
+      const current = this.threads.get(thread.id) || thread;
+      // The summary request reports its old input context. A new ordinary
+      // reply is needed before there is a trustworthy post-compaction value.
+      delete current.tokenUsage;
     } finally {
-      thread.compacting = undefined;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
+      const current = this.threads.get(thread.id);
+      if (current) {
+        current.compacting = undefined;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+      }
     }
     return { ok: true };
   }
@@ -1733,6 +2058,14 @@ export class OpenCodeAdapter extends EventEmitter {
     return { ok: true as const };
   }
 
+  async sendMessage(providerId: string, threadId: string, input: AgentMessageInput): Promise<AgentMessageAcceptance> {
+    const thread = this.requireThread(threadId);
+    assertMessageInput(thread, input, OPENCODE_CAPABILITIES.messages!);
+    const busy = messageBusy(thread);
+    const result = await this.sendTurn(providerId, threadId, input.text, input.images);
+    return { disposition: busy ? "backend-managed" : "started", turnId: result.turn.id };
+  }
+
   async sendTurn(
     _providerId: string,
     threadId: string,
@@ -1747,7 +2080,8 @@ export class OpenCodeAdapter extends EventEmitter {
         ? this.modelInput(thread.model)
         : undefined;
     if (images?.length && parsed) {
-      const meta = this.profiles.find(
+      const profiles = this.projectCatalogs.get(thread.cwd)?.profiles || this.profiles;
+      const meta = profiles.find(
         (item) => item.id === parsed.providerID,
       )?.models?.[parsed.modelID];
       if (modelSupportsImages(meta) === false)
@@ -1789,7 +2123,10 @@ export class OpenCodeAdapter extends EventEmitter {
     // actually advertises, otherwise OpenCode rejects the request.
     const variant = this.threadVariant(thread);
     try {
-      await this.request(`/session/${encodeURIComponent(threadId)}/message`, {
+      // /message waits for the entire agent run. A proxy or caller can time out
+      // after OpenCode accepted it, then resend the same prompt. The async
+      // endpoint acknowledges acceptance immediately (204).
+      await this.request(`/session/${encodeURIComponent(threadId)}/prompt_async`, {
         method: "POST",
         directory: thread.cwd,
         body: {
@@ -1807,15 +2144,18 @@ export class OpenCodeAdapter extends EventEmitter {
       // 若服务端实际已收下请求，后续 busy 事件会把它置回 running，自愈。
       const detail = String(error?.message || error || "OpenCode 任务发送失败");
       this.clearIdleTimer(thread.id);
-      thread.status = "error";
-      thread.activeTurnId = undefined;
-      thread.lastError = detail;
-      thread.updatedAt = Date.now();
-      this.broadcast("thread.updated", thread);
-      this.emitAgentEvent(thread, "turn/completed", {
-        threadId,
-        turn: { id: turnId, status: "failed", error: { message: detail } },
-      });
+      const current = this.threads.get(thread.id);
+      if (current) {
+        current.status = "error";
+        current.activeTurnId = undefined;
+        current.lastError = detail;
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+        this.emitAgentEvent(current, "turn/completed", {
+          threadId,
+          turn: { id: turnId, status: "failed", error: { message: detail } },
+        });
+      }
       throw error;
     }
     return { turn: { id: turnId, status: "inProgress" } };
@@ -1840,6 +2180,21 @@ export class OpenCodeAdapter extends EventEmitter {
     const decision = typeof body === "string" ? body : body.decision;
     if (approval.request?.method === "opencode/question")
       return this.resolveQuestion(approval, decision, (body as any)?.answers);
+    if (approval.request?.method === "opencode/permission.v2") {
+      const reply =
+        decision === "acceptForSession"
+          ? "always"
+          : decision === "accept"
+            ? "once"
+            : "reject";
+      await this.request(`/permission/${encodeURIComponent(approval.permissionId)}/reply`, {
+        method: "POST",
+        directory: approval.cwd,
+        body: { reply },
+      });
+      this.clearApproval(approvalId);
+      return { ok: true };
+    }
     // Question approvals carry the picked option back to OpenCode as the
     // permission response; a missing/unusable value falls back to allow-once.
     const answered =
@@ -1871,8 +2226,7 @@ export class OpenCodeAdapter extends EventEmitter {
             : "reject";
       await respond(response);
     }
-    this.approvals.delete(approvalId);
-    this.broadcast("approval.resolved", { agentId: this.id, approvalId });
+    this.clearApproval(approvalId);
     return { ok: true };
   }
 
@@ -1910,24 +2264,13 @@ export class OpenCodeAdapter extends EventEmitter {
             return explicit.length ? explicit : [single];
           }),
         };
-        try {
-          await this.request(
-            `/question/${encodeURIComponent(approval.requestId)}/reply`,
-            { method: "POST", directory: approval.cwd, body: payload },
-          );
-        } catch {
-          // Question may have been answered or retracted elsewhere; drop it.
-          this.approvals.delete(approval.id);
-          this.broadcast("approval.resolved", {
-            agentId: this.id,
-            approvalId: approval.id,
-          });
-          throw new Error("OpenCode 问题已失效，请重新发送");
-        }
+        await this.request(
+          `/question/${encodeURIComponent(approval.requestId)}/reply`,
+          { method: "POST", directory: approval.cwd, body: payload },
+        );
       }
     }
-    this.approvals.delete(approval.id);
-    this.broadcast("approval.resolved", { agentId: this.id, approvalId: approval.id });
+    this.clearApproval(approval.id);
     return { ok: true };
   }
 
@@ -1946,49 +2289,237 @@ export class OpenCodeAdapter extends EventEmitter {
     throw lastError || new Error("OpenCode server 未在限定时间内启动");
   }
 
+  private clearApproval(approvalId: string) {
+    const approval = this.approvals.get(approvalId);
+    if (!approval || !this.approvals.delete(approvalId)) return;
+    this.broadcast("approval.resolved", { agentId: this.id, approvalId });
+    const thread =
+      this.threads.get(approval.sessionID) ||
+      this.threads.get(this.childParents.get(approval.sessionID) || "");
+    if (!thread || thread.status !== "waiting") return;
+    const hasAnother = [...this.approvals.values()].some(
+      (item) =>
+        item.sessionID === thread.id ||
+        this.childParents.get(item.sessionID) === thread.id,
+    );
+    if (hasAnother) return;
+    thread.status = "running";
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    // An idle event may have arrived while the thread was waiting. Recheck
+    // the current server state so a resolved prompt cannot leave it running.
+    void this.request<Record<string, { type?: string }>>("/session/status", {
+      directory: thread.cwd,
+      retry: false,
+    }).then((statuses) => {
+      const current = this.threads.get(thread.id);
+      if (!current || current.status !== "running") return;
+      const status = statuses?.[thread.id]?.type;
+      if (!status || status === "idle") this.applyIdle(current);
+    }).catch(() => undefined);
+  }
+
+  private rememberPermissionRequest(permission: any) {
+    const sessionID = String(permission?.sessionID || "");
+    const permissionId = String(permission?.id || "");
+    if (!sessionID || !permissionId) return;
+    const thread =
+      this.threads.get(sessionID) ||
+      this.threads.get(this.childParents.get(sessionID) || "");
+    const metadata = permission.metadata || {};
+    const patterns = Array.isArray(permission.patterns)
+      ? permission.patterns.map(String).filter(Boolean)
+      : [];
+    const kind = String(permission.permission || "permission");
+    const command =
+      (typeof metadata.command === "string" && metadata.command) ||
+      patterns.join(", ") ||
+      kind;
+    const id = `${sessionID}:${permissionId}`;
+    const pending = {
+      id,
+      agentId: this.id,
+      providerId: thread?.providerId,
+      cwd: thread?.cwd,
+      sessionID,
+      permissionId,
+      kind: this.permissionKind(kind),
+      command,
+      reason: `${kind}${patterns.length ? ` · ${patterns.join(", ")}` : ""}`,
+      availableDecisions: ["decline", "accept", "acceptForSession"],
+      request: {
+        method: "opencode/permission.v2",
+        params: { threadId: sessionID, permission },
+      },
+    };
+    this.approvals.set(id, pending);
+    if (thread) {
+      this.clearIdleTimer(thread.id);
+      thread.status = "waiting";
+      this.broadcast("thread.updated", thread);
+    }
+    this.broadcast("approval.requested", pending);
+  }
+
+  private rememberQuestionRequest(request: any) {
+    const sessionID = String(request?.sessionID || "");
+    const requestId = String(request?.id || "");
+    if (!sessionID || !requestId) return;
+    const thread =
+      this.threads.get(sessionID) ||
+      this.threads.get(this.childParents.get(sessionID) || "");
+    const questions: ApprovalQuestion[] = (Array.isArray(request.questions)
+      ? request.questions
+      : []
+    ).map((item: any, index: number) => ({
+      id: String(requestId || index),
+      header: typeof item.header === "string" ? item.header : undefined,
+      prompt: item.question,
+      options: (Array.isArray(item.options) ? item.options : []).map(
+        (option: any) => ({
+          label: String(option.label ?? option.value ?? ""),
+          value: String(option.label ?? option.value ?? ""),
+          ...(option.description
+            ? { description: String(option.description) }
+            : {}),
+        }),
+      ),
+      ...(item.multiple ? { multiple: true } : {}),
+      ...(item.custom ? { custom: true } : {}),
+    }));
+    const id = `${sessionID}:${requestId}`;
+    const pending = {
+      id,
+      agentId: this.id,
+      providerId: thread?.providerId,
+      cwd: thread?.cwd,
+      sessionID,
+      requestId,
+      kind: "question" as ApprovalKind,
+      command: questions[0]?.header || questions[0]?.prompt || "OpenCode 提问",
+      reason: `OpenCode 请求回答 ${questions.length} 个问题`,
+      questions,
+      ...(questions.some((item) => item.multiple) ? { multiple: true } : {}),
+      request: {
+        method: "opencode/question",
+        params: { threadId: sessionID, requestId },
+      },
+    };
+    this.approvals.set(id, pending);
+    if (thread) {
+      this.clearIdleTimer(thread.id);
+      thread.status = "waiting";
+      this.broadcast("thread.updated", thread);
+    }
+    this.broadcast("approval.requested", pending);
+  }
+
+  private async syncPendingPermissions() {
+    const directories = new Set([
+      undefined,
+      ...[...this.threads.values()].map((thread) => thread.cwd).filter(Boolean),
+    ]);
+    const results = await Promise.all(
+      [...directories].map((directory) =>
+        this.request<unknown>("/permission", { directory, retry: false })
+          .then((value) => Array.isArray(value) ? value : undefined)
+          .catch(() => undefined),
+      ),
+    );
+    const seen = new Set<string>();
+    for (const requests of results) {
+      if (!requests) continue;
+      for (const permission of requests) {
+        if (!permission?.sessionID || !permission?.id) continue;
+        seen.add(`${permission.sessionID}:${permission.id}`);
+        this.rememberPermissionRequest(permission);
+      }
+    }
+    // A successful full scan also clears requests resolved while SSE was away.
+    if (results.every((requests) => requests !== undefined))
+      for (const [id, approval] of this.approvals)
+        if (approval.request?.method === "opencode/permission.v2" && !seen.has(id))
+          this.clearApproval(id);
+    // Native questions have a separate queue. Older servers may not expose
+    // GET /question; in that case keep existing cards until an SSE resolution.
+    const questions = await Promise.all(
+      [...directories].map((directory) =>
+        this.request<unknown>("/question", {
+          directory, retry: false, timeoutMs: 5_000,
+        }).then((value) => Array.isArray(value) ? value : undefined)
+          .catch(() => undefined),
+      ),
+    );
+    const activeQuestions = new Set<string>();
+    for (const requests of questions) {
+      if (!requests) continue;
+      for (const request of requests) {
+        if (!request?.sessionID || !request?.id) continue;
+        const id = `${request.sessionID}:${request.id}`;
+        activeQuestions.add(id);
+        if (!this.approvals.has(id)) this.rememberQuestionRequest(request);
+      }
+    }
+    if (questions.every((requests) => requests !== undefined))
+      for (const [id, approval] of this.approvals)
+        if (approval.request?.method === "opencode/question" && !activeQuestions.has(id))
+          this.clearApproval(id);
+  }
+
   private async consumeEvents() {
     // 先停掉上一条流：restart 漏调或并发 startAll 时不能有两条 SSE 循环。
     this.eventAbort?.abort();
     const abort = new AbortController();
     this.eventAbort = abort;
-    try {
-      const response = await this.fetcher(
-        requestUrl(this.baseUrl!, "/global/event"),
-        { signal: abort.signal },
-      );
-      if (!response.ok || !response.body)
-        throw new Error(`OpenCode 事件流不可用：${response.status}`);
-      const reader = response.body.getReader();
+    while (!abort.signal.aborted && this.eventAbort === abort) {
       try {
-        const decoder = new TextDecoder();
-        let buffered = "";
-        while (!abort.signal.aborted) {
-          const next = await reader.read();
-          if (next.done) break;
-          buffered += decoder.decode(next.value, { stream: true });
-          const chunks = buffered.split(/\n\n/);
-          buffered = chunks.pop() || "";
-          for (const chunk of chunks) {
-            const line = chunk
-              .split(/\r?\n/)
-              .find((item) => item.startsWith("data:"));
-            if (!line) continue;
-            try {
-              this.onEvent(JSON.parse(line.slice(5)));
-            } catch {}
+        const response = await this.fetcher(
+          requestUrl(this.baseUrl!, "/global/event"),
+          { signal: abort.signal },
+        );
+        if (!response.ok || !response.body)
+          throw new Error(`OpenCode 事件流不可用：${response.status}`);
+        this.error = undefined;
+        this.broadcast("agent.status", this.descriptor());
+        // Subscribe first, then recover requests created while SSE was away.
+        // Events arriving during the scan stay buffered in the response body.
+        await this.syncPendingPermissions();
+        const reader = response.body.getReader();
+        try {
+          const decoder = new TextDecoder();
+          let buffered = "";
+          while (!abort.signal.aborted) {
+            const next = await reader.read();
+            if (next.done) break;
+            buffered += decoder.decode(next.value, { stream: true });
+            const chunks = buffered.split(/\n\n/);
+            buffered = chunks.pop() || "";
+            for (const chunk of chunks) {
+              const line = chunk
+                .split(/\r?\n/)
+                .find((item) => item.startsWith("data:"));
+              if (!line) continue;
+              try {
+                this.onEvent(JSON.parse(line.slice(5)));
+              } catch {}
+            }
           }
+        } finally {
+          // reader 不 cancel/release 会一直挂着 socket 和 read() promise。
+          try {
+            await reader.cancel();
+          } catch {}
+          try {
+            reader.releaseLock();
+          } catch {}
         }
-      } finally {
-        // reader 不 cancel/release 会一直挂着 socket 和 read() promise。
-        try {
-          await reader.cancel();
-        } catch {}
-        try {
-          reader.releaseLock();
-        } catch {}
+      } catch (error: any) {
+        if (abort.signal.aborted) break;
+        this.error = error?.message || String(error);
+        this.broadcast("agent.status", this.descriptor());
       }
-    } catch (error: any) {
-      if (!abort.signal.aborted) this.error = error?.message || String(error);
+      if (!abort.signal.aborted && this.eventAbort === abort)
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
     }
   }
 
@@ -2045,71 +2576,56 @@ export class OpenCodeAdapter extends EventEmitter {
       return;
     }
     if (payload?.type === "session.status" && thread) {
-      if (body.status?.type === "busy") {
+      if (body.status?.type === "busy" || body.status?.type === "retry") {
         this.markBusy(thread);
       } else {
         this.scheduleIdle(thread);
       }
       return;
     }
+    if (payload?.type === "session.idle" && thread) {
+      this.scheduleIdle(thread);
+      return;
+    }
     if (payload?.type === "session.error" && thread) {
       this.clearIdleTimer(thread.id);
+      const turnId = thread.activeTurnId || "opencode";
+      // 手动停止走中断分支：idle + turn interrupted，不算失败、不写 lastError。
+      if (isAbortError(body.error)) {
+        thread.status = "idle";
+        thread.activeTurnId = undefined;
+        thread.lastError = undefined;
+        thread.compacting = undefined;
+        thread.updatedAt = Date.now();
+        this.broadcast("thread.updated", thread);
+        for (const [id, approval] of this.approvals)
+          if (approval.sessionID === thread.id) this.clearApproval(id);
+        this.emitAgentEvent(thread, "turn/completed", {
+          threadId: thread.id,
+          turn: { id: turnId, status: "interrupted" },
+        });
+        return;
+      }
       thread.status = "error";
       thread.activeTurnId = undefined;
       thread.lastError = String(
         body.error?.data?.message || body.error?.message || "OpenCode 任务失败",
       );
       this.broadcast("thread.updated", thread);
+      for (const [id, approval] of this.approvals)
+        if (approval.sessionID === thread.id) this.clearApproval(id);
+      this.emitAgentEvent(thread, "turn/completed", {
+        threadId: thread.id,
+        turn: {
+          id: turnId,
+          status: "failed",
+          error: { message: thread.lastError },
+        },
+      });
       return;
     }
     if (payload?.type === "question.asked") {
-      // Newer OpenCode versions ask questions through the dedicated question
-      // system (question.asked SSE + /question/:id/reply) instead of
-      // permission.updated; both share the question approval card here.
-      const request = body;
-      const id = `${request.sessionID}:${request.id}`;
-      const questions: ApprovalQuestion[] = (Array.isArray(request.questions)
-        ? request.questions
-        : []
-      ).map((item: any, index: number) => ({
-        id: String(request.id || index),
-        header: typeof item.header === "string" ? item.header : undefined,
-        prompt: item.question,
-        options: (Array.isArray(item.options) ? item.options : []).map(
-          (option: any) => ({
-            label: String(option.label ?? option.value ?? ""),
-            value: String(option.label ?? option.value ?? ""),
-          }),
-        ),
-        ...(item.multiple ? { multiple: true } : {}),
-        ...(item.custom ? { custom: true } : {}),
-      }));
-      const multiple = questions.some((item: any) => item.multiple);
-      const pending = {
-        id,
-        agentId: this.id,
-        providerId: thread?.providerId,
-        cwd: thread?.cwd,
-        sessionID: request.sessionID,
-        requestId: request.id,
-        kind: "question" as ApprovalKind,
-        command:
-          questions[0]?.header || questions[0]?.prompt || "OpenCode 提问",
-        reason: `OpenCode 请求回答 ${questions.length} 个问题`,
-        questions,
-        ...(multiple ? { multiple: true } : {}),
-        request: {
-          method: "opencode/question",
-          params: { threadId: request.sessionID, requestId: request.id },
-        },
-      };
-      this.approvals.set(id, pending);
-      if (thread) {
-        this.clearIdleTimer(thread.id);
-        thread.status = "waiting";
-        this.broadcast("thread.updated", thread);
-      }
-      this.broadcast("approval.requested", pending);
+      this.rememberQuestionRequest(body);
       return;
     }
     if (
@@ -2117,9 +2633,15 @@ export class OpenCodeAdapter extends EventEmitter {
         payload?.type === "question.rejected") &&
       body.requestID
     ) {
-      const id = `${body.sessionID}:${body.requestID}`;
-      if (this.approvals.delete(id))
-        this.broadcast("approval.resolved", { agentId: this.id, approvalId: id });
+      this.clearApproval(`${body.sessionID}:${body.requestID}`);
+      return;
+    }
+    if (payload?.type === "permission.asked") {
+      this.rememberPermissionRequest(body);
+      return;
+    }
+    if (payload?.type === "permission.replied" && body.requestID) {
+      this.clearApproval(`${body.sessionID}:${body.requestID}`);
       return;
     }
     if (payload?.type === "permission.updated") {
@@ -2156,6 +2678,24 @@ export class OpenCodeAdapter extends EventEmitter {
       if (info?.id && info?.role) this.rememberRole(info.id, info.role);
       return;
     }
+    if (payload?.type === "message.part.delta") {
+      if (
+        !thread ||
+        body.field !== "text" ||
+        !body.partID ||
+        this.messageRoles.get(String(body.messageID)) === "user" ||
+        (this.partTypes.has(String(body.partID)) &&
+          this.partTypes.get(String(body.partID)) !== "text")
+      ) return;
+      this.clearIdleTimer(thread.id);
+      this.emitAgentEvent(thread, "item/agentMessage/delta", {
+        threadId: thread.id,
+        turnId: thread.activeTurnId,
+        itemId: body.partID,
+        delta: body.delta,
+      });
+      return;
+    }
     if (payload?.type === "message.part.updated") {
       const childParent = sessionId
         ? this.childParents.get(sessionId)
@@ -2167,6 +2707,8 @@ export class OpenCodeAdapter extends EventEmitter {
       }
       if (!thread) return;
       let part = body.part;
+      if (part?.id && part?.type)
+        this.boundedPut(this.partTypes, String(part.id), String(part.type));
       // OpenCode replays the parts of the message the user just sent. The
       // turn history already renders that message, so forwarding it here
       // would show it a second time as if the assistant repeated it.
@@ -2286,6 +2828,7 @@ export class OpenCodeAdapter extends EventEmitter {
        * 内层再退避重试会把启动探测拖慢一个数量级。
        */
       retry?: boolean;
+      /** 0 disables the deadline for endpoints that run an entire agent turn. */
       timeoutMs?: number;
     } = {},
   ): Promise<T> {
@@ -2307,6 +2850,13 @@ export class OpenCodeAdapter extends EventEmitter {
             ],
           ),
         );
+      // AbortSignal.timeout 的定时器是 unref 的：进程空闲时它不会触发，
+      // 「挂起连接超时」的 deadline 保证就失效了（事件循环先排空，请求
+      // 永不结算）。ref 定时器 + AbortController 才能确保超时一定到达。
+      const abort = new AbortController();
+      const timer = timeoutMs > 0
+        ? setTimeout(() => abort.abort(), timeoutMs)
+        : undefined;
       try {
         const response = await this.fetcher(
           requestUrl(this.baseUrl, pathname, options.directory),
@@ -2316,7 +2866,7 @@ export class OpenCodeAdapter extends EventEmitter {
               ? { "content-type": "application/json" }
               : undefined,
             body: options.body ? JSON.stringify(options.body) : undefined,
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: abort.signal,
           },
         );
         if (!response.ok) {
@@ -2341,6 +2891,8 @@ export class OpenCodeAdapter extends EventEmitter {
         lastError = error;
         if (attempt + 1 >= maxAttempts || !isTransientRequestError(error))
           throw this.requestError(error);
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     throw this.requestError(lastError);
