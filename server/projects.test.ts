@@ -92,9 +92,54 @@ test("rememberCreate fills missing defaults and records recent dirs", async () =
   assert.equal(project.defaults?.agentId, "claude");
   assert.equal(project.defaults?.approvalsReviewer, "auto_review");
   assert.equal(store.getPreferences().lastAgentId, "claude");
-  assert.equal(store.getPreferences().lastModel, "gpt-b");
+  assert.equal(store.getPreferences().lastModel, "gpt-a");
+  assert.equal(store.getPreferences().lastProviderId, "local");
   assert.equal(store.getPreferences().lastApprovalsReviewer, "auto_review");
   assert.deepEqual(store.getPreferences().recentDirs, ["/mnt/d/Code/one"]);
+});
+
+test("pinned defaults survive new sessions and leave projects untouched", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-pin-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.updatePreferences({
+    pinDefaults: true,
+    lastAgentId: "codex",
+    lastModel: "gpt-pinned",
+    lastPermissionMode: "plan",
+  });
+  await store.rememberCreate({
+    agentId: "claude",
+    cwd: "/tmp/pinned",
+    model: "gpt-other",
+    permissionMode: "acceptEdits",
+  });
+  const prefs = store.getPreferences();
+  assert.equal(prefs.lastAgentId, "codex");
+  assert.equal(prefs.lastModel, "gpt-pinned");
+  assert.equal(prefs.lastPermissionMode, "plan");
+  assert.deepEqual(prefs.recentDirs, ["/tmp/pinned"]);
+  const project = store.list()[0];
+  assert.equal(project.cwd, "/tmp/pinned");
+  assert.equal(project.defaults, undefined);
+});
+
+test("other agents preserve Codex defaults across preference persistence", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "codex-deck-multi-agent-defaults-"));
+  const store = new ProjectStore(dir);
+  await store.load();
+  await store.updatePreferences({ lastProviderId: "chosen", lastModel: "gpt-test", lastReasoningEffort: "high" });
+  for (const agentId of ["claude", "opencode", "claude-acp"]) {
+    await store.rememberCreate({ agentId, cwd: `/tmp/${agentId}`, providerId: `${agentId}-current`,
+      model: "other-model", reasoningEffort: "low" });
+  }
+  const restored = new ProjectStore(dir);
+  await restored.load();
+  const prefs = restored.getPreferences();
+  assert.equal(prefs.lastProviderId, "chosen");
+  assert.equal(prefs.lastModel, "gpt-test");
+  assert.equal(prefs.lastReasoningEffort, "high");
+  assert.equal(prefs.lastAgentId, "claude-acp");
 });
 
 test("rememberCreate preserves legacy approval defaults as one pair", async () => {

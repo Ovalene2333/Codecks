@@ -413,6 +413,20 @@
   width: 10px;
   height: 10px;
 }
+/* deck-wake：监督中=强调色，失联=危险色（远端任务没人盯了）。 */
+.thread-list .thread-meta .wake-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+}
+.thread-list .thread-meta .wake-badge.lost {
+  color: var(--danger);
+}
+.thread-list .wake-badge svg {
+  width: 10px;
+  height: 10px;
+}
 .thread-list .thread-meta,
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {

@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Info, RefreshCw } from "lucide-react";
 import { api, put } from "../api";
 import {
-  Badge,
   Button,
   Field,
   Group,
@@ -12,6 +11,7 @@ import {
   Switch,
 } from "../kit";
 import type { ModelInfo } from "../types";
+import { useDirtyFlag } from "../settings/dirty";
 
 type Scope = "project" | "global";
 
@@ -54,7 +54,7 @@ function sameDraft(
 }
 
 /**
- * OpenCode 子代理设置：列表来自 `GET /agent`（离线时退化为配置文件里
+ * OpenCode 代理（主代理 + 子代理）设置：列表来自 `GET /agent`（离线时退化为配置文件里
  * 已声明的 agent 名），保存写入所选作用域的 opencode.json——项目与
  * 全局文件同一 schema，项目值覆盖全局值。
  *
@@ -68,7 +68,7 @@ export function OpenCodeAgentsSection({
   onReload,
 }: {
   cwd?: string;
-  /** OpenCode 是否已在「Agent」页启用；未启用时改动只落盘。 */
+  /** OpenCode 是否已在 Agent 列表里启用；未启用时改动只落盘。 */
   enabled?: boolean;
   reloading?: boolean;
   onReload?: () => void;
@@ -83,6 +83,7 @@ export function OpenCodeAgentsSection({
     needsReload: boolean;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const datalistId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -205,21 +206,66 @@ export function OpenCodeAgentsSection({
       </Button>
     ) : undefined;
 
+  const dirty = names.some(
+    (entry) => drafts[entry.name] && !sameDraft(entry.name, drafts[entry.name], scopeFile),
+  );
+  useDirtyFlag(`agents:opencode:${cwd || "global"}`, dirty);
+  const primary = names.filter((entry) => entry.mode !== "subagent");
+  const sub = names.filter((entry) => entry.mode === "subagent");
+  const agentRow = (entry: AgentEntry) => {
+    const draft = valueFor(entry.name);
+    return (
+      <Row
+        key={entry.name}
+        stack
+        dim={!draft.enabled}
+        title={entry.name}
+        desc={entry.description}
+        side={
+          <>
+            <input
+              className="ui-input ui-input--model"
+              list={datalistId}
+              placeholder="模型：跟随默认"
+              aria-label={`${entry.name} 的模型`}
+              value={draft.model}
+              onChange={(event) =>
+                setDraft(entry.name, { model: event.target.value })
+              }
+            />
+            <Switch
+              checked={draft.enabled}
+              label={`启用 ${entry.name}`}
+              onChange={(next) => setDraft(entry.name, { enabled: next })}
+            />
+          </>
+        }
+      />
+    );
+  };
+  const configPath =
+    scope === "project"
+      ? data?.project?.path || `${cwd}/opencode.json`
+      : data?.global?.path || "~/.config/opencode/opencode.json";
+
   return (
     <>
       {!enabled && (
         <Note tone="warn" icon={<Info />}>
-          OpenCode 当前未启用：改动只会写入
-          opencode.json，到「Agent」页启用后生效。
+          OpenCode 当前未启用：修改仅写入 opencode.json，在 Agent 列表启用后生效。
         </Note>
       )}
       <Section
-        title="OpenCode 子代理"
-        desc={`写入所选作用域的 opencode.json（项目覆盖全局，格式一致）。${
-          data && !data.online && enabled
-            ? " OpenCode 未在运行，保存后下次启动生效。"
-            : ""
-        }`}
+        title="OpenCode 代理"
+        desc={
+          <>
+            写入 <code>{configPath}</code>
+            {cwd ? "（项目覆盖全局，格式一致）" : ""}。
+            {data && !data.online && enabled
+              ? " OpenCode 未在运行，保存后下次启动生效。"
+              : ""}
+          </>
+        }
         actions={reloadButton}
       >
         {cwd && (
@@ -232,66 +278,30 @@ export function OpenCodeAgentsSection({
                 setDrafts({});
               }}
             >
-              <option value="project">
-                本项目（{data?.project?.path || `${cwd}/opencode.json`}）
-              </option>
-              <option value="global">
-                全局（{data?.global?.path || "~/.config/opencode/opencode.json"}
-                ）
-              </option>
+              <option value="project">本项目</option>
+              <option value="global">全局</option>
             </select>
           </Field>
-        )}
-        {!cwd && data?.global && (
-          <p className="ui-section__desc">写入全局配置：{data.global.path}</p>
         )}
         {!data && !error && (
           <p className="ui-section__desc">正在读取 OpenCode 配置…</p>
         )}
-        {names.length > 0 && (
-          <Group>
-            {names.map((entry) => {
-              const draft = valueFor(entry.name);
-              return (
-                <Row
-                  key={entry.name}
-                  stack
-                  dim={!draft.enabled}
-                  title={entry.name}
-                  badges={
-                    entry.mode === "subagent" ? <Badge>子代理</Badge> : null
-                  }
-                  desc={entry.description}
-                  side={
-                    <>
-                      <input
-                        className="ui-input ui-input--model"
-                        list="opencode-agent-models"
-                        placeholder="模型：跟随默认"
-                        aria-label={`${entry.name} 的模型`}
-                        value={draft.model}
-                        onChange={(event) =>
-                          setDraft(entry.name, { model: event.target.value })
-                        }
-                      />
-                      <Switch
-                        checked={draft.enabled}
-                        label={`启用 ${entry.name}`}
-                        onChange={(next) =>
-                          setDraft(entry.name, { enabled: next })
-                        }
-                      />
-                    </>
-                  }
-                />
-              );
-            })}
-          </Group>
+        {primary.length > 0 && (
+          <>
+            <h4 className="ui-subhead">主代理</h4>
+            <Group>{primary.map(agentRow)}</Group>
+          </>
+        )}
+        {sub.length > 0 && (
+          <>
+            <h4 className="ui-subhead">子代理</h4>
+            <Group>{sub.map(agentRow)}</Group>
+          </>
         )}
         {data && names.length === 0 && (
-          <p className="ui-section__desc">没有可配置的子代理。</p>
+          <p className="ui-section__desc">没有可配置的代理。</p>
         )}
-        <datalist id="opencode-agent-models">
+        <datalist id={datalistId}>
           {models
             .filter((model) => model.model && model.model !== "default")
             .map((model) => (
@@ -300,16 +310,6 @@ export function OpenCodeAgentsSection({
               </option>
             ))}
         </datalist>
-        <div className="ui-actions">
-          <Button
-            variant="primary"
-            busy={saving}
-            disabled={!data}
-            onClick={() => void save()}
-          >
-            {saving ? "保存中…" : "保存子代理设置"}
-          </Button>
-        </div>
         {status && (
           <Note
             tone={status.needsReload ? "warn" : "ok"}
@@ -322,6 +322,25 @@ export function OpenCodeAgentsSection({
           </Note>
         )}
         {error && <p className="ui-error">{error}</p>}
+        <div className="ui-actions">
+          {dirty && (
+            <Button
+              variant="ghost"
+              disabled={saving}
+              onClick={() => setDrafts({})}
+            >
+              还原
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            busy={saving}
+            disabled={!data || !dirty}
+            onClick={() => void save()}
+          >
+            {saving ? "保存中…" : "保存代理设置"}
+          </Button>
+        </div>
       </Section>
     </>
   );

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { MobileTabBar, useMobileLayout } from "./layout/MobileNav";
 import { MonitorPanel } from "./monitor/MonitorPanel";
 import { resetActivities } from "./monitor/activity-store";
 import { mergeProjectGroups } from "./projects";
@@ -12,6 +13,8 @@ import type {
   RuntimeSnapshot,
   ThreadActivity,
   ThreadSummary,
+  WakeDelivery,
+  WakeWatcher,
 } from "./types";
 import "./styles.css";
 import "./project-groups.css";
@@ -24,9 +27,9 @@ import "./polish.css";
 import "./appearance.css";
 import "./task-tools.css";
 import "./deck-ui.css";
-import "./tiled.css";
 import "./monitor.css";
 import "./search-picker.css";
+import "./mobile-nav.css";
 import "./kit.css";
 import "./settings.css";
 
@@ -61,8 +64,58 @@ window.fetch = async (input, init) => {
         node: "v22.12.0",
         clients: 2,
       },
+      servers: [
+        { agentId: "codex", pid: 4243, rss: 148 * 1024 ** 2 },
+        { agentId: "opencode", pid: 4244, rss: 736 * 1024 ** 2 },
+        { agentId: "devin", pid: 4245, rss: 1_900 * 1024 ** 2 },
+      ],
     };
     return new Response(JSON.stringify(stats), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (String(input).endsWith("/api/monitor/watchers")) {
+    // ?watchers=0 预览「监督中」的空态。
+    const empty = new URLSearchParams(location.search).get("watchers") === "0";
+    const items: WakeWatcher[] = empty ? [] : [
+      {
+        pid: 1358291,
+        code: "f61d9535",
+        mode: "poll",
+        label: "report-heads-g2v2",
+        intervalSec: 300,
+        command: "ssh -o BatchMode=yes hlt R=/data/runs/report_heads_g2v2; test -f $R/PIPELINE_COMPLETE && echo DONE || echo RUNNING",
+        startedAt: ago(12 * 3_600 + 2_400),
+        state: "RUNNING",
+        stateAt: ago(12 * 3_600 + 2_400),
+        log: "/home/ovalene/.codex-deck/watch/f61d9535-20260929-120808.log",
+        agentId: "claude",
+        threadId: "heads",
+      },
+      {
+        pid: 20411,
+        code: "gpu",
+        mode: "watch",
+        label: "train-r3",
+        command: "ssh -o BatchMode=yes gpu-box 'while kill -0 12345 2>/dev/null; do sleep 60; done; tail -n 30 ~/runs/r3/train.log'",
+        startedAt: ago(3 * 3_600 + 600),
+        agentId: "codex",
+        threadId: "dotfiles",
+      },
+      {
+        pid: 20877,
+        code: "hpc-4821",
+        mode: "poll",
+        label: "job-4821",
+        intervalSec: 120,
+        command: "ssh -o BatchMode=yes hpc 'sacct -j 4821 -n -X -o State | head -1'",
+        startedAt: ago(2_400),
+        state: "PENDING",
+        stateAt: ago(2_300),
+        failures: 3,
+      },
+    ];
+    return new Response(JSON.stringify({ items }), {
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -188,12 +241,87 @@ const THREADS: ThreadSummary[] = [
     locked: true,
   }),
   thread({
+    id: "flaky",
+    name: "flaky-e2e",
+    cwd: "/home/ovalene/work/mobile-app",
+    agentId: "claude",
+    updatedAt: ago(3_900),
+    preview: "定位偶发失败的 e2e 用例",
+  }),
+  thread({
+    id: "bench",
+    name: "perf-bench",
+    cwd: "/home/ovalene/Codecks",
+    agentId: "opencode",
+    providerId: "relay",
+    updatedAt: ago(5_400),
+    preview: "对比两种虚拟列表实现",
+  }),
+  thread({
+    id: "ask",
+    name: "release-notes",
+    cwd: "/home/ovalene/Codecks",
+    agentId: "claude",
+    status: "waiting",
+    updatedAt: ago(780),
+    preview: "整理 0.3.0 发布说明",
+  }),
+  thread({
+    id: "heads",
+    name: "report-heads 分析",
+    cwd: "/home/ovalene/code/RL",
+    agentId: "claude",
+    updatedAt: ago(45_000),
+    preview: "g2v2 报告头训练，结束后自动分析",
+  }),
+  thread({
     id: "dotfiles",
     name: "nvim-config",
     cwd: "/home/ovalene/dotfiles",
     updatedAt: ago(200_000),
     preview: "lazy.nvim 插件已锁定版本",
   }),
+];
+
+// 唤醒投递示例：一条正在退避重试、一条 dead 待人处理、一条会话已不在。
+const DELIVERIES: WakeDelivery[] = [
+  {
+    id: "d1",
+    code: "f61d9535",
+    status: "pending",
+    agentId: "claude",
+    threadId: "heads",
+    attempts: 3,
+    createdAt: ago(1_200),
+    updatedAt: ago(60),
+    nextAttemptAt: now + 4 * 60_000,
+    lastError: "Claude Code 会话正在运行",
+    preview: "[report-heads-g2v2] 任务结束：RUNNING -> COMPLETED",
+  },
+  {
+    id: "d2",
+    code: "etl-done",
+    status: "dead",
+    agentId: "opencode",
+    threadId: "etl",
+    attempts: 1,
+    createdAt: ago(3_600),
+    updatedAt: ago(3_540),
+    lastError: "会话已归档，请先恢复再发送",
+    preview: "[nightly-etl] 命令结束 exit=0，用时 2h04m",
+  },
+  {
+    id: "d3",
+    code: "hpc-4821",
+    status: "dead",
+    agentId: "opencode",
+    threadId: "gone-session",
+    attempts: 7,
+    createdAt: ago(90_000),
+    updatedAt: ago(80_000),
+    lastError: "OpenCode 连接闪断（fetch failed）（ECONNRESET），重试即可恢复",
+    preview: "[job-4821] 任务结束：RUNNING -> FAILED",
+  },
 ];
 
 const ACTIVITIES: ThreadActivity[] = [
@@ -217,23 +345,48 @@ const ACTIVITIES: ThreadActivity[] = [
       item: { id: "e1", type: "commandExecution", tool: "edit", input: { filePath: "/home/ovalene/work/data-pipeline/jobs/merge.py" } },
     },
   },
+  { agentId: "claude", threadId: "refactor", turnStartedAt: ago(1_500), lastEventAt: ago(330) },
+  { agentId: "claude", threadId: "gateway", turnStartedAt: ago(300), lastEventAt: ago(240) },
+  { agentId: "claude", threadId: "ask", turnStartedAt: ago(900), lastEventAt: ago(780) },
   {
-    agentId: "claude",
-    threadId: "refactor",
-    turnStartedAt: ago(1_500),
-    lastEventAt: ago(330),
-  },
-  {
-    agentId: "claude",
-    threadId: "gateway",
-    turnStartedAt: ago(300),
-    lastEventAt: ago(240),
+    agentId: "codex",
+    threadId: "mobile",
+    lastEventAt: ago(540),
+    lastTurn: { startedAt: ago(900), endedAt: ago(540), status: "failed", reply: "xcodebuild 失败：签名证书过期。" },
   },
   {
     agentId: "opencode",
     threadId: "infra",
     lastEventAt: ago(2_700),
-    lastTurn: { startedAt: ago(2_952), endedAt: ago(2_700), status: "completed" },
+    lastTurn: {
+      startedAt: ago(2_952),
+      endedAt: ago(2_700),
+      status: "completed",
+      reply: "## Plan 完成\n\n- 新增 3 个资源：`aws_s3_bucket.logs`、`aws_iam_role.ci`、`aws_cloudwatch_log_group.api`\n- 修改 1 个：安全组放行 443\n\n没有销毁操作，可以直接 apply。",
+    },
+  },
+  {
+    agentId: "claude",
+    threadId: "docs",
+    lastEventAt: ago(7_200),
+    lastTurn: {
+      startedAt: ago(8_100),
+      endedAt: ago(7_200),
+      status: "completed",
+      reply: "中文翻译已同步到 87%，剩下的 12 页是 API 参考，需要你确认术语表后再继续。",
+    },
+  },
+  {
+    agentId: "claude",
+    threadId: "flaky",
+    lastEventAt: ago(3_900),
+    lastTurn: { startedAt: ago(4_300), endedAt: ago(3_900), status: "interrupted", reply: "复现了 3 次，怀疑是动画未结束就断言，" },
+  },
+  {
+    agentId: "opencode",
+    threadId: "bench",
+    lastEventAt: ago(5_400),
+    lastTurn: { startedAt: ago(6_000), endedAt: ago(5_400), status: "completed" },
   },
 ];
 resetActivities(ACTIVITIES);
@@ -271,7 +424,16 @@ function Harness() {
   const [approvals, setApprovals] = useState(APPROVALS);
   const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
   const groups = useMemo(() => mergeProjectGroups(PROJECTS, THREADS), []);
-  const unseen = useMemo(() => new Set(["codex:official:mobile"]), []);
+  const [unseen, setUnseen] = useState<ReadonlySet<string>>(
+    () =>
+      new Set([
+        "codex:official:mobile",
+        "opencode:relay:infra",
+        "claude:relay:docs",
+        "claude:official:flaky",
+        "opencode:relay:bench",
+      ]),
+  );
   const toast = (message: string) => {
     const id = Date.now() + Math.random();
     setToasts((current) => [...current, { id, message }]);
@@ -280,8 +442,9 @@ function Harness() {
       2_000,
     );
   };
+  const mobile = useMobileLayout();
   return (
-    <div className="app" style={{ height: "100dvh" }}>
+    <div className={`app-shell${mobile ? " has-tabbar" : ""}`}>
       <section className="workspace">
         <MonitorPanel
           groups={groups}
@@ -292,15 +455,20 @@ function Harness() {
           runtime={RUNTIME}
           threads={THREADS}
           liveThreads={THREADS}
-          forkCounts={new Map()}
+          deliveries={DELIVERIES}
           searchMatches={new Map()}
           query=""
           loading={false}
           notificationPermission="default"
           onSelect={(item) => toast(`打开 ${item.name}`)}
           onOpenThread={(item) => toast(`打开 ${item.name}`)}
-          onClose={() => toast("返回工作区")}
-          onOpenSidebar={() => toast("打开会话列表")}
+          onShowAll={() => toast("查看全部会话")}
+          onNew={() => toast("新建会话")}
+          onAppearance={() => toast("外观设置")}
+          onMarkSeen={(key) =>
+            setUnseen((current) => new Set([...current].filter((item) => item !== key)))
+          }
+          onMarkAllSeen={() => setUnseen(new Set())}
           onSessionMenu={(item) => toast(`${item.name} 的菜单`)}
           onHistory={(item) => toast(`${item.name} 的历史`)}
           onResolveApproval={(id, body) => {
@@ -312,6 +480,18 @@ function Harness() {
           onOpenUsage={() => toast("打开用量明细")}
         />
       </section>
+      {mobile && (
+        <MobileTabBar
+          active="home"
+          homeBadge={approvals.length}
+          sessionsBadge={unseen.size}
+          onHome={() => toast("总览")}
+          onSessions={() => toast("会话列表")}
+          onNew={() => toast("新建会话")}
+          onTools={() => toast("工具")}
+          onSettings={() => toast("设置")}
+        />
+      )}
       <ToastStack toasts={toasts} />
     </div>
   );

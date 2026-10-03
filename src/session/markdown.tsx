@@ -57,8 +57,18 @@ export const DeferredImage = memo(function DeferredImage({
         }}
         title={failed ? "重新加载图片" : "点击加载图片"}
       >
-        {failed ? <RotateCcw aria-hidden="true" /> : <ImageIcon aria-hidden="true" />}
-        <span>{failed ? "重新加载图片" : requested ? "正在加载图片" : "点击加载图片"}</span>
+        {failed ? (
+          <RotateCcw aria-hidden="true" />
+        ) : (
+          <ImageIcon aria-hidden="true" />
+        )}
+        <span>
+          {failed
+            ? "重新加载图片"
+            : requested
+              ? "正在加载图片"
+              : "点击加载图片"}
+        </span>
       </button>
     );
   return (
@@ -105,8 +115,28 @@ const MARKDOWN_BASE_COMPONENTS = {
   img: ({ src, alt }: { src?: string; alt?: string }) => (
     <DeferredImage src={src} alt={alt} />
   ),
-  h1: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
-  h2: ({ children }: { children?: React.ReactNode }) => <h3>{children}</h3>,
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div
+      className="message-table-scroll"
+      role="region"
+      aria-label="消息表格"
+      tabIndex={0}
+    >
+      <table>{children}</table>
+    </div>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => {
+    const text = Array.isArray(children)
+      ? children.join("")
+      : String(children ?? "");
+    const numeric =
+      /^\s*[~≈]?\s*[-+]?[\d,.]+(?:\s*(?:[KMGT]?B|ms|s|%|倍))?\s*$/i.test(text);
+    return (
+      <td className={numeric ? "message-table-number" : undefined}>
+        {children}
+      </td>
+    );
+  },
 };
 
 function FileImage({ src, alt }: { src?: string; alt?: string }) {

@@ -43,13 +43,15 @@ header（标题，固定）
 
 | 组件      | 用途                                                                         |
 | --------- | ---------------------------------------------------------------------------- |
-| `Section` | 一块内容：标题 + 可选描述 + 右上角 `actions`                                 |
+| `Section` | 一块内容：标题 + 可选描述 + 右上角 `actions`；`scope="device"` 加「本设备」badge |
 | `Group`   | 一组设置项的圆角卡片，`pad` 时内部留表单边距                                 |
-| `Row`     | 一行设置项：状态点/首字母块 + 标题 + badges + desc + side                    |
-| `Field`   | 表单字段：label + 控件 + hint                                                |
+| `Row`     | 一行设置项：状态点/首字母块 + 标题 + badges + desc + side；`onOpen` 变下一级入口行 |
+| `Field`   | 表单字段：label + 控件 + hint；控件是一组按钮（Choice 等）时加 `group`        |
 | `Button`  | `variant` default/primary/danger/ghost，`size` sm/md，<br>`iconOnly`、`busy` |
 | `Switch`  | 开关，`label` 必填（读屏名称）                                               |
 | `Seg`     | 分段控件/标签页，支持方向键 + roving tabindex                                |
+| `Choice`  | 单选分段控件（role=radiogroup）：改一个值，与 Seg 同外观不同语义             |
+| `Kbd`     | 键帽，快捷键说明里的单个键                                                   |
 | `Badge`   | 状态小标，`tone` neutral/ok/info/warn/danger/accent                          |
 | `Dot`     | 状态点，语义同监控台：ok/busy/warn/error/off                                 |
 | `Note`    | 提示条：icon + 标题 + 正文 + 可选 action                                     |
@@ -60,7 +62,24 @@ header（标题，固定）
 - 错误详情只显示第一行，完整内容放 `title` 悬停。
 - 进行中状态用 `busy`（按钮禁用 + 光标进度态），不手写 spinner 结构；
   图标旋转加 `.ui-spin`。
-- `Row` 的 `dim` 表示已停用/弱化；`stack` 让窄屏时右侧控件折行。
+- `Row` 的 `dim` 表示已停用/弱化；`stack` 让窄屏时右侧控件折行；
+  `onOpen` 把标题区变成按钮并在行尾加箭头（进二级页用）。
+- `Section` 的 `scope="device"` 标「本设备」：值存在浏览器里，换设备不跟随；
+  只标例外，服务端设置不用标。
+- 字段标签中文（沙箱/审批/推理强度/权限模式），选项值（on-request、
+  Workspace Write 等枚举 label）保持英文与后端一致。
+
+## 设置弹窗外壳 `.settings-modal`
+
+`ui-panel` + `settings-modal`：桌面左侧固定导航（`--settings-nav-w`），
+供应商等不常用项放导航底部 `is-minor`；≤640px 改成两档——先是分类列表
+（`.settings-index`），点进去是页面，标题栏左侧出现返回
+（`Modal` 的 `leading`）。二级页用 `useOverlayHistory` 各占一格历史：
+系统返回 / Esc 先退回上一级。
+
+各页表单经 `DirtyContext`（`useDirtyFlag("页面:表单", dirty)`）向外壳
+汇报未保存修改：导航项点圆点，关闭前弹确认（`onClose` 返回 `false`
+即拒绝关闭，外壳重新压回弹层占位）。
 
 ## 交互行为：借无头库，不借外观
 

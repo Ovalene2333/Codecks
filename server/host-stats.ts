@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import os from "node:os";
-import type { HostStats } from "./types.js";
+import type { AgentId, HostStats } from "./types.js";
 
 interface CpuTimes {
   idle: number;
@@ -54,7 +55,41 @@ export function availableMemory(
   return os.freemem();
 }
 
-export function hostStats(sampler: CpuSampler, clients: number): HostStats {
+/**
+ * 单个进程的常驻内存（字节）。Linux 读 /proc/<pid>/status；其余 unix 走
+ * `ps`；Windows 没有廉价途径，返回 undefined（前端不显示这一行）。
+ */
+export function processRssBytes(pid: number): number | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  if (process.platform === "linux") {
+    try {
+      const match = readFileSync(`/proc/${pid}/status`, "utf8").match(
+        /^VmRSS:\s+(\d+)\s+kB/m,
+      );
+      if (match) return Number(match[1]) * 1024;
+    } catch {
+      // 进程刚退出或 /proc 不可读。
+    }
+    return undefined;
+  }
+  if (process.platform === "win32") return undefined;
+  try {
+    const out = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
+      encoding: "utf8",
+    });
+    const kb = Number(String(out.stdout || "").trim());
+    if (Number.isFinite(kb) && kb > 0) return kb * 1024;
+  } catch {
+    // ps 不可用或进程已退出。
+  }
+  return undefined;
+}
+
+export function hostStats(
+  sampler: CpuSampler,
+  clients: number,
+  servers: { agentId: AgentId; pid: number }[] = [],
+): HostStats {
   const memory = process.memoryUsage();
   return {
     platform: process.platform,
@@ -73,5 +108,10 @@ export function hostStats(sampler: CpuSampler, clients: number): HostStats {
       node: process.version,
       clients,
     },
+    servers: servers.map((entry) => ({
+      agentId: entry.agentId,
+      pid: entry.pid,
+      rss: processRssBytes(entry.pid),
+    })),
   };
 }

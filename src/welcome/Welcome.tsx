@@ -71,7 +71,7 @@ export function Welcome({
           )}
           {!loading && !recent.length && (
             <p className="muted recent-empty">
-              还没有最近项目，先选一个目录开始。
+              暂无最近项目，请选择一个目录开始。
             </p>
           )}
           <button type="button" className="recent-create" onClick={onNew}>

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
+import { SwrCache, useSwr } from "../swr-cache";
 import { threadPath } from "../agents";
 import {
   approvalMode,
@@ -404,31 +405,21 @@ function CommandListState({ loading, error, empty, children }: any) {
   );
 }
 
+/**
+ * skills / mcp / 文件搜索结果：只留内存、30 秒内复用、最多 24 条。
+ * 重开同一个面板直接出上次的列表，过期才后台刷新。
+ */
+const commandDataCache = new SwrCache<unknown>({
+  ttlMs: 30_000,
+  maxEntries: 24,
+});
+
 function useCommandData<T>(url: string, delay = 0) {
-  const [state, setState] = useState<{
-    data?: T;
-    loading: boolean;
-    error: string;
-  }>({ loading: true, error: "" });
-  useEffect(() => {
-    let cancelled = false;
-    setState((current) => ({ ...current, loading: true, error: "" }));
-    const timer = window.setTimeout(() => {
-      api<T>(url)
-        .then((data) => {
-          if (!cancelled) setState({ data, loading: false, error: "" });
-        })
-        .catch((error) => {
-          if (!cancelled)
-            setState({ loading: false, error: error?.message || "读取失败" });
-        });
-    }, delay);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [delay, url]);
-  return state;
+  // 带防抖的是搜索：边输边查时先留着上一次的结果，不闪空列表。
+  return useSwr(commandDataCache, url, () => api<unknown>(url), {
+    delayMs: delay,
+    keepPrevious: delay > 0,
+  }) as { data?: T; loading: boolean; error: string };
 }
 
 function mentionPath(root: string, value: string) {

@@ -77,6 +77,11 @@ export interface DeckPreferences extends ConnectionOverlay {
   lastApprovalPolicy?: ApprovalPolicy;
   lastApprovalsReviewer?: ApprovalsReviewer;
   lastPermissionMode?: ClaudePermissionMode;
+  /**
+   * true：last* 是用户固定的默认值，新建会话不再回写 last*，也不再自动
+   * 给项目记默认值。缺省/false：沿用上次（旧行为）。
+   */
+  pinDefaults?: boolean;
   recentDirs: string[];
 }
 
@@ -285,6 +290,10 @@ export interface ActivityItem {
   activity?: string;
   query?: string;
   path?: string;
+  /** Codex 多代理：subAgentActivity 的 kind 与 agentPath、collab 的 prompt。 */
+  kind?: string;
+  agentPath?: string;
+  prompt?: string;
   input?: Record<string, string>;
   commandActions?: {
     type: string;
@@ -308,7 +317,70 @@ export interface ThreadActivity {
   /** 当前进行中的步骤；缺省表示在等模型响应。 */
   step?: { item: ActivityItem; startedAt: number };
   /** 上一轮的起止与结果，空闲会话据此显示上次耗时。 */
-  lastTurn?: { startedAt: number; endedAt: number; status: string };
+  lastTurn?: {
+    startedAt: number;
+    endedAt: number;
+    status: string;
+    /** 这一轮最后一条回复的开头（约 240 字），首页“新回复”据此预览；仅内存。 */
+    reply?: string;
+  };
+}
+
+/** 本机正在运行的 deck-wake watcher（只读发现，Deck 不托管其生命周期）。 */
+export interface WakeWatcher {
+  pid: number;
+  code: string;
+  mode: "watch" | "poll";
+  label: string;
+  /** 被执行的命令（watch：阻塞到任务结束；poll：打印任务状态）。 */
+  command: string;
+  intervalSec?: number;
+  startedAt: number;
+  /** poll：日志里最近一次状态（如 RUNNING）及其时间。 */
+  state?: string;
+  stateAt?: number;
+  /** poll：正处于连续连接失败（满 10 次 watcher 报错退出）。 */
+  failures?: number;
+  log?: string;
+  /** 代号当前绑定的会话；代号已被关闭时为空。 */
+  agentId?: AgentId;
+  threadId?: string;
+}
+
+/**
+ * 失联的 watcher：进程已经不在，日志里却没有「已唤醒」或「已停止」——
+ * 被 kill、机器重启、OOM 等。远端任务可能仍在跑，但不会再有人叫醒会话，
+ * 需要人在首页处理（通知会话或忽略）。持久化在 wake-watchers.json。
+ */
+export interface LostWakeWatcher extends WakeWatcher {
+  id: string;
+  /** Deck 发现它消失的时间。 */
+  endedAt: number;
+  reason: string;
+  /** 日志最后一行（便于判断死在哪一步）。 */
+  lastLine?: string;
+}
+
+/**
+ * 唤醒投递条目（服务端持久化在 wake-outbox.json，经 snapshot 下发）。
+ * pending 仍在重试；delivered 已送达（去重窗口内保留）；dead 投递无望、
+ * 等人在首页处理（重试或移除）。preview 是 prompt 详情的截断摘要。
+ */
+export interface WakeDelivery {
+  id: string;
+  code: string;
+  status: "pending" | "delivered" | "dead";
+  /** 入队时的目标快照；代号之后解绑也不影响展示定位。 */
+  agentId: AgentId;
+  threadId: string;
+  /** 本轮投递已失败次数。 */
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  nextAttemptAt?: number;
+  deliveredAt?: number;
+  lastError?: string;
+  preview: string;
 }
 
 export interface ActivityUpdate {
@@ -337,6 +409,8 @@ export interface HostStats {
     node: string;
     clients: number;
   };
+  /** 各已启用 agent 的后端进程（codex app-server、opencode、ACP agent 等）。 */
+  servers?: { agentId: AgentId; pid: number; rss?: number }[];
 }
 
 export interface RuntimeStatus {
@@ -348,6 +422,8 @@ export interface RuntimeStatus {
   account?: AccountInfo;
   rateLimits?: RateLimits | null;
   rateLimitsError?: string;
+  /** 官方帐号每天消耗的 token（`YYYY-MM-DD` -> tokens），用于按窗口额度反推月度额度。 */
+  accountUsageDaily?: Record<string, number>;
   archiveError?: string;
   runtimeWsl?: boolean;
   modelConfig?: RuntimeModelConfig;

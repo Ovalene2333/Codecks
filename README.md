@@ -28,6 +28,7 @@
     - 支持本机 Claude 登录态与 CC Switch 多配置档
   - [OpenCode 后端适配（实验性）](#opencode-后端适配)
   - [ACP 通用适配（实验性）](#acp-通用适配)
+  - [Agent 专属内容展示](#agent-专属内容展示)
 - **部署与日常使用**
   - [远程访问](#远程访问)
     - [访问实例](#实例)
@@ -114,7 +115,7 @@ Codecks 不依赖 CC Switch 或中转服务，有 OpenAI Official 登录就能�
 
 右边是两块面板：
 
-- **用量与额度**：累计 token、按模型单价折算的费用、Official 账号额度，以及上下文快满的会话
+- **用量与额度**：累计 token、按模型单价折算的费用、Codex 额度（Official 账号，只显示最容易触顶的两个窗口，通常就是 5h 和 7d），以及上下文快满的会话
 - **运行健康**：各 Agent 的状态（没装或被停用的折叠在一行里）、供应商报错、本机 CPU 和内存、Deck 自己和各 Agent 后端进程的内存占用
 
 「调整布局」可以拖动面板顺序，主栏和右栏各排各的，只保存在当前设备上。一个会话都没有时显示欢迎页。
@@ -152,7 +153,7 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 ### 对话和时间线
 
 - 消息发出去马上就显示。没发的文字和图片草稿按会话分开存，切换会话不会串
-- 任务运行中（包括等审批）发的新消息，会像 Codex CLI 一样 steer 当前 Turn；空闲时才开新 Turn
+- 任务运行中发的新消息默认「追加」排队，等当前任务完成后处理；已发出的待发送气泡上可以改成「即时反馈」立即介入（各后端按能力实现为 steer 或先打断再发），空闲时都开新 Turn。持久队列重启不丢，各后端行为见 [消息输送文档](docs/message-transport.md)
 - 历史里的用户消息可以带回输入框修改，也可以从那条消息之前开分支重试
 - 输入框支持 Codex 的常用指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，还有 `!command` 无沙箱执行。完整语法和后续计划见 [Slash 指令文档](docs/slash-commands.md)
 - 助手回复里的 Markdown 图片，以及 Codex 或兼容 Agent 生成的图片，先显示成「点击加载」，点了才请求，并且懒加载。用手机流量时能省不少
@@ -163,7 +164,7 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 ### 任务与用量
 
 - 侧栏的「任务」汇总所有受管的 Codex / Claude 会话：活动中的 Turn、在跑的命令、待确认状态，可以跳到来源，也能停掉整个任务。较新的 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，可以单独停；旧 Runtime 自动退化成 Turn 级中断
-- 用量面板汇总各会话累计的 token，可以按项目或会话看未缓存输入、缓存输入和输出；Official 账号额度单独一个页签。运行时用量缓存在 `.data/codex-usage.json`，重启 Server 后还在；「修复」历史索引时也会从 rollout 里回填缺的记录
+- 用量面板汇总各会话累计的 token，可以按项目或会话看未缓存输入、缓存输入和输出；Codex 额度（Official 账号）单独一个页签。运行时用量缓存在 `.data/codex-usage.json`，重启 Server 后还在；「修复」历史索引时也会从 rollout 里回填缺的记录
 - 项目设置可以覆盖该目录默认供应商的请求重试、流重试和流空闲超时。这些会写进共享 Runtime：有会话在跑就先记着，空闲后再生效
 - 「设置 → Agent → Codex → 上下文」可以分别设 `model_context_window` 和 `model_auto_compact_token_limit`，留空就用模型或 Runtime 的默认值。设置存在 `.data/runtime-config.json`，不会改 `~/.codex/config.toml`。保存会重启共享的 Codex Runtime，有任务在跑或在等审批时会拒绝保存
 - Codex Runtime 进程被外部结束（比如在后台按了 Ctrl+C）时，在跑或在等审批的会话会标成「运行时中断」并解除占用，可以继续分支、重试或改配置。刷新页面不会把它们又当成「正在运行」
@@ -185,7 +186,7 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 
 | 页面 | 里面有什么 |
 | --- | --- |
-| 界面 | 主题（跟随系统 / 浅色 / 深色）、动画、界面效果、会话正文字号，只存在当前浏览器 |
+| 界面 | 主题（跟随系统 / 浅色 / 深色）、动画、界面效果、消息排版与模板，只存在当前设备 |
 | 会话 | 发送键（Enter 发送，或 Ctrl/⌘+Enter 发送）、系统提醒、新会话的默认值 |
 | Agent | 启用、停用、重载每个 Agent，不用重启 Deck；Codex 和 OpenCode 有各自的详情页 |
 | 工具 | 工具菜单显示哪些、桌面端怎么打开 |

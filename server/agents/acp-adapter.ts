@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 import type {
@@ -113,8 +114,14 @@ interface AcpSessionState {
   live: boolean;
   /** 正在进行的 turnId（用于把 session/update 路由到正确 turn）。 */
   turnId?: string;
-  /** toolCallId → 已归一化的 deck item。 */
-  tools: Map<string, any>;
+  /**
+   * toolCallId → 原始 ACP toolCall，tool_call_update 增量合并与
+   * request_permission 补 kind/title/rawInput 都以此为底。终态后只留
+   * 骨架字段（slimToolCall）——rawInput/content 里是整份文件内容。
+   * 原始载荷不再挂到 item.__raw：那会随 agent.event 广播和 readThread
+   * 响应被全量序列化给客户端，常驻内存和带宽两头浪费。
+   */
+  rawTools: Map<string, AcpToolCall>;
   commands: AcpAvailableCommand[];
   modes?: AcpSessionModeState;
   /** session/new|resume|load 响应里的模型目录（claude-code-acp 走这个字段）。 */
@@ -122,6 +129,13 @@ interface AcpSessionState {
   configOptions: AcpSessionConfigOption[];
   /** 本地收集的 turn 历史（live 累积或 load 回放结果）。 */
   turns: any[];
+  /**
+   * 本进程内已回放过该会话的历史（session/load 成功，或 session/new 的
+   * 全新会话天然无历史可回放）。live 会话靠 session/update 流保持新鲜，
+   * 不需要每次读取都整段重放——agent 端每次 load 都会新建一整套会话
+   * 状态（devin 的 create_acp_agent），重复回放是纯开销。
+   */
+  historyLoaded?: boolean;
   /** session/load 回放在此累积，与实时 turn 分流。 */
   replay?: { turns: any[]; current?: any };
   /** 每个 messageId 的流式文本累积。 */
@@ -134,6 +148,7 @@ interface AcpSessionState {
   loading?: Promise<any[]>;
   /** running 期间收到的待发消息；turn 结束后按序 drain。 */
   pendingSends: { turnId: string; text: string; images?: TurnImage[] }[];
+  queueHolds?: number;
 }
 
 /**
@@ -179,6 +194,17 @@ function textOfContent(block: AcpContentBlock | undefined): string {
   return `[${block.type || "content"}]`;
 }
 
+/** 用户图片保留为图片部分，不能在回放时拼成正文里的 "[image]"。 */
+function userContentPart(block: AcpContentBlock | undefined): Record<string, any> | undefined {
+  if (block?.type === "image") {
+    const url = block.data && block.mimeType?.startsWith("image/")
+      ? `data:${block.mimeType};base64,${block.data}` : block.uri;
+    return url ? { type: "image", url, name: block.name } : undefined;
+  }
+  const text = textOfContent(block);
+  return text ? { type: "text", text } : undefined;
+}
+
 function toolOutputText(call: AcpToolCall): string {
   const parts: string[] = [];
   for (const entry of call.content || []) {
@@ -196,7 +222,7 @@ function toolOutputText(call: AcpToolCall): string {
       /* ignore */
     }
   }
-  return parts.join("\n\n").trim();
+  return tailLimited(parts.join("\n\n").trim(), TOOL_OUTPUT_TAIL_LIMIT);
 }
 
 function shellCommandOf(call: AcpToolCall): string {
@@ -249,6 +275,62 @@ function itemStatus(status: string | undefined) {
   if (status === "completed") return "completed";
   if (status === "failed") return "failed";
   return "inProgress";
+}
+
+/**
+ * turn item 常驻内存的体积控制。回放的历史会话与累积的 live 会话都不
+ * 淘汰（session.turns 随进程生命周期保留），单个 item 必须把大块载荷
+ * 截在内存外，否则长跑进程会按会话活动量单调上涨。
+ */
+const TOOL_OUTPUT_TAIL_LIMIT = 512 * 1024;
+const RAW_ARG_STRING_LIMIT = 32 * 1024;
+
+function tailLimited(text: string, limit: number) {
+  if (text.length <= limit) return text;
+  return `…(省略前 ${text.length - limit} 字符)\n${text.slice(-limit)}`;
+}
+
+/**
+ * 终态 toolCall 只留增量合并要用的骨架字段：content（old/newText）、
+ * rawInput（整份文件参数）、locations 这些大载荷在终态后不再被读取。
+ * 进行中的调用要留全量——权限请求和后续 update 都靠它补齐字段。
+ */
+function slimToolCall(call: AcpToolCall): AcpToolCall {
+  return {
+    toolCallId: call.toolCallId,
+    kind: call.kind,
+    title: call.title,
+    status: call.status,
+  } as AcpToolCall;
+}
+
+/**
+ * rawInput 直接挂到 item 上前逐字段截断长字符串（write/edit 类工具的
+ * 参数是整份文件内容）。只有真有字段被截断才拷贝，小对象原样透传。
+ */
+function capDeepStrings(value: any): any {
+  if (typeof value === "string")
+    return tailLimited(value, RAW_ARG_STRING_LIMIT);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const capped = capDeepStrings(entry);
+      changed ||= capped !== entry;
+      return capped;
+    });
+    return changed ? next : value;
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const capped = capDeepStrings(entry);
+      changed ||= capped !== entry;
+      next[key] = capped;
+    }
+    return changed ? next : value;
+  }
+  return value;
 }
 
 /**
@@ -336,6 +418,7 @@ export class AcpAdapter extends EventEmitter {
   private get capabilities(): AgentCapabilities {
     const caps = this.client.agentCapabilities;
     return {
+      messages: { busyBehavior: "queue", interruptScope: "session", queueDurability: "memory" },
       approvals: true,
       archive: true,
       delete: Boolean(caps.sessionCapabilities?.delete),
@@ -439,6 +522,11 @@ export class AcpAdapter extends EventEmitter {
     );
   }
 
+  runtimePids() {
+    const pid = this.client.pid;
+    return typeof pid === "number" ? [pid] : [];
+  }
+
   restart() {
     // 先把挂起的 permission 请求应答 cancelled，再停进程。
     for (const approval of this.approvals.values()) {
@@ -452,7 +540,10 @@ export class AcpAdapter extends EventEmitter {
     void stopping.finally(() => {
       if (this.stopTask === stopping) this.stopTask = undefined;
     });
-    for (const session of this.sessions.values()) session.live = false;
+    for (const session of this.sessions.values()) {
+      session.live = false;
+      session.historyLoaded = false;
+    }
     for (const thread of this.threads.values())
       if (thread.status === "running" || thread.status === "waiting") {
         thread.status = "offline";
@@ -464,7 +555,10 @@ export class AcpAdapter extends EventEmitter {
   private onOffline(message: string) {
     this.online = false;
     this.error = message;
-    for (const session of this.sessions.values()) session.live = false;
+    for (const session of this.sessions.values()) {
+      session.live = false;
+      session.historyLoaded = false;
+    }
     for (const approval of this.approvals.values()) {
       this.broadcast("approval.resolved", {
         agentId: this.id,
@@ -490,7 +584,7 @@ export class AcpAdapter extends EventEmitter {
       session = {
         id: threadId,
         live: false,
-        tools: new Map(),
+        rawTools: new Map(),
         commands: [],
         configOptions: [],
         turns: [],
@@ -578,6 +672,7 @@ export class AcpAdapter extends EventEmitter {
         session.turns = replay.turns;
         this.applySessionInfo(thread, session, result);
         session.live = true;
+        session.historyLoaded = true;
         if (thread.locked) {
           thread.locked = undefined;
           this.broadcast("thread.updated", thread);
@@ -666,6 +761,7 @@ export class AcpAdapter extends EventEmitter {
     if (!sessionId) throw new Error(`${this.spec.name} 没有返回 sessionId`);
     const session = this.sessionFor(sessionId);
     session.live = true;
+    session.historyLoaded = true;
     const thread: ThreadSummary = {
       agentId: this.id,
       id: sessionId,
@@ -744,8 +840,13 @@ export class AcpAdapter extends EventEmitter {
     const thread = this.mustThread(threadId);
     const session = this.sessionFor(threadId);
     const busy = thread.status === "running" || thread.status === "waiting";
+    // live 会话由 session/update 流持续喂新，无需每次读取都整段重放；
+    // agent 端每次 session/load 都会新建一份会话状态，重复调用是内存放大器。
+    const needsReplay =
+      !session.live || (!session.turns.length && !session.historyLoaded);
     if (
       !busy &&
+      needsReplay &&
       this.client.online &&
       this.client.agentCapabilities.loadSession
     ) {
@@ -947,11 +1048,20 @@ export class AcpAdapter extends EventEmitter {
 
   // ------------------------------------------------------------------- turn
 
+  async sendMessage(providerId: string, threadId: string, input: AgentMessageInput): Promise<AgentMessageAcceptance> {
+    assertMessageInput(this.mustThread(threadId), input, this.capabilities.messages!);
+    const result = await this.sendTurn(providerId, threadId, input.text, input.images, input);
+    return result.turn.status === "queued"
+      ? { disposition: "queued", turnId: result.turn.id, queueDurability: "memory" }
+      : { disposition: "started", turnId: result.turn.id };
+  }
+
   async sendTurn(
     _providerId: string,
     threadId: string,
     text: string,
     images?: TurnImage[],
+    message?: AgentMessageInput,
   ) {
     const thread = this.mustThread(threadId);
     if (thread.archived) throw new Error("会话已归档，请先恢复再发送");
@@ -966,6 +1076,14 @@ export class AcpAdapter extends EventEmitter {
     }
     await this.ensureClient();
     await this.ensureLive(thread);
+    if (message) {
+      assertMessageInput(thread, message, this.capabilities.messages!);
+      if (messageBusy(thread)) {
+        const turnId = randomUUID();
+        session.pendingSends.push({ turnId, text, images });
+        return { turn: { id: turnId, status: "queued" } };
+      }
+    }
     const turnId = randomUUID();
     return this.beginTurn(thread, turnId, text, images);
   }
@@ -978,7 +1096,7 @@ export class AcpAdapter extends EventEmitter {
   ) {
     const session = this.sessionFor(thread.id);
     session.turnId = turnId;
-    session.tools.clear();
+    session.rawTools.clear();
     session.messageText.clear();
     session.thoughtText = "";
     session.thoughtItemId = undefined;
@@ -996,7 +1114,9 @@ export class AcpAdapter extends EventEmitter {
         {
           id: `acp-user-${turnId}`,
           type: "userMessage",
-          content: [{ type: "text", text }],
+          content: [{ type: "text", text }, ...(images || []).map((image) => ({
+            type: "image", url: image.url, name: image.name,
+          }))],
         },
       ],
     };
@@ -1111,6 +1231,7 @@ export class AcpAdapter extends EventEmitter {
 
   /** turn 结束（完成/失败/取消）后发队列里的下一条，按 FIFO 逐条 drain。 */
   private drainPendingSends(thread: ThreadSummary, session: AcpSessionState) {
+    if (!this.online || !session.live || session.queueHolds || session.turnId || messageBusy(thread)) return;
     if (!this.threads.has(thread.id)) {
       session.pendingSends.length = 0;
       return;
@@ -1119,8 +1240,27 @@ export class AcpAdapter extends EventEmitter {
     if (!next) return;
     // 微任务延迟：让 turn/completed 与 thread.updated 先到达前端。
     void Promise.resolve().then(() =>
-      this.beginTurn(thread, next.turnId, next.text, next.images),
+      !this.online || !session.live || session.queueHolds || session.turnId || messageBusy(thread)
+        ? session.pendingSends.unshift(next)
+        : this.beginTurn(thread, next.turnId, next.text, next.images),
     );
+  }
+
+  messageReady(threadId: string) {
+    return !this.sessions.get(threadId)?.turnId;
+  }
+
+  holdMessageQueue(threadId: string) {
+    const session = this.sessionFor(threadId);
+    session.queueHolds = (session.queueHolds ?? 0) + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      session.queueHolds = Math.max(0, (session.queueHolds ?? 1) - 1);
+      const thread = this.threads.get(threadId);
+      if (thread) this.drainPendingSends(thread, session);
+    };
   }
 
   private completeTurn(thread: ThreadSummary, turnId: string, status: string) {
@@ -1202,11 +1342,8 @@ export class AcpAdapter extends EventEmitter {
     // 命令文本、kind 也分不出来。
     const known = this.sessions
       .get(sessionId)
-      ?.tools.get(String(raw.toolCallId || ""));
-    const toolCall = {
-      ...((known?.__raw || {}) as AcpToolCall),
-      ...raw,
-    } as AcpToolCall;
+      ?.rawTools.get(String(raw.toolCallId || ""));
+    const toolCall = { ...(known || {}), ...raw } as AcpToolCall;
     const options = Array.isArray(params.options) ? params.options : [];
     const id = `${sessionId}:${randomUUID()}`;
     const approval: PendingPermission = {
@@ -1585,14 +1722,19 @@ export class AcpAdapter extends EventEmitter {
         const call = update as unknown as AcpToolCall;
         const toolCallId = String(call.toolCallId || "");
         if (!toolCallId) return;
-        const previous = session.tools.get(toolCallId);
-        const merged = { ...(previous?.__raw || {}), ...call, toolCallId };
-        const item = this.normalizeToolCall(merged, previous);
-        item.__raw = merged;
-        session.tools.set(toolCallId, item);
-        upsertItem(item);
+        const merged = {
+          ...(session.rawTools.get(toolCallId) || {}),
+          ...call,
+          toolCallId,
+        };
+        const item = this.normalizeToolCall(merged);
         const terminal =
           item.status === "completed" || item.status === "failed";
+        session.rawTools.set(
+          toolCallId,
+          terminal ? slimToolCall(merged) : merged,
+        );
+        upsertItem(item);
         emitItem(terminal ? "item/completed" : "item/started", item);
         return;
       }
@@ -1663,8 +1805,8 @@ export class AcpAdapter extends EventEmitter {
     };
     switch (update.sessionUpdate) {
       case "user_message_chunk": {
-        const text = textOfContent(update.content);
-        if (!text) return;
+        const part = userContentPart(update.content);
+        if (!part) return;
         // 新的 user 消息开启新 turn：上一个 turn 已有非 user 内容时收尾。
         const lastItem = replay.current?.items.at(-1);
         if (replay.current && lastItem && lastItem.type !== "userMessage") {
@@ -1674,12 +1816,14 @@ export class AcpAdapter extends EventEmitter {
         const turn = ensureTurn();
         const last = turn.items.at(-1);
         if (last?.type === "userMessage") {
-          last.content[0].text += text;
+          const tail = last.content.at(-1);
+          if (part.type === "text" && tail?.type === "text") tail.text += part.text;
+          else last.content.push(part);
         } else {
           turn.items.push({
             id: `acp-user-${replay.turns.length}-${turn.items.length}`,
             type: "userMessage",
-            content: [{ type: "text", text }],
+            content: [part],
           });
         }
         return;
@@ -1719,13 +1863,20 @@ export class AcpAdapter extends EventEmitter {
         const index = turn.items.findIndex(
           (entry: any) => String(entry?.id) === `acp-tool-${toolCallId}`,
         );
-        const previous = index >= 0 ? turn.items[index] : undefined;
-        const merged = { ...(previous?.__raw || {}), ...call, toolCallId };
-        const item = this.normalizeToolCall(merged, previous);
-        item.__raw = merged;
-        // 回放也登记 tools：resume/load 后 request_permission 才能用
-        // toolCallId 找回完整 kind/title/rawInput。
-        session.tools.set(toolCallId, item);
+        const merged = {
+          ...(session.rawTools.get(toolCallId) || {}),
+          ...call,
+          toolCallId,
+        };
+        const item = this.normalizeToolCall(merged);
+        // 回放也登记 rawTools：resume/load 后 request_permission 才能用
+        // toolCallId 找回完整 kind/title/rawInput。终态只留合并骨架。
+        session.rawTools.set(
+          toolCallId,
+          item.status === "completed" || item.status === "failed"
+            ? slimToolCall(merged)
+            : merged,
+        );
         if (index >= 0) turn.items[index] = item;
         else turn.items.push(item);
         return;
@@ -1765,7 +1916,7 @@ export class AcpAdapter extends EventEmitter {
   }
 
   /** ACP toolCall → Codex 形状的 turn item。 */
-  private normalizeToolCall(call: AcpToolCall, previous?: any): any {
+  private normalizeToolCall(call: AcpToolCall): any {
     const id = `acp-tool-${call.toolCallId}`;
     const status = itemStatus(call.status);
     const kind = String(call.kind || "other");
@@ -1779,7 +1930,9 @@ export class AcpAdapter extends EventEmitter {
         command: shellCommandOf(call) || title,
         status,
         aggregatedOutput: output,
-        ...(call.rawInput != null ? { input: call.rawInput } : {}),
+        ...(call.rawInput != null
+          ? { input: capDeepStrings(call.rawInput) }
+          : {}),
         tool: "bash",
       };
     }
@@ -1813,7 +1966,7 @@ export class AcpAdapter extends EventEmitter {
         command: title,
         status,
         aggregatedOutput: output,
-        input: call.rawInput,
+        input: capDeepStrings(call.rawInput),
         commandActions:
           kind === "read"
             ? locations.map((location) => ({
@@ -1837,7 +1990,7 @@ export class AcpAdapter extends EventEmitter {
       type: "dynamicToolCall",
       tool: title,
       status,
-      arguments: call.rawInput,
+      arguments: capDeepStrings(call.rawInput),
       output: output || undefined,
       locations: call.locations,
       ...(status === "failed" && output

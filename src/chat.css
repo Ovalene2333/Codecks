@@ -633,6 +633,48 @@
 .timeline .file-diff-card:hover {
   background: var(--surface-muted);
 }
+/* 独立图片项与工具行同一语言：左竖条、透明底、暗色小字；
+   加载占位按钮不再画成带边框的卡片。 */
+.timeline .image-message {
+  margin: 2px 0;
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.timeline .image-message:hover {
+  background: var(--surface-muted);
+}
+.timeline .image-message .message-images {
+  margin: 0;
+  padding: 2px 0 2px 8px;
+}
+.timeline .image-message .deferred-image {
+  gap: 8px;
+  min-height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.timeline .image-message .deferred-image svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+}
+.timeline .image-message .deferred-image:hover,
+.timeline .image-message .deferred-image:focus-visible {
+  color: var(--text);
+}
+.timeline .image-message .deferred-image:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+.timeline .image-message .markdown-image {
+  margin: 4px 0 6px;
+}
 .tool-row.reasoning {
   border-color: var(--line-strong);
   background: transparent;
@@ -778,6 +820,32 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* Codex 多代理 tick：与子代理卡片同一语言，interrupted 用警示色竖条；
+   成串出现时收进 .subagent-ticks 分组，展开逐条列出。 */
+.subagent-row.interrupted,
+.subagent-ticks.interrupted {
+  border-left-color: var(--wait);
+}
+.timeline .subagent-ticks > ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 6px 10px 8px 30px;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+.subagent-ticks li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.subagent-ticks li code {
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .tool-status {
   flex: none;
   color: var(--text-dim);
@@ -911,22 +979,18 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.unknown-item {
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-md);
-  margin: 10px 0;
+/* 未识别条目与工具行同一语言（左竖条+单行+展开 JSON），虚线竖条保留
+   「这是兜底渲染」的暗示，文字再压暗一档。 */
+.timeline .unknown-item {
+  border-left-style: dashed;
+  border-left-color: var(--line);
+}
+.unknown-item .tool-action,
+.unknown-item .tool-command {
+  color: var(--text-faint);
+}
+.timeline .unknown-item > pre {
   color: var(--text-dim);
-  font-size: var(--fs-meta);
-}
-.unknown-item summary {
-  padding: 8px 10px;
-  cursor: pointer;
-}
-.unknown-item pre {
-  margin: 0;
-  padding: 10px;
-  overflow: auto;
-  white-space: pre-wrap;
 }
 .fork-from-turn {
   display: inline-flex;
@@ -1062,6 +1126,112 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.composer-summary-actions {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+.session-message-queue {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  font-size: var(--fs-meta);
+}
+.session-message-queue-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: var(--space-2);
+  vertical-align: middle;
+  white-space: normal;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.session-message-queue-item .message.user {
+  overflow-wrap: anywhere;
+}
+.session-message-queue-controls > span {
+  white-space: nowrap;
+}
+.session-message-queue-images {
+  color: var(--text-dim);
+}
+.session-message-queue-images {
+  display: block;
+  font-size: var(--fs-meta);
+}
+.session-message-queue-error {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--danger);
+  font-size: var(--fs-meta);
+}
+.session-message-queue-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--space-6);
+  min-height: var(--space-6);
+  padding: var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.session-message-queue-controls button svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+.session-message-queue-controls button:hover:not(:disabled),
+.session-message-queue-controls button:focus-visible {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.session-message-queue-controls button:disabled {
+  opacity: .5;
+  cursor: wait;
+}
+@media (pointer: coarse) {
+  .session-message-queue-controls button {
+    min-width: var(--control-h-sm);
+    min-height: var(--control-h-sm);
+  }
+}
+.composer-send-help {
+  margin-bottom: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+.composer-send-help dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+.composer-send-help dl > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.composer-send-help dt {
+  color: var(--text);
+  font-weight: 600;
+}
+.composer-send-help dd {
+  margin: 0;
+}
+.composer-send-help p {
+  margin: var(--space-2) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--line);
 }
 .composer-settings-trigger {
   display: inline-flex;
@@ -1861,7 +2031,8 @@
     max-width: 92px;
   }
   .chat-header .appearance-trigger,
-  .chat-header .overflow-menu {
+  .chat-header .overflow-menu,
+  .chat-header .wake-toggle {
     width: 40px;
     height: 40px;
     min-width: 40px;
@@ -1984,4 +2155,94 @@
     min-width: 58px;
     min-height: 44px;
   }
+}
+
+/* 消息排版变量由本设备设置应用；只作用于消息，不改变文件预览与工具输出。 */
+.message.agent,
+.message.agent .markdown,
+.message.user {
+  font-family: var(--message-font, var(--font-sans));
+  font-size: var(--message-size, 15px);
+  line-height: var(--message-line-height, 1.55);
+}
+.message.agent {
+  max-width: min(100%, var(--message-width, 100%));
+}
+.message.user {
+  font-size: calc(var(--message-size, 15px) * 0.97);
+}
+.message.agent .markdown p,
+.message.agent .markdown ul,
+.message.agent .markdown ol {
+  margin-bottom: var(--message-paragraph-gap, 0.45em);
+}
+.message.agent .markdown p:last-child {
+  margin-bottom: 0;
+}
+.message.agent .markdown li {
+  margin: var(--message-list-gap, 0.06em) 0;
+  line-height: inherit;
+}
+.message.agent .markdown li > p {
+  margin: 0;
+}
+.message.agent .markdown li > p + p {
+  margin-top: var(--message-paragraph-gap, 0.45em);
+}
+.message.agent .markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: var(--message-heading-gap, 0.95em) 0 0.35em;
+  font-size: calc(1em * var(--message-heading-scale, 1.08));
+  font-weight: 650;
+  line-height: 1.35;
+}
+.message.agent .markdown h1 {
+  font-size: calc(1.12em * var(--message-heading-scale, 1.08));
+}
+.message.agent .markdown h2 {
+  font-size: calc(1.06em * var(--message-heading-scale, 1.08));
+}
+.message.agent .markdown :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+.message.agent .markdown strong {
+  font-weight: var(--message-emphasis-weight, 700);
+}
+.message.agent .markdown :not(pre) > code {
+  font-size: var(--message-code-scale, 0.86em);
+  background: var(--message-code-bg, var(--surface-muted));
+  padding: var(--message-code-padding, 0.1em 0.25em);
+}
+.message.agent .markdown pre code {
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+}
+.message-table-scroll {
+  max-width: 100%;
+  margin-bottom: 0.9em;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.message-table-scroll:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.message.agent .markdown table {
+  margin-bottom: 0;
+  font-size: 0.93em;
+  min-width: 320px;
+}
+.message.agent .markdown :is(th, td) {
+  padding: var(--message-table-padding, 6px) calc(var(--message-table-padding, 6px) + 2px);
+  border-color: var(--message-table-border, var(--line));
+  border-bottom-color: var(--line);
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.message.agent .markdown th {
+  background: var(--message-table-header-bg, transparent);
+}
+.message-table-number {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
