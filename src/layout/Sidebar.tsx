@@ -4,8 +4,10 @@ import {
   BarChart3,
   BellRing,
   Bot,
+  FileText,
   Gauge,
   GitBranch,
+  House,
   Plus,
   RefreshCw,
   Search,
@@ -13,14 +15,17 @@ import {
   Terminal,
   Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import deckLogo from "../assets/logo.svg";
 import type { DeckNotificationPermission } from "../notifications";
+import { useDeckSettings } from "../deck-settings";
 import type { ProjectGroup } from "../projects";
 import type {
   Provider,
   RuntimeSnapshot,
   SessionSearchMatch,
+  SessionWakeState,
   ThreadSummary,
 } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
@@ -40,6 +45,7 @@ export function Sidebar({
   statusFilter,
   counts,
   projects,
+  wakeStates,
   selected,
   unseenSessions,
   expandedProjects,
@@ -59,6 +65,8 @@ export function Sidebar({
   onLibrary,
   onQuery,
   onStatusFilter,
+  homeActive,
+  onHome,
   onToggleProject,
   onSelect,
   onAddInProject,
@@ -86,6 +94,8 @@ export function Sidebar({
   statusFilter: "all" | "active" | "attention" | "unseen";
   counts: { running: number; waiting: number; errors: number; unseen: number };
   projects: ProjectGroup[];
+  /** 会话的 deck-wake 标记（键为 sessionKey）。 */
+  wakeStates?: ReadonlyMap<string, SessionWakeState>;
   selected?: string;
   unseenSessions: ReadonlySet<string>;
   expandedProjects: Set<string>;
@@ -105,6 +115,9 @@ export function Sidebar({
   onLibrary: (next: "active" | "archived") => void;
   onQuery: (value: string) => void;
   onStatusFilter: (value: "all" | "active" | "attention" | "unseen") => void;
+  /** 当前停在总览首页（没有打开会话）。 */
+  homeActive: boolean;
+  onHome: () => void;
   onToggleProject: (key: string) => void;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
@@ -122,17 +135,23 @@ export function Sidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const { hiddenTools } = useDeckSettings();
   const searching = Boolean(query.trim());
   const emptyKind = searching
     ? "search"
     : library === "archived"
       ? "archived"
       : "none";
-  const visibleSessions = library === "archived" ? archivedCount : sessionCount;
   const matchCount = projects.reduce(
     (sum, project) => sum + project.sessions.length,
     0,
   );
+  const activeCount = counts.running + counts.waiting;
+  const attentionCount = counts.waiting + counts.errors;
+  const showActivity =
+    (library === "active" &&
+      (activeCount > 0 || attentionCount > 0 || counts.unseen > 0)) ||
+    statusFilter !== "all";
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -158,7 +177,10 @@ export function Sidebar({
     if (!toolsOpen) return;
     const close = (event: PointerEvent | KeyboardEvent) => {
       if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") setToolsOpen(false);
+        if (event.key === "Escape") {
+          event.preventDefault();
+          setToolsOpen(false);
+        }
         return;
       }
       if (!toolsMenuRef.current?.contains(event.target as Node)) {
@@ -181,9 +203,7 @@ export function Sidebar({
         <img className="brand-logo" src={deckLogo} alt="" />
         <div>
           <b>Codex Deck</b>
-          <small>REMOTE WORKSPACE</small>
         </div>
-        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <button className="icon-btn" onClick={onClose}>
           <X />
         </button>
@@ -237,6 +257,16 @@ export function Sidebar({
         >
           <RefreshCw />
         </button>
+        <button
+          type="button"
+          className={`icon-btn monitor-entry ${homeActive ? "active" : ""}`}
+          onClick={onHome}
+          title="总览"
+          aria-label="回到总览"
+          aria-current={homeActive ? "page" : undefined}
+        >
+          <House />
+        </button>
       </div>
       <div className="sidebar-meta">
         <span>
@@ -246,47 +276,61 @@ export function Sidebar({
               ? `同步中 · ${projectCount} 项目`
               : searching
                 ? `${matchCount} 个匹配 · ${projects.length} 个项目${contentSearchPending ? " · 检索中" : contentSearchProgress?.building ? ` · 已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
-                : `${projectCount} 项目 · ${visibleSessions} 会话`}
+                : library === "archived"
+                  ? `${projects.length} 个归档项目`
+                  : `${projectCount} 个项目`}
         </span>
-        <div className="watch-strip">
-          <button
-            type="button"
-            className={statusFilter === "active" ? "active" : ""}
-            aria-pressed={statusFilter === "active"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "active" ? "all" : "active")
-            }
-          >
-            <span className="watch-dot running" />
-            运行
-            <b>{counts.running}</b>
-          </button>
-          <button
-            type="button"
-            className={statusFilter === "attention" ? "active" : ""}
-            aria-pressed={statusFilter === "attention"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "attention" ? "all" : "attention")
-            }
-          >
-            <span className="watch-dot waiting" />
-            待确认
-            <b>{counts.waiting}</b>
-            {counts.errors > 0 && <em>{counts.errors}</em>}
-          </button>
-          <button
-            type="button"
-            className={statusFilter === "unseen" ? "active" : ""}
-            aria-pressed={statusFilter === "unseen"}
-            onClick={() =>
-              onStatusFilter(statusFilter === "unseen" ? "all" : "unseen")
-            }
-          >
-            <span className="watch-dot unseen" />
-            新回复
-            <b>{counts.unseen}</b>
-          </button>
-        </div>
+        {showActivity && (
+          <div className="watch-strip" role="group" aria-label="会话状态筛选">
+            {(activeCount > 0 || statusFilter === "active") && (
+              <button
+                type="button"
+                className={statusFilter === "active" ? "active" : ""}
+                aria-pressed={statusFilter === "active"}
+                onClick={() =>
+                  onStatusFilter(statusFilter === "active" ? "all" : "active")
+                }
+              >
+                <span className="watch-dot running" />
+                进行中
+                <b>{activeCount}</b>
+              </button>
+            )}
+            {(attentionCount > 0 || statusFilter === "attention") && (
+              <button
+                type="button"
+                className={statusFilter === "attention" ? "active" : ""}
+                aria-pressed={statusFilter === "attention"}
+                title={`待确认 ${counts.waiting} · 异常 ${counts.errors}`}
+                onClick={() =>
+                  onStatusFilter(
+                    statusFilter === "attention" ? "all" : "attention",
+                  )
+                }
+              >
+                <span
+                  className={`watch-dot ${counts.errors > 0 && counts.waiting === 0 ? "error" : "waiting"}`}
+                />
+                需处理
+                <b>{attentionCount}</b>
+              </button>
+            )}
+            {(counts.unseen > 0 || statusFilter === "unseen") && (
+              <button
+                type="button"
+                className={statusFilter === "unseen" ? "active" : ""}
+                aria-pressed={statusFilter === "unseen"}
+                onClick={() =>
+                  onStatusFilter(statusFilter === "unseen" ? "all" : "unseen")
+                }
+              >
+                <span className="watch-dot unseen" />
+                新回复
+                <b>{counts.unseen}</b>
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {archiveError && library === "archived" && (
         <p className="error-banner archive-error">{archiveError}</p>
@@ -299,6 +343,7 @@ export function Sidebar({
             library={library}
             selected={selected}
             unseenSessions={unseenSessions}
+            wakeStates={wakeStates}
             collapsed={!searching && !expandedProjects.has(project.key)}
             forkCounts={forkCounts}
             searchQuery={query}
@@ -343,7 +388,7 @@ export function Sidebar({
                 ? "没有匹配的会话"
                 : emptyKind === "archived"
                   ? "归档箱是空的"
-                  : "还没有现有会话"}
+                  : "暂无会话"}
             </p>
             <small>
               {emptyKind === "search"
@@ -356,6 +401,7 @@ export function Sidebar({
         )}
       </div>
       <div className="sidebar-footer">
+        <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
         <div className="sidebar-footer-actions">
           <button
             type="button"
@@ -393,34 +439,70 @@ export function Sidebar({
                   <b>工具</b>
                   <small>工作区与账号</small>
                 </div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onTools();
-                  }}
-                >
-                  <Terminal />
-                  <span>
-                    <b>终端</b>
-                    <small>打开 Web Terminal</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onTools("/git");
-                  }}
-                >
-                  <GitBranch />
-                  <span>
-                    <b>Git 管理</b>
-                    <small>改动、提交与分支</small>
-                  </span>
-                </button>
+                {!hiddenTools.includes("terminal") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools();
+                    }}
+                  >
+                    <Terminal />
+                    <span>
+                      <b>终端</b>
+                      <small>打开 Web Terminal</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("git") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/git");
+                    }}
+                  >
+                    <GitBranch />
+                    <span>
+                      <b>Git 管理</b>
+                      <small>改动、提交与分支</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("text-editor") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/text-editor");
+                    }}
+                  >
+                    <FileText />
+                    <span>
+                      <b>文本编辑器</b>
+                      <small>查看与编辑宿主机文件</small>
+                    </span>
+                  </button>
+                )}
+                {!hiddenTools.includes("commands") && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setToolsOpen(false);
+                      onTools("/commands");
+                    }}
+                  >
+                    <Zap />
+                    <span>
+                      <b>快捷指令</b>
+                      <small>一键执行常用命令</small>
+                    </span>
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -445,8 +527,8 @@ export function Sidebar({
                 >
                   <Gauge />
                   <span>
-                    <b>账号额度</b>
-                    <small>Official 额度状态</small>
+                    <b>Codex 额度</b>
+                    <small>Official 账号额度状态</small>
                   </span>
                 </button>
                 {notificationPermission !== "unsupported" ? (

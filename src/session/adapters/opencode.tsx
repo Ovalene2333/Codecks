@@ -1,6 +1,7 @@
 import type { AgentUiAdapter } from "./types";
 import { openCodeTodos, openCodePartToItem } from "./native-parts";
 import { TodoPanel } from "./todos";
+import { AssistantMarkdown } from "../markdown";
 
 function todoPayload(item: any): any[] {
   const payload = item?.payload;
@@ -15,6 +16,13 @@ function todoPayload(item: any): any[] {
 
 export const openCodeAdapter: AgentUiAdapter = {
   renderItem(item: any) {
+    if (item?.type === "contextCompaction")
+      return (
+        <details className="tool-row context-compaction">
+          <summary>上下文已压缩{item.text ? " · 查看摘要" : ""}</summary>
+          {item.text ? <div><AssistantMarkdown text={item.text} /></div> : null}
+        </details>
+      );
     if (item?.type === "extension") {
       if (/^todo/i.test(item.kind || "")) {
         const todos = todoPayload(item);

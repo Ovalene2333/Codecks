@@ -1,0 +1,752 @@
+/* UI 基线组件（ui-*）。
+   设置界面以此为准；新界面复用这些组件，不要再各写一套。规范见 docs/ui-baseline.md。
+   约定：只引用 tokens.css 的 token；状态用 is-*，变体用 BEM 修饰（--x），
+   以免与旧的全局类（.primary / .on / .danger）互相污染。 */
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ui-spin {
+  animation: ui-spin 0.9s linear infinite;
+}
+
+/* ── Button ─────────────────────────────────────────────── */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text-soft);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ui-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.ui-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.ui-btn--sm {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  font-size: var(--fs-caption);
+}
+
+.ui-btn--icon {
+  width: var(--control-h);
+  padding: 0;
+}
+
+.ui-btn--icon.ui-btn--sm {
+  width: var(--control-h-sm);
+}
+
+.ui-btn--primary {
+  border-color: color-mix(in srgb, var(--accent) 82%, rgb(0 0 0 / 30%));
+  background: var(--accent-grad);
+  color: var(--accent-text);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 20%),
+    0 1px 2px rgb(0 0 0 / 24%);
+}
+
+.ui-btn--primary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-hover) 82%, rgb(0 0 0 / 30%));
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  color: var(--accent-text);
+}
+
+.ui-btn--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.ui-btn--danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.ui-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-dim);
+}
+
+.ui-btn--ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--control-hover);
+}
+
+.ui-btn.is-busy {
+  cursor: progress;
+}
+
+/* ── Segmented control（标签 / 二选一切换）────────────────── */
+.ui-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 22%);
+  scrollbar-width: none;
+}
+
+.ui-seg::-webkit-scrollbar {
+  display: none;
+}
+
+.ui-seg__item {
+  flex: 1 0 auto;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ui-seg__item:hover:not(.is-active) {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.ui-seg__item.is-active {
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow:
+    inset 0 1px 0 var(--edge-hi),
+    var(--shadow-sm);
+}
+
+/* ── Switch ─────────────────────────────────────────────── */
+.ui-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--control-hover);
+  cursor: pointer;
+  transition:
+    background-color var(--ease),
+    border-color var(--ease);
+}
+
+.ui-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-soft);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color var(--ease);
+}
+
+/* 视觉尺寸不变，命中区向四周放大，手指好按。 */
+.ui-switch::before {
+  content: "";
+  position: absolute;
+  inset: -10px -6px;
+}
+
+.ui-switch[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.ui-switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+
+.ui-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-switch.is-busy {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.ui-switch.is-busy::after {
+  animation: ui-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes ui-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ── Badge / Dot ────────────────────────────────────────── */
+.ui-badge {
+  --tone-fg: var(--text-dim);
+  --tone-bg: var(--surface-muted);
+  --tone-border: var(--line);
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--tone-border);
+  border-radius: 999px;
+  background: var(--tone-bg);
+  color: var(--tone-fg);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ui-tone-ok {
+  --tone-fg: var(--ok);
+  --tone-bg: var(--success-bg);
+  --tone-border: var(--success-border);
+}
+
+.ui-tone-warn {
+  --tone-fg: var(--warn);
+  --tone-bg: var(--warning-bg);
+  --tone-border: var(--warning-border);
+}
+
+.ui-tone-danger {
+  --tone-fg: var(--danger-text);
+  --tone-bg: var(--danger-bg);
+  --tone-border: var(--danger-border);
+}
+
+.ui-tone-info {
+  --tone-fg: var(--info);
+  --tone-bg: var(--info-bg);
+  --tone-border: var(--info-border);
+}
+
+.ui-tone-accent {
+  --tone-fg: var(--accent);
+  --tone-bg: var(--accent-soft);
+  --tone-border: color-mix(in srgb, var(--accent) 34%, var(--line));
+}
+
+.ui-dot {
+  --dot: var(--text-faint);
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dot);
+}
+
+.ui-dot.ui-dot--ok {
+  --dot: var(--ok);
+}
+
+.ui-dot.ui-dot--busy {
+  --dot: var(--info);
+  animation: ui-pulse 1.2s ease-in-out infinite;
+}
+
+.ui-dot.ui-dot--warn {
+  --dot: var(--warn);
+}
+
+.ui-dot.ui-dot--error {
+  --dot: var(--danger);
+}
+
+/* ── Note（提示条）──────────────────────────────────────── */
+.ui-note {
+  --tone-fg: var(--text-dim);
+  --tone-bg: var(--surface-muted);
+  --tone-border: var(--line);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--tone-border);
+  border-radius: var(--radius-md);
+  background: var(--tone-bg);
+  color: var(--text-soft);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.ui-note > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--tone-fg);
+}
+
+.ui-note__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-note__body b {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+
+.ui-note__body p {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.ui-note__action {
+  flex: none;
+  align-self: center;
+}
+
+/* ── Section / Group / Row（列表式设置项）──────────────── */
+.ui-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ui-section + .ui-section,
+.ui-note + .ui-section,
+.ui-section + .ui-note {
+  margin-top: var(--space-5);
+}
+
+.ui-section__head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  min-height: var(--control-h-sm);
+}
+
+.ui-section__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-section .ui-section__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ui-section__desc {
+  margin: 1px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+.ui-section__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-group {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.ui-group--pad {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.ui-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-3) var(--space-4);
+}
+
+.ui-row + .ui-row {
+  border-top: 1px solid var(--line);
+}
+
+.ui-row__lead {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: color-mix(
+    in srgb,
+    var(--lead, var(--text-faint)) 18%,
+    var(--surface)
+  );
+  color: var(--lead, var(--text-dim));
+  font-size: var(--fs-ui);
+  font-weight: 700;
+}
+
+.ui-row__main {
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-row__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ui-row__title .ui-dot {
+  margin-right: calc(var(--space-1) * -1);
+}
+
+.ui-row__desc {
+  display: block;
+  margin: 2px 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ui-row__desc.is-danger {
+  color: var(--danger-text);
+}
+
+.ui-row__desc.is-faint {
+  color: var(--text-faint);
+}
+
+.ui-row__side {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.ui-row.is-dim .ui-row__title {
+  color: var(--text-dim);
+}
+
+/* 可点进下一级的行：标题区是按钮，整行悬停高亮，行尾一个箭头。 */
+.ui-row--link {
+  transition: background-color var(--ease);
+}
+
+.ui-row--link:hover {
+  background: var(--control-hover);
+}
+
+.ui-row__open {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  margin: calc(var(--space-3) * -1) 0;
+  padding: var(--space-3) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-row__open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.ui-row__chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: calc(var(--space-1) * -1);
+  color: var(--text-faint);
+}
+
+/* Section 内的小标题：把一个表单分成几组（如「Codex」「Claude Code」）。 */
+.ui-subhead {
+  margin: var(--space-2) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 600;
+}
+
+/* 单选分段：放在行尾时按内容收缩，不撑满。 */
+.ui-choice {
+  display: inline-flex;
+  flex: none;
+  max-width: 100%;
+}
+
+.ui-choice .ui-seg__item {
+  flex: 1 0 auto;
+}
+
+.ui-choice .ui-seg__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ui-choice .ui-seg__item:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 0;
+}
+
+/* ── Kbd ────────────────────────────────────────────────── */
+.ui-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--control-border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ── Field / Input ──────────────────────────────────────── */
+.ui-field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ui-field__label {
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.ui-field__hint {
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ui-field__hint code {
+  font-family: var(--font-mono);
+}
+
+.ui-input {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--control);
+  color: var(--text);
+  font-size: var(--fs-ui);
+}
+
+.ui-input::placeholder {
+  color: var(--text-faint);
+}
+
+.ui-input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+}
+
+.ui-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 原生 select 自带一段内边距和箭头，文字会比同列 input 往右缩。去掉原生
+   外观，用两道渐变画箭头，左内边距与 input 对齐。 */
+select.ui-input {
+  appearance: none;
+  padding-right: calc(var(--space-3) + 18px);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+/* 共用组件（ModelPicker 等）仍输出旧式 <label>文字<控件></label>；在 kit
+   表单里套一层 .ui-form-compat，让它们与 Field / ui-input 视觉一致。 */
+.ui-form-compat label {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-caption);
+  font-weight: 500;
+}
+
+.ui-form-compat label > input,
+.ui-form-compat label > select {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background-color: var(--control);
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: 400;
+}
+
+.ui-form-compat label > select {
+  appearance: none;
+  padding-right: calc(var(--space-3) + 18px);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.ui-form-compat label > input:focus,
+.ui-form-compat label > select:focus {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+}
+
+.ui-form-compat .search-picker,
+.ui-form-compat .search-picker-trigger {
+  width: 100%;
+}
+
+.ui-form-compat .search-picker-trigger {
+  min-height: var(--control-h);
+  background: var(--control);
+}
+
+/* 「手动输入 / 从目录选择」挪到标签行右端，不再在控件下方多占一行，
+   两列网格里左右两栏的控件才能顶端对齐。 */
+.ui-form-compat .model-manual-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  line-height: 1.4;
+}
+
+.ui-form-compat .toolbar-hint {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+}
+
+.ui-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ui-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.ui-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.ui-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-caption);
+  line-height: 1.5;
+}
+
+/* 触屏输入框用 16px：低于 16px 时 iOS Safari 聚焦会整页放大。 */
+@media (pointer: coarse) {
+  .ui-input,
+  .ui-form-compat label > input,
+  .ui-form-compat label > select {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ui-form__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-spin,
+  .ui-dot--busy,
+  .ui-switch.is-busy::after {
+    animation: none;
+  }
+}

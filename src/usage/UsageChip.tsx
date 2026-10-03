@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Folder, Gauge, MessageSquare } from "lucide-react";
 import type { ProjectRecord, RuntimeSnapshot, ThreadSummary } from "../types";
 import {
-  formatResetCountdown,
+  CODEX_QUOTA_TITLE,
+  estimateAccountQuota,
+  formatResetLabel,
   formatWindowLength,
   remainingPercent,
   usageChipMetric,
   usageTone,
+  usageWindow,
 } from "./format";
 import { Drawer } from "../ui";
 import { formatTokens, relativeTime } from "../format";
 import { buildUsageStats, type UsageTotals } from "./stats";
+import { estimateCost, formatCost, planPrice } from "./cost";
 
 export type UsageView = "stats" | "limits";
 
@@ -23,15 +27,21 @@ export function UsageChip({
 }) {
   const metric = usageChipMetric(runtime?.rateLimits, runtime?.rateLimitsError);
   const tone = runtime?.rateLimits ? usageTone(runtime.rateLimits) : "muted";
+  const pct = remainingPercent(usageWindow(runtime?.rateLimits)?.usedPercent);
   return (
     <button
       type="button"
       className={`usage-chip ${tone}`}
-      title="账号额度"
+      title={CODEX_QUOTA_TITLE}
       onClick={onOpen}
     >
-      <Gauge />
+      <span className="usage-chip-label">{CODEX_QUOTA_TITLE}</span>
       <span className="usage-chip-metric">{metric}</span>
+      {pct != null ? (
+        <i className="usage-chip-track" aria-hidden="true">
+          <b style={{ width: `${pct}%` }} />
+        </i>
+      ) : null}
     </button>
   );
 }
@@ -50,19 +60,22 @@ export function UsageDrawer({
   projects?: ProjectRecord[];
   currentSessionKey?: string;
   initialView?: UsageView;
-  onRefreshLimits: () => Promise<void>;
+  onRefreshLimits: (force?: boolean) => Promise<void>;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<UsageView>(initialView);
   const [refreshingLimits, setRefreshingLimits] = useState(false);
-  const refreshLimits = useCallback(async () => {
-    setRefreshingLimits(true);
-    try {
-      await onRefreshLimits();
-    } finally {
-      setRefreshingLimits(false);
-    }
-  }, [onRefreshLimits]);
+  const refreshLimits = useCallback(
+    async (force = false) => {
+      setRefreshingLimits(true);
+      try {
+        await onRefreshLimits(force);
+      } finally {
+        setRefreshingLimits(false);
+      }
+    },
+    [onRefreshLimits],
+  );
 
   useEffect(() => {
     if (tab === "limits") void refreshLimits();
@@ -87,7 +100,7 @@ export function UsageDrawer({
           className={tab === "limits" ? "on" : ""}
           onClick={() => setTab("limits")}
         >
-          账号额度
+          {CODEX_QUOTA_TITLE}
         </button>
       </div>
       {tab === "stats" ? (
@@ -123,6 +136,12 @@ function UsageStats({
   );
   const rows = level === "projects" ? stats.projects : stats.sessions;
   const max = rows[0]?.totals.total || 0;
+  const cost = stats.sessions.reduce(
+    (sum, row) =>
+      sum +
+      estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
+    0,
+  );
 
   return (
     <div className="usage-stats">
@@ -134,6 +153,13 @@ function UsageStats({
           <UsageMetric label="缓存输入" value={stats.totals.cachedInput} />
           <UsageMetric label="输出" value={stats.totals.output} />
         </div>
+      </section>
+      <section className="usage-summary usage-cost" aria-label="估算费用">
+        <span>估算费用</span>
+        <strong>{formatCost(cost)}</strong>
+        <p className="usage-note">
+          按社区 API 目录价（sub2api 口径）折算，仅供订阅用量参考。
+        </p>
       </section>
       <div className="usage-level" role="tablist" aria-label="统计层级">
         <button
@@ -253,25 +279,41 @@ function OfficialLimits({
 }: {
   runtime?: RuntimeSnapshot;
   refreshing: boolean;
-  onRefresh: () => void;
+  onRefresh: (force?: boolean) => void;
 }) {
   const limits = runtime?.rateLimits;
   const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
   const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
+  const plan = limits?.planName || runtime?.account?.planType;
+  const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "Codex";
+  const price = planPrice(plan);
+  const quota = estimateAccountQuota(limits, runtime?.accountUsageDaily);
   return (
     <div className="usage-limits">
       <p className="usage-plan">
-        {limits?.planName || runtime?.account?.planType || "Official"}
+        {planName}
+        {price != null ? ` · $${price}/月` : ""}
         {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
       </p>
+      {quota ? (
+        <p className="usage-plan" title="阶段用量 ÷ 窗口已用百分比，按窗口长度放大到一个月">
+          估算本期额度 ≈ {formatTokens(quota.monthlyQuota)} tok/月
+          （{quota.windowLabel}窗口实测 {formatTokens(quota.stageTokens)} tok ≈{" "}
+          {Math.round(quota.usedPercent)}%）
+        </p>
+      ) : null}
       {runtime?.rateLimitsError || !limits ? (
         <div className="usage-unavailable" aria-live="polite">
           <p>
             {refreshing
-              ? "正在读取 Official 账号额度…"
+              ? `正在读取 ${CODEX_QUOTA_TITLE}…`
               : runtime?.rateLimitsError || "额度不可用"}
           </p>
-          <button type="button" onClick={onRefresh} disabled={refreshing}>
+          <button
+            type="button"
+            onClick={() => onRefresh(true)}
+            disabled={refreshing}
+          >
             {refreshing ? "刷新中…" : "重新读取"}
           </button>
         </div>
@@ -318,14 +360,14 @@ function UsageWindow({
   const usedPct =
     window.usedPercent != null ? Math.round(window.usedPercent) : null;
   const remainingPct = remainingPercent(window.usedPercent);
-  const reset = formatResetCountdown(window);
+  const reset = formatResetLabel(window);
   return (
     <div
       className={`usage-window ${window.reached || (usedPct ?? 0) >= 85 ? "hot" : ""}`}
     >
       <div>
         <b>{label}</b>
-        <small>{reset ? `重置 ${reset}` : "重置时间未知"}</small>
+        <small>{reset || "重置时间未知"}</small>
       </div>
       <strong>{remainingPct == null ? "—" : `剩余 ${remainingPct}%`}</strong>
       <div className="context-track">

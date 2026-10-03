@@ -3,7 +3,11 @@ import type { Dirent } from "node:fs";
 import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { parseTokenUsage, uncachedInputTokens } from "./protocol.js";
+import {
+  parseTimestamp,
+  parseTokenUsage,
+  uncachedInputTokens,
+} from "./protocol.js";
 import type { TokenUsage } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +26,30 @@ type WslExec = (
   command: string,
   args: string[],
 ) => Promise<{ stdout: string; stderr: string }>;
+
+/** tokenUsage 增量归因元数据：at 默认取当下，rollout 恢复时用文件内时间戳。 */
+export interface UsageDeltaMeta {
+  providerId?: string;
+  at?: number;
+}
+
+export interface RestoredRolloutUsage {
+  usage: TokenUsage;
+  at?: number;
+}
+
+export function usageDayKey(at: number) {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
+function usageTotalMetric(usage?: TokenUsage) {
+  if (!usage) return undefined;
+  if (usage.total != null) return usage.total;
+  const parts = [usage.input, usage.cachedInput, usage.output].filter(
+    (value): value is number => typeof value === "number",
+  );
+  return parts.length ? parts.reduce((sum, value) => sum + value, 0) : undefined;
+}
 
 function normalizeUsage(
   raw: unknown,
@@ -46,6 +74,8 @@ function normalizeUsage(
 
 export class CodexUsageStore {
   private usage = new Map<string, TokenUsage>();
+  // `${providerId}|${YYYY-MM-DD}` -> 当天累计消耗的 token（按 total 差值记账）
+  private daily = new Map<string, number>();
   private loaded = false;
   private pending: Promise<void> = Promise.resolve();
   private file: string;
@@ -62,11 +92,19 @@ export class CodexUsageStore {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       const threads = parsed?.threads || parsed;
-      const migrateInclusiveInput = parsed?.version !== 2;
-      if (!threads || typeof threads !== "object") return;
-      for (const [threadId, raw] of Object.entries(threads)) {
-        const usage = normalizeUsage(raw, migrateInclusiveInput);
-        if (threadId && usage) this.usage.set(threadId, usage);
+      const migrateInclusiveInput = (parsed?.version ?? 0) < 2;
+      if (threads && typeof threads === "object") {
+        for (const [threadId, raw] of Object.entries(threads)) {
+          const usage = normalizeUsage(raw, migrateInclusiveInput);
+          if (threadId && usage) this.usage.set(threadId, usage);
+        }
+      }
+      const daily = parsed?.daily;
+      if (daily && typeof daily === "object") {
+        for (const [key, value] of Object.entries(daily)) {
+          if (typeof value === "number" && Number.isFinite(value) && value > 0)
+            this.daily.set(key, value);
+        }
       }
     } catch (error: any) {
       if (error?.code !== "ENOENT" && !(error instanceof SyntaxError))
@@ -78,22 +116,56 @@ export class CodexUsageStore {
     return this.usage.get(threadId);
   }
 
-  set(threadId: string, usage: TokenUsage) {
+  set(threadId: string, usage: TokenUsage, meta?: UsageDeltaMeta) {
     const normalized = normalizeUsage(usage);
     if (!threadId || !normalized) return this.pending;
+    this.recordDailyDelta(threadId, normalized, meta);
     this.usage.set(threadId, normalized);
     return this.save();
   }
 
-  setMany(entries: Iterable<readonly [string, TokenUsage]>) {
+  setMany(
+    entries: Iterable<readonly [string, TokenUsage, UsageDeltaMeta?]>,
+  ) {
     let changed = false;
-    for (const [threadId, raw] of entries) {
+    for (const [threadId, raw, meta] of entries) {
       const usage = normalizeUsage(raw);
       if (!threadId || !usage) continue;
+      this.recordDailyDelta(threadId, usage, meta);
       this.usage.set(threadId, usage);
       changed = true;
     }
     return changed ? this.save() : this.pending;
+  }
+
+  /** 各 provider 每天消耗的 token；providerIds 为空时返回全部供应商合计。 */
+  dailyUsage(providerIds?: ReadonlySet<string>) {
+    const result: Record<string, number> = {};
+    for (const [key, tokens] of this.daily) {
+      const separator = key.lastIndexOf("|");
+      const providerId = key.slice(0, separator);
+      const day = key.slice(separator + 1);
+      if (providerIds && !providerIds.has(providerId)) continue;
+      result[day] = (result[day] || 0) + tokens;
+    }
+    return result;
+  }
+
+  private recordDailyDelta(
+    threadId: string,
+    next: TokenUsage,
+    meta?: UsageDeltaMeta,
+  ) {
+    const metric = usageTotalMetric(next);
+    if (metric == null) return;
+    const delta = Math.max(
+      0,
+      metric - (usageTotalMetric(this.usage.get(threadId)) || 0),
+    );
+    if (!delta) return;
+    const day = usageDayKey(meta?.at ?? Date.now());
+    const key = `${meta?.providerId || ""}|${day}`;
+    this.daily.set(key, (this.daily.get(key) || 0) + delta);
   }
 
   remove(threadId: string) {
@@ -146,7 +218,15 @@ export class CodexUsageStore {
         await mkdir(this.dataDir, { recursive: true });
         await writeFile(
           this.file,
-          JSON.stringify({ version: 2, threads: snapshot }, null, 2),
+          JSON.stringify(
+            {
+              version: 3,
+              threads: snapshot,
+              daily: Object.fromEntries(this.daily),
+            },
+            null,
+            2,
+          ),
           { encoding: "utf8", mode: 0o600 },
         );
       });
@@ -155,11 +235,19 @@ export class CodexUsageStore {
 }
 
 export function parseCodexRolloutUsageLine(line: string) {
+  return parseCodexRolloutUsageRecord(line)?.usage;
+}
+
+function parseCodexRolloutUsageRecord(
+  line: string,
+): RestoredRolloutUsage | undefined {
   try {
     const record = JSON.parse(line);
     if (record?.type !== "event_msg" || record?.payload?.type !== "token_count")
       return undefined;
-    return parseTokenUsage(record.payload.info);
+    const usage = parseTokenUsage(record.payload.info);
+    if (!usage) return undefined;
+    return { usage, at: parseTimestamp(record.timestamp) };
   } catch {
     return undefined;
   }
@@ -188,13 +276,13 @@ async function latestUsageFromFile(filePath: string) {
       carry = start > 0 ? lines.shift() || "" : "";
       for (let index = lines.length - 1; index >= 0; index--) {
         if (!lines[index].includes('"token_count"')) continue;
-        const usage = parseCodexRolloutUsageLine(lines[index]);
-        if (usage) return usage;
+        const restored = parseCodexRolloutUsageRecord(lines[index]);
+        if (restored) return restored;
       }
       end = start;
     }
     return carry.includes('"token_count"')
-      ? parseCodexRolloutUsageLine(carry)
+      ? parseCodexRolloutUsageRecord(carry)
       : undefined;
   } finally {
     await handle.close();
@@ -231,7 +319,7 @@ async function loadNativeRolloutUsages(
       rolloutFiles(path.join(codexHome, "archived_sessions")),
     ])
   ).flat();
-  const usage = new Map<string, TokenUsage>();
+  const usage = new Map<string, RestoredRolloutUsage>();
   let cursor = 0;
   const workers = Array.from(
     { length: Math.min(16, Math.max(1, files.length)) },
@@ -286,14 +374,14 @@ export function parseWslCodexUsages(
   stdout: string,
   wanted?: ReadonlySet<string>,
 ) {
-  const usage = new Map<string, TokenUsage>();
+  const usage = new Map<string, RestoredRolloutUsage>();
   for (const row of stdout.replace(/\r\n/g, "\n").split("\n")) {
     const separator = row.indexOf("\t");
     if (separator < 0) continue;
     const threadId = threadIdFromRolloutPath(row.slice(0, separator));
     if (!threadId || (wanted && !wanted.has(threadId))) continue;
-    const parsed = parseCodexRolloutUsageLine(row.slice(separator + 1));
-    if (parsed) usage.set(threadId, parsed);
+    const restored = parseCodexRolloutUsageRecord(row.slice(separator + 1));
+    if (restored) usage.set(threadId, restored);
   }
   return usage;
 }
@@ -314,7 +402,7 @@ export async function loadCodexRolloutUsages(options: {
   wslExec?: WslExec;
 }) {
   if (!options.codexHome || /[\0\r\n]/.test(options.codexHome))
-    return new Map<string, TokenUsage>();
+    return new Map<string, RestoredRolloutUsage>();
   if (!options.useWsl)
     return loadNativeRolloutUsages(options.codexHome, options.wanted);
   const { stdout } = await (options.wslExec || defaultWslExec)(

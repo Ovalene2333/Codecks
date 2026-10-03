@@ -71,3 +71,32 @@ test("runtime crash unlocks busy threads and refresh cannot revive the turn", ()
   assert.equal(revived.interruptedTurnId, undefined);
   assert.equal(revived.lastError, undefined);
 });
+
+test("Codex edit rewinds the current thread before the selected turn", async () => {
+  const adapter = new CodexAdapter({ listPublic: () => [] } as any, "/tmp") as any;
+  const calls: Array<{ method: string; params: unknown }> = [];
+  adapter.threads.set("t1", {
+    id: "t1", providerId: "p", name: "t", preview: "old",
+    cwd: "/work", model: "default", status: "idle", updatedAt: 1,
+    tokenUsage: { used: 10 },
+  });
+  adapter.ensureLoaded = async () => {};
+  adapter.ensure = async () => ({
+    request: async (method: string, params: unknown) => {
+      calls.push({ method, params });
+      return { thread: { id: "t1", turns: [] } };
+    },
+  });
+
+  assert.deepEqual(await adapter.revertSession("p", "t1", "turn-2"), {
+    messageID: "turn-2", files: 0, additions: 0, deletions: 0,
+  });
+  assert.deepEqual(calls, [{
+    method: "thread/revert",
+    params: { threadId: "t1", beforeTurnId: "turn-2" },
+  }]);
+  assert.equal(adapter.threads.get("t1").tokenUsage, undefined);
+  adapter.threads.get("t1").status = "running";
+  await assert.rejects(adapter.revertSession("p", "t1", "turn-1"), /运行中/);
+  assert.equal(calls.length, 1);
+});

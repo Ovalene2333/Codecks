@@ -34,6 +34,8 @@ import {
   PLAN_PROMPT,
   reviewParams,
 } from "../turn-input.js";
+import { visibleUserText } from "./injected-context.js";
+import { AgentMessageError, assertMessageInput, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import {
   classifyThreadStoreError,
   explainThreadStoreError,
@@ -65,6 +67,7 @@ import type {
 } from "./types.js";
 
 const CODEX_CAPABILITIES: AgentCapabilities = {
+  messages: { busyBehavior: "steer", interruptScope: "turn" },
   approvals: true,
   archive: true,
   delete: true,
@@ -119,6 +122,8 @@ export class CodexAdapter extends EventEmitter {
   private account?: AccountInfo;
   private rateLimits: RateLimits | null = null;
   private rateLimitsError?: string;
+  private usageFetchedAt = 0;
+  private usageLoading?: Promise<ReturnType<CodexAdapter["runtimeStatus"]>>;
   private archiveError?: string;
   private pendingFileChanges = new Map<string, FileChange[]>();
   private compactionTimers = new Map<string, NodeJS.Timeout>();
@@ -175,6 +180,7 @@ export class CodexAdapter extends EventEmitter {
     return {
       id: this.id,
       name: "Codex",
+      protocol: "native",
       available: true,
       online: runtime.online,
       starting: runtime.starting,
@@ -423,19 +429,56 @@ export class CodexAdapter extends EventEmitter {
         useWsl: this.useWsl,
         wanted,
       });
-      for (const [threadId, usage] of restored) {
+      for (const [threadId, restoredUsage] of restored) {
         const thread = this.threads.get(threadId);
-        if (thread) thread.tokenUsage = usage;
+        if (thread) thread.tokenUsage = restoredUsage.usage;
       }
-      await this.usageStore.setMany(restored);
+      // setMany/set 返回的 promise 挂在 unref 的 300ms 落盘定时器上，await 它
+      // 会饿死事件循环；flush() 立即落盘且语义等价（已提交的写全部持久化）。
+      void this.usageStore.setMany(
+        [...restored].map(([threadId, entry]) => [
+          threadId,
+          entry.usage,
+          {
+            providerId:
+              this.threads.get(threadId)?.providerId ||
+              this.officialProviderId(),
+            at: entry.at,
+          },
+        ]),
+      );
+      await this.usageStore.flush();
       this.rolloutUsageLoaded = true;
     } catch {
       // History remains usable when a rollout is unreadable or WSL is offline.
     }
   }
 
-  private rememberUsage(threadId: string, usage: TokenUsage) {
-    void this.usageStore.set(threadId, usage).catch(() => undefined);
+  private rememberUsage(
+    threadId: string,
+    usage: TokenUsage,
+    meta?: { providerId?: string; at?: number },
+  ) {
+    void this.usageStore.set(threadId, usage, meta).catch(() => undefined);
+  }
+
+  private officialProviders() {
+    const providers =
+      typeof this.store.runtimeProviders === "function"
+        ? this.store.runtimeProviders()
+        : [];
+    const official = providers.filter((provider) => isOfficialProvider(provider));
+    const profile = this.store.runtimeProfile?.();
+    return official.length ? official : profile ? [profile] : [];
+  }
+
+  /** 官方帐号对应的 provider id 集合：rateLimits 窗口描述的就是这个帐号。 */
+  private officialProviderIds() {
+    return new Set(this.officialProviders().map((provider) => provider.id));
+  }
+
+  private officialProviderId() {
+    return this.officialProviders()[0]?.id;
   }
 
   private threadListParams(
@@ -486,6 +529,7 @@ export class CodexAdapter extends EventEmitter {
       account: this.account,
       rateLimits: this.rateLimits,
       rateLimitsError: this.rateLimitsError,
+      accountUsageDaily: this.usageStore.dailyUsage(this.officialProviderIds()),
       archiveError: this.archiveError,
       runtimeWsl: this.useWsl,
       ...(modelConfig.modelContextWindow ||
@@ -530,6 +574,11 @@ export class CodexAdapter extends EventEmitter {
     return this.listThreads().filter(
       (thread) => thread.status === "running" || thread.status === "waiting",
     );
+  }
+
+  runtimePids() {
+    const pid = this.client?.pid;
+    return typeof pid === "number" ? [pid] : [];
   }
 
   async applyProviderConfig() {
@@ -829,6 +878,9 @@ export class CodexAdapter extends EventEmitter {
       params.sandboxPolicy = sandboxPolicyFromMode(settings.sandbox);
     if (Object.prototype.hasOwnProperty.call(settings, "serviceTier"))
       params.serviceTier = settings.serviceTier || null;
+    // 手填模型清空时表示「用供应商默认」，normalize 后没有可下发字段；
+    // 只剩 threadId 的空更新对 runtime 没有意义，直接跳过。
+    if (Object.keys(params).length === 1) return this.threads.get(threadId);
     try {
       await client.request("thread/settings/update", params);
     } catch (error: any) {
@@ -932,6 +984,27 @@ export class CodexAdapter extends EventEmitter {
       "idle",
     );
     return this.threads.get(result.thread.id) || result.thread;
+  }
+
+  /** In-place conversation rewind. Codex does not revert workspace files. */
+  async revertSession(providerId: string, threadId: string, beforeTurnId?: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Codex 会话不存在");
+    if (thread.status === "running" || thread.status === "waiting")
+      throw new Error("任务运行中不能编辑历史消息，请先停止任务");
+    const target = String(beforeTurnId || "").trim();
+    if (!target) throw new Error("请选择要编辑的消息");
+    await this.ensureLoaded(providerId, threadId);
+    const client = await this.ensure(providerId);
+    await client.request("thread/revert", { threadId, beforeTurnId: target });
+    thread.status = "idle";
+    thread.activeTurnId = undefined;
+    thread.lastError = undefined;
+    thread.updatedAt = Date.now();
+    delete thread.tokenUsage;
+    void this.usageStore.remove(threadId).catch(() => undefined);
+    this.broadcast("thread.updated", thread);
+    return { messageID: target, files: 0, additions: 0, deletions: 0 };
   }
 
   private async createEmptyFork(providerId: string, source: ThreadSummary) {
@@ -1115,6 +1188,13 @@ export class CodexAdapter extends EventEmitter {
   }
 
   async readThread(providerId: string, threadId: string) {
+    // thread/start creates an in-memory, empty session. Some runtimes answer
+    // includeTurns with "list_turns is not supported yet" until the first
+    // turn is persisted. We already have all metadata needed to show it.
+    if (this.loadedThreads.has(threadId) && !this.knownRollouts.has(threadId)) {
+      const fresh = this.threads.get(threadId);
+      if (fresh) return { ...fresh, turns: [] };
+    }
     const client = await this.ensure(providerId);
     const read = (includeTurns: boolean) =>
       client
@@ -1129,11 +1209,23 @@ export class CodexAdapter extends EventEmitter {
           const normalized = restored
             ? { ...thread, tokenUsage: restored }
             : thread;
+          this.stampTurnModels(normalized);
           if (existing && restored) {
             existing.tokenUsage = restored;
             this.broadcast("thread.updated", existing);
           }
-          if (tokenUsage) this.rememberUsage(threadId, tokenUsage);
+          if (tokenUsage)
+            this.rememberUsage(threadId, tokenUsage, {
+              providerId:
+                this.threads.get(threadId)?.providerId ||
+                this.providerForThread(thread).id,
+              at: parseTimestamp(
+                thread.updatedAt,
+                thread.updated_at,
+                thread.lastUpdatedAt,
+                thread.last_updated_at,
+              ),
+            });
           return normalized;
         });
     try {
@@ -1155,7 +1247,39 @@ export class CodexAdapter extends EventEmitter {
           }
         }
       }
-      return await read(false);
+      try {
+        return await read(false);
+      } catch (metadataError: unknown) {
+        if (classifyThreadStoreError(metadataError) !== "unmaterialized")
+          throw explainThreadStoreError(metadataError);
+        // Some app-server versions route even includeTurns=false through
+        // list_turns for an empty rollout. The list/start summary is enough
+        // to render that session until its first turn is written.
+        const cached = this.threads.get(threadId);
+        if (cached) return { ...cached, turns: [] };
+        throw explainThreadStoreError(metadataError);
+      }
+    }
+  }
+
+  /**
+   * Codex 的 turn 记录不含模型；把 turn/started 时记入的快照回填到
+   * turn.model / turn.reasoningEffort。agent 自带字段（或老数据没有快照）
+   * 时保持原值，由前端回落到会话当前模型。
+   */
+  private stampTurnModels(thread: any) {
+    const turns = thread?.turns;
+    if (!Array.isArray(turns) || !this.threadSettings) return;
+    for (const turn of turns) {
+      if (!turn || turn.model) continue;
+      const stamp = this.threadSettings.turnModel(
+        this.id,
+        String(thread.id),
+        String(turn.id || ""),
+      );
+      if (stamp?.model) turn.model = stamp.model;
+      if (stamp?.reasoningEffort && !turn.reasoningEffort)
+        turn.reasoningEffort = stamp.reasoningEffort;
     }
   }
 
@@ -1178,6 +1302,23 @@ export class CodexAdapter extends EventEmitter {
     text: string,
     images?: TurnImage[],
   ) {
+    return (await this.deliverTurn(providerId, threadId, text, images)).response;
+  }
+
+  async sendMessage(providerId: string, threadId: string, input: AgentMessageInput): Promise<AgentMessageAcceptance> {
+    const { response: _response, ...acceptance } = await this.deliverTurn(
+      providerId, threadId, input.text, input.images, input,
+    );
+    return acceptance;
+  }
+
+  private async deliverTurn(
+    providerId: string,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+    message?: AgentMessageInput,
+  ): Promise<AgentMessageAcceptance & { response: any }> {
     let client;
     try {
       client = await this.prepareThread(providerId, threadId);
@@ -1185,6 +1326,10 @@ export class CodexAdapter extends EventEmitter {
       throw explainThreadStoreError(error);
     }
     const existing = this.threads.get(threadId);
+    if (message) {
+      if (!existing) throw new Error("会话不存在");
+      assertMessageInput(existing, message, CODEX_CAPABILITIES.messages!);
+    }
     const input = buildTurnInput(text, images);
     const startTurn = () => {
       // Do not re-send sandbox/approval here. thread/start, resume, and
@@ -1193,43 +1338,47 @@ export class CodexAdapter extends EventEmitter {
       // drops prompt cache to the static ~3.5k header.
       return client.request("turn/start", { threadId, input });
     };
+    const start = async () => {
+      let response;
+      try {
+        response = await startTurn();
+      } catch (error: unknown) {
+        response = await this.retryTurnAfterMissing(client, providerId, threadId, error, startTurn);
+      }
+      return { response, disposition: "started" as const, turnId: response?.turn?.id };
+    };
     if (
-      (existing?.status === "running" || existing?.status === "waiting") &&
+      existing &&
+      (existing?.status === "running" || existing?.status === "waiting" || message?.mode === "append") &&
       existing.activeTurnId &&
       !existing.compacting
     ) {
+      const expectedTurnId = existing.activeTurnId;
       try {
-        return await client.request("turn/steer", {
+        const response = await client.request("turn/steer", {
           threadId,
-          expectedTurnId: existing.activeTurnId,
+          expectedTurnId,
           input,
         });
+        return { response, disposition: "appended", turnId: response?.turnId || expectedTurnId };
       } catch (error: any) {
+        // 严格追加不能悄悄创建新回合，expectedTurnId 也不能被恢复逻辑绕过。
+        if (message?.mode === "append" || message?.expectedTurnId) {
+          if (/no active turn/i.test(String(error?.message || error)))
+            throw new AgentMessageError("no_active_turn", "目标回合已结束，消息未追加");
+          throw error;
+        }
         if (
           !String(error?.message || "")
             .toLowerCase()
             .includes("no active turn")
-        )
-          return this.retryTurnAfterMissing(
-            client,
-            providerId,
-            threadId,
-            error,
-            startTurn,
-          );
+        ) {
+          const response = await this.retryTurnAfterMissing(client, providerId, threadId, error, startTurn);
+          return { response, disposition: "started", turnId: response?.turn?.id };
+        }
       }
     }
-    try {
-      return await startTurn();
-    } catch (error: unknown) {
-      return this.retryTurnAfterMissing(
-        client,
-        providerId,
-        threadId,
-        error,
-        startTurn,
-      );
-    }
+    return start();
   }
 
   private async retryTurnAfterMissing(
@@ -1473,9 +1622,30 @@ export class CodexAdapter extends EventEmitter {
     this.broadcast("approval.resolved", { approvalId });
   }
 
-  async loadOfficialUsage() {
+  // account/updated、turn 失败、前端手动刷新都会走到这里；rateLimits/read
+  // 上游会请求 wham/usage，不能裸奔。被动触发走 60s 冷却 + 在途去重，
+  // 只有用户点“重新读取”（force）才绕过冷却。
+  private static USAGE_REFRESH_COOLDOWN_MS = 60_000;
+
+  loadOfficialUsage(force = false) {
     const client = this.client;
-    if (!client?.online) return this.runtimeStatus();
+    if (!client?.online) return Promise.resolve(this.runtimeStatus());
+    if (
+      !force &&
+      this.usageFetchedAt &&
+      Date.now() - this.usageFetchedAt < CodexAdapter.USAGE_REFRESH_COOLDOWN_MS
+    )
+      return Promise.resolve(this.runtimeStatus());
+    if (this.usageLoading) return this.usageLoading;
+    this.usageFetchedAt = Date.now();
+    const loading = this.fetchOfficialUsage(client);
+    this.usageLoading = loading;
+    return loading.finally(() => {
+      if (this.usageLoading === loading) this.usageLoading = undefined;
+    });
+  }
+
+  private async fetchOfficialUsage(client: CodexClient) {
     try {
       const accountRaw = await client.request("account/read", {});
       this.account = parseAccount(accountRaw);
@@ -1568,12 +1738,16 @@ export class CodexAdapter extends EventEmitter {
       lastError: staleRunning
         ? "Codex 运行时已退出，该任务被中断"
         : latestTurn
-          ? latestError?.message
+          ? latestTurn.status === "failed"
+            ? latestError?.message
+            : undefined
           : old?.lastError,
       errorCode: staleRunning
         ? undefined
         : latestTurn
-          ? latestError?.code
+          ? latestTurn.status === "failed"
+            ? latestError?.code
+            : undefined
           : old?.errorCode,
       interruptedTurnId: staleRunning ? old?.interruptedTurnId : undefined,
       archived: thread.archived ?? old?.archived,
@@ -1619,7 +1793,11 @@ export class CodexAdapter extends EventEmitter {
       ...this.threadSettings?.get(this.id, key),
     };
     this.threads.set(key, item);
-    if (parsedUsage) this.rememberUsage(item.id, parsedUsage);
+    if (parsedUsage)
+      this.rememberUsage(item.id, parsedUsage, {
+        providerId: item.providerId,
+        at: item.updatedAt,
+      });
     if (thread.turns?.length || thread.preview) this.rememberRollout(thread.id);
     if (item.cwd) void this.projects?.rememberSeen(item.cwd, item.updatedAt);
     this.broadcast("thread.updated", item);
@@ -1628,8 +1806,12 @@ export class CodexAdapter extends EventEmitter {
   private extractPreview(thread: any) {
     for (const turn of thread.turns || [])
       for (const item of turn.items || []) {
-        if (item.type === "userMessage")
-          return item.content?.find((x: any) => x.type === "text")?.text;
+        if (item.type !== "userMessage") continue;
+        // Codex 会把 environment_context / AGENTS.md 等注入内容写进
+        // userMessage——预览只取剥离后的可见文本，纯注入的消息跳过。
+        const raw = item.content?.find((x: any) => x.type === "text")?.text;
+        const text = visibleUserText(String(raw ?? ""));
+        if (text) return text;
       }
     return "";
   }
@@ -1702,19 +1884,29 @@ export class CodexAdapter extends EventEmitter {
         this.rememberRollout(existing.id);
         existing.status = "running";
         existing.activeTurnId = params.turn?.id;
+        if (params.turn?.id)
+          void this.threadSettings
+            ?.recordTurnModel(this.id, existing.id, String(params.turn.id), {
+              model: existing.resolvedModel || existing.model,
+              reasoningEffort: existing.reasoningEffort,
+            })
+            ?.catch(() => undefined);
         existing.interruptedTurnId = undefined;
         existing.updatedAt = Date.now();
         existing.lastError = undefined;
         existing.errorCode = undefined;
       }
       if (message.method === "turn/completed") {
-        existing.status = params.turn?.status === "failed" ? "error" : "idle";
+        const failed = params.turn?.status === "failed";
+        existing.status = failed ? "error" : "idle";
         existing.activeTurnId = undefined;
         this.setCompacting(existing, false);
+        // interrupted 等非失败收尾也可能带 error 字段，只有 failed 才上横幅。
         const error = this.turnError(params.turn?.error);
-        existing.lastError = error?.message;
-        existing.errorCode = error?.code;
-        if (this.isUsageLimitError(error?.code)) void this.loadOfficialUsage();
+        existing.lastError = failed ? error?.message : undefined;
+        existing.errorCode = failed ? error?.code : undefined;
+        if (failed && this.isUsageLimitError(error?.code))
+          void this.loadOfficialUsage();
       }
       if (message.method === "error" && !params.willRetry) {
         const error = this.turnError(params.error);
@@ -1735,7 +1927,10 @@ export class CodexAdapter extends EventEmitter {
           parseTokenUsage(params.tokenUsage || params.usage || params) ||
           existing.tokenUsage;
         existing.tokenUsage = usage;
-        if (usage) this.rememberUsage(existing.id, usage);
+        if (usage)
+          this.rememberUsage(existing.id, usage, {
+            providerId: existing.providerId,
+          });
       }
       if (
         message.method === "thread/compact/started" ||

@@ -3,13 +3,21 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  Lock,
   MoreHorizontal,
   Pin,
   Plus,
+  Radar,
 } from "lucide-react";
+import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
-import type { Provider, SessionSearchMatch, ThreadSummary } from "../types";
+import type {
+  Provider,
+  SessionSearchMatch,
+  SessionWakeState,
+  ThreadSummary,
+} from "../types";
 import { Status } from "../ui";
 import { relativeTime, sessionKey } from "../format";
 import { ProjectMenu } from "./ProjectMenu";
@@ -19,6 +27,7 @@ export function ProjectGroupView({
   library,
   selected,
   unseenSessions,
+  wakeStates,
   collapsed,
   forkCounts,
   searchQuery,
@@ -41,6 +50,8 @@ export function ProjectGroupView({
   library: "active" | "archived";
   selected?: string;
   unseenSessions: ReadonlySet<string>;
+  /** 会话的 deck-wake 标记（键为 sessionKey）。 */
+  wakeStates?: ReadonlyMap<string, SessionWakeState>;
   collapsed: boolean;
   forkCounts: Map<string, number>;
   searchQuery: string;
@@ -70,6 +81,19 @@ export function ProjectGroupView({
   const providerById = new Map(
     providers.map((item) => [item.id, item] as const),
   );
+  const providerCounts = new Map<string, Map<string, number>>();
+  for (const thread of project.sessions) {
+    const agentId = thread.agentId || "codex";
+    const counts = providerCounts.get(agentId) || new Map<string, number>();
+    counts.set(thread.providerId, (counts.get(thread.providerId) || 0) + 1);
+    providerCounts.set(agentId, counts);
+  }
+  const commonProviderByAgent = new Map(
+    [...providerCounts].map(([agentId, counts]) => [
+      agentId,
+      [...counts].sort((a, b) => b[1] - a[1])[0]?.[0],
+    ]),
+  );
   return (
     <div className={`project-group ${project.pinned ? "pinned" : ""}`}>
       <div className="project-heading">
@@ -81,13 +105,23 @@ export function ProjectGroupView({
         >
           {collapsed ? <ChevronRight /> : <ChevronDown />}
           <Folder />
-          <span title={project.cwd}>{project.name}</span>
+          <span className="project-name" title={project.cwd}>
+            {project.name}
+          </span>
           {project.pinned && <Pin className="pin-mark" />}
+          {project.sessions.length > 1 && (
+            <small
+              className="project-session-count"
+              title={`${project.sessions.length} 个会话`}
+            >
+              · {project.sessions.length}
+            </small>
+          )}
         </button>
-        <b>{project.sessions.length}</b>
         <button
           className="project-add"
           title={`在 ${project.name} 中新建会话`}
+          aria-label={`在 ${project.name} 中新建会话`}
           onClick={onAdd}
         >
           <Plus />
@@ -95,6 +129,7 @@ export function ProjectGroupView({
         <button
           className="project-add"
           title="项目菜单"
+          aria-label={`${project.name} 项目菜单`}
           onClick={() => setMenu(true)}
         >
           <MoreHorizontal />
@@ -117,20 +152,16 @@ export function ProjectGroupView({
       {visible.map((thread) => {
         const key = sessionKey(thread);
         const unseen = unseenSessions.has(key);
+        const wake = wakeStates?.get(key);
         const forks = forkCounts.get(thread.id) || 0;
         const provider = providerById.get(thread.providerId);
         const searchMatch = searchMatches.get(
           `${thread.agentId || "codex"}:${thread.id}`,
         );
-        const agentLabel =
-          thread.agentId === "claude"
-            ? "Claude"
-            : thread.agentId === "opencode"
-              ? "OpenCode"
-              : "Codex";
+        const agentLabel = agentShortName(thread.agentId);
         const providerLabel =
           provider?.name ||
-          (thread.agentId === "claude" || thread.agentId === "opencode"
+          (thread.agentId && thread.agentId !== "codex"
             ? ""
             : thread.providerId);
         return (
@@ -170,7 +201,12 @@ export function ProjectGroupView({
                 <MoreHorizontal />
               </button>
             </div>
-            <div className="thread-meta">
+            <div
+              className="thread-meta"
+              title={[agentLabel, providerLabel, thread.model]
+                .filter(Boolean)
+                .join(" · ")}
+            >
               <time
                 dateTime={
                   Number.isFinite(thread.updatedAt)
@@ -186,7 +222,10 @@ export function ProjectGroupView({
               >
                 {agentLabel}
               </small>
-              {providerLabel ? (
+              {providerLabel &&
+              (searchQuery.trim() ||
+                thread.providerId !==
+                  commonProviderByAgent.get(thread.agentId || "codex")) ? (
                 <small
                   className="provider-badge session-provider"
                   style={
@@ -203,23 +242,39 @@ export function ProjectGroupView({
                   {providerLabel}
                 </small>
               ) : null}
-              <small
-                className={
-                  thread.controlMode === "history"
-                    ? "history-badge"
-                    : "mode-badge"
-                }
-                onClick={
-                  thread.controlMode === "history"
-                    ? (event) => {
-                        event.stopPropagation();
-                        onHistory(thread);
-                      }
-                    : undefined
-                }
-              >
-                {thread.controlMode === "managed" ? "受管" : "历史"}
-              </small>
+              {thread.controlMode === "history" && (
+                <small
+                  className="history-badge"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onHistory(thread);
+                  }}
+                >
+                  历史
+                </small>
+              )}
+              {thread.locked ? (
+                <small
+                  className="lock-badge"
+                  title="会话正被其它进程占用，仅可查看历史"
+                >
+                  <Lock />
+                  占用中
+                </small>
+              ) : null}
+              {wake ? (
+                <small
+                  className={`wake-badge ${wake}`}
+                  title={
+                    wake === "lost"
+                      ? "deck-wake watcher 已失联，远端任务没人盯了"
+                      : "deck-wake 正在监督远端任务"
+                  }
+                >
+                  <Radar aria-hidden="true" />
+                  {wake === "lost" ? "失联" : "监督中"}
+                </small>
+              ) : null}
               {forks > 0 && <small>{forks} 分支</small>}
             </div>
             {searchMatch && (
@@ -243,7 +298,13 @@ export function ProjectGroupView({
   );
 }
 
-function SearchHighlight({ text, query }: { text: string; query: string }) {
+export function SearchHighlight({
+  text,
+  query,
+}: {
+  text: string;
+  query: string;
+}) {
   const needle = query.trim();
   const index = text.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
   if (!needle || index < 0) return <span>{text}</span>;

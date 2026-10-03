@@ -1,0 +1,216 @@
+/* 移动端底栏（总览 / 会话 / 新建 / 工具 / 设置）与一级页面的配套调整。
+   底栏只在移动端的一级页面渲染（App 上挂 .has-tabbar），进会话后让位给输入框。
+   高度刻意压低：图标 20px + 一行 12px 标签，新建是居中的小胶囊而非悬浮大圆钮。 */
+:root {
+  --tabbar-h: 50px;
+}
+
+.mobile-tabbar {
+  display: none;
+}
+
+/* ActionSheet 的富条目：图标 + 标题 + 副标题（工具列表、新建时的项目快选）。 */
+.action-sheet button.rich {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 8px;
+}
+
+.action-sheet button.rich > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--text-dim);
+}
+
+.action-sheet button.rich > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action-sheet button.rich b,
+.action-sheet button.rich small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-sheet button.rich b {
+  font-weight: 600;
+}
+
+.action-sheet button.rich small {
+  color: var(--text-faint);
+  font-size: var(--fs-caption);
+  font-weight: 400;
+}
+
+/* 总览行尾的「···」：窄一点，桌面端悬停/聚焦时才显出来。 */
+.home-row-more {
+  width: 36px;
+}
+
+.home-row-more:hover {
+  color: var(--text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .home-row .home-row-more {
+    opacity: 0;
+  }
+  .home-row:hover .home-row-more,
+  .home-row:focus-within .home-row-more {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell.has-tabbar {
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  }
+
+  /* 会话页（/sessions）是整屏侧栏：让出底栏，顶部品牌行与底部入口都交给底栏。 */
+  .app-shell.has-tabbar .sidebar {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  }
+
+  .app-shell.has-tabbar .sidebar .brand,
+  .app-shell.has-tabbar .sidebar-footer,
+  .app-shell.has-tabbar .new-session-btn,
+  .app-shell.has-tabbar .monitor-new {
+    display: none;
+  }
+
+  .app-shell.has-tabbar .toast-stack {
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 12px);
+  }
+
+  .mobile-tabbar {
+    position: fixed;
+    z-index: 30;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    padding: 0 4px env(safe-area-inset-bottom);
+    border-top: 1px solid var(--line);
+    background: var(--glass-strong);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .mobile-tabbar > button {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--text-faint);
+    font: inherit;
+    font-size: var(--fs-caption);
+    line-height: 14px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 抵消 styles.css 里遗留的全局 `nav button` / `nav button span`
+     （固定 42px 高、左对齐，标签带灰色胶囊底和 margin-left:auto）。 */
+  .mobile-tabbar > button {
+    width: auto;
+    height: auto;
+    font-weight: 500;
+    text-align: center;
+  }
+
+  .mobile-tabbar > button > span {
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+
+  .mobile-tabbar > button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mobile-tabbar > button.on {
+    color: var(--accent);
+  }
+
+  .mobile-tabbar > button.on span {
+    font-weight: 600;
+  }
+
+  .mobile-tabbar > button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -4px;
+    border-radius: var(--radius-sm);
+  }
+
+  .mobile-tabbar > .mobile-tabbar-new {
+    align-self: center;
+    justify-self: center;
+    width: 46px;
+    height: 34px;
+    border-radius: 11px;
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+
+  .mobile-tabbar > .mobile-tabbar-new svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .mobile-tabbar > .mobile-tabbar-new:active {
+    transform: scale(0.96);
+  }
+
+  .mobile-tabbar-badge {
+    position: absolute;
+    top: 3px;
+    left: calc(50% + 6px);
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--wait);
+    color: var(--surface);
+    font-size: var(--fs-caption);
+    font-weight: 700;
+    font-style: normal;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  .mobile-tabbar-dot {
+    position: absolute;
+    top: 6px;
+    left: calc(50% + 8px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--info);
+  }
+}
+
+@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
+  .mobile-tabbar > .mobile-tabbar-new:active {
+    transform: none;
+  }
+}

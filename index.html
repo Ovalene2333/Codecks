@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#0A0B0D" />
+    <meta name="theme-color" content="#10131a" />
     <link rel="icon" href="/src/assets/logo.svg" type="image/svg+xml" />
     <title>Codex Deck</title>
     <script>
@@ -27,32 +27,34 @@
               : matchMedia("(prefers-reduced-motion: reduce)").matches
                 ? "off"
                 : "on";
+          var effects = value.effects === "off" ? "off" : "on";
           document.documentElement.dataset.theme = theme;
           document.documentElement.dataset.motion = motion;
+          document.documentElement.dataset.effects = effects;
           document.documentElement.style.colorScheme = theme;
           document.querySelector('meta[name="theme-color"]').content =
-            theme === "light" ? "#f6f7f9" : "#0a0b0d";
+            theme === "light" ? "#f4f6f9" : "#10131a";
         } catch (error) {}
       })();
     </script>
     <style>
       :root {
-        --boot-bg: #0a0b0d;
-        --boot-sidebar: #0c0e11;
-        --boot-surface: #12151a;
-        --boot-mid: #181c22;
-        --boot-text: #f2f4f7;
-        --boot-dim: #9aa6b6;
-        --boot-line: #23282f;
+        --boot-bg: #10131a;
+        --boot-sidebar: #131720;
+        --boot-surface: #1a1f2b;
+        --boot-mid: #222836;
+        --boot-text: #e9ecf2;
+        --boot-dim: #97a1b0;
+        --boot-line: #262c38;
       }
       html[data-theme="light"] {
-        --boot-bg: #f6f7f9;
-        --boot-sidebar: #fff;
-        --boot-surface: #e8ebef;
-        --boot-mid: #f7f8fa;
-        --boot-text: #171a1f;
-        --boot-dim: #626b78;
-        --boot-line: #d9dee5;
+        --boot-bg: #f4f6f9;
+        --boot-sidebar: #fbfcfe;
+        --boot-surface: #eef1f5;
+        --boot-mid: #e4e8ef;
+        --boot-text: #1d2433;
+        --boot-dim: #5d6572;
+        --boot-line: #e2e6ec;
       }
       html,
       body {

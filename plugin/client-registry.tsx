@@ -1,10 +1,14 @@
 import type { ComponentType } from "react";
-import { GitBranch, Puzzle, Terminal } from "lucide-react";
+import { FilePen, GitBranch, Puzzle, Terminal, Zap } from "lucide-react";
 import type { ToolDescriptor } from "./types";
 import { GitView } from "./git/GitView.client";
 import { TerminalView } from "./terminal/TerminalView.client";
+import { TextFilesView } from "./text-files/TextFilesView.client";
+import { QuickCommandView } from "./quick-command/QuickCommandView.client";
 import "./git/git.css";
 import "./terminal/terminal.css";
+import "./text-files/text-files.css";
+import "./quick-command/quick-command.css";
 
 export interface ToolViewProps {
   tool: ToolDescriptor;
@@ -21,14 +25,21 @@ interface ClientPlugin {
 const plugins: Record<string, ClientPlugin> = {
   terminal: { icon: Terminal, view: TerminalView },
   git: { icon: GitBranch, view: GitView },
+  "text-editor": { icon: FilePen, view: TextFilesView },
+  commands: { icon: Zap, view: QuickCommandView },
 };
 
 export const toolIcon = (id: string) => plugins[id]?.icon || Puzzle;
 export const toolView = (id: string) => plugins[id]?.view;
 
+/** 历史路径 → 现行路径；保持旧链接/书签可用。 */
+const TOOL_ALIASES: Record<string, string> = {
+  "/page/terminal": "/terminal",
+  "/text-files": "/text-editor",
+};
+
 export const toolPath = (pathname: string) =>
-  pathname === "/page/terminal"
-    ? "/terminal"
-    : Object.keys(plugins).find((id) => pathname === `/${id}`)
-      ? pathname
-      : undefined;
+  TOOL_ALIASES[pathname] ||
+  (Object.keys(plugins).find((id) => pathname === `/${id}`)
+    ? pathname
+    : undefined);

@@ -120,6 +120,18 @@ export function threadsForProject(
   );
 }
 
+/**
+ * 「新建」快捷面板的候选项目：沿用 mergeProjectGroups 的顺序（置顶优先、
+ * 再按最近活动），跳过隐藏项目和没有真实路径的占位分组。
+ */
+export function quickNewProjects(groups: ProjectGroup[], limit = 5) {
+  return groups
+    .filter(
+      (group) => !group.hidden && group.cwd && group.cwd !== "未指定路径",
+    )
+    .slice(0, limit);
+}
+
 /** Sessions updated within this window stay visible while a project is collapsed. */
 export const COLLAPSED_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Upper bound for a collapsed preview; active sessions are never dropped by it. */
@@ -200,7 +212,9 @@ export function filterProjectGroups(
                 ? "Claude Code"
                 : thread.agentId === "opencode"
                   ? "OpenCode"
-                  : "Codex";
+                  : !thread.agentId || thread.agentId === "codex"
+                    ? "Codex"
+                    : thread.agentId;
             return (
               Boolean(options?.matchingThread?.(thread)) ||
               thread.name.toLowerCase().includes(needle) ||
@@ -239,12 +253,17 @@ export function resolveNewThreadDefaults(input: {
     defaults.approvalPolicy === "never" &&
     !defaults.approvalsReviewer,
   );
-  const preferredProviderId = defaults?.providerId || prefs?.lastProviderId;
-  const preferredProvider = online.find(
-    (provider) => provider.id === preferredProviderId,
-  );
+  // online 是 Runtime 的瞬时状态，不是用户的供应商偏好。启动/重连时
+  // 仍保留明确选择；项目供应商已删除或属于别的 Agent 时继续查全局默认。
+  const preferredProvider =
+    input.providers.find((provider) => provider.id === defaults?.providerId) ||
+    input.providers.find((provider) => provider.id === prefs?.lastProviderId);
   const providerId =
-    preferredProvider?.id || online[0]?.id || input.providers[0]?.id || "";
+    preferredProvider?.id ||
+    online.find((provider) => provider.current)?.id ||
+    online[0]?.id ||
+    input.providers.find((provider) => provider.current)?.id ||
+    input.providers[0]?.id || "";
   const provider = input.providers.find((item) => item.id === providerId);
   const cwd = input.cwd || input.project?.cwd || "";
   // "default" 是 Claude/OpenCode 的占位写法，串到 Codex 会被当成真实模型 id。

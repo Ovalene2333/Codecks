@@ -41,6 +41,17 @@ test("thread summary cache persists OpenCode rows", async () => {
   assert.equal(loaded.threads[0]?.agentId, "opencode");
 });
 
+test("thread summary cache persists ACP agent rows", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-cache-acp-"));
+  const cache = new ThreadSummaryCache(dir);
+  cache.schedule([{ ...thread, agentId: "devin", providerId: "devin-current" }]);
+  await cache.flush();
+
+  const loaded = await new ThreadSummaryCache(dir).load();
+  assert.equal(loaded.threads[0]?.agentId, "devin");
+  assert.equal(loaded.threads[0]?.updatedAt, 42);
+});
+
 test("thread summary cache ignores malformed rows", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-cache-bad-"));
   const cache = new ThreadSummaryCache(dir);

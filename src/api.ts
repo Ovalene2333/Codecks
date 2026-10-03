@@ -8,11 +8,8 @@ export const setToken = (next: string) => {
   storage?.setItem("codex-deck-token", next);
 };
 
-export async function api<T = any>(
-  url: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const response = await fetch(`/api${url}`, {
+export async function rawApi(url: string, options: RequestInit = {}) {
+  return fetch(`/api${url}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -20,6 +17,13 @@ export async function api<T = any>(
       ...options.headers,
     },
   });
+}
+
+export async function api<T = any>(
+  url: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const response = await rawApi(url, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok)
     throw new Error(data.error || `请求失败 (${response.status})`);

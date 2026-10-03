@@ -8,6 +8,7 @@ import {
   FolderSearch,
   GitFork,
   Pencil,
+  Puzzle,
   RotateCcw,
   ScanSearch,
   Undo2,
@@ -18,7 +19,11 @@ import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown, DeferredImage } from "./markdown";
 import { assistantImageParts, userImageParts } from "./images";
-import type { StreamedAgentMessage, StreamedTurnItem } from "./streaming";
+import type {
+  StreamedAgentMessage,
+  StreamedEntry,
+  StreamedTurnItem,
+} from "./streaming";
 import {
   activeStreamItemId,
   mergeTurnItems,
@@ -27,14 +32,21 @@ import {
 import { userMessageText } from "./user-message";
 import type { PendingUserMessage } from "./optimistic";
 import {
+  collabAgentStateLabel,
+  collabReceiverNames,
+  collabToolLabel,
   commandPresentation,
   fileChangeGroupLabel,
   groupTurnItems,
   isTrivialToolOutput,
   openCodeFileTarget,
   reasoningText,
+  subAgentActivityName,
+  subAgentKindLabel,
+  subAgentKindVerb,
   toolCallPresentation,
   turnReadTargets,
+  type TurnRenderEntry,
 } from "./turn-items";
 import { uiAdapterFor } from "./adapters";
 
@@ -47,11 +59,72 @@ function UnknownItem({ item }: { item: any }) {
   } catch {
     raw = String(item?.type || "unknown");
   }
+  const type = displayText(item?.type) || "unknown";
+  // 兜底行也走 tool-row 语言：类型名当动作，挑一个最像“对象”的字段当目标。
+  const hint = displayText(
+    item?.title || item?.command || item?.path || item?.tool || item?.name,
+  );
   return (
-    <details className="unknown-item">
-      <summary>{item?.type || "unknown"}</summary>
+    <details className="tool-row unknown-item">
+      <summary>
+        <Puzzle />
+        <span className="tool-action">{type}</span>
+        {hint ? (
+          <code className="tool-command" title={hint}>
+            {hint}
+          </code>
+        ) : null}
+      </summary>
       <pre>{raw}</pre>
     </details>
+  );
+}
+
+/**
+ * 子代理卡片：OpenCode 的 task、Codex 的 collabAgentToolCall 与
+ * subAgentActivity 共用同一副面孔——Bot 图标 + 状态色竖条 + 标题 +
+ * 右侧标签 + 可展开输出。
+ */
+function SubAgentCard({
+  state,
+  action,
+  title,
+  tag,
+  output,
+  activity,
+}: {
+  state: "running" | "failed" | "interrupted" | "ok";
+  action: string;
+  title?: string;
+  tag?: string;
+  output?: string;
+  activity?: string;
+}) {
+  return (
+    <div className={`tool-row subagent-row ${state}`}>
+      <details>
+        <summary>
+          <Bot />
+          <span className="tool-action">{action}</span>
+          {title ? (
+            <code className="tool-command" title={title}>
+              {title}
+            </code>
+          ) : null}
+          {tag ? (
+            <span className="subagent-agent" title={tag}>
+              {tag}
+            </span>
+          ) : null}
+        </summary>
+        {output ? <pre>{output}</pre> : null}
+      </details>
+      {state === "running" && activity ? (
+        <div className="subagent-activity" title={activity}>
+          {activity}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -86,6 +159,8 @@ function TurnItemInner({
   if (item.type === "userMessage") {
     const images = userImageParts(item);
     const text = userText(item);
+    // 整条都是注入上下文/控制回显的消息剥净后为空，不渲染空气泡。
+    if (!text && !images.length) return null;
     return (
       <div className="user-message-wrap">
         <div className="message user">
@@ -115,7 +190,10 @@ function TurnItemInner({
             {onEditUserMessage && (
               <button
                 type="button"
-                title="编辑后重发"
+                title={(thread.agentId || "codex") === "codex"
+                  ? "回退此条及之后的对话，工作区文件不变"
+                  : "撤回此条及之后，在当前会话编辑"}
+                disabled={messageActionsDisabled}
                 onClick={() => onEditUserMessage(item)}
               >
                 <Pencil />
@@ -187,22 +265,6 @@ function TurnItemInner({
       </div>
     );
   }
-  const standaloneImages = assistantImageParts(item);
-  if (standaloneImages.length > 0)
-    return (
-      <div className="message agent image-message">
-        <div className="message-images assistant-images">
-          {standaloneImages.map((image, index) => (
-            <DeferredImage
-              key={`${image.url}-${index}`}
-              src={image.url}
-              alt={image.alt || "生成或引用的图片"}
-              thread={thread}
-            />
-          ))}
-        </div>
-      </div>
-    );
   if (item.type === "reasoning")
     return (
       <details className="tool-row reasoning">
@@ -220,39 +282,95 @@ function TurnItemInner({
         : item.status === "failed"
           ? "failed"
           : "ok";
-    const title = displayText(item.title) || "子代理";
-    const agent = displayText(item.agent);
-    const activity = displayText(item.activity);
-    const output = displayText(item.aggregatedOutput);
     return (
-      <div className={`tool-row subagent-row ${state}`}>
-        <details>
-          <summary>
-            <Bot />
-            <span className="tool-action">
-              {state === "running"
-                ? "子代理执行中"
-                : state === "failed"
-                  ? "子代理失败"
-                  : "子代理"}
-            </span>
-            <code className="tool-command" title={title}>
-              {title}
-            </code>
-            {agent ? (
-              <span className="subagent-agent" title={agent}>
-                {agent}
-              </span>
-            ) : null}
-          </summary>
-          {output ? <pre>{output}</pre> : null}
-        </details>
-        {state === "running" && activity ? (
-          <div className="subagent-activity" title={activity}>
-            {activity}
-          </div>
-        ) : null}
-      </div>
+      <SubAgentCard
+        state={state}
+        action={
+          state === "running"
+            ? "子代理执行中"
+            : state === "failed"
+              ? "子代理失败"
+              : "子代理"
+        }
+        title={displayText(item.title) || "子代理"}
+        tag={displayText(item.agent)}
+        output={displayText(item.aggregatedOutput)}
+        activity={displayText(item.activity)}
+      />
+    );
+  }
+  // Codex 多代理：subAgentActivity 是子代理生命周期的 tick
+  // （{kind, agentThreadId, agentPath}），展开给路径与线程 id 方便对照。
+  if (item.type === "subAgentActivity") {
+    const kind = String(item.kind || "");
+    const name = subAgentActivityName(item);
+    const path = displayText(item.agentPath ?? item.agent_path);
+    const threadRef = displayText(item.agentThreadId ?? item.agent_thread_id);
+    return (
+      <SubAgentCard
+        state={kind === "interrupted" ? "interrupted" : "ok"}
+        action={subAgentKindLabel(kind)}
+        title={name || threadRef}
+        output={[path, threadRef].filter(Boolean).join("\n")}
+      />
+    );
+  }
+  // collabAgentToolCall 是父代理侧的协作工具调用（spawn/sendInput/
+  // resume/wait/close），prompt 与 agentsStates 放进展开详情。
+  if (item.type === "collabAgentToolCall") {
+    const state =
+      item.status === "inProgress"
+        ? "running"
+        : item.status === "failed"
+          ? "failed"
+          : "ok";
+    const tool = String(item.tool || "");
+    const prompt = displayText(item.prompt).trim();
+    const receivers = (
+      Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []
+    )
+      .map((id: any) => String(id || ""))
+      .filter(Boolean);
+    const receiverNames = collabReceiverNames(item);
+    const states: Record<string, any> =
+      item.agentsStates && typeof item.agentsStates === "object"
+        ? item.agentsStates
+        : {};
+    const agentIds = [...new Set([...receivers, ...Object.keys(states)])];
+    const agentName = (id: string) => receiverNames.get(id) || id.slice(0, 8);
+    const agentLines = agentIds.map((id) =>
+      [
+        agentName(id),
+        collabAgentStateLabel(states[id]?.status),
+        displayText(states[id]?.message).trim(),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+    const meta = [
+      displayText(item.model),
+      displayText(item.reasoningEffort),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const title =
+      prompt ||
+      (agentIds.length === 1
+        ? agentName(agentIds[0])
+        : agentIds.length > 1
+          ? `${agentIds.length} 个子代理`
+          : "");
+    return (
+      <SubAgentCard
+        state={state}
+        action={collabToolLabel(tool, state === "running")}
+        title={title}
+        tag={displayText(item.model)}
+        output={[meta, prompt, agentLines.join("\n")]
+          .filter(Boolean)
+          .join("\n\n")}
+        activity={agentLines.join(" · ")}
+      />
     );
   }
   if (item.type === "commandExecution") {
@@ -355,6 +473,25 @@ function TurnItemInner({
       </details>
     );
   }
+  // 裸图片项（imageView/imageGeneration 等没有专属渲染器的类型）兜底——
+  // 必须排在已知类型之后，否则带 output/result/path 字段的工具项会被
+  // 误识别成图片卡片。
+  const standaloneImages = assistantImageParts(item);
+  if (standaloneImages.length > 0)
+    return (
+      <div className="message agent image-message">
+        <div className="message-images assistant-images">
+          {standaloneImages.map((image, index) => (
+            <DeferredImage
+              key={`${image.url}-${index}`}
+              src={image.url}
+              alt={image.alt || "生成或引用的图片"}
+              thread={thread}
+            />
+          ))}
+        </div>
+      </div>
+    );
   return <UnknownItem item={item} />;
 }
 
@@ -454,6 +591,46 @@ function ToolGroup({
   );
 }
 
+/** 连续的 subAgentActivity tick 收成一行；展开看每条的种类与目标代理。 */
+function SubAgentTickGroup({ items }: { items: any[] }) {
+  const kinds = [...new Set(items.map((item) => String(item?.kind || "")))];
+  const label =
+    kinds.length === 1 ? subAgentKindLabel(kinds[0]) : "子代理动态";
+  const names = [
+    ...new Set(items.map(subAgentActivityName).filter(Boolean)),
+  ];
+  return (
+    <details
+      className={`tool-row subagent-row subagent-ticks ${kinds.includes("interrupted") ? "interrupted" : "ok"}`}
+    >
+      <summary>
+        <Bot />
+        <span className="tool-action">{label}</span>
+        <span className="file-change-count">{items.length} 条</span>
+        {names.length ? (
+          <code className="tool-command" title={names.join("、")}>
+            {names.join("、")}
+          </code>
+        ) : null}
+      </summary>
+      <ul>
+        {items.map((item, index) => {
+          const name = subAgentActivityName(item);
+          const path = displayText(item?.agentPath ?? item?.agent_path);
+          return (
+            <li key={String(item?.id || index)}>
+              <span className="tool-status">
+                {subAgentKindVerb(item?.kind) || "动态"}
+              </span>
+              <code title={path}>{name}</code>
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
 function ReadSummary({ targets }: { targets: string[] }) {
   if (targets.length === 0) return null;
   return (
@@ -503,10 +680,11 @@ interface TurnBlockProps {
   targetRequest?: number;
   streamed: StreamedAgentMessage[];
   streamedItems?: StreamedTurnItem[];
+  streamedEntries?: StreamedEntry[];
   pendingUsers?: PendingUserMessage[];
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
-  onEditUserMessage?: (item: any) => void;
+  onEditUserMessage?: (turnId: string, item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   onRevertUserMessage?: (turnId: string, item: any) => void;
   messageActionsDisabled?: boolean;
@@ -527,6 +705,13 @@ function streamItemsSignature(items: StreamedTurnItem[] | undefined) {
   return `${items.length}:${items.map((entry) => entry.itemId).join(",")}`;
 }
 
+function streamEntriesSignature(entries: StreamedEntry[] | undefined) {
+  if (!entries || entries.length === 0) return "0";
+  return `${entries.length}:${entries
+    .map((entry) => `${entry.kind === "item" ? "i" : "m"}${entry.itemId}`)
+    .join(",")}`;
+}
+
 function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
   if (prev.turn !== next.turn) return false;
   if (prev.thread !== next.thread) {
@@ -538,6 +723,7 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
       a.status !== b.status ||
       a.cwd !== b.cwd ||
       a.model !== b.model ||
+      a.resolvedModel !== b.resolvedModel ||
       a.reasoningEffort !== b.reasoningEffort ||
       a.agentId !== b.agentId ||
       a.updatedAt !== b.updatedAt
@@ -561,7 +747,9 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
   return (
     streamSignature(prev.streamed) === streamSignature(next.streamed) &&
     streamItemsSignature(prev.streamedItems) ===
-      streamItemsSignature(next.streamedItems)
+      streamItemsSignature(next.streamedItems) &&
+    streamEntriesSignature(prev.streamedEntries) ===
+      streamEntriesSignature(next.streamedEntries)
   );
 }
 
@@ -574,6 +762,7 @@ function TurnBlockInner({
   targetRequest,
   streamed,
   streamedItems = [],
+  streamedEntries,
   pendingUsers = [],
   onCopy,
   onForkFrom,
@@ -591,7 +780,6 @@ function TurnBlockInner({
   const turnItems = active
     ? mergeTurnItems(historyItems, streamedItems)
     : historyItems;
-  const renderEntries = groupTurnItems(turnItems);
   const readTargets = turnReadTargets(turnItems, thread.cwd);
   const streamedByItem = new Map(
     active ? streamed.map((message) => [message.itemId, message.text]) : [],
@@ -600,6 +788,62 @@ function TurnBlockInner({
   const renderedStreamIds = active
     ? streamsCoveredByHistory(turnItems, streamed)
     : new Set<string>();
+  // mergeTurnItems 把未进历史的 live item 追加在末尾；它们应与「同样未进
+  // 历史」的 live 文本按 streamedEntries 的事件序交错渲染，否则运行中的
+  // 时间线会变成「先全部事件、再全部文本」两段式错序。
+  type LiveUnit =
+    | TurnRenderEntry
+    | { kind: "message"; message: StreamedAgentMessage };
+  const liveUnits: LiveUnit[] = [];
+  if (active) {
+    // 老调用方（测试）不传 streamedEntries：退回「item 在前、文本在后」的旧序。
+    const ordered: StreamedEntry[] = streamedEntries ?? [
+      ...streamedItems.map(
+        (entry): StreamedEntry => ({ kind: "item", itemId: entry.itemId }),
+      ),
+      ...streamed.map(
+        (message): StreamedEntry => ({
+          kind: "message",
+          itemId: message.itemId,
+        }),
+      ),
+    ];
+    const historyIds = new Set(
+      historyItems
+        .map((item: any) => String(item?.id || ""))
+        .filter(Boolean),
+    );
+    const itemById = new Map(
+      streamedItems.map((entry) => [entry.itemId, entry.item]),
+    );
+    const messageById = new Map(
+      streamed.map((message) => [message.itemId, message]),
+    );
+    let run: any[] = [];
+    const flushRun = () => {
+      if (!run.length) return;
+      liveUnits.push(...groupTurnItems(run));
+      run = [];
+    };
+    for (const entry of ordered) {
+      if (entry.kind === "item") {
+        if (historyIds.has(entry.itemId)) continue;
+        const item = itemById.get(entry.itemId);
+        if (item) run.push(item);
+        continue;
+      }
+      if (renderedStreamIds.has(entry.itemId)) continue;
+      const message = messageById.get(entry.itemId);
+      if (!message) continue;
+      flushRun();
+      liveUnits.push({ kind: "message", message });
+    }
+    flushRun();
+  }
+  const renderEntries: LiveUnit[] = [
+    ...groupTurnItems(turnItems.slice(0, historyItems.length)),
+    ...liveUnits,
+  ];
   const newLiveIds = new Set(
     streamedItems.map((entry) => String(entry.itemId || "")).filter(Boolean),
   );
@@ -608,11 +852,15 @@ function TurnBlockInner({
   for (const message of pendingUsers) {
     const sentIds = new Set(message.liveItemIds || []);
     const index = renderEntries.findIndex((entry) => {
-      const ids =
-        entry.kind === "fileChangeGroup" || entry.kind === "toolGroup"
-          ? entry.items.map((item) => String(item?.id || ""))
-          : [String(entry.item?.id || "")];
-      return ids.some((id) => newLiveIds.has(id) && !sentIds.has(id));
+      const ids: string[] =
+        entry.kind === "fileChangeGroup" ||
+        entry.kind === "toolGroup" ||
+        entry.kind === "subAgentGroup"
+          ? entry.items.map((item: any) => String(item?.id || ""))
+          : entry.kind === "item"
+            ? [String(entry.item?.id || "")]
+            : [];
+      return ids.some((id: string) => newLiveIds.has(id) && !sentIds.has(id));
     });
     if (index < 0) pendingAtEnd.push(message);
     else
@@ -621,6 +869,10 @@ function TurnBlockInner({
   const started =
     Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
     thread.updatedAt;
+  // 服务端按回合打标（历史或发送时快照）；没有打标的旧数据才回落到
+  // 会话当前设置。打标过的回合不回落 effort，「当时没设」就是没设。
+  const model = turn.model || thread.resolvedModel || thread.model;
+  const effort = turn.model ? turn.reasoningEffort : thread.reasoningEffort;
   return (
     <section
       className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
@@ -628,8 +880,8 @@ function TurnBlockInner({
     >
       <header className="turn-head">
         Turn {index} · {fmtTime(started)}
-        {turn.model || thread.model ? ` · ${turn.model || thread.model}` : ""}
-        {thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}
+        {model ? ` · ${model}` : ""}
+        {effort ? ` · ${effort}` : ""}
       </header>
       <ReadSummary targets={readTargets} />
       {renderEntries.map((entry, itemIndex) => {
@@ -638,6 +890,20 @@ function TurnBlockInner({
             <OptimisticUserMessage key={message.id} message={message} />
           ),
         );
+        if (entry.kind === "message") {
+          const message = entry.message;
+          return (
+            <Fragment key={`live-msg-${message.itemId}`}>
+              {pendingMarkup}
+              <div
+                className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
+              >
+                <AssistantMarkdown text={message.text} onCopy={onCopy} />
+                {message.itemId === streamingItemId && <i />}
+              </div>
+            </Fragment>
+          );
+        }
         if (entry.kind === "fileChangeGroup")
           return (
             <Fragment key={`file-group-${entry.items[0]?.id || itemIndex}`}>
@@ -661,6 +927,13 @@ function TurnBlockInner({
               />
             </Fragment>
           );
+        if (entry.kind === "subAgentGroup")
+          return (
+            <Fragment key={`subagent-group-${entry.items[0]?.id || itemIndex}`}>
+              {pendingMarkup}
+              <SubAgentTickGroup items={entry.items} />
+            </Fragment>
+          );
         const item = entry.item;
         const liveText =
           item.type === "agentMessage" && item.id
@@ -678,7 +951,11 @@ function TurnBlockInner({
             streaming={String(item.id) === streamingItemId}
             cwd={thread.cwd}
             onCopy={onCopy}
-            onEditUserMessage={onEditUserMessage}
+            onEditUserMessage={
+              onEditUserMessage
+                ? (item) => onEditUserMessage(String(turn.id), item)
+                : undefined
+            }
             onRetryUserMessage={
               onRetryUserMessage
                 ? (item) => onRetryUserMessage(String(turn.id), item)
@@ -712,18 +989,6 @@ function TurnBlockInner({
       {pendingAtEnd.map((message) => (
         <OptimisticUserMessage key={message.id} message={message} />
       ))}
-      {active &&
-        streamed
-          .filter((message) => !renderedStreamIds.has(message.itemId))
-          .map((message) => (
-            <div
-              className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
-              key={message.itemId}
-            >
-              <AssistantMarkdown text={message.text} onCopy={onCopy} />
-              {message.itemId === streamingItemId && <i />}
-            </div>
-          ))}
       {completed && turn.id && onForkFrom && (
         <button
           type="button"

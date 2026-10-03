@@ -25,12 +25,21 @@ import {
 } from "../codexLabels";
 import { basename } from "../format";
 import { isWslCwd, toggleWslCwd } from "../wsl-path";
-import { defaultAgentId, opencodeProviderId, type AgentId } from "../agents";
+import {
+  agentProtocol,
+  capabilitiesFor,
+  defaultAgentId,
+  isAgentEnabled,
+  opencodeProviderId,
+  type AgentId,
+  type AgentProtocol,
+} from "../agents";
 import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 
 export function NewThreadModal({
   providers,
   agents,
+  agentProfiles = [],
   initialCwd = "",
   project,
   preferences,
@@ -40,12 +49,18 @@ export function NewThreadModal({
 }: {
   providers: Provider[];
   agents: AgentDescriptor[];
+  agentProfiles?: AgentProfile[];
   initialCwd?: string;
   project?: ProjectRecord;
   preferences?: Snapshot["preferences"];
   runtimeWsl?: boolean;
   onClose: () => void;
-  onCreated: (agentId: AgentId, providerId: string, id: string) => void;
+  onCreated: (
+    agentId: AgentId,
+    providerId: string,
+    id: string,
+    thread: any,
+  ) => void;
 }) {
   const defaults = resolveNewThreadDefaults({
     cwd: initialCwd,
@@ -58,14 +73,74 @@ export function NewThreadModal({
     agents,
     project?.defaults?.agentId || preferences?.lastAgentId,
   );
+  // 已停用的 agent 不能新建会话：选择器里直接不出现，在设置里启用后才回来。
+  const enabledAgents = agents.filter(isAgentEnabled);
+  const agentOptions: Pick<
+    AgentDescriptor,
+    "id" | "name" | "online" | "starting" | "protocol" | "fallbackFor"
+  >[] = enabledAgents.length
+    ? enabledAgents
+    : [
+        {
+          id: "codex",
+          name: "Codex",
+          protocol: "native",
+          online: true,
+          starting: false,
+        },
+      ];
+  const nativeAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "native",
+  );
+  const acpAgents = agentOptions.filter(
+    (agent) => agentProtocol(agent) === "acp",
+  );
   const [agentId, setAgentId] = useState<AgentId>(preferredAgentId);
-  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
+  const [protocolTab, setProtocolTab] = useState<AgentProtocol>(() => {
+    const preferred = agentOptions.find(
+      (agent) => agent.id === preferredAgentId,
+    );
+    return preferred ? agentProtocol(preferred) : "native";
+  });
+  const listedAgents = acpAgents.length
+    ? protocolTab === "acp"
+      ? acpAgents
+      : nativeAgents
+    : agentOptions;
+  // 快照的 agentProfiles 已汇总各 adapter 的 publicProfiles（ACP 的
+  // `${id}-current` 占位也在其中）：先按它渲染最终形态，再后台静默校验，
+  // 否则每个弹窗都要等一次 /profiles 往返才出现最终界面。
+  const profilesFor = (id: AgentId) =>
+    agentProfiles.filter((profile) => profile.agentId === id);
+  const preferredProfile = (list: AgentProfile[]) =>
+    list.find((profile) => profile.current && profile.enabled !== false) ||
+    list.find((profile) => profile.enabled !== false);
+  // 服务端把 `${id}-current` 视作「当前配置档」占位；opencode 的 providerId
+  // 由模型 id 携带，留空沿用旧行为。
+  const placeholderProviderId = (id: AgentId) =>
+    id === "opencode" ? "" : `${id}-current`;
+  const seedProviderId = (id: AgentId) =>
+    preferredProfile(profilesFor(id))?.id || placeholderProviderId(id);
+  const [refreshedProfiles, setRefreshedProfiles] = useState<
+    Record<string, AgentProfile[]>
+  >({});
+  const profiles =
+    agentId === "codex"
+      ? []
+      : (refreshedProfiles[agentId] ?? profilesFor(agentId));
   const [profilesLoading, setProfilesLoading] = useState(false);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     ...defaults,
+    providerId:
+      preferredAgentId === "codex"
+        ? defaults.providerId
+        : seedProviderId(preferredAgentId),
+    model: preferredAgentId === "codex" ? defaults.model : "default",
+    reasoningEffort:
+      preferredAgentId === "codex" ? defaults.reasoningEffort : "",
     name: "",
     personality: "" as "" | Personality,
-  });
+  }));
   const [emptyWslPathMode, setEmptyWslPathMode] = useState(runtimeWsl);
   const wslPathMode = form.cwd.trim() ? isWslCwd(form.cwd) : emptyWslPathMode;
   const [browse, setBrowse] = useState(false);
@@ -74,29 +149,35 @@ export function NewThreadModal({
   const submittingRef = useRef(false);
   useEffect(() => {
     if (agentId === "codex") {
-      setProfiles([]);
+      setProfilesLoading(false);
       return;
     }
     let cancelled = false;
-    setProfilesLoading(true);
+    const hasSeed = profilesFor(agentId).length > 0;
+    // 没有种子才露出「正在读取…」；有种子时表单已可用，静默校验即可。
+    // 显式赋终值：切到有种子 agent 时要清掉上一个 agent 留下的 loading。
+    setProfilesLoading(!hasSeed);
     api<{ profiles: AgentProfile[] }>(`/agents/${agentId}/profiles`)
       .then((result) => {
         if (cancelled) return;
-        setProfiles(result.profiles);
-        const preferred = result.profiles.find(
-          (profile) => profile.current && profile.enabled !== false,
-        );
-        const firstEnabled = result.profiles.find(
-          (profile) => profile.enabled !== false,
-        );
-        setForm((current) => ({
+        setRefreshedProfiles((current) => ({
           ...current,
-          providerId: preferred?.id || firstEnabled?.id || "",
-          model: "default",
+          [agentId]: result.profiles,
         }));
+        setForm((current) => {
+          // 已选配置档（含刚手选的）在新列表里仍有效就保留。
+          if (result.profiles.some((p) => p.id === current.providerId))
+            return current;
+          return {
+            ...current,
+            providerId:
+              preferredProfile(result.profiles)?.id ||
+              placeholderProviderId(agentId),
+          };
+        });
       })
       .catch((err: any) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled && !hasSeed) setError(err.message);
       })
       .finally(() => {
         if (!cancelled) setProfilesLoading(false);
@@ -106,6 +187,16 @@ export function NewThreadModal({
     };
   }, [agentId]);
 
+  const selectProtocol = (next: AgentProtocol) => {
+    setProtocolTab(next);
+    const group = next === "acp" ? acpAgents : nativeAgents;
+    if (group.some((agent) => agent.id === agentId)) return;
+    const pick =
+      group.find((agent) => agent.online) ||
+      group.find((agent) => agent.starting) ||
+      group[0];
+    if (pick) selectAgent(pick.id);
+  };
   const selectAgent = (next: AgentId) => {
     setAgentId(next);
     setError("");
@@ -120,7 +211,7 @@ export function NewThreadModal({
     else
       setForm((current) => ({
         ...current,
-        providerId: "",
+        providerId: seedProviderId(next),
         model: "default",
         reasoningEffort: "",
       }));
@@ -143,27 +234,24 @@ export function NewThreadModal({
         ...form,
         model: codexModel,
         providerId: form.providerId || undefined,
-        ...(agentId === "opencode"
-          ? {
-              reasoningEffort: form.reasoningEffort || undefined,
+        ...(agentId === "codex"
+          ? { permissionMode: undefined }
+          : {
+              // 非 Codex agent 不使用 codex 的权限/沙箱/personality 字段。
+              reasoningEffort:
+                agentId === "claude"
+                  ? undefined
+                  : form.reasoningEffort || undefined,
               personality: undefined,
               sandbox: undefined,
               approvalPolicy: undefined,
               approvalsReviewer: undefined,
-            }
-          : agentId === "claude"
-            ? {
-                reasoningEffort: undefined,
-                personality: undefined,
-                sandbox: undefined,
-                approvalPolicy: undefined,
-                approvalsReviewer: undefined,
-              }
-            : { permissionMode: undefined }),
+              ...(agentId === "claude" ? {} : { permissionMode: undefined }),
+            }),
         personality: form.personality || undefined,
       };
       const thread = await post(`/agents/${agentId}/threads`, payload);
-      onCreated(agentId, thread.providerId, thread.id);
+      onCreated(agentId, thread.providerId, thread.id, thread);
       onClose();
     } catch (err: any) {
       setError(err.message);
@@ -183,27 +271,44 @@ export function NewThreadModal({
       <form className="form" onSubmit={submit}>
         <label>
           Agent
+          {acpAgents.length ? (
+            <div
+              className="library-segment"
+              role="tablist"
+              aria-label="启动方式"
+            >
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "native" ? "on" : ""}
+                aria-selected={protocolTab === "native"}
+                onClick={() => selectProtocol("native")}
+              >
+                原生
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={protocolTab === "acp" ? "on" : ""}
+                aria-selected={protocolTab === "acp"}
+                onClick={() => selectProtocol("acp")}
+              >
+                ACP
+              </button>
+            </div>
+          ) : null}
           <select
             value={agentId}
             onChange={(event) => selectAgent(event.target.value as AgentId)}
           >
-            {(agents.length
-              ? agents
-              : [
-                  {
-                    id: "codex" as const,
-                    name: "Codex",
-                    online: true,
-                    starting: false,
-                  },
-                ]
-            ).map((agent) => (
+            {listedAgents.map((agent) => (
               <option
                 key={agent.id}
                 value={agent.id}
                 disabled={!agent.online && !agent.starting}
               >
                 {agent.name}
+                {agent.fallbackFor ? "（备选）" : ""}
                 {!agent.online
                   ? agent.starting
                     ? "（启动中）"
@@ -321,24 +426,60 @@ export function NewThreadModal({
             </label>
           </>
         ) : (
-          <ModelPicker
-            agentId="opencode"
-            providerId=""
-            model={form.model}
-            reasoningEffort={form.reasoningEffort}
-            onChange={(next) =>
-              setForm((current) => ({
-                ...current,
-                model: next.model,
-                reasoningEffort: next.reasoningEffort,
-                // The model id carries the provider, so the thread keeps
-                // pointing at the right one without a second picker.
-                ...(opencodeProviderId(next.model)
-                  ? { providerId: opencodeProviderId(next.model) }
-                  : {}),
-              }))
-            }
-          />
+          <>
+            <ModelPicker
+              agentId={agentId}
+              // ACP agent 的目录能力由 descriptor 声明（spec.models 或既有
+              // 会话的模型表）；没有目录就不发请求，直接手填。
+              providerId={
+                capabilitiesFor(agents, { agentId }).models
+                  ? form.providerId
+                  : ""
+              }
+              cwd={form.cwd}
+              model={form.model}
+              reasoningEffort={form.reasoningEffort}
+              onChange={(next) =>
+                setForm((current) => ({
+                  ...current,
+                  model: next.model,
+                  reasoningEffort: next.reasoningEffort,
+                  ...(agentId === "opencode" && opencodeProviderId(next.model)
+                    ? // The model id carries the provider, so the thread keeps
+                      // pointing at the right one without a second picker.
+                      { providerId: opencodeProviderId(next.model) }
+                    : {}),
+                }))
+              }
+            />
+            {agentId === "opencode" ? null : profilesLoading ||
+              profiles.length > 1 ? (
+              <label>
+                配置档
+                <select
+                  value={form.providerId}
+                  disabled={profilesLoading}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      providerId: event.target.value,
+                    }))
+                  }
+                >
+                  {profilesLoading ? (
+                    <option value="">正在读取…</option>
+                  ) : (
+                    profiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                        {profile.current ? "（当前）" : ""}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+            ) : null}
+          </>
         )}
         <label>
           工作目录
@@ -481,7 +622,12 @@ export function NewThreadModal({
         <button
           className="primary"
           type="submit"
-          disabled={submitting || !form.providerId || profilesLoading}
+          disabled={
+            submitting ||
+            !form.providerId ||
+            profilesLoading ||
+            !listedAgents.some((agent) => agent.id === agentId)
+          }
         >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}

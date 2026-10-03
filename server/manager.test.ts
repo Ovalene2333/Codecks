@@ -339,6 +339,63 @@ test("unmaterialized threads are read without turns until their first user messa
   ]);
 });
 
+test("a newly started empty Codex thread renders without asking runtime for turns", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: string[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string) => {
+      calls.push(method);
+      throw new Error("list_turns is not supported yet");
+    },
+  });
+  manager.loadedThreads.add("fresh");
+  manager.threads.set("fresh", {
+    id: "fresh", agentId: "codex", providerId: "provider",
+    cwd: "/tmp/project", status: "idle", updatedAt: 1,
+  });
+
+  const thread = await manager.readThread("provider", "fresh");
+  assert.equal(thread.id, "fresh");
+  assert.deepEqual(thread.turns, []);
+  assert.deepEqual(calls, []);
+});
+
+test("Codex falls back to metadata while list_turns is briefly unavailable", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: boolean[] = [];
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      calls.push(params.includeTurns);
+      if (params.includeTurns) throw new Error("list_turns is not supported yet");
+      return { thread: { id: "fresh", cwd: "/tmp/project" } };
+    },
+  });
+  const thread = await manager.readThread("provider", "fresh");
+  assert.equal(thread.id, "fresh");
+  assert.deepEqual(calls, [true, false]);
+});
+
+test("Codex renders a listed empty session when both thread reads reject list_turns", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: boolean[] = [];
+  manager.threads.set("fresh", {
+    id: "fresh", agentId: "codex", providerId: "provider",
+    cwd: "/tmp/project", status: "idle", updatedAt: 1,
+  });
+  manager.knownRollouts.add("fresh");
+  manager.ensure = async () => ({
+    request: async (_method: string, params: any) => {
+      calls.push(params.includeTurns);
+      throw new Error("list_turns is not supported yet");
+    },
+  });
+
+  const thread = await manager.readThread("provider", "fresh");
+  assert.equal(thread.id, "fresh");
+  assert.deepEqual(thread.turns, []);
+  assert.deepEqual(calls, [true, false]);
+});
+
 test("empty rollout reads fall back to metadata like unmaterialized threads", async () => {
   const manager = new CodexManager({} as any, "/tmp") as any;
   const calls: any[] = [];
@@ -542,6 +599,71 @@ test("failed turn exposes its error and a new turn clears it", () => {
   assert.equal(thread.status, "running");
   assert.equal(thread.lastError, undefined);
   assert.equal(thread.errorCode, undefined);
+});
+
+test("turn/started snapshots the model so old turns keep their own model", async () => {
+  const provider = { id: "provider", model: "m", kind: "local-profile" };
+  const stamps = new Map<string, any>();
+  const settings = {
+    get: () => undefined,
+    recordTurnModel: async (
+      _agentId: string,
+      _threadId: string,
+      turnId: string,
+      stamp: any,
+    ) => {
+      stamps.set(turnId, stamp);
+    },
+    turnModel: (_agentId: string, _threadId: string, turnId: string) =>
+      stamps.get(turnId),
+  };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    false,
+    settings as any,
+  ) as any;
+  manager.upsertThread(provider, {
+    id: "thread",
+    cwd: "/tmp",
+    model: "sol",
+  });
+  manager.onNotification("provider", {
+    method: "turn/started",
+    params: { threadId: "thread", turn: { id: "turn-1" } },
+  });
+  // 会话中途切换模型：之后的 turn 记新模型，之前的记录不动。
+  manager.threads.get("thread").model = "luna";
+  manager.threads.get("thread").reasoningEffort = "high";
+  manager.onNotification("provider", {
+    method: "turn/started",
+    params: { threadId: "thread", turn: { id: "turn-2" } },
+  });
+  manager.ensure = async () => ({
+    request: async () => ({
+      thread: {
+        id: "thread",
+        cwd: "/tmp",
+        turns: [
+          { id: "turn-1", status: "completed" },
+          { id: "turn-2", status: "completed" },
+          { id: "turn-old", status: "completed" },
+        ],
+      },
+    }),
+  });
+
+  const full = await manager.readThread("provider", "thread");
+  assert.equal(full.turns[0].model, "sol");
+  assert.equal(full.turns[1].model, "luna");
+  assert.equal(full.turns[1].reasoningEffort, "high");
+  // 没有快照的旧回合不打标，交给前端回落到当前模型。
+  assert.equal(full.turns[2].model, undefined);
 });
 
 test("non-retrying error notification is returned to the thread", () => {
@@ -1862,6 +1984,7 @@ test("retry forks before the selected turn and starts it on the branch", async (
     },
   });
   manager.loadedThreads.add("src");
+  manager.knownRollouts.add("src");
   manager.upsertThread(provider, {
     id: "src",
     cwd: "/tmp",
@@ -1903,6 +2026,7 @@ test("retrying the first turn creates an empty source-linked branch", async () =
     },
   });
   manager.loadedThreads.add("src");
+  manager.knownRollouts.add("src");
   manager.upsertThread(provider, {
     id: "src",
     cwd: "/tmp",

@@ -3,6 +3,7 @@ import { changeKindLabel, displayText, shortenPath } from "../format";
 export type TurnRenderEntry =
   | { kind: "item"; item: any }
   | { kind: "fileChangeGroup"; items: any[]; changes: any[] }
+  | { kind: "subAgentGroup"; items: any[] }
   | { kind: "toolGroup"; items: any[]; label: string; files: string[] };
 
 export function reasoningText(item: any) {
@@ -36,6 +37,24 @@ export function groupTurnItems(items: any[]): TurnRenderEntry[] {
         continue;
       }
       grouped.push({ kind: "item", item: editItems[0] });
+      continue;
+    }
+    if (item?.type === "subAgentActivity") {
+      // Codex 多代理的生命周期 tick 成串出现（spawn 一波就有 N 条
+      // started），逐条占行太吵，≥2 条收成一行可展开的分组。
+      const ticks: any[] = [];
+      while (
+        index < items.length &&
+        items[index]?.type === "subAgentActivity"
+      ) {
+        ticks.push(items[index]);
+        index += 1;
+      }
+      grouped.push(
+        ticks.length > 1
+          ? { kind: "subAgentGroup", items: ticks }
+          : { kind: "item", item: ticks[0] },
+      );
       continue;
     }
     if (item?.type !== "fileChange") {
@@ -343,4 +362,118 @@ export function toolCallPresentation(item: any) {
     jsonText(item?.result) ||
     jsonText(item?.output);
   return { tool, scope, input, output };
+}
+
+/**
+ * Codex 多代理（collab）item 的展示辅助。
+ * subAgentActivity：{kind: started|interacted|interrupted, agentThreadId, agentPath}，
+ * agentPath 形如 /root/p3_explore——/root 是主代理本身，展示时剥掉前缀留
+ * 相对路径，嵌套子代理保留 a/b 层级。
+ */
+export function subAgentName(path: unknown) {
+  const text = displayText(path).trim();
+  if (!text) return "";
+  const rel = text.replace(/^\/+/, "");
+  return rel.startsWith("root/") ? rel.slice(5) : rel;
+}
+
+export function subAgentActivityName(item: any) {
+  return (
+    subAgentName(item?.agentPath ?? item?.agent_path) ||
+    displayText(item?.agentThreadId ?? item?.agent_thread_id).slice(0, 8)
+  );
+}
+
+export function subAgentKindLabel(kind: unknown) {
+  const verb = subAgentKindVerb(kind);
+  return verb ? `子代理${verb}` : "子代理动态";
+}
+
+/** 分组展开里逐条列出的短动词，省掉重复的“子代理”前缀。 */
+export function subAgentKindVerb(kind: unknown) {
+  switch (String(kind || "")) {
+    case "started":
+      return "启动";
+    case "interrupted":
+      return "中断";
+    case "interacted":
+      return "活动";
+    default:
+      return "";
+  }
+}
+
+/**
+ * 新版 collab item 可能带 receiverAgents[{threadId, nickname, role}]；
+ * 旧版只有 receiverThreadIds。返回 threadId → 可读名的映射，展开详情里
+ * 优先展示名字而不是截断的 uuid。
+ */
+export function collabReceiverNames(item: any): Map<string, string> {
+  const agents = Array.isArray(item?.receiverAgents ?? item?.receiver_agents)
+    ? (item?.receiverAgents ?? item?.receiver_agents)
+    : [];
+  const names = new Map<string, string>();
+  for (const agent of agents) {
+    if (!agent || typeof agent !== "object") continue;
+    const id = String(
+      agent.threadId ??
+        agent.agentThreadId ??
+        agent.agent_thread_id ??
+        agent.id ??
+        "",
+    );
+    const name = String(
+      agent.nickname ??
+        agent.agentNickname ??
+        agent.agent_nickname ??
+        agent.name ??
+        agent.role ??
+        agent.agentRole ??
+        agent.agent_role ??
+        "",
+    ).trim();
+    if (id && name) names.set(id, name);
+  }
+  return names;
+}
+
+/** collabAgentToolCall.tool：spawnAgent/sendInput/resumeAgent/wait/closeAgent。 */
+export function collabToolLabel(tool: unknown, running: boolean) {
+  switch (String(tool || "")) {
+    case "spawnAgent":
+      return running ? "正在启动子代理" : "启动子代理";
+    case "sendInput":
+      return running ? "正在发送给子代理" : "发送给子代理";
+    case "resumeAgent":
+      return running ? "正在恢复子代理" : "恢复子代理";
+    case "wait":
+    case "waitAgent":
+      return running ? "正在等待子代理" : "等待子代理";
+    case "closeAgent":
+      return running ? "正在关闭子代理" : "关闭子代理";
+    default:
+      return "子代理";
+  }
+}
+
+/** agentsStates 里的 CollabAgentStatus → 中文。 */
+export function collabAgentStateLabel(status: unknown) {
+  switch (String(status || "")) {
+    case "pendingInit":
+      return "初始化中";
+    case "running":
+      return "运行中";
+    case "interrupted":
+      return "已中断";
+    case "completed":
+      return "已完成";
+    case "errored":
+      return "出错";
+    case "shutdown":
+      return "已关闭";
+    case "notFound":
+      return "未找到";
+    default:
+      return String(status || "");
+  }
 }

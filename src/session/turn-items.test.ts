@@ -334,6 +334,150 @@ test("TurnBlock renders subagent cards with status and expandable output", () =>
   assert.match(html, /共 3 处建议/);
 });
 
+test("TurnBlock renders Codex subAgentActivity ticks and collapses bursts", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const tick = (id: string, kind: string, agentPath: string) => ({
+    id,
+    type: "subAgentActivity",
+    kind,
+    agentThreadId: `agent-${id}`,
+    agentPath,
+  });
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      index: 1,
+      thread,
+      streamed: [],
+      turn: {
+        id: "turn",
+        status: "completed",
+        items: [
+          tick("a", "started", "/root/p3_stronger"),
+          tick("b", "started", "/root/f7_second"),
+          tick("c", "started", "/root/non_qwen_research"),
+          { id: "m", type: "agentMessage", text: "继续" },
+          tick("d", "interrupted", "/root/p3_stronger"),
+        ],
+      },
+    }),
+  );
+  // 三条连续 started 收成一个分组行，不再出现三条虚线 unknown 卡。
+  assert.match(html, /class="tool-row subagent-row subagent-ticks ok"/);
+  assert.match(html, /子代理启动/);
+  assert.match(html, /3 条/);
+  assert.match(html, /p3_stronger、f7_second、non_qwen_research/);
+  assert.doesNotMatch(html, /unknown-item/);
+  // 单独的 interrupted 是与子代理卡片同款的单行。
+  assert.match(html, /subagent-row interrupted/);
+  assert.match(html, /子代理中断/);
+});
+
+test("TurnBlock renders collabAgentToolCall cards and plain wait rows", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      index: 1,
+      thread,
+      streamed: [],
+      turn: {
+        id: "turn",
+        status: "completed",
+        items: [
+          {
+            id: "spawn",
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            senderThreadId: "root-thread",
+            receiverThreadIds: ["01a0f07d-a832-7682-a3dd-6c3272285986"],
+            prompt: "核对实验结果并汇总",
+            model: "gpt-5",
+            reasoningEffort: "high",
+            agentsStates: {
+              "01a0f07d-a832-7682-a3dd-6c3272285986": {
+                status: "completed",
+                message: "done",
+              },
+            },
+          },
+          {
+            id: "wait",
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: "root-thread",
+            receiverThreadIds: [],
+            prompt: null,
+            agentsStates: {},
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /class="tool-row subagent-row ok"/);
+  assert.match(html, /启动子代理/);
+  assert.match(html, /核对实验结果并汇总/);
+  assert.match(html, /gpt-5 · high/);
+  assert.match(html, /01a0f07d 已完成 done/);
+  // wait 没有载荷：卡片只剩一行标题。
+  assert.match(html, /等待子代理/);
+  assert.doesNotMatch(html, /unknown-item/);
+});
+
+test("TurnBlock renders unknown item types as quiet tool rows", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      index: 1,
+      thread,
+      streamed: [],
+      turn: {
+        id: "turn",
+        status: "completed",
+        items: [
+          {
+            id: "mystery",
+            type: "brandNewThing",
+            title: "某种新条目",
+            extra: { nested: true },
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /class="tool-row unknown-item"/);
+  assert.match(html, /brandNewThing/);
+  assert.match(html, /某种新条目/);
+  assert.match(html, /&quot;nested&quot;: true/);
+});
+
 test("TurnBlock collapses consecutive OpenCode edits and hides trivial output", () => {
   const thread: ThreadSummary = {
     id: "thread",
