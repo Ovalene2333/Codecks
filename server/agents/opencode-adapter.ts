@@ -1365,6 +1365,49 @@ export class OpenCodeAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * 轻量重载：opencode serve 把每个目录的实例（配置 + 供应商目录）缓存在
+   * 内存里，外部编辑 opencode.json 或 `opencode auth login` 新增供应商后，
+   * 必须先 dispose 对应实例，下次访问才会按当前文件重建。走
+   * `POST /instance/dispose` 而不是 PATCH /config：后者会把合并结果回写
+   * 进用户配置文件。旧版本缺这个端点时退化为整体重启。
+   */
+  async reload() {
+    if (!this.online) {
+      this.restart();
+      await this.startAll();
+      return;
+    }
+    const directories = new Set<string>();
+    for (const directory of this.options.initialDirectories || [])
+      directories.add(directory);
+    for (const thread of this.threads.values())
+      if (thread.cwd) directories.add(thread.cwd);
+    for (const directory of this.projectCatalogs.keys())
+      directories.add(directory);
+    const dispose = async (directory?: string) => {
+      try {
+        await this.request("/instance/dispose", {
+          method: "POST",
+          directory,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const results = await Promise.all([
+      dispose(),
+      ...[...directories].map((directory) => dispose(directory)),
+    ]);
+    if (!results.some(Boolean)) {
+      this.restart();
+      await this.startAll();
+      return;
+    }
+    await this.refreshAll();
+  }
+
   restart() {
     this.eventAbort?.abort();
     this.eventAbort = undefined;
@@ -2532,6 +2575,16 @@ export class OpenCodeAdapter extends EventEmitter {
       body.part?.sessionID ||
       body.session?.id;
     const thread = sessionId ? this.threads.get(sessionId) : undefined;
+    // 实例被 dispose（我们自己的 reload、外部 PATCH /config 等）后，对应
+    // 目录的供应商/模型目录缓存作废，下次 listModels 重新拉取。
+    if (payload?.type === "server.instance.disposed") {
+      const directory = String(
+        body.directory || event?.directory || "",
+      ).trim();
+      if (directory) this.projectCatalogs.delete(directory);
+      else this.projectCatalogs.clear();
+      return;
+    }
     if (
       payload?.type === "session.created" ||
       payload?.type === "session.updated"

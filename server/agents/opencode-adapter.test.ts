@@ -88,6 +88,99 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
   assert.ok(calls.some((call) => call.url.includes("/session")));
 });
 
+test("OpenCode adapter reload disposes directory instances and re-reads providers", async () => {
+  const disposeCalls: string[] = [];
+  let providerVersion = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/instance/dispose") && init?.method === "POST") {
+        disposeCalls.push(value);
+        providerVersion = 1;
+        return Response.json(true);
+      }
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            openai: {
+              name: "OpenAI",
+              models: { "gpt-5": { name: "GPT-5" } },
+            },
+            ...(providerVersion
+              ? {
+                  "new-provider": {
+                    name: "New",
+                    models: { "new-model": { name: "New Model" } },
+                  },
+                }
+              : {}),
+          },
+          connected: providerVersion
+            ? ["openai", "new-provider"]
+            : ["openai"],
+        });
+      return Response.json([
+        { id: "existing-session", directory: "/work", time: { updated: 1 } },
+      ]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+
+  await adapter.refreshAll();
+  assert.equal(
+    adapter.listModels().some((model: any) => model.id === "new-provider/new-model"),
+    false,
+  );
+
+  await adapter.reload();
+  assert.ok(
+    disposeCalls.some((url) => url.includes("directory=%2Fwork")),
+    "reload must dispose each known project directory",
+  );
+  assert.ok(
+    disposeCalls.some((url) => !url.includes("directory=")),
+    "reload must also dispose the default instance",
+  );
+  assert.ok(
+    adapter
+      .listModels()
+      .some((model: any) => model.id === "new-provider/new-model"),
+    "reload must surface providers added after the server started",
+  );
+});
+
+test("OpenCode adapter drops a directory catalog on server.instance.disposed", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            "dir-provider": { name: "Dir", models: { m: { name: "M" } } },
+          },
+        });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  await adapter.listModels(undefined, "/work");
+  const catalogs = (adapter as any).projectCatalogs as Map<string, unknown>;
+  assert.ok(catalogs.has("/work"));
+  (adapter as any).onEvent({
+    payload: {
+      type: "server.instance.disposed",
+      properties: { directory: "/work" },
+    },
+  });
+  assert.equal(
+    catalogs.has("/work"),
+    false,
+    "disposed directory must drop its cached catalog",
+  );
+});
+
 test("OpenCode adapter rejects image attachments on text-only models", async () => {
   const messagePosts: Array<{ url: string; init?: RequestInit }> = [];
   const adapter = new OpenCodeAdapter({
