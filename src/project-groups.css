@@ -531,6 +531,42 @@
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
 }
+.task-error-body {
+  flex: 1;
+  min-width: 0;
+}
+.task-error-controls {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: -4px -6px 0 0;
+}
+.task-error-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.task-error-controls button:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.task-error-controls svg {
+  width: 14px;
+  height: 14px;
+}
+.task-error.collapsed .task-error-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* ACP 会话被其它进程占用时的中性提示条（非错误）。 */
 .lock-banner {
   display: flex;

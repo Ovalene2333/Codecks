@@ -6,6 +6,7 @@ import {
   collectStreamed,
   collectStreamedAgentMessages,
   collectStreamedTurnItems,
+  liveUserMessagesCoveredByHistory,
   mergeTurnItems,
   streamsCoveredByHistory,
 } from "./streaming.ts";
@@ -351,6 +352,91 @@ test("live turn items update matching history and append missing commands", () =
         status: "inProgress",
       },
     ],
+  );
+});
+
+test("a live user message with a different runtime id is covered by matching history", () => {
+  const history = [
+    {
+      id: "user-persisted",
+      type: "userMessage",
+      content: [{ type: "text", text: "姓名 Ovalene 邮箱 894381852@qq.com" }],
+    },
+    { id: "msg-1", type: "agentMessage", text: "收到" },
+  ];
+  const live = [
+    {
+      itemId: "user-live",
+      item: {
+        id: "user-live",
+        type: "userMessage",
+        content: [
+          { type: "text", text: "姓名 Ovalene 邮箱 894381852@qq.com" },
+        ],
+        status: "completed",
+      },
+    },
+    {
+      itemId: "read-1",
+      item: {
+        id: "read-1",
+        type: "commandExecution",
+        command: "cat SKILL.md",
+        status: "inProgress",
+      },
+    },
+  ];
+  assert.deepEqual(
+    [...liveUserMessagesCoveredByHistory(history, live)],
+    ["user-live"],
+  );
+  assert.deepEqual(
+    mergeTurnItems(history, live).map((item) => item.id),
+    ["user-persisted", "msg-1", "read-1"],
+  );
+});
+
+test("unmatched live user messages still append and claims stay one-to-one", () => {
+  const userItem = (id: string, text: string) => ({
+    itemId: id,
+    item: { id, type: "userMessage", content: [{ type: "text", text }] },
+  });
+  // 历史里没有同文消息 → live 消息照常追加。
+  const noMatch = mergeTurnItems(
+    [{ id: "user-1", type: "userMessage", text: "别的话" }],
+    [userItem("user-live", "新消息")],
+  );
+  assert.deepEqual(
+    noMatch.map((item) => item.id),
+    ["user-1", "user-live"],
+  );
+  // 同一文本连发两次：历史只有一份时第二个 live 副本不被吞掉。
+  const history = [{ id: "user-1", type: "userMessage", text: "继续" }];
+  const doubled = mergeTurnItems(history, [
+    userItem("live-a", "继续"),
+    userItem("live-b", "继续"),
+  ]);
+  assert.deepEqual(
+    doubled.map((item) => item.id),
+    ["user-1", "live-b"],
+  );
+  // 图片数不一致不算同一条。
+  const withImage = mergeTurnItems(history, [
+    {
+      itemId: "live-img",
+      item: {
+        id: "live-img",
+        type: "userMessage",
+        content: [
+          { type: "text", text: "继续" },
+          { type: "image", url: "data:image/png;base64,YQ==" },
+        ],
+      },
+    },
+  ]);
+  assert.deepEqual(
+    withImage.map((item) => item.id),
+    ["user-1", "live-img"],
   );
 });
 

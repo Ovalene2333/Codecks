@@ -9,7 +9,9 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  /* app-shell 用 100dvh；body 若保留 100vh，移动端地址栏可见时文档比
+     可视区高出一截，键盘跟随光标滚动整页就表现为输入时上下跳动。 */
+  min-height: 100dvh;
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;

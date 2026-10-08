@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Lock, ShieldAlert } from "lucide-react";
+import { ChevronDown, ChevronUp, Lock, ShieldAlert, X } from "lucide-react";
 import { api, post, remove } from "../api";
 import { dedupeThreadLoad, readThreadCache, writeThreadCache } from "../cache";
 import { loadModelCatalog, modelCatalogCache } from "../ModelPicker";
@@ -62,6 +62,78 @@ import {
 import { draftFromUserMessage, userMessageText } from "./user-message";
 
 const EMPTY_TURNS: any[] = [];
+
+/** 执行失败横幅：可折叠成单行预览，也可忽略整条（同签名的新错误会再次弹出）。 */
+function TaskErrorNotice({
+  agentName,
+  message,
+  code,
+  contextExceeded,
+  usageLimit,
+  onCompact,
+  onUsage,
+  onDismiss,
+}: {
+  agentName: string;
+  message: string;
+  code?: string;
+  contextExceeded?: boolean;
+  usageLimit?: boolean;
+  onCompact: () => void;
+  onUsage: () => void;
+  onDismiss: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div
+      className={`task-error${collapsed ? " collapsed" : ""}`}
+      role="alert"
+    >
+      <ShieldAlert />
+      <div className="task-error-body">
+        <b>{agentName} 执行失败</b>
+        {collapsed ? (
+          <p className="task-error-preview" title={message}>
+            {message}
+          </p>
+        ) : (
+          <>
+            <p>{message}</p>
+            {code && <small>错误类型：{code}</small>}
+            {contextExceeded && (
+              <button className="primary" type="button" onClick={onCompact}>
+                压缩上下文
+              </button>
+            )}
+            {usageLimit && (
+              <button className="primary" type="button" onClick={onUsage}>
+                查看 Codex 额度
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      <div className="task-error-controls">
+        <button
+          type="button"
+          aria-label={collapsed ? "展开错误详情" : "折叠错误详情"}
+          title={collapsed ? "展开错误详情" : "折叠错误详情"}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          {collapsed ? <ChevronDown /> : <ChevronUp />}
+        </button>
+        <button
+          type="button"
+          aria-label="忽略这条错误"
+          title="忽略这条错误"
+          onClick={onDismiss}
+        >
+          <X />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 type SessionCommand = { name: string; hint?: string };
 
@@ -155,6 +227,7 @@ export function ChatWorkspace({
   }, [messageDeliveries]);
   const [error, setError] = useState("");
   const [threadLoadSettled, setThreadLoadSettled] = useState(false);
+  const [dismissedTaskError, setDismissedTaskError] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
@@ -931,6 +1004,10 @@ export function ChatWorkspace({
         ? `登录状态已失效：${rawTaskError}`
         : rawTaskError
       : "";
+  // 忽略按「会话 + 回合 + 文案」打标：换会话或新一轮再失败时横幅会重新出现。
+  const taskErrorSignature = `${thread.id}|${
+    full?.turns?.at?.(-1)?.id || ""
+  }|${taskError}`;
   const locked =
     thread.status === "running" ||
     thread.status === "waiting" ||
@@ -1035,25 +1112,18 @@ export function ChatWorkspace({
           }
         />
       </RenderErrorBoundary>
-      {taskError && (
-        <div className="task-error" role="alert">
-          <ShieldAlert />
-          <div>
-            <b>{agentName} 执行失败</b>
-            <p>{taskError}</p>
-            {taskErrorCode && <small>错误类型：{taskErrorCode}</small>}
-            {contextExceeded && (
-              <button className="primary" type="button" onClick={compact}>
-                压缩上下文
-              </button>
-            )}
-            {usageLimit && (
-              <button className="primary" type="button" onClick={onUsage}>
-                查看 Codex 额度
-              </button>
-            )}
-          </div>
-        </div>
+      {taskError && dismissedTaskError !== taskErrorSignature && (
+        <TaskErrorNotice
+          key={taskErrorSignature}
+          agentName={agentName}
+          message={taskError}
+          code={taskErrorCode}
+          contextExceeded={contextExceeded}
+          usageLimit={usageLimit}
+          onCompact={compact}
+          onUsage={onUsage}
+          onDismiss={() => setDismissedTaskError(taskErrorSignature)}
+        />
       )}
       {thread.locked && !locked && (
         <div className="lock-banner" role="status">

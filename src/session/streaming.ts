@@ -1,6 +1,9 @@
 import { displayText } from "../format";
 import type { AgentId } from "../types";
 import { openCodePartToItem } from "./adapters/native-parts";
+import { userImageParts } from "./images";
+import { userMessageText } from "./user-message";
+import { normalizedUserMessageText } from "./user-message-reconcile";
 
 export interface StreamedAgentMessage {
   itemId: string;
@@ -357,6 +360,43 @@ export function collectStreamed(
   };
 }
 
+/**
+ * Codex 的 userMessage 在 rollout 里没有稳定 id：steer 时事件流里的
+ * item/started|completed item id 与 thread/read 持久化读出的 id 不一致，
+ * 按 id 合并失败后 live 副本会作为尾巴再渲染一次，出现「发一条显示两条」。
+ * 这里按剥离注入上下文后的可见文本 + 图片数做一一认领：历史中每份同文
+ * 消息最多认领一个 live 副本，同一条消息重复发送时数量仍然对得上。
+ */
+export function liveUserMessagesCoveredByHistory(
+  historyItems: any[],
+  streamedItems: StreamedTurnItem[],
+) {
+  const covered = new Set<string>();
+  const historyIds = new Set(
+    historyItems
+      .map((item: any) => String(item?.id || ""))
+      .filter(Boolean),
+  );
+  const claimed = new Set<number>();
+  for (const entry of streamedItems) {
+    const item = entry.item;
+    if (item?.type !== "userMessage" || historyIds.has(entry.itemId)) continue;
+    const text = normalizedUserMessageText(userMessageText(item));
+    const images = userImageParts(item).length;
+    const index = historyItems.findIndex(
+      (history: any, historyIndex) =>
+        history?.type === "userMessage" &&
+        !claimed.has(historyIndex) &&
+        normalizedUserMessageText(userMessageText(history)) === text &&
+        userImageParts(history).length === images,
+    );
+    if (index < 0) continue;
+    claimed.add(index);
+    covered.add(entry.itemId);
+  }
+  return covered;
+}
+
 export function mergeTurnItems(
   historyItems: any[],
   streamedItems: StreamedTurnItem[],
@@ -370,5 +410,11 @@ export function mergeTurnItems(
     liveById.delete(itemId);
     return { ...item, ...live.item };
   });
-  return [...merged, ...Array.from(liveById.values(), (entry) => entry.item)];
+  const covered = liveUserMessagesCoveredByHistory(historyItems, streamedItems);
+  return [
+    ...merged,
+    ...Array.from(liveById.values())
+      .filter((entry) => !covered.has(entry.itemId))
+      .map((entry) => entry.item),
+  ];
 }

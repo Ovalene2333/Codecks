@@ -26,6 +26,7 @@ import type {
 } from "./streaming";
 import {
   activeStreamItemId,
+  liveUserMessagesCoveredByHistory,
   mergeTurnItems,
   streamsCoveredByHistory,
 } from "./streaming";
@@ -813,6 +814,12 @@ function TurnBlockInner({
         .map((item: any) => String(item?.id || ""))
         .filter(Boolean),
     );
+    // userMessage 的 live id 与持久化 id 可能不一致（rollout 无稳定 id），
+    // 已被历史按内容认领的 live 副本不能再渲染一遍。
+    const coveredLiveIds = liveUserMessagesCoveredByHistory(
+      historyItems,
+      streamedItems,
+    );
     const itemById = new Map(
       streamedItems.map((entry) => [entry.itemId, entry.item]),
     );
@@ -827,7 +834,8 @@ function TurnBlockInner({
     };
     for (const entry of ordered) {
       if (entry.kind === "item") {
-        if (historyIds.has(entry.itemId)) continue;
+        if (historyIds.has(entry.itemId) || coveredLiveIds.has(entry.itemId))
+          continue;
         const item = itemById.get(entry.itemId);
         if (item) run.push(item);
         continue;

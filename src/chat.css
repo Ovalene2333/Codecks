@@ -1549,9 +1549,16 @@
   color: var(--text-dim);
 }
 .slash-menu {
+  /* 浮层定位：补全列表随输入逐字符增减行数，留在文档流里会把
+     composer 往上顶，表现为输入时页面上下跳动。 */
+  position: absolute;
+  z-index: 20;
+  right: max(30px, calc((100% - 760px) / 2));
+  bottom: calc(100% + 8px);
+  left: max(30px, calc((100% - 760px) / 2));
   display: grid;
   gap: 2px;
-  margin: 0 12px 8px;
+  margin: 0;
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
