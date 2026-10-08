@@ -3,6 +3,8 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type { Provider } from "./types.js";
+import { classifyClaudeEnvironment, type ClaudeProfile } from "./claude-profiles.js";
+export type { ClaudeProfile } from "./claude-profiles.js";
 
 type Row = {
   id: string;
@@ -11,16 +13,6 @@ type Row = {
   icon_color: string | null;
   is_current: number;
 };
-
-export interface ClaudeProfile {
-  id: string;
-  name: string;
-  color: string;
-  current: boolean;
-  official: boolean;
-  supported: boolean;
-  env: Record<string, string>;
-}
 
 export async function findCcSwitchDb(explicit?: string) {
   if (explicit) {
@@ -140,33 +132,10 @@ export class CcSwitchSource {
             (entry): entry is [string, string] => typeof entry[1] === "string",
           ),
         );
-        const baseUrl = env.ANTHROPIC_BASE_URL?.trim();
-        let endpointValid = true;
-        let officialEndpoint = !baseUrl;
-        if (baseUrl) {
-          try {
-            const url = new URL(baseUrl);
-            endpointValid = url.protocol === "https:" || url.protocol === "http:";
-            officialEndpoint =
-              url.hostname.toLowerCase() === "api.anthropic.com";
-          } catch {
-            endpointValid = false;
-          }
-        }
-        const cloudProvider = Boolean(
-          env.CLAUDE_CODE_USE_BEDROCK === "1" ||
-          env.CLAUDE_CODE_USE_VERTEX === "1" ||
-          env.CLAUDE_CODE_USE_FOUNDRY === "1",
-        );
-        const hasCredential = Boolean(
-          env.ANTHROPIC_AUTH_TOKEN ||
-          env.ANTHROPIC_API_KEY ||
-          env.ANTHROPIC_CUSTOM_HEADERS,
-        );
-        const official = officialEndpoint && !hasCredential && !cloudProvider;
-        const supported = endpointValid && (hasCredential || cloudProvider);
+        const { official, supported } = classifyClaudeEnvironment(env);
         return {
           id: `claude-cc-${row.id}`,
+          kind: "cc-switch" as const,
           name: row.name,
           color:
             row.icon_color ||

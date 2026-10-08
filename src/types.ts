@@ -8,6 +8,7 @@ export type AgentId = string;
 
 export interface Provider {
   id: string;
+  agentId?: AgentId;
   name: string;
   kind: "local-profile" | "custom" | "cc-switch";
   color: string;
@@ -535,6 +536,10 @@ export interface AgentProfile {
   official?: boolean;
   enabled?: boolean;
   online?: boolean;
+  kind?: Provider["kind"];
+  baseUrl?: string;
+  model?: string;
+  hasApiKey?: boolean;
   /** Logged in / usable in the upstream agent (OpenCode `connected`). */
   connected?: boolean;
 }

@@ -11,6 +11,7 @@ import { useDeckShortcuts } from "./shortcuts";
 import { ConfirmDialog, ToastStack } from "./ui";
 import type {
   AgentDescriptor,
+  AgentProfile,
   AgentReloadResult,
   DeckPreferences,
   Provider,
@@ -44,6 +45,7 @@ import "./settings.css";
  *   ?slow=1                                            接口更慢，便于观察进行中状态
  *   ?notify=granted|denied|unsupported                 通知权限初值
  *   ?pending=1                                         Runtime 有待应用的供应商配置
+ *   ?cc=none                                           无 CC Switch 的供应商配置
  */
 const params = new URLSearchParams(location.search);
 const themeParam = params.get("theme");
@@ -150,6 +152,13 @@ let PROVIDERS: Provider[] = [
   },
 ];
 
+const noCcSwitch = params.get("cc") === "none";
+if (noCcSwitch) PROVIDERS = PROVIDERS.filter((provider) => provider.kind !== "cc-switch");
+let CLAUDE_PROFILES: AgentProfile[] = [
+  { id: "claude-local", agentId: "claude", name: "本机 Claude", kind: "local-profile", current: true, enabled: true, online: true },
+  ...(noCcSwitch ? [] : [{ id: "claude-cc-relay", agentId: "claude", name: "Claude 兼容中转", kind: "cc-switch" as const, baseUrl: "https://claude-relay.example.com", hasApiKey: true, enabled: true, online: true }]),
+];
+
 const TOOLS: ToolDescriptor[] = [
   {
     id: "terminal",
@@ -188,7 +197,7 @@ const SERVER: ServerInfo = {
   wsl: false,
   startedAt: Date.now() - 5 * 3_600_000,
   dataDir: "~/.local/share/codex-deck",
-  ccSwitch: "~/.cc-switch/cc-switch.db",
+  ccSwitch: noCcSwitch ? null : "~/.cc-switch/cc-switch.db",
 };
 
 let RUNTIME: RuntimeSnapshot = {
@@ -208,6 +217,7 @@ let PREFERENCES: DeckPreferences = {
 const snapshot = (): Snapshot => ({
   agents: agents.map((item) => ({ ...item })),
   providers: [...PROVIDERS],
+  agentProfiles: [...CLAUDE_PROFILES],
   threads: [],
   approvals: [],
   preferences: PREFERENCES,
@@ -286,6 +296,21 @@ window.fetch = async (input, init) => {
   const agentModels = path.match(/^\/api\/agents\/([^/]+)\/models$/);
   if (agentModels) return json([]);
 
+  if (path === "/api/claude/providers" && method === "POST") {
+    await sleep(latency);
+    CLAUDE_PROFILES = [...CLAUDE_PROFILES, {
+      id: `claude-custom-${Date.now()}`, agentId: "claude", name: body.name,
+      kind: "custom", color: "#d97757", baseUrl: body.baseUrl, model: body.model,
+      hasApiKey: true, enabled: true, online: true,
+    }];
+    return json(snapshot());
+  }
+  const removeClaudeProvider = path.match(/^\/api\/claude\/providers\/([^/]+)$/);
+  if (removeClaudeProvider && method === "DELETE") {
+    await sleep(latency);
+    CLAUDE_PROFILES = CLAUDE_PROFILES.filter((profile) => profile.id !== decodeURIComponent(removeClaudeProvider[1]));
+    return json(snapshot());
+  }
   if (path === "/api/providers" && method === "POST") {
     await sleep(latency);
     PROVIDERS = [
@@ -421,7 +446,7 @@ window.fetch = async (input, init) => {
       ...snapshot(),
       restarted: true,
       busyCount: 0,
-      ccSwitch: "~/.cc-switch/cc-switch.db",
+      ccSwitch: SERVER.ccSwitch,
     });
   }
   return json({ error: `预览页没有实现 ${method} ${path}` }, 404);

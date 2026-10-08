@@ -12,7 +12,7 @@
 
 它直接用本机已有的登录状态、`~/.codex` 里的会话和你的项目目录，不另存一套历史。人不在电脑前，可以用手机看任务跑到哪了、批一下命令、接着往下聊。
 
-只用 OpenAI Official 的话不需要装 CC Switch。如果你在 [CC Switch](https://github.com/farion1231/cc-switch) 里配了好几家中转，Codecks 可以让每个会话各选各的供应商和模型，不用来回切「当前项」。会话列表、任务和审批里都会标出实际用的是哪个 Agent。
+CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。Codex 和 Claude 都可以使用本机 CLI 登录，或在「设置 → 供应商」直接添加自定义中转；无头 Linux 也能用配置文件管理。如果你已经在 [CC Switch](https://github.com/farion1231/cc-switch) 里配置了供应商，Codecks 会兼容只读读取，让每个会话各选各的供应商和模型，不用来回切「当前项」。会话列表、任务和审批里都会标出实际用的是哪个 Agent。
 
 ## 阅读导引
 
@@ -540,7 +540,54 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `DDNS_IPV6`                     | `auto`                     | `auto` / `none` / 固定 IPv6                                                            |
 | `DDNS_INTERVAL`                 | `10`                       | DDNS 同步间隔（分钟）                                                                  |
 
-### CC Switch
+### 不安装 CC Switch / 无头环境
+
+没有 CC Switch 数据库时，Codecks 正常启动，供应商页面显示「未检测到 · 不影响使用」。本机 Codex 入口始终保留，即使 Codex 主目录尚未创建；使用前仍需安装 CLI 并完成有效登录或配置 API 凭据。「本机 Claude」沿用 Claude CLI 当前登录、`settings.json` 和环境变量，不依赖 CC Switch。
+
+在「设置 → 供应商 → 自定义供应商」点击「添加」，选择 Agent：
+
+- **Codex**：填写 OpenAI 兼容 Base URL、模型、API Key，并选择 Responses / Chat Completions。配置保存在 `DATA_DIR/providers.json`。
+- **Claude Code**：填写 Anthropic 兼容 Base URL，选择 API Key（`ANTHROPIC_API_KEY`）或 Auth Token（`ANTHROPIC_AUTH_TOKEN`）；默认模型可选。配置保存在 `DATA_DIR/claude-providers.json`。新增后可在新建会话或分支会话中选择，不必安装或启动 CC Switch。
+
+无头环境可以在启动前直接创建上述文件。Codex 示例：
+
+```json
+[
+  {
+    "id": "headless-codex",
+    "name": "Codex 网关",
+    "kind": "custom",
+    "color": "#8b5cf6",
+    "enabled": true,
+    "baseUrl": "https://codex.example.com/v1",
+    "model": "your-model-id",
+    "wireApi": "responses",
+    "apiKey": "replace-with-your-key"
+  }
+]
+```
+
+Claude 示例（`id` 以 `claude-custom-` 开头，不能与只读导入或本机入口混用）：
+
+```json
+[
+  {
+    "id": "claude-custom-headless",
+    "name": "Claude 网关",
+    "model": "sonnet",
+    "env": {
+      "ANTHROPIC_BASE_URL": "https://claude.example.com",
+      "ANTHROPIC_AUTH_TOKEN": "replace-with-your-token"
+    }
+  }
+]
+```
+
+Claude 的 `env` 也可配置云供应商开关与凭据。文件含密钥，不要提交到 Git；Linux 上建议将手工创建的文件权限设为 `600`。修改 Claude 文件后在供应商页面点「重新读取」或重载 Claude Agent；已有 Claude 连接不会被打断，新的认证配置用于之后新建、分支或重新连接的会话。Codex 文件请在启动前修改；运行中通过设置页面添加后，若 Runtime 提示配置待应用，等任务空闲后点「应用」。
+
+自动化管理也可使用 `POST /api/providers`、`DELETE /api/providers/:id`（Codex），以及 `POST /api/claude/providers`、`DELETE /api/claude/providers/:id`（Claude）。Claude POST 接受 `name`、`baseUrl`、`apiKey`、可选 `model` 和 `authType`（`api-key` / `auth-token`）；更新时附上已有 `id`，不传 `apiKey` 会保留原凭据。读取配置档仍走 `GET /api/agents/claude/profiles`，不会返回认证环境变量。沿用服务端已有鉴权，不要把凭据写进 URL。
+
+### CC Switch（可选兼容）
 
 默认数据库路径：
 
@@ -548,14 +595,16 @@ codex --remote ws://127.0.0.1:<runtime-port>
 - Linux / macOS：`~/.cc-switch/cc-switch.db`
 - WSL：扫描 `/mnt/c/Users/*/.cc-switch/cc-switch.db`
 
-自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置。Codecks 不修改 CC Switch 数据库；供应商的新增、编辑和当前项切换应在 CC Switch 中完成。在「设置 → 供应商」里点「重新读取」，会重新发现数据库、刷新供应商列表，并在没有运行中或待审批会话时重启 Runtime。如果当时有任务在跑，列表会先更新，等空闲了再点「应用」。
+自定义位置设置 `CC_SWITCH_DB`。该路径必须存在才会连接；不会再回退到默认位置，路径缺失或数据库损坏不会阻止本机和自定义供应商使用。Codecks 不修改 CC Switch 数据库；导入供应商的新增、编辑和当前项切换仍在 CC Switch 中完成，Deck 自定义供应商则在 Codecks 中管理。在「设置 → 供应商」里点「重新读取」，会重新发现数据库、刷新 Claude 本地配置与导入列表，并在没有运行中或待审批 Codex 会话时重启 Runtime。如果当时有任务在跑，列表会先更新，等空闲了再点「应用」。
+
+只读导入与 Deck 自定义配置彼此独立。导入项不再写入 Deck 的供应商配置文件；数据库不存在时，旧版本留下的导入缓存也不会作为有效供应商重新出现。准备移除 CC Switch 前，请将仍要使用的中转添加为 Deck 自定义供应商，并为后续会话选择新配置；原有会话历史不会删除。
 
 CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 镜像网络下通常可直接访问；传统 NAT 可能需要改成 Windows 主机地址，或直接在 Windows 运行 Codecks。
 
 ## 安全
 
 - API Key、OAuth 内容和生成的供应商配置不会通过 API 返回给浏览器
-- Claude CC Switch 配置中的认证环境变量只存在于 adapter 启动的进程环境中
+- Claude 自定义及 CC Switch 配置中的认证环境变量只注入对应 adapter 子进程，不返回给浏览器
 - `.data/` 可能含自定义供应商密钥，已加入 `.gitignore`
 - runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
 - Web Terminal 等同于以 Codecks Server 用户身份登录宿主机，终端 WebSocket 使用同一访问令牌鉴权；快捷指令同样会在宿主机上执行命令。对外暴露时不要使用 `--no-token`，并建议在反向代理或隧道层再加一道访问控制

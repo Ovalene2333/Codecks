@@ -32,7 +32,7 @@ import {
   type SpawnOptions,
   type SpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
-import { CcSwitchSource, type ClaudeProfile } from "../cc-switch.js";
+import { classifyClaudeEnvironment, type ClaudeProfile } from "../claude-profiles.js";
 import {
   exposeEnvironmentToWsl,
   windowsPathToWsl,
@@ -228,7 +228,7 @@ async function skillFrontmatter(file: string) {
 interface ClaudeAdapterOptions {
   claudeHome?: string;
   claudeBin?: string;
-  ccSwitchPath?: string;
+  profileSource?: () => ClaudeProfile[] | Promise<ClaudeProfile[]>;
   queryFactory?: QueryFactory;
   historyFiles?: () => Promise<string[]>;
   historyIndexFile?: string;
@@ -360,8 +360,8 @@ const CLAUDE_LOCAL_PROFILE_ID = "claude-local";
 
 /**
  * 追加「本机 Claude」兜底配置档：不注入自有 env，直接沿用 claude CLI 的
- * 当前登录态（~/.claude 凭据、settings.json 或环境变量）。CC Switch 没有
- * 可用中转、或只有 Official 时它让 adapter 仍然可用；配置了中转时它也是
+ * 当前登录态（~/.claude 凭据、settings.json 或环境变量）。没有独立供应商
+ * 配置时它让 adapter 仍然可用；配置了中转时它也是
  * 回退到官方登录的显式入口。仅在没有任何 supported+current 中转时承担
  * current 角色。
  */
@@ -378,6 +378,7 @@ function withLocalProfile(profiles: ClaudeProfile[]): ClaudeProfile[] {
       current: !rest.some((profile) => profile.current && profile.supported),
       official: false,
       supported: true,
+      kind: "local-profile",
       env: {},
     },
   ];
@@ -600,6 +601,10 @@ export class ClaudeAdapter extends EventEmitter {
   publicProfiles() {
     return this.profiles.map((profile) => ({
       ...publicProfile(profile),
+      kind: profile.kind || (profile.id.startsWith("claude-cc-") ? "cc-switch" : "custom"),
+      model: profile.model,
+      baseUrl: profile.env.ANTHROPIC_BASE_URL,
+      hasApiKey: classifyClaudeEnvironment(profile.env).hasCredential,
       official: profile.official,
       enabled: profile.supported,
       online: this.online && profile.supported,
@@ -674,7 +679,7 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   /**
-   * 轻量重载：重新读取 CC Switch 配置档并重扫历史，不关闭任何已有的 Claude
+   * 轻量重载：重新读取供应商配置档并重扫历史，不关闭任何已有的 Claude
    * 连接（restart() 会终止后台任务，重载不该有这个副作用）。新配置档只
    * 用于之后新建或分支的会话。
    */
@@ -863,7 +868,7 @@ export class ClaudeAdapter extends EventEmitter {
       name: input.name || "新 Claude 会话",
       preview: "新 Claude 会话",
       cwd: input.cwd,
-      model: input.model || "default",
+      model: input.model && input.model !== "default" ? input.model : profile.model || "default",
       status: "idle",
       updatedAt: Date.now(),
       sessionId: id,
@@ -2130,7 +2135,7 @@ export class ClaudeAdapter extends EventEmitter {
         this.profiles.find((item) => item.supported);
       if (profile) return profile;
       throw new Error(
-        "Claude Code 不支持 Official，请先在 CC Switch 配置可用的 Claude 中转",
+        "没有可用的 Claude 配置，请使用本机 Claude 或添加自定义供应商",
       );
     }
     const profile = this.profiles.find((item) => item.id === id);
@@ -2138,7 +2143,7 @@ export class ClaudeAdapter extends EventEmitter {
     if (!profile.supported)
       throw new Error(
         profile.official
-          ? "这个 CC Switch Official 配置没有独立凭据；请选本机 Claude 使用已有登录态"
+          ? "这个 Official 配置没有独立凭据；请选本机 Claude 使用已有登录态"
           : "Claude Code 配置缺少有效的地址或认证凭据",
       );
     return profile;
@@ -2152,7 +2157,7 @@ export class ClaudeAdapter extends EventEmitter {
     this.online = this.hasSupportedProfile();
     this.error = this.online
       ? undefined
-      : "Claude Code 仅支持配置了自定义 API 地址和凭据的 CC Switch 中转配置";
+      : "Claude Code 没有可用配置，请使用本机登录或添加自定义供应商";
   }
 
   private runtimeEnv(
@@ -2220,17 +2225,15 @@ export class ClaudeAdapter extends EventEmitter {
   }
 
   private async loadProfiles() {
-    if (!this.options.ccSwitchPath) return;
+    if (!this.options.profileSource) return;
     this.profiles = withLocalProfile(
-      new CcSwitchSource(this.options.ccSwitchPath).readClaudeProfiles(),
+      await this.options.profileSource(),
     );
   }
 
-  /** Reload CC Switch profiles after the shared provider source is refreshed. */
-  async reloadProfiles(ccSwitchPath?: string) {
-    this.options.ccSwitchPath = ccSwitchPath;
-    if (ccSwitchPath) await this.loadProfiles();
-    else this.profiles = withLocalProfile([]);
+  /** Refresh independent sources without interrupting existing sessions. */
+  async reloadProfiles() {
+    await this.loadProfiles();
     this.syncAvailability();
     this.broadcast("agent.status", this.descriptor());
     this.broadcast("snapshot", this.snapshot());

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, readFile, unlink } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ProviderStore } from './store.js'
@@ -57,7 +57,7 @@ test('provider secrets stay private and persist', async () => {
 
 test('the runtime codex home stays visible and loads as a provider', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-'))
-  // 本机 home 必须真实存在：addExistingCodexHomes 会过滤不存在的目录。
+  // 本机入口始终存在，不依赖安装 CC Switch。
   const store = new ProviderStore(dir, dir)
   await store.load()
 
@@ -74,6 +74,40 @@ test('a local-profile row that is not the runtime home stays hidden', async () =
 
   assert.equal(store.listPublic().some((p) => p.id === extra.id), false)
   assert.equal(store.runtimeProviders().some((p) => p.id === extra.id), false)
+})
+
+test('without CC Switch the local provider survives a not-yet-created Codex home and stale imports', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-no-cc-switch-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const home = path.join(dir, 'new-codex-home')
+  await writeFile(path.join(dir, 'providers.json'), JSON.stringify([
+    { id: 'cc-old', name: 'Stale import', kind: 'cc-switch', enabled: true, apiKey: 'old-secret' },
+  ]))
+  await withCcSwitchDb(path.join(dir, 'missing.db'), async () => {
+    const store = new ProviderStore(dir, home)
+    await store.load()
+    assert.deepEqual(store.listPublic().map((provider) => provider.id), ['local'])
+    assert.equal(store.runtimeProviders()[0].codexHome, home)
+    assert.equal(store.ccSwitchPath, undefined)
+    assert.deepEqual(store.claudeProfiles(), [])
+  })
+})
+
+test('saving Deck providers never persists imported CC Switch credentials', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-import-isolation-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const db = path.join(dir, 'cc-switch.db')
+  seedCcSwitchDb(db, [{ id: 'relay', name: 'Imported' }])
+  await withCcSwitchDb(db, async () => {
+    const store = new ProviderStore(dir, path.join(dir, 'home'))
+    await store.load()
+    await store.upsert({ name: 'Deck relay', kind: 'custom', baseUrl: 'https://deck.test/v1', model: 'test-model', apiKey: 'deck-secret' })
+    assert.ok(store.listPublic().some((provider) => provider.kind === 'cc-switch'))
+    const saved = JSON.parse(await readFile(path.join(dir, 'providers.json'), 'utf8'))
+    assert.equal(saved.some((provider: any) => provider.kind === 'cc-switch'), false)
+    assert.equal(JSON.stringify(saved).includes('"secret"'), false)
+    assert.equal(JSON.stringify(saved).includes('deck-secret'), true)
+  })
 })
 
 test('runtime model context settings persist outside config.toml', async () => {

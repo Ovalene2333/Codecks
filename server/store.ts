@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -39,7 +39,8 @@ export class ProviderStore {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       if (!Array.isArray(parsed)) throw new Error("供应商文件形状错误");
-      this.providers = parsed;
+      // Never revive old read-only snapshots when the external source is absent.
+      this.providers = parsed.filter((provider) => provider.kind !== "cc-switch");
     } catch (error: any) {
       if (error?.code === "ENOENT") {
         this.providers = [
@@ -96,8 +97,6 @@ export class ProviderStore {
     const retained = this.providers.filter((p) => p.kind !== "local-profile");
     const localProviders: Provider[] = [];
     for (const [codexHome, meta] of homes) {
-      try {
-        await access(codexHome);
         localProviders.push({
           id: meta.id,
           name: meta.name,
@@ -106,7 +105,6 @@ export class ProviderStore {
           codexHome,
           enabled: true,
         });
-      } catch {}
     }
     this.providers = [...localProviders, ...retained];
   }
@@ -152,6 +150,10 @@ export class ProviderStore {
 
   get ccSwitchPath() {
     return this.cc?.dbPath;
+  }
+
+  claudeProfiles() {
+    return this.cc?.readClaudeProfiles() || [];
   }
 
   get revision() {
@@ -269,7 +271,9 @@ export class ProviderStore {
   }
 
   private async save() {
-    await writeJsonAtomic(this.file, JSON.stringify(this.providers, null, 2));
+    await writeJsonAtomic(this.file, JSON.stringify(
+      this.providers.filter((provider) => provider.kind !== "cc-switch"), null, 2,
+    ));
   }
 }
 

@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { CcSwitchSource } from "../cc-switch.js";
 import { ThreadSettingsStore } from "../thread-settings.js";
 import { AgentRegistry } from "./registry.js";
 import { MessageDeliveryQueue } from "../message-delivery.js";
@@ -927,7 +928,7 @@ test("Claude adapter resumes history and keeps secrets server-side", async () =>
   const adapter = new ClaudeAdapter({
     queryFactory,
     historyFiles: async () => [history],
-    ccSwitchPath: ccSwitch,
+    profileSource: () => new CcSwitchSource(ccSwitch).readClaudeProfiles(),
   });
   await adapter.startAll();
   await writeFile(history, "{temporarily-broken");

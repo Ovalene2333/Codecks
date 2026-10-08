@@ -393,7 +393,7 @@ export function NewThreadModal({
                     ))}
                   </>
                 ) : (
-                  <option value="">未找到 CC Switch Claude 配置</option>
+                  <option value="">未找到可用的 Claude 配置</option>
                 )}
               </select>
             </label>

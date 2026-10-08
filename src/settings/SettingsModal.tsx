@@ -69,7 +69,7 @@ const PROVIDERS_NAV: NavItem = {
   id: "providers",
   label: "供应商",
   icon: Plug,
-  desc: "Codex 与 Claude 的模型供应商，通常由 CC Switch 管理。",
+  desc: "使用本机登录或添加 Codex、Claude 自定义供应商；CC Switch 是可选的只读配置来源。",
 };
 const ALL_NAV = [...NAV, PROVIDERS_NAV];
 const AGENT_DETAILS: Record<AgentDetail, string> = {
@@ -370,6 +370,8 @@ export function SettingsModal({
         return (
           <ProvidersPage
             providers={providers}
+            claudeProfiles={snapshot.agentProfiles?.filter((profile) => profile.agentId === "claude")}
+            ccSwitch={snapshot.server?.ccSwitch}
             runtime={runtime}
             defaultCwd={defaultCwd}
             onSaved={onSaved}

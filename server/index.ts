@@ -17,6 +17,7 @@ import { loadEnvFile } from "node:process";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { ProviderStore } from "./store.js";
+import { ClaudeProviderStore, claudeProviderInput } from "./claude-profiles.js";
 import {
   pickConnectionOverlay,
   ProjectStore,
@@ -151,6 +152,7 @@ if (remote && cli.noToken)
   );
 
 const store = new ProviderStore(dataDir, codexHome);
+const claudeProviders = new ClaudeProviderStore(dataDir);
 const projects = new ProjectStore(dataDir);
 const threadSummaries = new ThreadSummaryCache(dataDir);
 const threadSettings = new ThreadSettingsStore(dataDir);
@@ -161,6 +163,7 @@ const [, , cachedThreads] = await Promise.all([
   threadSummaries.load(),
   threadSettings.load(),
   agentSettings.load(),
+  claudeProviders.load(),
 ]);
 const initialThreads = [
   ...cachedThreads.threads,
@@ -184,7 +187,10 @@ const claude = new ClaudeAdapter({
   claudeBin: process.env.CLAUDE_BIN || undefined,
   claudeWslBin: process.env.CLAUDE_WSL_BIN || undefined,
   useWsl,
-  ccSwitchPath: store.ccSwitchPath,
+  profileSource: async () => {
+    await claudeProviders.load();
+    return [...claudeProviders.profiles(), ...store.claudeProfiles()];
+  },
   historyIndexFile: path.join(dataDir, "claude-history-index.json"),
   initialThreads,
   threadSettings,
@@ -1309,7 +1315,7 @@ app.post(
   "/api/runtime/reload",
   route(async () => {
     const ccs = await store.refreshCcSwitch();
-    await claude.reloadProfiles(store.ccSwitchPath);
+    await claude.reloadProfiles();
     manager.emit("event", { type: "snapshot", data: fullSnapshot() });
     const busy = manager.busyThreads();
     let restarted = false;
@@ -1482,6 +1488,22 @@ app.get(
 app.get(
   "/api/providers/:id/models",
   route(async (req) => manager.listModels(param(req.params.id))),
+);
+app.post(
+  "/api/claude/providers",
+  route(async (req) => {
+    await claudeProviders.upsert(claudeProviderInput.parse(req.body));
+    await claude.reloadProfiles();
+    return fullSnapshot();
+  }),
+);
+app.delete(
+  "/api/claude/providers/:id",
+  route(async (req) => {
+    await claudeProviders.remove(param(req.params.id));
+    await claude.reloadProfiles();
+    return fullSnapshot();
+  }),
 );
 app.post(
   "/api/providers",
