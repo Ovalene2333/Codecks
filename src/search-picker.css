@@ -219,6 +219,26 @@
   color: var(--text-faint);
 }
 
+.search-picker-filter {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 10px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--fs-small);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search-picker-filter.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 .search-picker-list {
   flex: 1;
   min-height: 0;

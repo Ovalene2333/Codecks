@@ -10,6 +10,12 @@ export interface SearchableOption {
   groupMeta?: string;
   hint?: string;
   meta?: string;
+  /**
+   * Marks options backed by a connected provider (OpenCode `/provider`
+   * `connected`). Enables the picker's "仅已连接" filter when
+   * `connectedToggle` is on.
+   */
+  connected?: boolean;
 }
 
 export function filterSearchableOptions(
@@ -117,6 +123,7 @@ export function SearchablePicker({
   loading,
   disabled,
   fallbackLabel,
+  connectedToggle,
 }: {
   value: string;
   options: SearchableOption[];
@@ -128,6 +135,12 @@ export function SearchablePicker({
   loading?: boolean;
   disabled?: boolean;
   fallbackLabel?: string;
+  /**
+   * 目录里有 connected 供应商时，在搜索行提供「仅已连接」开关（默认开，
+   * 对齐 opencode 自身的选择器）。输入关键字时暂时放开过滤，让未连接的
+   * 供应商也能被搜到。
+   */
+  connectedToggle?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -135,16 +148,26 @@ export function SearchablePicker({
   const [limit, setLimit] = useState(ROW_CHUNK);
   const [anchor, setAnchor] = useState<PickerAnchor>();
   const [sheet, setSheet] = useState(false);
+  const [connectedOnly, setConnectedOnly] = useState(true);
   const rootRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const filtered = useMemo(
-    () => filterSearchableOptions(options, query),
-    [options, query],
+  const hasConnected = useMemo(
+    () => options.some((option) => option.connected),
+    [options],
   );
+  const showConnectedToggle = connectedToggle && hasConnected;
+  const filtered = useMemo(() => {
+    // 无分组项（如「跟随默认」占位）不受过滤影响。
+    const base =
+      showConnectedToggle && connectedOnly && !query.trim()
+        ? options.filter((option) => option.connected || !option.group)
+        : options;
+    return filterSearchableOptions(base, query);
+  }, [options, query, connectedOnly, showConnectedToggle]);
   const segments = useMemo(() => groupSearchableOptions(filtered), [filtered]);
   const selected = options.find((option) => option.value === value);
 
@@ -374,6 +397,27 @@ export function SearchablePicker({
                   }}
                   onKeyDown={onSearchKeyDown}
                 />
+                {showConnectedToggle && (
+                  <button
+                    type="button"
+                    className={`search-picker-filter${
+                      connectedOnly ? " on" : ""
+                    }`}
+                    aria-pressed={connectedOnly}
+                    title={
+                      connectedOnly
+                        ? "只看已连接的供应商，点按显示全部"
+                        : "正在显示全部供应商，点按只看已连接"
+                    }
+                    onClick={() => {
+                      setConnectedOnly((value) => !value);
+                      setActive(0);
+                      setLimit(ROW_CHUNK);
+                    }}
+                  >
+                    已连接
+                  </button>
+                )}
               </div>
               <div
                 className="search-picker-list"

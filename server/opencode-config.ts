@@ -27,8 +27,22 @@ export interface OpenCodeConfigFile {
 
 const CONFIG_BASENAMES = ["opencode.json", "opencode.jsonc"];
 
-export function openCodeGlobalDir() {
-  return path.join(os.homedir(), ".config", "opencode");
+/**
+ * Deck 读写的全局配置目录，与 `opencode serve` 看到的一致：
+ * `OPENCODE_CONFIG_DIR`（opencode 原生支持的额外全局配置目录）优先，
+ * 其次 `XDG_CONFIG_HOME/opencode`，最后 `~/.config/opencode`。
+ * serve 子进程直接继承 Deck 的环境，同一组变量对两边同时生效；
+ * 沙箱/托管环境想让 serve 用另一份配置时显式设置这些变量即可，
+ * Deck 不会根据 /etc/passwd 猜测别的 home。
+ */
+export function openCodeGlobalDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: string = os.homedir(),
+) {
+  if (env.OPENCODE_CONFIG_DIR)
+    return path.resolve(env.OPENCODE_CONFIG_DIR);
+  const xdg = env.XDG_CONFIG_HOME || path.join(homedir, ".config");
+  return path.join(xdg, "opencode");
 }
 
 /**

@@ -833,7 +833,7 @@ test("OpenCode compaction renders one marker and waits for a new reply before re
     },
     {
       info: {
-        id: "m2", role: "assistant", providerID: "yapi", modelID: "opus",
+        id: "m2", role: "assistant", providerID: "acme", modelID: "opus",
         tokens: { input: 17_000, output: 600, cache: { read: 340_000 } },
       },
       parts: [{ id: "p2", type: "text", text: "压缩前的回复" }],
@@ -861,7 +861,7 @@ test("OpenCode compaction renders one marker and waits for a new reply before re
     },
     {
       info: {
-        id: "m4", role: "assistant", providerID: "yapi", modelID: "opus",
+        id: "m4", role: "assistant", providerID: "acme", modelID: "opus",
         summary: true,
         tokens: { input: 64_000, output: 1_800, cache: { read: 190_000 } },
       },
@@ -882,7 +882,7 @@ test("OpenCode compaction renders one marker and waits for a new reply before re
     },
     {
       info: {
-        id: "m6", role: "assistant", providerID: "yapi", modelID: "opus",
+        id: "m6", role: "assistant", providerID: "acme", modelID: "opus",
         tokens: { input: 10_000, output: 500, cache: { read: 1_500 } },
       },
       parts: [{ id: "p6", type: "text", text: "正常回复" }],

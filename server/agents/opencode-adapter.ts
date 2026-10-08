@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
+
 import type {
   ApprovalKind,
   ApprovalQuestion,
@@ -1109,6 +1110,8 @@ export class OpenCodeAdapter extends EventEmitter {
         this.options.spawnProcess ||
         ((bin, args, opts) => spawn(bin, args, opts));
       const child = spawnProcess(spawnCommand, spawnArgs, {
+        // serve 直接继承 Deck 的环境：按 HOME/XDG_* 或 OPENCODE_CONFIG_DIR
+        // 定位配置与 auth.json，与 Deck 的配置编辑读同一套目录。
         env: process.env,
         stdio: ["ignore", "ignore", "pipe"],
         windowsHide: true,
@@ -1526,7 +1529,7 @@ export class OpenCodeAdapter extends EventEmitter {
    * allowlist (unknown effort is dropped, otherwise OpenCode rejects it);
    * only custom `opencode.json` models known to the catalog but without any
    * variant metadata pass through, so
-   * e.g. `dstest/deepseek-v4.1-flash-expires-on-0910 · medium` works.
+   * e.g. `acme/custom-model-0901 · medium` works.
    * Unknown profiles/models still drop, avoiding variant sends before the
    * provider catalog has loaded.
    */

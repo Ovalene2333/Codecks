@@ -203,7 +203,9 @@ export function ModelPicker({
         value: item.model,
         label: item.displayName,
         group: item.groupName,
-        ...(item.connected ? { groupMeta: "已连接" } : {}),
+        ...(item.connected
+          ? { groupMeta: "已连接", connected: true }
+          : {}),
         hint: item.id !== item.displayName ? item.id : undefined,
         meta: item.isDefault
           ? "默认"
@@ -225,7 +227,7 @@ export function ModelPicker({
     return next?.defaultReasoningEffort || list[0]?.reasoningEffort || "";
   };
   // 目录无 effort 声明时补手填入口（自定义模型如
-  // dstest/deepseek-v4.1-flash-expires-on-0910 无 variants 元数据）；
+  // acme/custom-model-0901 无 variants 元数据）；
   // claude/ACP 在 SDK 目录未加载前同样没有声明，手填透传由后端白名单兜底。
   const showFallbackEffort = efforts.length === 0;
   return (
@@ -252,6 +254,7 @@ export function ModelPicker({
             loading={loading}
             placeholder="选择模型"
             emptyText="没有匹配的模型"
+            connectedToggle={combinedCatalog}
             fallbackLabel={model || undefined}
             onChange={(next) => {
               const nextModel = models.find(

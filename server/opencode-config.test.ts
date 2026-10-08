@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  openCodeGlobalDir,
   parseJsonc,
   readOpenCodeConfig,
   writeOpenCodeConfig,
@@ -15,9 +16,9 @@ test("parseJsonc strips comments and trailing commas but keeps URLs", () => {
     "provider": { "x": { "options": { "baseURL": "https://a.b/v1" } }, },
     /* block
        comment */
-    "model": "yapi/claude-opus-5-5",
+    "model": "acme/claude-opus-5-5",
   }`);
-  assert.equal(parsed.model, "yapi/claude-opus-5-5");
+  assert.equal(parsed.model, "acme/claude-opus-5-5");
   assert.equal(parsed.provider.x.options.baseURL, "https://a.b/v1");
 });
 
@@ -36,16 +37,16 @@ test("readOpenCodeConfig prefers opencode.json and tolerates jsonc", async () =>
 test("writeOpenCodeConfig creates a file and merges agent patches", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-opencode-config-"));
   const file = await writeOpenCodeConfig("project", dir, {
-    agent: { explore: { model: "tular/claude-haiku-4-5", disable: false } },
-    model: "yapi/claude-opus-5-5",
-    smallModel: "tular/claude-haiku-4-5",
+    agent: { explore: { model: "demo/claude-haiku-4-5", disable: false } },
+    model: "acme/claude-opus-5-5",
+    smallModel: "demo/claude-haiku-4-5",
   });
   assert.equal(file.path, path.join(dir, "opencode.json"));
   const written = JSON.parse(await readFile(file.path, "utf8"));
   assert.equal(written.$schema, "https://opencode.ai/config.json");
-  assert.equal(written.model, "yapi/claude-opus-5-5");
-  assert.equal(written.small_model, "tular/claude-haiku-4-5");
-  assert.equal(written.agent.explore.model, "tular/claude-haiku-4-5");
+  assert.equal(written.model, "acme/claude-opus-5-5");
+  assert.equal(written.small_model, "demo/claude-haiku-4-5");
+  assert.equal(written.agent.explore.model, "demo/claude-haiku-4-5");
   assert.equal(written.agent.explore.disable, undefined);
 });
 
@@ -54,7 +55,7 @@ test("writeOpenCodeConfig null deletes keys and preserves unrelated config", asy
   await writeFile(
     path.join(dir, "opencode.json"),
     JSON.stringify({
-      provider: { yapi: { options: { apiKey: "k" } } },
+      provider: { acme: { options: { apiKey: "k" } } },
       agent: { explore: { model: "a/b", disable: true }, other: { model: "c" } },
     }),
   );
@@ -64,11 +65,32 @@ test("writeOpenCodeConfig null deletes keys and preserves unrelated config", asy
   const written = JSON.parse(
     await readFile(path.join(dir, "opencode.json"), "utf8"),
   );
-  assert.equal(written.provider.yapi.options.apiKey, "k");
+  assert.equal(written.provider.acme.options.apiKey, "k");
   assert.deepEqual(written.agent.explore, undefined);
   assert.deepEqual(written.agent.other, { model: "c" });
 });
 
 test("project scope without directory is rejected", async () => {
   await assert.rejects(() => readOpenCodeConfig("project"), /directory/);
+});
+
+test("openCodeGlobalDir prefers OPENCODE_CONFIG_DIR over XDG and home", () => {
+  assert.equal(
+    openCodeGlobalDir(
+      { OPENCODE_CONFIG_DIR: "/shared/oc", XDG_CONFIG_HOME: "/xdg" },
+      "/home/u",
+    ),
+    path.resolve("/shared/oc"),
+  );
+});
+
+test("openCodeGlobalDir falls back to XDG_CONFIG_HOME then home", () => {
+  assert.equal(
+    openCodeGlobalDir({ XDG_CONFIG_HOME: "/xdg" }, "/home/u"),
+    path.join("/xdg", "opencode"),
+  );
+  assert.equal(
+    openCodeGlobalDir({}, "/home/u"),
+    path.join("/home/u", ".config", "opencode"),
+  );
 });
