@@ -246,7 +246,7 @@ export function OpenCodeAgentsSection({
   const configPath =
     scope === "project"
       ? data?.project?.path || `${cwd}/opencode.json`
-      : data?.global?.path || "~/.config/opencode/opencode.json";
+      : data?.global?.path || "opencode.json（全局配置目录）";
 
   return (
     <>

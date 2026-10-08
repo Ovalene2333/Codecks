@@ -1104,7 +1104,7 @@ app.post(
           [
             `[deck] 本会话已开启远程唤醒，代号 ${wakeCode}。`,
             `在远端启动长任务后，用 deck-wake skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
-            `没有该 skill 时可直接调用：curl -X POST "$(cat ~/.codex-deck/url)${wakePath}" -H "Authorization: Bearer $(cat ~/.codex-deck/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
+            `没有该 skill 时可直接调用：curl -X POST "$(cat ${deckHome}/url)${wakePath}" -H "Authorization: Bearer $(cat ${deckHome}/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
             "本条仅需确认收到，无需其它操作。",
           ].join("\n"),
         );

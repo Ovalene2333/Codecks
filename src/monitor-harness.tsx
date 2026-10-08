@@ -88,7 +88,7 @@ window.fetch = async (input, init) => {
         startedAt: ago(12 * 3_600 + 2_400),
         state: "RUNNING",
         stateAt: ago(12 * 3_600 + 2_400),
-        log: "/home/ovalene/.codex-deck/watch/f61d9535-20260929-120808.log",
+        log: "/home/u/.codex-deck/watch/f61d9535-20260929-120808.log",
         agentId: "claude",
         threadId: "heads",
       },
@@ -165,7 +165,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "tiled",
     name: "tiled-mode",
-    cwd: "/home/ovalene/Codecks",
+    cwd: "/home/u/Codecks",
     status: "running",
     updatedAt: ago(20),
     preview: "正在生成平铺布局组件",
@@ -174,7 +174,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "etl",
     name: "nightly-etl",
-    cwd: "/home/ovalene/work/data-pipeline",
+    cwd: "/home/u/work/data-pipeline",
     agentId: "opencode",
     providerId: "relay",
     status: "running",
@@ -185,7 +185,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "refactor",
     name: "auth-refactor",
-    cwd: "/home/ovalene/work/api-gateway",
+    cwd: "/home/u/work/api-gateway",
     agentId: "claude",
     model: "claude-opus-5-5",
     status: "running",
@@ -196,7 +196,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "gateway",
     name: "retry-backoff",
-    cwd: "/home/ovalene/work/api-gateway",
+    cwd: "/home/u/work/api-gateway",
     agentId: "claude",
     model: "claude-sonnet-5",
     status: "waiting",
@@ -206,7 +206,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "schema",
     name: "db-migration",
-    cwd: "/home/ovalene/work/data-pipeline",
+    cwd: "/home/u/work/data-pipeline",
     status: "waiting",
     updatedAt: ago(120),
     preview: "准备写入迁移脚本",
@@ -214,7 +214,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "mobile",
     name: "push-notify",
-    cwd: "/home/ovalene/work/mobile-app",
+    cwd: "/home/u/work/mobile-app",
     status: "error",
     updatedAt: ago(540),
     lastError: "PROVISIONING_PROFILE expired\nxcodebuild exited with 65",
@@ -223,7 +223,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "infra",
     name: "terraform-plan",
-    cwd: "/home/ovalene/work/infra",
+    cwd: "/home/u/work/infra",
     agentId: "opencode",
     providerId: "relay",
     updatedAt: ago(2_700),
@@ -233,7 +233,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "docs",
     name: "i18n-zh",
-    cwd: "/home/ovalene/work/docs-site",
+    cwd: "/home/u/work/docs-site",
     agentId: "claude",
     providerId: "relay",
     updatedAt: ago(7_200),
@@ -243,7 +243,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "flaky",
     name: "flaky-e2e",
-    cwd: "/home/ovalene/work/mobile-app",
+    cwd: "/home/u/work/mobile-app",
     agentId: "claude",
     updatedAt: ago(3_900),
     preview: "定位偶发失败的 e2e 用例",
@@ -251,7 +251,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "bench",
     name: "perf-bench",
-    cwd: "/home/ovalene/Codecks",
+    cwd: "/home/u/Codecks",
     agentId: "opencode",
     providerId: "relay",
     updatedAt: ago(5_400),
@@ -260,7 +260,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "ask",
     name: "release-notes",
-    cwd: "/home/ovalene/Codecks",
+    cwd: "/home/u/Codecks",
     agentId: "claude",
     status: "waiting",
     updatedAt: ago(780),
@@ -269,7 +269,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "heads",
     name: "report-heads 分析",
-    cwd: "/home/ovalene/code/RL",
+    cwd: "/home/u/code/RL",
     agentId: "claude",
     updatedAt: ago(45_000),
     preview: "g2v2 报告头训练，结束后自动分析",
@@ -277,7 +277,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "dotfiles",
     name: "nvim-config",
-    cwd: "/home/ovalene/dotfiles",
+    cwd: "/home/u/dotfiles",
     updatedAt: ago(200_000),
     preview: "lazy.nvim 插件已锁定版本",
   }),
@@ -342,7 +342,7 @@ const ACTIVITIES: ThreadActivity[] = [
     lastEventAt: ago(4),
     step: {
       startedAt: ago(6),
-      item: { id: "e1", type: "commandExecution", tool: "edit", input: { filePath: "/home/ovalene/work/data-pipeline/jobs/merge.py" } },
+      item: { id: "e1", type: "commandExecution", tool: "edit", input: { filePath: "/home/u/work/data-pipeline/jobs/merge.py" } },
     },
   },
   { agentId: "claude", threadId: "refactor", turnStartedAt: ago(1_500), lastEventAt: ago(330) },
@@ -399,7 +399,7 @@ const APPROVALS: Approval[] = [
     kind: "command",
     request: { method: "exec", params: { threadId: "gateway", command: "rm -rf tmp/certs && ./regen-certs.sh" } },
     command: "rm -rf tmp/certs && ./regen-certs.sh",
-    cwd: "/home/ovalene/work/api-gateway",
+    cwd: "/home/u/work/api-gateway",
   },
   {
     id: "schema:approval-2",
@@ -408,16 +408,16 @@ const APPROVALS: Approval[] = [
     kind: "file",
     request: { method: "item/fileChange/requestApproval", params: { threadId: "schema" } },
     changes: [
-      { path: "/home/ovalene/work/data-pipeline/migrations/0042_add_index.sql", kind: "add", diff: "+CREATE INDEX idx_events_ts ON events (ts);\n" },
+      { path: "/home/u/work/data-pipeline/migrations/0042_add_index.sql", kind: "add", diff: "+CREATE INDEX idx_events_ts ON events (ts);\n" },
     ],
-    cwd: "/home/ovalene/work/data-pipeline",
+    cwd: "/home/u/work/data-pipeline",
   },
 ];
 
 const PROJECTS = [
-  { key: "codecks", cwd: "/home/ovalene/Codecks", name: "codex-deck", pinned: true, updatedAt: now },
-  { key: "pipeline", cwd: "/home/ovalene/work/data-pipeline", name: "data-pipeline", updatedAt: now },
-  { key: "gateway", cwd: "/home/ovalene/work/api-gateway", name: "api-gateway", updatedAt: now },
+  { key: "codecks", cwd: "/home/u/Codecks", name: "codex-deck", pinned: true, updatedAt: now },
+  { key: "pipeline", cwd: "/home/u/work/data-pipeline", name: "data-pipeline", updatedAt: now },
+  { key: "gateway", cwd: "/home/u/work/api-gateway", name: "api-gateway", updatedAt: now },
 ];
 
 function Harness() {

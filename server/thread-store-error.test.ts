@@ -19,7 +19,7 @@ test("classifies Codex 0.147 empty-rollout and legacy unmaterialized errors toge
   assert.equal(
     classifyThreadStoreError(
       new Error(
-        "Failed to read thread: thread-store internal error: failed to read session metadata /home/ovalene/.codex/sessions/2026/08/14/rollout.jsonl: rollout at /tmp/rollout.jsonl is empty",
+        "Failed to read thread: thread-store internal error: failed to read session metadata /home/u/.codex/sessions/2026/08/14/rollout.jsonl: rollout at /tmp/rollout.jsonl is empty",
       ),
     ),
     "unmaterialized",

@@ -209,7 +209,7 @@ let RUNTIME: RuntimeSnapshot = {
 };
 
 let PREFERENCES: DeckPreferences = {
-  recentDirs: ["/home/ovalene/Codecks", "/home/ovalene/playground"],
+  recentDirs: ["/home/u/Codecks", "/home/u/playground"],
   lastAgentId: "codex",
   lastProviderId: "official",
 };
@@ -522,7 +522,7 @@ function Harness() {
               );
             })
           }
-          defaultCwd="/home/ovalene/Codecks"
+          defaultCwd="/home/u/Codecks"
           initialTab={initialTab}
           onClose={() => setOpen(false)}
           onSaved={setState}

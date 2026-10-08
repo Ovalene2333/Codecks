@@ -70,7 +70,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "tiled",
     name: "tiled-mode",
-    cwd: "/home/ovalene/Codecks",
+    cwd: "/home/u/Codecks",
     status: "running",
     updatedAt: minutes(0.4),
     preview: "正在生成平铺布局组件 · tsc --noEmit 通过",
@@ -78,7 +78,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "etl",
     name: "nightly-etl",
-    cwd: "/home/ovalene/work/data-pipeline",
+    cwd: "/home/u/work/data-pipeline",
     agentId: "opencode",
     providerId: "relay",
     status: "running",
@@ -88,7 +88,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "gateway",
     name: "retry-backoff",
-    cwd: "/home/ovalene/work/api-gateway",
+    cwd: "/home/u/work/api-gateway",
     agentId: "claude",
     status: "waiting",
     updatedAt: minutes(4),
@@ -97,7 +97,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "mobile",
     name: "push-notify",
-    cwd: "/home/ovalene/work/mobile-app",
+    cwd: "/home/u/work/mobile-app",
     status: "error",
     updatedAt: minutes(9),
     lastError: "PROVISIONING_PROFILE expired",
@@ -106,7 +106,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "docs",
     name: "i18n-zh",
-    cwd: "/home/ovalene/work/docs-site",
+    cwd: "/home/u/work/docs-site",
     agentId: "claude",
     providerId: "relay",
     status: "idle",
@@ -116,7 +116,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "infra",
     name: "terraform-plan",
-    cwd: "/home/ovalene/work/infra",
+    cwd: "/home/u/work/infra",
     agentId: "opencode",
     providerId: "relay",
     status: "idle",
@@ -126,7 +126,7 @@ const THREADS: ThreadSummary[] = [
   thread({
     id: "dotfiles",
     name: "nvim-config",
-    cwd: "/home/ovalene/dotfiles",
+    cwd: "/home/u/dotfiles",
     status: "idle",
     updatedAt: minutes(300),
     preview: "lazy.nvim 插件已锁定版本",
@@ -134,13 +134,13 @@ const THREADS: ThreadSummary[] = [
 ];
 
 const PROJECT_META: Record<string, { name: string; pinned?: boolean }> = {
-  "/home/ovalene/Codecks": { name: "codex-deck", pinned: true },
-  "/home/ovalene/work/data-pipeline": { name: "data-pipeline" },
-  "/home/ovalene/work/api-gateway": { name: "api-gateway", pinned: true },
-  "/home/ovalene/work/mobile-app": { name: "mobile-app" },
-  "/home/ovalene/work/docs-site": { name: "docs-site" },
-  "/home/ovalene/work/infra": { name: "infra" },
-  "/home/ovalene/dotfiles": { name: "dotfiles" },
+  "/home/u/Codecks": { name: "codex-deck", pinned: true },
+  "/home/u/work/data-pipeline": { name: "data-pipeline" },
+  "/home/u/work/api-gateway": { name: "api-gateway", pinned: true },
+  "/home/u/work/mobile-app": { name: "mobile-app" },
+  "/home/u/work/docs-site": { name: "docs-site" },
+  "/home/u/work/infra": { name: "infra" },
+  "/home/u/dotfiles": { name: "dotfiles" },
 };
 
 function groupsFor(threads: ThreadSummary[]): ProjectGroup[] {
