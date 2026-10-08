@@ -42,21 +42,35 @@ export async function fetchThreadFull(
     ? readThreadEtag(cacheKey)
     : null;
   for (;;) {
-    const response = await rawApi(threadPath(thread), {
-      headers: etag ? { "If-None-Match": etag } : {},
-    });
-    if (response.status === 304) {
-      const cached = readCompleteThreadCache(cacheKey);
-      if (cached) return cached;
-      // ETag 还在但缓存体已被淘汰：去掉条件头重新拉全文。
-      etag = null;
-      continue;
+    // fetch 没有内建超时：挂死的请求会随 dedupeThreadLoad 的 inflight 去重
+    // 一直被后续打开复用，会话页就永远停在空白。手动 abort 兜底，超时后
+    // inflight 条目随拒绝释放，下次打开能重新拉。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const response = await rawApi(threadPath(thread), {
+        headers: etag ? { "If-None-Match": etag } : {},
+        signal: controller.signal,
+      });
+      if (response.status === 304) {
+        const cached = readCompleteThreadCache(cacheKey);
+        if (cached) return cached;
+        // ETag 还在但缓存体已被淘汰：去掉条件头重新拉全文。
+        etag = null;
+        continue;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(data.error || `请求失败 (${response.status})`);
+      const next = response.headers.get("ETag");
+      if (next) writeThreadEtag(cacheKey, next);
+      return data;
+    } catch (error: any) {
+      if (error?.name === "AbortError")
+        throw new Error("会话加载超时，请重试");
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(data.error || `请求失败 (${response.status})`);
-    const next = response.headers.get("ETag");
-    if (next) writeThreadEtag(cacheKey, next);
-    return data;
   }
 }

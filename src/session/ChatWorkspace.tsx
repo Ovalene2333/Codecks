@@ -1138,6 +1138,14 @@ export function ChatWorkspace({
         </div>
       )}
       {error && <p className="error-banner">{error}</p>}
+      {full?.historyMissing && (
+        <p className="error-banner" role="alert">
+          会话历史不可用：Codex 记录文件缺失或已被移动
+          {typeof full.historyMissing === "string"
+            ? `（${full.historyMissing}）`
+            : ""}
+        </p>
+      )}
       {statusNote && (
         <pre className="command-status" role="status">
           {statusNote}

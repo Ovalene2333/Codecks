@@ -348,7 +348,7 @@ test("a newly started empty Codex thread renders without asking runtime for turn
       throw new Error("list_turns is not supported yet");
     },
   });
-  manager.loadedThreads.add("fresh");
+  manager.inMemoryThreads.add("fresh");
   manager.threads.set("fresh", {
     id: "fresh", agentId: "codex", providerId: "provider",
     cwd: "/tmp/project", status: "idle", updatedAt: 1,
@@ -358,6 +358,64 @@ test("a newly started empty Codex thread renders without asking runtime for turn
   assert.equal(thread.id, "fresh");
   assert.deepEqual(thread.turns, []);
   assert.deepEqual(calls, []);
+});
+
+test("a thread loaded by another client still reads history from the runtime", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      return { thread: { id: "hist", turns: [{ id: "t1" }] } };
+    },
+  });
+  // thread/started 通知只证明会话被装进了 runtime（可能是别的客户端
+  // resume 的），不代表它还没写 rollout——不能把这类会话读成空。
+  manager.loadedThreads.add("hist");
+  manager.threads.set("hist", {
+    id: "hist", agentId: "codex", providerId: "provider",
+    cwd: "/tmp/project", status: "idle", updatedAt: 1,
+  });
+
+  const thread = await manager.readThread("provider", "hist");
+  assert.equal(thread.turns[0].id, "t1");
+  assert.deepEqual(calls, [
+    { method: "thread/read", params: { threadId: "hist", includeTurns: true } },
+  ]);
+});
+
+test("thread read flags a used session whose rollout file is missing", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  const missing = "/definitely/missing/rollout-01.jsonl";
+  manager.ensure = async () => ({
+    request: async () => ({
+      thread: {
+        id: "used",
+        turns: [],
+        path: missing,
+        tokenUsage: { total: 100, used: 42 },
+      },
+    }),
+  });
+  manager.threads.set("used", {
+    id: "used", agentId: "codex", providerId: "provider",
+    cwd: "/tmp/project", status: "idle", updatedAt: 1,
+  });
+
+  const thread = await manager.readThread("provider", "used");
+  assert.equal(thread.historyMissing, missing);
+});
+
+test("thread read does not flag a fresh session without usage", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  manager.ensure = async () => ({
+    request: async () => ({
+      thread: { id: "new", turns: [], path: "/definitely/missing/rollout-02.jsonl" },
+    }),
+  });
+
+  const thread = await manager.readThread("provider", "new");
+  assert.equal(thread.historyMissing, undefined);
 });
 
 test("Codex falls back to metadata while list_turns is briefly unavailable", async () => {

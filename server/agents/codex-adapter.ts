@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import type { ProviderStore } from "../store.js";
 import type { ProjectStore } from "../projects.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
@@ -111,6 +112,11 @@ export class CodexAdapter extends EventEmitter {
   // thread/start is in-memory only. Codex writes a rollout on the first turn,
   // when the thread is listed, or when it is forked/resumed from disk.
   private knownRollouts = new Set<string>();
+  // 本 adapter 经 thread/start 创建、尚未落 rollout 的纯内存会话。
+  // 不能拿 loadedThreads 充当这个角色：其它客户端 resume 历史会话也会让
+  // runtime 广播 thread/started，把 id 塞进 loadedThreads，readThread 的快
+  // 路径就会把那类有历史的会话直接读成空。
+  private inMemoryThreads = new Set<string>();
   private approvals = new Map<
     string,
     { providerId: string; request: RpcMessage }
@@ -369,8 +375,10 @@ export class CodexAdapter extends EventEmitter {
           bucketListed &&
           !seen.has(thread.id) &&
           !this.loadedThreads.has(key)
-        )
+        ) {
           this.threads.delete(key);
+          this.inMemoryThreads.delete(key);
+        }
       }
       await this.projects?.rememberSeenMany(
         [...this.threads.values()].map((thread) => ({
@@ -679,6 +687,7 @@ export class CodexAdapter extends EventEmitter {
       approvalsReviewer,
     });
     this.loadedThreads.add(result.thread.id);
+    this.inMemoryThreads.add(result.thread.id);
     this.upsertThread(
       provider,
       {
@@ -1125,13 +1134,13 @@ export class CodexAdapter extends EventEmitter {
   }
 
   private canSwitchWithoutFork(thread: ThreadSummary) {
-    return (
-      this.loadedThreads.has(thread.id) && !this.knownRollouts.has(thread.id)
-    );
+    return this.inMemoryThreads.has(thread.id);
   }
 
   private rememberRollout(threadId?: string) {
-    if (threadId) this.knownRollouts.add(threadId);
+    if (!threadId) return;
+    this.knownRollouts.add(threadId);
+    this.inMemoryThreads.delete(threadId);
   }
 
   private async migrateUnsentThread(
@@ -1191,7 +1200,9 @@ export class CodexAdapter extends EventEmitter {
     // thread/start creates an in-memory, empty session. Some runtimes answer
     // includeTurns with "list_turns is not supported yet" until the first
     // turn is persisted. We already have all metadata needed to show it.
-    if (this.loadedThreads.has(threadId) && !this.knownRollouts.has(threadId)) {
+    // loadedThreads 不能用来判断：外部客户端 resume 历史会话同样会触发
+    // thread/started 把它装进来，混用会把有历史的会话直接读成空。
+    if (this.inMemoryThreads.has(threadId)) {
       const fresh = this.threads.get(threadId);
       if (fresh) return { ...fresh, turns: [] };
     }
@@ -1210,6 +1221,7 @@ export class CodexAdapter extends EventEmitter {
             ? { ...thread, tokenUsage: restored }
             : thread;
           this.stampTurnModels(normalized);
+          this.flagMissingHistory(normalized, includeTurns, restored);
           if (existing && restored) {
             existing.tokenUsage = restored;
             this.broadcast("thread.updated", existing);
@@ -1259,6 +1271,33 @@ export class CodexAdapter extends EventEmitter {
         if (cached) return { ...cached, turns: [] };
         throw explainThreadStoreError(metadataError);
       }
+    }
+  }
+
+  /**
+   * includeTurns 正常返回但 turns 为空、而会话明明跑过（有用量/预览）：
+   * 多半是 rollout 文件缺失（CODEX_HOME 被替换、文件被移走）。本地运行时
+   * 可以直接 stat；WSL 下 thread.path 是 WSL 内部路径，跳过检查以免误报。
+   * 命中的结果带 historyMissing，前端据此提示而不是渲染成全新空会话。
+   */
+  private flagMissingHistory(
+    thread: any,
+    includeTurns: boolean,
+    usage?: TokenUsage | null,
+  ) {
+    if (!includeTurns || !Array.isArray(thread?.turns) || thread.turns.length)
+      return;
+    if (!thread.preview && Number(usage?.used || 0) <= 0) return;
+    const rolloutPath = pickString(
+      thread.path,
+      thread.rolloutPath,
+      thread.rollout_path,
+    );
+    if (!rolloutPath || this.useWsl) return;
+    try {
+      if (!existsSync(rolloutPath)) thread.historyMissing = rolloutPath;
+    } catch {
+      // stat 失败按正常空会话处理
     }
   }
 
@@ -2059,6 +2098,7 @@ export class CodexAdapter extends EventEmitter {
     this.threads.delete(key);
     this.loadedThreads.delete(key);
     this.knownRollouts.delete(key);
+    this.inMemoryThreads.delete(key);
     void this.usageStore.remove(key).catch(() => undefined);
     this.broadcast("thread.deleted", { threadId });
   }
