@@ -512,18 +512,20 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `PORT`                          | `4174`                     | HTTP 端口                                                                              |
 | `REMOTE_TOKEN`                  | _(空)_                     | API / WebSocket Bearer 令牌；非本机监听时必填                                          |
 | `CODEX_BIN`                     | `codex`                    | Codex CLI 路径                                                                         |
+| `CODEX_HOME`                    | `~/.codex`                 | Codex 的配置与历史目录；与 Codex CLI 原生变量同名，Deck 与 CLI 读同一份               |
 | `CODEX_WSL_BIN`                 | `codex`                    | Windows `--wsl` 模式下的 WSL 内 Codex CLI                                              |
 | `CODEX_WSL_SHELL`               | `bash`                     | 加载 WSL Codex `PATH` 的登录 shell                                                     |
 | `CODEX_WSL_HOME`                | WSL `~/.codex`             | Windows `--wsl` 模式下的 Codex home                                                    |
-| `CLAUDE_CONFIG_DIR`             | 自动发现                   | Claude 配置与历史目录；WSL 可指向 `/mnt/c/Users/<用户>/.claude`                        |
+| `CLAUDE_CONFIG_DIR`             | `~/.claude`                | Claude 配置与历史目录（也认 `CLAUDE_HOME`）；WSL 可指向 `/mnt/c/Users/<用户>/.claude`  |
 | `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
 | `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
+| `OPENCODE_CONFIG_DIR`           | `~/.config/opencode`       | OpenCode 全局配置目录（opencode 原生变量）；`auth.json`/会话库随 `XDG_DATA_HOME` 走    |
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
 | `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
 | `DATA_DIR`                      | `.data`                    | Codecks 的偏好、项目、用量缓存、Agent 开关、快捷指令、自定义供应商等数据               |
 | `CODEX_DECK_HOME`               | `~/.codex-deck`            | 本机发现目录：Deck 把访问地址和令牌写在这里（权限 600），给本机的唤醒脚本读            |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_                   | 仅监听本机的 Codex control WebSocket 端口                                              |
-| `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径                                                        |
+| `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径；也可用 `CC_SWITCH_CONFIG_DIR` 指定其所在目录          |
 | `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` / `ddns:duckdns\|ddns:cloudflare` |
 | `CODEX_DECK_PUBLIC_ORIGIN`      | _(空)_                     | 已有反代或固定域名时的 https 入口；也可用 `PUBLIC_ORIGIN`                              |
 | `CODEX_DECK_TUNNEL_BIN`         | _(空)_                     | `command` 供应商的可执行文件                                                           |
