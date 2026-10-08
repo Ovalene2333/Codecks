@@ -55,6 +55,27 @@ test('provider secrets stay private and persist', async () => {
   assert.equal(store.get(saved.id)?.baseUrl, 'https://example.test/v1')
 })
 
+test('the runtime codex home stays visible and loads as a provider', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-'))
+  // 本机 home 必须真实存在：addExistingCodexHomes 会过滤不存在的目录。
+  const store = new ProviderStore(dir, dir)
+  await store.load()
+
+  const local = store.listPublic().find((p) => p.kind === 'local-profile')
+  assert.equal(local?.id, 'local')
+  assert.ok(store.runtimeProviders().some((p) => p.id === 'local'))
+})
+
+test('a local-profile row that is not the runtime home stays hidden', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-'))
+  const store = new ProviderStore(dir, dir)
+  await store.load()
+  const extra = await store.upsert({ name: 'Other home', kind: 'local-profile', codexHome: '/nonexistent' })
+
+  assert.equal(store.listPublic().some((p) => p.id === extra.id), false)
+  assert.equal(store.runtimeProviders().some((p) => p.id === extra.id), false)
+})
+
 test('runtime model context settings persist outside config.toml', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-context-'))
   const store = new ProviderStore(dir)

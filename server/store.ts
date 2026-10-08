@@ -158,9 +158,25 @@ export class ProviderStore {
     return this.revisionValue;
   }
 
+  /**
+   * 该 local-profile 行是否就是 Runtime 实际占用的本机 home。Runtime 只能持有
+   * 一个 home：其它 local-profile 行（手工添加的、残留的）即使被选中，会话用的
+   * 仍是 Runtime home 的 auth.json——对它们不可见、也不装入，避免张冠李戴。
+   */
+  private isRuntimeProfile(provider: Provider) {
+    return (
+      provider.kind === "local-profile" &&
+      provider.id === this.runtimeProfile().id
+    );
+  }
+
   listPublic(): PublicProvider[] {
     return this.providers
-      .filter((provider) => provider.kind !== "local-profile")
+      .filter(
+        (provider) =>
+          provider.kind !== "local-profile" ||
+          this.isRuntimeProfile(provider),
+      )
       .map(({ apiKey, configToml, authJson, ...item }) => ({
         ...item,
         hasApiKey: Boolean(
@@ -192,8 +208,10 @@ export class ProviderStore {
 
   /** Secrets stay server-side; callers use this only to build the app-server process. */
   runtimeProviders() {
+    // 本机配置档也作为 Official（requires_openai_auth）装入：没有 CC Switch /
+    // 自定义供应商时它往往是唯一连接，缺失会导致会话无法创建。
     return this.providers.filter(
-      (p) => p.enabled && p.kind !== "local-profile",
+      (p) => p.enabled && (p.kind !== "local-profile" || this.isRuntimeProfile(p)),
     );
   }
 
