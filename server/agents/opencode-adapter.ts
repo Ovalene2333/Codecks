@@ -1,6 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { openCodeGlobalDir } from "../opencode-config.js";
 import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
@@ -61,6 +64,9 @@ interface OpenCodeAdapterOptions {
   ) => ChildProcess;
   port?: number;
   platform?: NodeJS.Platform;
+  /** 覆盖全局 opencode 配置目录（reload 的新鲜度检查用）；默认走
+   * `openCodeGlobalDir()` 的 OPENCODE_CONFIG_DIR > XDG > ~/.config 解析。 */
+  openCodeConfigDir?: string;
   /**
    * Windows 上真实的 server 是 `cmd.exe` 包裹层身后的孙进程，
    * 默认用 `taskkill /T` 连带结束；测试可注入 mock 断言。
@@ -774,6 +780,7 @@ export class OpenCodeAdapter extends EventEmitter {
   private error?: string;
   private baseUrl?: string;
   private process?: ChildProcess;
+  private processStartedAt = 0;
   private eventAbort?: AbortController;
   private fetcher: Fetcher;
   private processStderr = "";
@@ -1118,6 +1125,7 @@ export class OpenCodeAdapter extends EventEmitter {
         windowsVerbatimArguments: commandIsBatch || undefined,
       });
       this.process = child;
+      this.processStartedAt = Date.now();
       this.processStderr = "";
       child.stderr?.on("data", (chunk) => {
         this.processStderr = `${this.processStderr}${String(chunk)}`.slice(
@@ -1374,12 +1382,29 @@ export class OpenCodeAdapter extends EventEmitter {
    * 必须先 dispose 对应实例，下次访问才会按当前文件重建。走
    * `POST /instance/dispose` 而不是 PATCH /config：后者会把合并结果回写
    * 进用户配置文件。旧版本缺这个端点时退化为整体重启。
+   *
+   * 例外：全局配置文件（`~/.config/opencode/opencode.json*` 或
+   * `OPENCODE_CONFIG_DIR` 指向的目录）在 serve 里按进程生命周期缓存，
+   * dispose 不会重读——文件比进程新时只能整体重启。
    */
   async reload() {
     if (!this.online) {
       this.restart();
       await this.startAll();
       return;
+    }
+    if (this.processStartedAt) {
+      const dir = this.options.openCodeConfigDir || openCodeGlobalDir();
+      for (const basename of ["opencode.json", "opencode.jsonc"]) {
+        try {
+          const file = path.join(dir, basename);
+          if ((await stat(file)).mtimeMs > this.processStartedAt) {
+            this.restart();
+            await this.startAll();
+            return;
+          }
+        } catch {}
+      }
     }
     const directories = new Set<string>();
     for (const directory of this.options.initialDirectories || [])

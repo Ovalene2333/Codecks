@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, utimes, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { openCodePartToItem, OpenCodeAdapter } from "./opencode-adapter.js";
 
@@ -148,6 +151,52 @@ test("OpenCode adapter reload disposes directory instances and re-reads provider
       .some((model: any) => model.id === "new-provider/new-model"),
     "reload must surface providers added after the server started",
   );
+});
+
+test("OpenCode adapter restarts when the global config is newer than the serve process", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-opencode-global-"));
+  const configFile = path.join(dir, "opencode.jsonc");
+  await writeFile(configFile, "{}");
+  let disposeCalls = 0;
+  let spawned = 0;
+  const child = new EventEmitter() as any;
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  const adapter = new OpenCodeAdapter({
+    openCodeConfigDir: dir,
+    spawnProcess: () => {
+      spawned += 1;
+      return child;
+    },
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/instance/dispose") && init?.method === "POST") {
+        disposeCalls += 1;
+        return Response.json(true);
+      }
+      if (value.includes("/global/health"))
+        return Response.json({ healthy: true });
+      if (value.includes("/provider"))
+        return Response.json({ all: {} });
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+  // 模拟进程先于配置文件修改启动：全局配置按进程缓存，只能重启。
+  (adapter as any).processStartedAt = Date.now() - 60_000;
+
+  await adapter.reload();
+  assert.equal(disposeCalls, 0, "stale global config must restart, not dispose");
+  assert.equal(spawned, 1, "reload should respawn the serve process");
+
+  // 配置文件比进程旧：走 dispose 轻量重载即可。
+  const stale = new Date(Date.now() - 120_000);
+  await utimes(configFile, stale, stale);
+  (adapter as any).processStartedAt = Date.now();
+  await adapter.reload();
+  assert.ok(disposeCalls > 0, "fresh global config allows lightweight dispose");
+  adapter.restart();
 });
 
 test("OpenCode adapter drops a directory catalog on server.instance.disposed", async () => {
