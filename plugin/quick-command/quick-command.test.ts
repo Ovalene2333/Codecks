@@ -10,6 +10,9 @@ import {
 import { commandParamNames } from "./quick-command.types.js";
 
 const cwd = process.cwd();
+// exec 用例模拟 platform:"linux"：Windows 主机上 process.cwd() 不是 POSIX
+// 绝对路径，resolveCwd 会先拒掉。"/" 两边都是目录且走同样的校验路径。
+const execCwd = "/";
 
 test("commandParamNames extracts placeholders in order without duplicates", () => {
   assert.deepEqual(
@@ -150,7 +153,7 @@ test("exec runs the expanded command through the shell spec", async () => {
   });
   const result = (await tool.run({
     action: "exec",
-    cwd,
+    cwd: execCwd,
     command: "echo {who}",
     params: { who: "world" },
   })) as any;
@@ -160,7 +163,7 @@ test("exec runs the expanded command through the shell spec", async () => {
   assert.deepEqual(calls[0].spec, {
     file: "/bin/bash",
     args: ["-lc", "echo 'world'"],
-    cwd,
+    cwd: execCwd,
   });
 });
 
@@ -178,7 +181,7 @@ test("exec surfaces non-zero exits as results, not errors", async () => {
   });
   const result = (await tool.run({
     action: "exec",
-    cwd,
+    cwd: execCwd,
     command: "false",
   })) as any;
   assert.equal(result.code, 3);
@@ -198,7 +201,7 @@ test("exec rejects missing params and invalid directories", async () => {
     }),
   });
   await assert.rejects(
-    tool.run({ action: "exec", cwd, command: "echo {who}" }),
+    tool.run({ action: "exec", cwd: execCwd, command: "echo {who}" }),
     /缺少参数：who/,
   );
   await assert.rejects(

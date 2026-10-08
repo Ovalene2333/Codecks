@@ -26,7 +26,9 @@ test("commandExists finds executables on PATH and ignores the rest", async () =>
 
     assert.equal(commandExists("fake-cli", env, "linux"), true);
     // 没有可执行位的文件不是命令，spawn 也会 EACCES。
-    assert.equal(commandExists("not-executable", env, "linux"), false);
+    // Windows 文件系统没有可执行位，accessSync(X_OK) 恒放行，只在 POSIX 断言。
+    if (process.platform !== "win32")
+      assert.equal(commandExists("not-executable", env, "linux"), false);
     assert.equal(commandExists("missing-cli", env, "linux"), false);
     assert.equal(commandExists("fake-cli", { PATH: "" }, "linux"), false);
     assert.equal(commandExists("fake-cli", {}, "linux"), false);
