@@ -1289,7 +1289,7 @@ app.post(
     const input = z
       .object({
         decision: z
-          .enum(["accept", "acceptForSession", "decline", "cancel"])
+          .enum(["accept", "acceptForSession", "allowForProject", "decline", "cancel"])
           .optional(),
         optionId: z.string().optional(),
         permissions: z.unknown().optional(),
@@ -1886,7 +1886,7 @@ app.post(
     const input = z
       .object({
         decision: z
-          .enum(["accept", "acceptForSession", "decline", "cancel"])
+          .enum(["accept", "acceptForSession", "allowForProject", "decline", "cancel"])
           .optional(),
         permissions: z.unknown().optional(),
         scope: z.enum(["session", "turn"]).optional(),

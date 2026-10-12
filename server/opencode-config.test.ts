@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   openCodeGlobalDir,
+  allowOpenCodeExternalDirectories,
   parseJsonc,
   readOpenCodeConfig,
   writeOpenCodeConfig,
@@ -93,4 +94,22 @@ test("openCodeGlobalDir falls back to XDG_CONFIG_HOME then home", () => {
     openCodeGlobalDir({}, "/home/u"),
     path.join("/home/u", ".config", "opencode"),
   );
+});
+
+test("external directory grants persist per project without widening existing rules", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-opencode-permission-"));
+  await writeFile(path.join(dir, "opencode.json"), JSON.stringify({
+    permission: { external_directory: { "*": "ask", "/opt/demo/private/*": "deny" }, bash: "ask" },
+  }));
+  await allowOpenCodeExternalDirectories(dir, ["/opt/demo/assets/*"]);
+  const config = JSON.parse(await readFile(path.join(dir, "opencode.json"), "utf8"));
+  assert.deepEqual(config.permission, {
+    external_directory: { "*": "ask", "/opt/demo/private/*": "deny", "/opt/demo/assets/*": "allow" },
+    bash: "ask",
+  });
+  await assert.rejects(() => allowOpenCodeExternalDirectories(dir, ["*"]), /不明确/);
+  await writeFile(path.join(dir, "opencode.json"), JSON.stringify({ permission: "deny" }));
+  await allowOpenCodeExternalDirectories(dir, ["/opt/demo/assets/*"]);
+  const shorthand = JSON.parse(await readFile(path.join(dir, "opencode.json"), "utf8"));
+  assert.equal(shorthand.permission["*"], "deny");
 });

@@ -283,6 +283,8 @@ POST /api/agents/claude/approvals/:approvalId
 
 ### OpenCode 后端适配
 
+OpenCode 审批中的「本会话允许」对应 OpenCode 原生 `always`，只在当前会话内有效。对于项目外目录的审批，还可在「更多授权选项」选择「此项目始终允许」：Deck 会把该目录的授权模式写进当前项目的 `opencode.json(c)`，之后该项目的新会话与原生 OpenCode TUI 共用此规则；其它项目不会自动获得授权。该文件属于项目配置，可在 OpenCode 配置里撤销对应 `permission.external_directory` 规则；请留意项目配置文件可能被版本控制跟踪。
+
 OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新时会按已知项目目录补拉会话，并保留 OpenCode 暂时返回的局部列表中未出现的历史会话。打开会话只会补充首条消息标题，不会因此刷新会话时间。
 
 > **版本要求：面向 OpenCode V1（1.x）**。适配器走 `opencode serve` 的 V1 REST 接口（`/session`、`/global/event`、`/config` 等），对 V2 的 `/api/*` 新契约不兼容；OpenCode 2 尚未发布 stable（npm `latest` 仍为 1.x），且 V2 安装会替换 V1 二进制，升级前请先完成迁移。配置文件侧 V2 仍读取 `opencode.json(c)` 原位置并兼容 V1 字段，迁移要点与待办见 [docs/opencode-v2-todo.md](docs/opencode-v2-todo.md)。

@@ -402,7 +402,7 @@ export interface HostStats {
 }
 
 export interface ApprovalResolveBody {
-  decision?: "accept" | "acceptForSession" | "decline" | "cancel";
+  decision?: "accept" | "acceptForSession" | "allowForProject" | "decline" | "cancel";
   /** ACP：直接选中 agent 给出的某个 optionId（devin 一次给多档选项）。 */
   optionId?: string;
   permissions?: unknown;

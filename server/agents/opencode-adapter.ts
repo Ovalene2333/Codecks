@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import { openCodeGlobalDir } from "../opencode-config.js";
+import { allowOpenCodeExternalDirectories, openCodeGlobalDir } from "../opencode-config.js";
 import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
@@ -2252,8 +2252,19 @@ export class OpenCodeAdapter extends EventEmitter {
     if (approval.request?.method === "opencode/question")
       return this.resolveQuestion(approval, decision, (body as any)?.answers);
     if (approval.request?.method === "opencode/permission.v2") {
+      const persistent = decision === "allowForProject";
+      if (persistent) {
+        const permission = approval.request.params?.permission;
+        if (permission?.permission !== "external_directory" || !approval.cwd)
+          throw new Error("仅支持为当前项目持久授权项目外目录");
+        const patterns = Array.isArray(permission.always) && permission.always.length
+          ? permission.always : permission.patterns;
+        const file = await allowOpenCodeExternalDirectories(approval.cwd, patterns);
+        // serve 会缓存每个项目的配置；同步到在线实例，长任务无需等重启。
+        await this.patchRuntimeConfig({ permission: file.config.permission }, approval.cwd);
+      }
       const reply =
-        decision === "acceptForSession"
+        decision === "acceptForSession" || persistent
           ? "always"
           : decision === "accept"
             ? "once"
@@ -2417,7 +2428,8 @@ export class OpenCodeAdapter extends EventEmitter {
       kind: this.permissionKind(kind),
       command,
       reason: `${kind}${patterns.length ? ` · ${patterns.join(", ")}` : ""}`,
-      availableDecisions: ["decline", "accept", "acceptForSession"],
+      availableDecisions: ["decline", "accept", "acceptForSession",
+        ...(kind === "external_directory" && thread?.cwd && patterns.length ? ["allowForProject"] : [])],
       request: {
         method: "opencode/permission.v2",
         params: { threadId: sessionID, permission },

@@ -166,12 +166,18 @@ export function ApprovalCard({
           ? [
               {
                 id: "acceptForSession",
-                label: approval.request.method?.startsWith(
-                  "opencode/permission",
-                )
-                  ? "始终允许"
-                  : "本会话允许",
+                label: "本会话允许",
                 body: { decision: "acceptForSession" as const },
+                tone: "neutral" as const,
+              },
+            ]
+          : []),
+        ...(decisions.includes("allowForProject")
+          ? [
+              {
+                id: "allowForProject",
+                label: "此项目始终允许（写入 OpenCode 项目配置）",
+                body: { decision: "allowForProject" as const },
                 tone: "neutral" as const,
               },
             ]

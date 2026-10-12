@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1393,6 +1393,40 @@ test("OpenCode permission.asked can be answered through the current permission A
     type: "permission.replied",
     properties: { sessionID: "s1", requestID: "per_1", reply: "reject" },
   });
+  assert.equal(adapter.snapshot().approvals.length, 0);
+});
+
+test("OpenCode project external-directory approval writes native project config", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "deck-opencode-approval-"));
+  const replies: unknown[] = [];
+  const patches: unknown[] = [];
+  const adapter = new OpenCodeAdapter({ fetcher: (async (url, init) => {
+    if (String(url).includes("/config") && init?.method === "PATCH") {
+      patches.push(JSON.parse(String(init.body)));
+      return Response.json(true);
+    }
+    if (String(url).includes("/permission/") && init?.method === "POST") {
+      replies.push(JSON.parse(String(init.body)));
+      return Response.json(true);
+    }
+    return Response.json([]);
+  }) as typeof fetch });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "n", preview: "", cwd,
+    model: "default", status: "running", updatedAt: 1,
+  });
+  (adapter as any).onEvent({ type: "permission.asked", properties: {
+    id: "per_1", sessionID: "s1", permission: "external_directory",
+    patterns: ["/opt/demo/assets/*"], always: ["/opt/demo/assets/*"], metadata: {},
+  } });
+  const approval: any = adapter.snapshot().approvals[0];
+  assert.ok(approval.availableDecisions.includes("allowForProject"));
+  await adapter.resolveApproval(approval.id, { decision: "allowForProject" });
+  assert.deepEqual(replies, [{ reply: "always" }]);
+  assert.deepEqual(patches, [{ permission: { external_directory: { "/opt/demo/assets/*": "allow" } } }]);
+  const saved = JSON.parse(await readFile(path.join(cwd, "opencode.json"), "utf8"));
+  assert.deepEqual(saved.permission.external_directory, { "/opt/demo/assets/*": "allow" });
   assert.equal(adapter.snapshot().approvals.length, 0);
 });
 

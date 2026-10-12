@@ -206,3 +206,45 @@ export async function writeOpenCodeConfig(
   await rename(temporary, file.path);
   return { ...file, exists: true, config };
 }
+
+/** 将项目外目录的精确授权模式写入 OpenCode 原生项目配置，供新会话和 TUI 共用。 */
+export async function allowOpenCodeExternalDirectories(
+  directory: string,
+  patterns: string[],
+): Promise<OpenCodeConfigFile> {
+  if (!patterns.length || patterns.some((pattern) => {
+    if (typeof pattern !== "string") return true;
+    const prefix = pattern.split(/[?*]/, 1)[0];
+    return !path.isAbsolute(prefix) || path.parse(prefix).root === prefix;
+  })) {
+    throw new Error("无法持久授权不明确的项目外目录模式");
+  }
+  const file = await readOpenCodeConfig("project", directory);
+  const config = file.config;
+  const permissions = config.permission && typeof config.permission === "object" && !Array.isArray(config.permission)
+    ? config.permission
+    : (config.permission = typeof config.permission === "string"
+      ? { "*": config.permission }
+      : {});
+  const existing = permissions.external_directory;
+  const rules: Record<string, string> = typeof existing === "string"
+    ? { "*": existing }
+    : existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...existing }
+      : {};
+  for (const pattern of patterns) {
+    delete rules[pattern]; // OpenCode 以最后匹配的规则为准。
+    rules[pattern] = "allow";
+  }
+  permissions.external_directory = rules;
+  if (config.$schema === undefined && !file.exists)
+    config.$schema = "https://opencode.ai/config.json";
+  await mkdir(path.dirname(file.path), { recursive: true });
+  const temporary = `${file.path}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await rename(temporary, file.path);
+  return { ...file, exists: true, config };
+}
