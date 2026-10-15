@@ -17,11 +17,10 @@ import "./chat.css";
 import "./approval-inbox.css";
 import "./overlays.css";
 import "./tokens.css";
-import "./polish.css";
-import "./appearance.css";
 import "./task-tools.css";
 import "./deck-ui.css";
 import "./search-picker.css";
+import "./kit.css";
 
 document.documentElement.dataset.theme = "dark";
 document.documentElement.dataset.motion = "off";
@@ -212,7 +211,6 @@ function Harness() {
           new Set(["claude:official:gateway", "opencode:relay:infra"])
         }
         expandedProjects={expanded}
-        forkCounts={new Map()}
         runtime={{ online: true } as any}
         notificationPermission="default"
         loading={false}

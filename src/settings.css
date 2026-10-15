@@ -7,15 +7,16 @@
   gap: var(--space-3);
   width: min(260px, 100%);
 }
-.message-range input {
-  flex: 1;
-  min-width: 0;
-  accent-color: var(--accent);
+.message-range .ui-slider {
+  /* 原生 input 有默认内禀宽度，div 滑杆没有：min-width 给行侧一个下限，
+     否则 flex:none 的行侧会被百分比宽度拖成 0。 */
+  flex: 1 1 auto;
+  min-width: 140px;
 }
 .message-range output {
   min-width: 64px;
   text-align: right;
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
@@ -68,7 +69,7 @@
 }
 
 .modal.ui-panel > header h2 {
-  font-size: var(--fs-modal-title);
+  font-size: var(--fs-dialog);
 }
 
 .ui-panel__tabs {
@@ -155,12 +156,27 @@
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
   min-height: 0;
   padding: var(--space-3);
   overflow-y: auto;
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-muted) 55%, transparent);
+}
+
+.settings-nav__group {
+  display: grid;
+  gap: 2px;
+}
+
+/* 分组标签：对标 shadcn SidebarGroupLabel——11px 大写灰字，不抢导航项。 */
+.settings-nav__label {
+  margin: 0 0 2px;
+  padding: 0 var(--space-3);
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
 }
 
 .settings-nav__item {
@@ -174,7 +190,7 @@
   background: transparent;
   color: var(--text-dim);
   font-size: var(--fs-ui);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   text-align: left;
   cursor: pointer;
 }
@@ -191,15 +207,13 @@
 }
 
 .settings-nav__item.is-active {
-  background: var(--surface-raised);
+  background: var(--surface-selected);
   color: var(--text);
-  box-shadow:
-    inset 0 1px 0 var(--edge-hi),
-    var(--shadow-sm);
+  box-shadow: none;
 }
 
 .settings-nav__item.is-active svg {
-  color: var(--accent);
+  color: var(--text);
 }
 
 .settings-nav__foot {
@@ -210,14 +224,6 @@
 
 .settings-nav__item.is-minor {
   width: 100%;
-  min-height: var(--control-h-sm);
-  color: var(--text-dim);
-  font-size: var(--fs-caption);
-}
-
-.settings-nav__item.is-minor svg {
-  width: 16px;
-  height: 16px;
 }
 
 .settings-nav__dirty {
@@ -252,15 +258,15 @@
   margin: 0;
   color: var(--text);
   font-size: var(--fs-heading);
-  font-weight: 600;
-  line-height: 1.3;
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
 }
 
 .settings-page__head p {
   margin: var(--space-1) 0 0;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
 }
 
 .settings-page__actions {
@@ -279,8 +285,8 @@
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  font-weight: 500;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
   cursor: pointer;
 }
 
@@ -311,7 +317,7 @@
   background: none;
   color: var(--text);
   font-size: var(--fs-body);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   text-align: left;
   cursor: pointer;
 }
@@ -341,12 +347,6 @@
   height: 16px;
   margin-left: auto;
   color: var(--text-faint);
-}
-
-.settings-index__minor .settings-index__item {
-  min-height: 44px;
-  color: var(--text-dim);
-  font-size: var(--fs-ui);
 }
 
 @media (max-width: 640px) {
@@ -395,7 +395,7 @@
 
 .settings-keys__or {
   color: var(--text-faint);
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
 }
 
 .ui-actions--split {
@@ -439,3 +439,17 @@
     width: auto;
   }
 }
+
+
+.cli-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  align-items: center;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.cli-path > span { grid-column: 1 / -1; }
+.cli-path code, .cli-effective { overflow-wrap: anywhere; user-select: text; }
+.cli-path code { color: var(--text-dim); }
+.ui-group .search-picker { width: 100%; }

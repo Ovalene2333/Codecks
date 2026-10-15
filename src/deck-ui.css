@@ -1,76 +1,143 @@
 /* Final product shell layer. Palette lives in tokens.css; this file owns
    layout rhythm and component geometry. */
 :root {
-  --shell-sidebar: clamp(308px, 18vw, 344px);
+  --shell-sidebar: clamp(272px, 18vw, 300px);
 }
 
 .sidebar {
+  position: relative;
   width: var(--shell-sidebar);
   min-width: var(--shell-sidebar);
   border-right: 1px solid var(--line);
   box-shadow: none;
 }
 
-.brand-logo {
-  width: 34px;
-  height: 34px;
+/*
+ * 侧栏右边缘的拖拽把手：桌面端横向拖动调宽（240–480px，断开即保存），
+ * 双击回到自动宽度；键盘聚焦后可用方向键/Home/End/Backspace。窄屏是整屏
+ * 抽屉，调宽没有意义，把手隐藏。
+ */
+.sidebar-resize {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 5;
+  width: 9px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+  outline-offset: -2px;
+}
+
+.sidebar-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+}
+
+.sidebar-resize:hover::after {
+  background: var(--line-strong);
+}
+
+.sidebar-resize:focus-visible::after,
+.sidebar.is-resizing .sidebar-resize::after {
+  background: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .sidebar-resize {
+    display: none;
+  }
+}
+
+/*
+ * 手动调宽也不挤死内容区：桌面端给内容至少留 360px。min-width 也要一起压，
+ * 否则它（同样跟随 --shell-sidebar）会盖过 max-width。
+ */
+@media (min-width: 761px) {
+  .sidebar {
+    min-width: min(var(--shell-sidebar), calc(100vw - 360px));
+    max-width: min(480px, calc(100vw - 360px));
+  }
+}
+
+.brand .brand-logo {
+  width: 20px;
+  height: 20px;
+  color: var(--text);
 }
 
 .brand {
-  height: 56px;
+  height: 52px;
 }
 
 .brand b {
-  font-size: 15px;
-  line-height: 20px;
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
 }
 
 .sidebar-toolbar {
-  gap: 8px;
-  padding: 12px 12px 8px;
+  gap: 6px;
+  padding: 10px 10px 8px;
 }
 
 .session-search {
-  height: 40px;
-  padding: 0 10px;
-  border-radius: var(--radius-md);
+  height: var(--control-h);
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
 }
 
 .session-search input {
-  min-height: 38px;
+  min-height: calc(var(--control-h) - 2px);
   padding: 0;
   border-radius: 0;
   background: transparent;
 }
 
-.new-session-btn {
-  min-height: 40px;
-  padding: 0 13px;
-  gap: 6px;
+/* 侧栏「新建」用次级样式：主操作留给内容区。 */
+.sidebar .new-session-btn {
+  min-height: var(--control-h);
+  padding: 0 10px;
+  gap: 5px;
+  border-color: var(--control-border);
+  background: var(--control);
+  color: var(--text);
+}
+
+.sidebar .new-session-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  color: var(--text);
 }
 
 .library-bar {
-  padding: 0 12px 10px;
+  padding: 0 10px 8px;
 }
 
 .library-segment {
-  min-height: 38px;
+  min-height: var(--control-h);
   background: var(--surface-muted);
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 20%);
+  box-shadow: none;
 }
 
 .library-segment > button.on {
-  background: var(--surface-raised);
-  box-shadow:
-    inset 0 1px 0 var(--edge-hi),
-    var(--shadow-sm);
+  background: var(--surface-selected);
+  box-shadow: none;
 }
 
 .sidebar-meta {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 2px 14px 10px;
+  gap: 4px;
+  padding: 0 12px 6px;
 }
 
 .sidebar-meta > span {
@@ -81,7 +148,7 @@
 .sidebar-meta .watch-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -92,30 +159,36 @@
   justify-content: center;
   gap: 5px;
   min-height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-xs);
   background: transparent;
   box-shadow: none;
   color: var(--text-dim);
   font-size: var(--fs-meta);
-  font-weight: 500;
+  font-weight: var(--fw-regular);
 }
 
 .sidebar-meta .watch-strip button:hover {
-  background: var(--control-hover);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
 .sidebar-meta .watch-strip button.active {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  background: var(--accent-soft);
+  border-color: transparent;
+  background: var(--surface-selected);
   color: var(--text);
   box-shadow: none;
 }
 
 .sidebar-meta .watch-strip button b {
+  color: var(--text-faint);
   font-size: var(--fs-meta);
+  font-weight: var(--fw-regular);
+}
+
+.sidebar-meta .watch-strip button.active b {
+  color: var(--text-soft);
 }
 
 .watch-dot {
@@ -126,20 +199,19 @@
 
 .watch-dot.error {
   background: var(--danger);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 60%, transparent);
 }
 
 .thread-list {
-  padding: 2px 8px 10px;
+  padding: 2px 6px 10px;
 }
 
 .project-group {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
 }
 
 .project-heading {
-  min-height: 38px;
-  padding-inline: 8px !important;
+  min-height: 30px;
+  padding-inline: 6px !important;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -154,41 +226,36 @@
 }
 
 .session-row {
-  width: calc(100% - 6px);
-  margin-left: 6px;
-  padding: 8px 8px 8px 10px;
-  border-left: 2px solid transparent;
-  border-radius: 8px;
-  transition:
-    background-color var(--ease),
-    border-color var(--ease),
-    box-shadow var(--ease);
+  width: 100%;
+  margin-left: 0;
+  padding: 6px 8px 6px 26px;
+  border-left: 0;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--ease);
 }
 
 .session-row:hover,
 .session-row:focus-visible {
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
+  background: var(--surface-hover);
 }
 
-.session-row.selected {
+/* 选中行：中性底色，不加强调色竖条。 */
+.session-row.selected,
+.thread-list > button.selected {
   border-left-color: transparent;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      color-mix(in srgb, var(--accent) 4%, transparent) 58%,
-      transparent
-    ),
-    var(--surface);
-  box-shadow:
-    inset 2px 0 0 var(--accent),
-    inset 0 1px 0 var(--edge-hi),
-    var(--shadow-sm);
+  background: var(--surface-selected);
+  box-shadow: none;
 }
 
 .session-row strong {
-  font-size: 13px;
-  line-height: 18px;
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-ui);
+}
+
+.session-row.selected strong {
+  color: var(--text);
 }
 
 .session-row p,
@@ -196,10 +263,10 @@
 .thread-list .thread-meta small,
 .thread-list .thread-meta time {
   font-size: var(--fs-meta);
-  line-height: 16px;
+  line-height: var(--lh-tight);
 }
 
-/* 元信息区降噪：供应商/受管/历史回归纯文本，agent 保留无描边小色块 */
+/* 元信息区降噪：供应商、agent、受管、历史都是纯文本，不做色块。 */
 .thread-list .thread-meta .provider-badge,
 .thread-list .session-provider {
   padding: 0;
@@ -207,17 +274,19 @@
   border-radius: 0;
   background: transparent;
   color: var(--text-faint);
-  line-height: 15px;
+  line-height: var(--lh-tight);
 }
 
 .thread-list .thread-meta .agent-badge,
 .thread-list .agent-badge {
   min-height: 15px;
-  padding: 0 5px;
+  padding: 0;
   border: 0;
-  border-radius: 4px;
-  font-weight: 600;
-  line-height: 15px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
 }
 
 .thread-list .thread-meta .mode-badge {
@@ -234,10 +303,22 @@
   color: var(--accent-hover);
 }
 
+/* 底栏：上面一块额度，下面一组分段快捷入口。 */
+.sidebar-footer {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+}
+
 .sidebar-footer-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 
 /* 底栏保持一条安静的额度信息与一排紧凑导航。 */
@@ -251,7 +332,7 @@
   gap: 7px;
   width: 100%;
   height: auto;
-  min-height: 36px;
+  min-height: var(--control-h);
   padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -259,19 +340,21 @@
   box-shadow: none;
   color: var(--text-dim);
   font-size: var(--fs-meta);
-  font-weight: 500;
+  font-weight: var(--fw-regular);
   cursor: pointer;
 }
 
 .sidebar-footer > .usage-chip {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  row-gap: 5px;
+  column-gap: 6px;
   width: 100%;
-  min-height: 28px;
-  padding: 0 3px;
+  min-height: 0;
+  padding: 2px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -280,10 +363,27 @@
   cursor: pointer;
 }
 
+.sidebar-footer .usage-chip-metric {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-footer-actions > button {
+  border-radius: 0;
+}
+
+.sidebar-footer-actions > button + button {
+  border-left: 1px solid var(--line);
+}
+
+.sidebar-footer-actions > button:focus-visible {
+  outline-offset: -2px;
+}
+
 .sidebar-footer-actions > button:hover,
 .sidebar-tools-wrap > button:hover,
 .sidebar-tools-wrap > button.active {
-  background: var(--control-hover);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -300,7 +400,7 @@
 }
 
 .sidebar-footer > .usage-chip.warn {
-  color: var(--warn);
+  color: var(--wait);
 }
 
 .sidebar-footer > .usage-chip.danger {
@@ -314,14 +414,14 @@
   min-width: 30px;
   height: 3px;
   overflow: hidden;
-  border-radius: 999px;
-  background: var(--control);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
 }
 
 .sidebar-footer .usage-chip-track {
-  order: 2;
-  flex: 1;
-  min-width: 40px;
+  order: 3;
+  flex: 1 1 100%;
+  min-width: 0;
   height: 4px;
 }
 
@@ -329,11 +429,11 @@
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--text-dim);
 }
 
 .usage-chip.warn .usage-chip-track b {
-  background: var(--warn);
+  background: var(--wait);
 }
 
 .usage-chip.danger .usage-chip-track b {
@@ -341,25 +441,45 @@
 }
 
 .sidebar-footer > .usage-chip .usage-chip-metric {
-  order: 3;
+  order: 2;
   flex: none;
   min-width: 0;
-  text-align: left;
+  margin-left: auto;
+  color: var(--text);
+  font-weight: var(--fw-medium);
+  text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* 窗口标签：用字阶+间距跟百分比区分，不用「·」。 */
+.sidebar-footer > .usage-chip .usage-chip-window {
+  margin-left: 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-regular);
+}
+
+/* 芯片图标跟 12px 文字等高；Gauge 笔画光学中心偏下半像素，挪上去对齐。 */
+.sidebar-footer > .usage-chip .usage-chip-icon {
+  width: 13px;
+  height: 13px;
+  transform: translateY(-0.5px);
 }
 
 .sidebar-footer > .usage-chip .usage-chip-label {
   order: 1;
   color: var(--text-faint);
   font-size: var(--fs-meta);
-  font-weight: 500;
+  font-weight: var(--fw-regular);
+  /* 文字光学中心偏上半像素，挪下来跟图标对齐。 */
+  transform: translateY(0.5px);
 }
 
 .sidebar-footer-actions > button svg,
 .sidebar-tools-wrap > button svg,
 .sidebar-footer > .usage-chip svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex: none;
 }
 
@@ -368,19 +488,20 @@
   font-size: var(--fs-meta);
 }
 
+/* 计数：纯数字，不做胶囊。 */
 .sidebar-footer-actions > button > b {
   position: static;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  display: grid;
-  place-items: center;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--wait) 18%, transparent);
-  color: var(--wait);
-  font-family: var(--font-mono);
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  display: inline;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
   font-size: var(--fs-meta);
-  line-height: 1;
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-flat);
 }
 
 .sidebar-tools-wrap {
@@ -398,10 +519,8 @@
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--glass-strong);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  box-shadow: var(--shadow-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-tools-title {
@@ -414,7 +533,7 @@
 }
 
 .sidebar-tools-title b {
-  font-size: 12px;
+  font-size: var(--fs-meta);
 }
 
 .sidebar-tools-title small {
@@ -440,7 +559,7 @@
 
 .sidebar-tools-popover > button:hover:not(:disabled),
 .sidebar-tools-popover > button:focus-visible {
-  background: var(--control-hover);
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -457,24 +576,24 @@
 
 .sidebar-tools-popover > button b {
   color: var(--text-soft);
-  font-size: 12px;
-  line-height: 17px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
 }
 
 .sidebar-tools-popover > button small {
   overflow: hidden;
   color: var(--text-faint);
   font-size: var(--fs-meta);
-  line-height: 15px;
+  line-height: var(--lh-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .chat-header-row1 {
   width: min(1180px, 100%);
-  min-height: 56px;
+  min-height: 52px;
   margin-inline: auto;
-  padding: 0 18px;
+  padding: 0 16px;
 }
 
 .chat-title {
@@ -509,8 +628,9 @@
 .chat-title h2 {
   flex: 0 1 auto;
   max-width: min(40vw, 600px);
-  font-size: 15px;
-  line-height: 20px;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-ui);
   white-space: nowrap;
   -webkit-line-clamp: 1;
 }
@@ -537,8 +657,8 @@
 
 .provider-switch.secondary:hover:not(:disabled),
 .chat-header-actions .icon-btn:hover:not(:disabled) {
-  border-color: var(--control-border);
-  background: var(--control-hover);
+  border-color: transparent;
+  background: var(--surface-hover);
 }
 
 /* deck-wake 入口：灰=未开启，亮色=已有唤醒代号，右上角绿点=本机 watcher 监督中。 */
@@ -564,11 +684,9 @@
   height: 6px;
   border-radius: 50%;
   background: var(--ok);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--ok) 60%, transparent);
 }
 .chat-header-actions .wake-toggle.lost::after {
   background: var(--danger);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--danger) 60%, transparent);
 }
 
 .desktop-context {
@@ -608,15 +726,12 @@
   margin-bottom: 22px;
 }
 
-.turn-head {
-  margin-bottom: 9px;
-  color: var(--text-faint);
-}
+
 
 .message.agent {
-  color: var(--text-soft);
-  font-size: 14px;
-  line-height: 1.68;
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
 }
 
 .toolbar-select {
@@ -661,7 +776,7 @@
     display: inline-flex;
   }
 
-  .composer-session-controls .toolbar-select select,
+  .composer-session-controls .toolbar-select :is(select, .ui-select-trigger),
   .composer-session-controls .toolbar-select input {
     max-width: none;
     padding-left: 2px;
@@ -732,10 +847,10 @@
   padding: 0;
   color: var(--text-dim);
   font-size: var(--fs-meta);
-  line-height: 16px;
+  line-height: var(--lh-tight);
 }
 
-.session-toolbar--panel .toolbar-select select,
+.session-toolbar--panel .toolbar-select :is(select, .ui-select-trigger),
 .session-toolbar--panel .toolbar-select input {
   width: 100%;
   max-width: none;
@@ -747,17 +862,17 @@
   border-radius: var(--radius-sm);
   background: var(--control);
   color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
 }
 
-.session-toolbar--panel .toolbar-select select:hover:not(:disabled),
+.session-toolbar--panel .toolbar-select :is(select, .ui-select-trigger):hover:not(:disabled),
 .session-toolbar--panel .toolbar-select input:hover:not(:disabled) {
   border-color: var(--line-strong);
   background: var(--control-hover);
 }
 
-.session-toolbar--panel .toolbar-select select:focus-visible,
+.session-toolbar--panel .toolbar-select :is(select, .ui-select-trigger):focus-visible,
 .session-toolbar--panel .toolbar-select input:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -766,9 +881,9 @@
 .session-toolbar--panel .toolbar-hint {
   margin-top: -5px;
   white-space: normal;
-  color: var(--warn);
+  color: var(--wait);
   font-size: var(--fs-meta);
-  line-height: 17px;
+  line-height: var(--lh-ui);
 }
 
 .session-toolbar--panel .compact-btn {
@@ -790,6 +905,8 @@
 
 @media (max-width: 760px) {
   .sidebar {
+    /* Mobile drawer must not reserve space beside the workspace. */
+    position: absolute;
     width: 100%;
     min-width: 0;
   }
@@ -799,7 +916,7 @@
   }
 
   .session-search,
-  .new-session-btn {
+  .sidebar .new-session-btn {
     min-height: 44px;
   }
 
@@ -812,7 +929,7 @@
   }
 
   .sidebar-meta .watch-strip button {
-    min-height: 40px;
+    min-height: 36px;
   }
 
   .project-heading,
@@ -847,7 +964,7 @@
   .chat-title h2 {
     flex: 1;
     max-width: none;
-    font-size: 14px;
+    font-size: var(--fs-body);
   }
 
   .mobile-chat-meta {
@@ -864,17 +981,12 @@
   }
 
   .message.agent {
-    font-size: 14px;
-  }
-
-  .composer-session-summary,
-  .composer-session-controls {
-    display: none;
+    font-size: var(--fs-body);
   }
 
   .modal,
   .usage-drawer {
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-xl);
   }
 
   .phone-session-settings .toolbar-field-label {
@@ -887,7 +999,7 @@
     min-height: 46px;
   }
 
-  .phone-session-settings .toolbar-select select,
+  .phone-session-settings .toolbar-select :is(select, .ui-select-trigger),
   .phone-session-settings .toolbar-select input {
     border: 0;
     background: transparent;
@@ -906,11 +1018,11 @@
     display: block;
   }
 
-  .session-toolbar--panel .toolbar-select select,
+  .session-toolbar--panel .toolbar-select :is(select, .ui-select-trigger),
   .session-toolbar--panel .toolbar-select input {
     min-height: 44px;
     height: 44px;
-    font-size: 14px;
+    font-size: var(--fs-body);
   }
 
   .session-toolbar--panel .compact-btn {
@@ -929,5 +1041,54 @@
 
   .brand .usage-chip-metric {
     display: none;
+  }
+}
+
+.appearance-trigger svg {
+  width: 17px;
+  height: 17px;
+}
+
+.appearance-trigger-home {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text-dim);
+  box-shadow: var(--shadow-md);
+  position: absolute;
+  z-index: 8;
+  top: 16px;
+  right: 18px;
+}
+
+.sidebar {
+  background: var(--sidebar);
+  border-right-color: var(--line);
+  border-color: var(--line);
+}
+
+.sidebar-meta .watch-strip button:hover {
+  border-color: var(--control-border);
+}
+
+@media (max-width: 760px) {
+  .appearance-trigger-home {
+    top: 14px;
+    right: 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .new-session-btn {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 760px) {
+  .sidebar-meta .watch-strip button {
+    width: auto;
+    height: auto;
+    min-width: 0;
+    padding: 0 8px;
+    border-radius: var(--radius-sm);
   }
 }

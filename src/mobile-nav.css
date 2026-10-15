@@ -38,13 +38,13 @@
 }
 
 .action-sheet button.rich b {
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }
 
 .action-sheet button.rich small {
   color: var(--text-faint);
-  font-size: var(--fs-caption);
-  font-weight: 400;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-regular);
 }
 
 /* 总览行尾的「···」：窄一点，桌面端悬停/聚焦时才显出来。 */
@@ -98,9 +98,7 @@
     height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
     padding: 0 4px env(safe-area-inset-bottom);
     border-top: 1px solid var(--line);
-    background: var(--glass-strong);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    background: var(--bg);
   }
 
   .mobile-tabbar > button {
@@ -117,8 +115,8 @@
     background: none;
     color: var(--text-faint);
     font: inherit;
-    font-size: var(--fs-caption);
-    line-height: 14px;
+    font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
@@ -128,7 +126,7 @@
   .mobile-tabbar > button {
     width: auto;
     height: auto;
-    font-weight: 500;
+    font-weight: var(--fw-regular);
     text-align: center;
   }
 
@@ -147,12 +145,13 @@
     height: 20px;
   }
 
+  /* 当前页用正文色，不染强调色。 */
   .mobile-tabbar > button.on {
-    color: var(--accent);
+    color: var(--text);
   }
 
   .mobile-tabbar > button.on span {
-    font-weight: 600;
+    font-weight: var(--fw-medium);
   }
 
   .mobile-tabbar > button:focus-visible {
@@ -166,10 +165,10 @@
     justify-self: center;
     width: 46px;
     height: 34px;
-    border-radius: 11px;
-    background: var(--accent);
-    color: var(--accent-text);
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: var(--radius-md);
+    background: var(--primary);
+    color: var(--primary-text);
+    box-shadow: none;
   }
 
   .mobile-tabbar > .mobile-tabbar-new svg {
@@ -188,13 +187,14 @@
     min-width: 16px;
     height: 16px;
     padding: 0 4px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--wait);
-    color: var(--surface);
-    font-size: var(--fs-caption);
-    font-weight: 700;
+    /* 状态色底上的固定深字：需始终可读，不随主题变。 */
+    color: #1a1305;
+    font-size: var(--fs-micro);
+    font-weight: var(--fw-strong);
     font-style: normal;
-    line-height: 16px;
+    line-height: var(--lh-tight);
     text-align: center;
   }
 

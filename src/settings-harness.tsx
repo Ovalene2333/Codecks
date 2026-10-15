@@ -27,8 +27,6 @@ import "./chat.css";
 import "./approval-inbox.css";
 import "./overlays.css";
 import "./tokens.css";
-import "./polish.css";
-import "./appearance.css";
 import "./task-tools.css";
 import "./deck-ui.css";
 import "./monitor.css";
@@ -159,10 +157,59 @@ let CLAUDE_PROFILES: AgentProfile[] = [
   ...(noCcSwitch ? [] : [{ id: "claude-cc-relay", agentId: "claude", name: "Claude 兼容中转", kind: "cc-switch" as const, baseUrl: "https://claude-relay.example.com", hasApiKey: true, enabled: true, online: true }]),
 ];
 
+let OPENCODE = [
+  {
+    id: "nikoapi",
+    name: "nikoapi",
+    npm: "@ai-sdk/openai-compatible",
+    baseURL: "https://jp.nikoapi.xyz/v1",
+    hasApiKey: false,
+    models: [
+      { id: "claude-opus-5-5", variants: ["high", "medium", "xhigh"] },
+      { id: "claude-sonnet-5-5", variants: ["high", "medium", "xhigh"] },
+    ],
+  },
+  {
+    id: "tokenmarket",
+    name: "tokenmarket",
+    npm: "@ai-sdk/openai-compatible",
+    baseURL: "https://tokenmarket.cheap/v1",
+    hasApiKey: false,
+    models: [
+      { id: "claude-opus-5-5", variants: ["high", "medium", "xhigh"] },
+      { id: "claude-sonnet-5-5", variants: ["high", "medium", "xhigh"] },
+    ],
+  },
+  {
+    id: "yapi",
+    name: "yapi",
+    npm: "@ai-sdk/openai-compatible",
+    baseURL: "https://yapi.click/v1",
+    hasApiKey: false,
+    apiKeyHint: "{env:YAPI_KEY}",
+    models: [
+      { id: "claude-opus-5-5", variants: ["high", "medium", "xhigh"], supportsImages: true },
+      { id: "claude-sonnet-5-5", variants: ["high", "medium"], supportsImages: true },
+      { id: "gpt-5-codex", name: "GPT-5 Codex", supportsImages: false, sdk: "@ai-sdk/openai" },
+    ],
+  },
+];
+let PERMS: Record<string, string> = { bash: "ask" };
+let OPENCODE_PROJECT = [
+  {
+    id: "local-dev",
+    name: "本机开发网关",
+    npm: "@ai-sdk/openai-compatible",
+    baseURL: "http://127.0.0.1:4000/v1",
+    hasApiKey: true,
+    models: [{ id: "dev-model" }],
+  },
+];
+
 const TOOLS: ToolDescriptor[] = [
   {
     id: "terminal",
-    name: "Web Terminal",
+    name: "网页终端",
     description: "通过浏览器连接服务端所在主机的交互式终端",
     icon: "terminal",
     available: true,
@@ -234,12 +281,50 @@ const json = (body: unknown, status = 200) =>
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const realFetch = window.fetch.bind(window);
+const backendBins = {
+  codex: [
+    { bin: "/opt/demo/codex-v1/bin/codex", version: "0.140.0", source: "standard", alive: true },
+    { bin: "/opt/demo/codex-v2/bin/codex", version: "0.160.0", source: "path", alive: true },
+  ],
+  claude: [
+    { bin: "/opt/demo/claude-v1/bin/claude", version: "2.0.0", source: "standard" },
+    { bin: "/opt/demo/claude-v2/bin/claude", version: "2.1.0", source: "path" },
+  ],
+  opencode: [
+    { bin: "/opt/demo/opencode-v1/bin/opencode", version: "1.0.0", source: "standard" },
+    { bin: "/opt/demo/opencode-v2/bin/opencode", version: "1.2.0", source: "path" },
+  ],
+};
+const selectedBins: Record<keyof typeof backendBins, string> = {
+  codex: "", claude: "", opencode: "",
+};
 window.fetch = async (input, init) => {
   const url = new URL(String(input), location.href);
   const method = (init?.method || "GET").toUpperCase();
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   const path = url.pathname;
   if (!path.startsWith("/api/")) return realFetch(input, init);
+
+  const binsAgent = /^\/api\/agents\/(claude|opencode)\/(bins|bin)$/.exec(path);
+  if (binsAgent) {
+    const agentId = binsAgent[1] as "claude" | "opencode";
+    if (method === "GET" && binsAgent[2] === "bins")
+      return json({ bins: backendBins[agentId], selected: selectedBins[agentId], effective: selectedBins[agentId] || agentId, pinned: false });
+    if (method === "PUT" && binsAgent[2] === "bin") {
+      await sleep(latency);
+      selectedBins[agentId] = body.bin || "";
+      return json({ result: { id: agentId, reloaded: true, busyCount: 0 }, snapshot: snapshot() });
+    }
+  }
+  if (path === "/api/runtime/codex-bins" && method === "GET")
+    return json({ bins: backendBins.codex, selected: selectedBins.codex, effective: selectedBins.codex || "codex", pinned: false });
+  if (path === "/api/runtime/codex-bin" && method === "PUT") {
+    selectedBins.codex = body.bin || "";
+    RUNTIME.codexBin = selectedBins.codex || "codex";
+    RUNTIME.codexBinRunning = RUNTIME.codexBin;
+    RUNTIME.codexVersionRunning = backendBins.codex.find((item) => item.bin === selectedBins.codex)?.version;
+    return json(snapshot());
+  }
 
   if (path === "/api/agents/opencode/config" && method === "PUT") {
     await sleep(latency);
@@ -266,6 +351,99 @@ window.fetch = async (input, init) => {
       ],
     });
   if (path === "/api/agents/opencode/models") return json([]);
+
+  // OpenCode 自定义 provider：用接近真机的脏数据（长 URL、多 variant、
+  // 长文件路径），专给窄屏换行 QA 用。
+  if (path === "/api/agents/opencode/providers" && method === "GET") {
+    const withScope = (scope: "global" | "project", providers: unknown[]) => ({
+      scope,
+      path:
+        scope === "global"
+          ? "/home/u/.config/opencode/opencode.jsonc"
+          : "/home/u/Codecks/opencode.json",
+      displayPath:
+        scope === "global"
+          ? "~/.config/opencode/opencode.jsonc"
+          : "~/Codecks/opencode.json",
+      exists: true,
+      providers,
+    });
+    return json({
+      online: true,
+      global: withScope("global", OPENCODE),
+      project: withScope("project", OPENCODE_PROJECT),
+    });
+  }
+  // 新鲜 connected 探测：只让 nikoapi 翻成“有 Key”，演示列表秒回徽标后补。
+  if (path === "/api/agents/opencode/connected" && method === "GET") {
+    await sleep(latency);
+    return json({ global: ["nikoapi"], project: [] });
+  }
+  if (path === "/api/agents/opencode/permissions" && method === "GET") {
+    return json({
+      online: true,
+      global: {
+        scope: "global",
+        path: "/home/u/.config/opencode/opencode.jsonc",
+        exists: true,
+        rules: PERMS,
+      },
+    });
+  }
+  if (path === "/api/agents/opencode/permissions" && method === "PUT") {
+    await sleep(latency);
+    if (body.rule) PERMS[String(body.tool)] = String(body.rule);
+    else delete PERMS[String(body.tool)];
+    return json({ path: "opencode.json", rules: { ...PERMS }, needsReload: true });
+  }
+  if (path === "/api/agents/opencode/providers" && method === "POST") {
+    await sleep(latency);
+    const target = body.scope === "project" ? OPENCODE_PROJECT : OPENCODE;
+    const entry = {
+      id: String(body.id),
+      name: String(body.name || body.id),
+      npm: body.npm || "@ai-sdk/openai-compatible",
+      baseURL: String(body.baseURL),
+      hasApiKey: Boolean(body.apiKey),
+      ...(body.apiKey && String(body.apiKey).startsWith("{env:")
+        ? { apiKeyHint: String(body.apiKey) }
+        : {}),
+      models: (body.models || []).map((model: any) =>
+        typeof model === "string"
+          ? { id: model }
+            : {
+              id: String(model.id),
+              ...(model.name ? { name: String(model.name) } : {}),
+              ...(model.variants?.length ? { variants: model.variants } : {}),
+              ...(typeof model.supportsImages === "boolean"
+                ? { supportsImages: model.supportsImages }
+                : {}),
+              ...(model.sdk ? { sdk: String(model.sdk) } : {}),
+            },
+      ),
+    };
+    const index = target.findIndex((item) => item.id === entry.id);
+    if (index >= 0) target[index] = entry;
+    else target.push(entry);
+    return json({ path: "opencode.json", providers: target, needsReload: true });
+  }
+  const removeOpenCodeProvider = path.match(
+    /^\/api\/agents\/opencode\/providers\/([^/]+)$/,
+  );
+  if (removeOpenCodeProvider && method === "DELETE") {
+    await sleep(latency);
+    const id = decodeURIComponent(removeOpenCodeProvider[1]);
+    const target =
+      url.searchParams.get("scope") === "project" ? OPENCODE_PROJECT : OPENCODE;
+    const index = target.findIndex((item) => item.id === id);
+    if (index < 0) return json({ error: "未找到 provider" }, 404);
+    target.splice(index, 1);
+    return json({ path: "opencode.json", providers: target, needsReload: true });
+  }
+  if (path === "/api/agents/opencode/reload" && method === "POST") {
+    await sleep(latency);
+    return json({ snapshot: snapshot() });
+  }
 
   if (path === "/api/preferences" && method === "PUT") {
     await sleep(latency);

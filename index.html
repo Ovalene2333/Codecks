@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#10131a" />
+    <meta name="theme-color" content="#101113" />
     <link rel="icon" href="/src/assets/logo.svg" type="image/svg+xml" />
     <title>Codex Deck</title>
     <script>
@@ -33,28 +33,28 @@
           document.documentElement.dataset.effects = effects;
           document.documentElement.style.colorScheme = theme;
           document.querySelector('meta[name="theme-color"]').content =
-            theme === "light" ? "#f4f6f9" : "#10131a";
+            theme === "light" ? "#fbfbfc" : "#101113";
         } catch (error) {}
       })();
     </script>
     <style>
       :root {
-        --boot-bg: #10131a;
-        --boot-sidebar: #131720;
-        --boot-surface: #1a1f2b;
-        --boot-mid: #222836;
-        --boot-text: #e9ecf2;
-        --boot-dim: #97a1b0;
-        --boot-line: #262c38;
+        --boot-bg: #101113;
+        --boot-sidebar: #131416;
+        --boot-surface: #18191c;
+        --boot-mid: #202124;
+        --boot-text: #ececee;
+        --boot-dim: #9b9ea6;
+        --boot-line: #232427;
       }
       html[data-theme="light"] {
-        --boot-bg: #f4f6f9;
-        --boot-sidebar: #fbfcfe;
-        --boot-surface: #eef1f5;
-        --boot-mid: #e4e8ef;
-        --boot-text: #1d2433;
-        --boot-dim: #5d6572;
-        --boot-line: #e2e6ec;
+        --boot-bg: #fbfbfc;
+        --boot-sidebar: #f5f5f6;
+        --boot-surface: #efeff1;
+        --boot-mid: #f8f8f9;
+        --boot-text: #17181b;
+        --boot-dim: #62656d;
+        --boot-line: #e8e8eb;
       }
       html,
       body {
@@ -71,8 +71,8 @@
         height: 100dvh;
       }
       .boot-aside {
-        width: 344px;
-        min-width: 344px;
+        width: 300px;
+        min-width: 300px;
         border-right: 1px solid var(--boot-line);
         background: var(--boot-sidebar);
         padding: 18px 14px;
@@ -80,7 +80,7 @@
       }
       .boot-brand {
         font-weight: 600;
-        font-size: 15px;
+        font-size: 13px;
         margin: 6px 4px 16px;
       }
       .boot-search {

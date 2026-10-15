@@ -18,17 +18,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: 6px;
   min-height: var(--control-h);
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-3);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control);
-  color: var(--text-soft);
-  box-shadow: inset 0 1px 0 var(--edge-hi);
+  color: var(--text);
+  box-shadow: none;
   font-size: var(--fs-ui);
-  font-weight: 600;
-  line-height: 1;
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-flat);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -47,8 +47,8 @@
 
 .ui-btn--sm {
   min-height: var(--control-h-sm);
-  padding: 0 var(--space-3);
-  font-size: var(--fs-caption);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-meta);
 }
 
 .ui-btn--icon {
@@ -61,18 +61,20 @@
 }
 
 .ui-btn--primary {
-  border-color: color-mix(in srgb, var(--accent) 82%, rgb(0 0 0 / 30%));
-  background: var(--accent-grad);
-  color: var(--accent-text);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 20%),
-    0 1px 2px rgb(0 0 0 / 24%);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-text);
+  box-shadow: none;
 }
 
 .ui-btn--primary:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent-hover) 82%, rgb(0 0 0 / 30%));
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
-  color: var(--accent-text);
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  color: var(--primary-text);
+}
+
+.ui-btn--primary:active:not(:disabled) {
+  background: var(--primary-active);
 }
 
 .ui-btn--danger {
@@ -112,6 +114,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: var(--bg);
+  /* 分段控件凹底：inset 方向的功能性投影，不与 knob 阴影同类。 */
   box-shadow: inset 0 1px 3px rgb(0 0 0 / 22%);
   scrollbar-width: none;
 }
@@ -128,8 +131,8 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -140,11 +143,9 @@
 }
 
 .ui-seg__item.is-active {
-  background: var(--surface-raised);
+  background: var(--surface-selected);
   color: var(--text);
-  box-shadow:
-    inset 0 1px 0 var(--edge-hi),
-    var(--shadow-sm);
+  box-shadow: none;
 }
 
 /* ── Switch ─────────────────────────────────────────────── */
@@ -155,7 +156,7 @@
   height: 22px;
   padding: 0;
   border: 1px solid var(--control-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--control-hover);
   cursor: pointer;
   transition:
@@ -172,7 +173,7 @@
   height: 16px;
   border-radius: 50%;
   background: var(--text-soft);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+  box-shadow: var(--shadow-knob);
   transition:
     transform 160ms var(--ease-out),
     background-color var(--ease);
@@ -192,7 +193,7 @@
 
 .ui-switch[aria-checked="true"]::after {
   transform: translateX(16px);
-  background: #fff;
+  background: var(--static-white);
 }
 
 .ui-switch:disabled {
@@ -207,6 +208,86 @@
 
 .ui-switch.is-busy::after {
   animation: ui-pulse 0.9s ease-in-out infinite;
+}
+
+/* ── Slider（单值滑杆，Base UI Slider）───────────────────────
+   结构：Root.ui-slider > Control > Track > Thumb（内藏原生 input，
+   键盘与读屏语义走它）。外观对齐旧的原生 range：4px 圆轨 + 14px 圆点。 */
+.ui-slider {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+
+.ui-slider__control {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  min-height: var(--control-h);
+  /* 横滑不跟页面竖滚抢手势，竖滑照常滚动。 */
+  touch-action: pan-y;
+  cursor: pointer;
+}
+
+.ui-slider__track {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--control-border);
+}
+
+.ui-slider__indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.ui-slider__thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--shadow-knob);
+  translate: -50% -50%;
+}
+
+.ui-slider__thumb:has(input:focus-visible) {
+  box-shadow: var(--focus-halo);
+}
+
+.ui-slider__thumb[data-dragging] {
+  cursor: grabbing;
+}
+
+/* 开关＋文字说明行（表单内用，开关本身只有无障碍名称）。 */
+.ui-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.ui-switch-row__text {
+  display: grid;
+  gap: 2px;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+}
+
+.ui-switch-row__text small {
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
 }
 
 @keyframes ui-pulse {
@@ -225,12 +306,12 @@
   min-height: 20px;
   padding: 0 var(--space-2);
   border: 1px solid var(--tone-border);
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: var(--tone-bg);
   color: var(--tone-fg);
-  font-size: var(--fs-caption);
-  font-weight: 500;
-  line-height: 1;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-flat);
   white-space: nowrap;
 }
 
@@ -241,7 +322,7 @@
 }
 
 .ui-tone-warn {
-  --tone-fg: var(--warn);
+  --tone-fg: var(--wait);
   --tone-bg: var(--warning-bg);
   --tone-border: var(--warning-border);
 }
@@ -283,7 +364,7 @@
 }
 
 .ui-dot.ui-dot--warn {
-  --dot: var(--warn);
+  --dot: var(--wait);
 }
 
 .ui-dot.ui-dot--error {
@@ -303,8 +384,8 @@
   border-radius: var(--radius-md);
   background: var(--tone-bg);
   color: var(--text-soft);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
 }
 
 .ui-note > svg {
@@ -324,7 +405,7 @@
   display: block;
   color: var(--text);
   font-size: var(--fs-ui);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }
 
 .ui-note__body p {
@@ -335,6 +416,15 @@
 .ui-note__action {
   flex: none;
   align-self: center;
+}
+
+/* 带操作按钮的提示条：文字块与按钮垂直居中，单行文字不再贴顶。 */
+.ui-note:has(> .ui-note__action) {
+  align-items: center;
+}
+
+.ui-note:has(> .ui-note__action) > svg {
+  margin-top: 0;
 }
 
 /* ── Section / Group / Row（列表式设置项）──────────────── */
@@ -352,14 +442,16 @@
 
 .ui-section__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   min-height: var(--control-h-sm);
 }
 
 .ui-section__text {
   min-width: 0;
-  flex: 1;
+  /* 窄屏时文本至少占一行，按钮自动折到下一行，不再把描述挤成细条。 */
+  flex: 1 1 220px;
 }
 
 .ui-section .ui-section__title {
@@ -370,20 +462,23 @@
   margin: 0;
   color: var(--text);
   font-size: var(--fs-ui);
-  font-weight: 600;
-  line-height: 1.4;
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-ui);
 }
 
 .ui-section__desc {
   margin: 1px 0 0;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
+  /* 长路径 / URL 在窄屏不断出行外。 */
+  overflow-wrap: anywhere;
 }
 
 .ui-section__actions {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
 }
@@ -428,7 +523,7 @@
   );
   color: var(--lead, var(--text-dim));
   font-size: var(--fs-ui);
-  font-weight: 700;
+  font-weight: var(--fw-medium);
 }
 
 .ui-row__main {
@@ -444,8 +539,8 @@
   min-width: 0;
   color: var(--text);
   font-size: var(--fs-ui);
-  font-weight: 600;
-  line-height: 1.35;
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
 }
 
 .ui-row__title .ui-dot {
@@ -456,8 +551,8 @@
   display: block;
   margin: 2px 0 0;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  line-height: 1.45;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
   overflow-wrap: anywhere;
 }
 
@@ -523,8 +618,8 @@
 .ui-subhead {
   margin: var(--space-2) 0 0;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
 }
 
 /* 单选分段：放在行尾时按内容收缩，不撑满。 */
@@ -562,8 +657,8 @@
   background: var(--control);
   color: var(--text-soft);
   font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  line-height: 1;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-flat);
   white-space: nowrap;
 }
 
@@ -576,14 +671,14 @@
 
 .ui-field__label {
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  font-weight: 500;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
 }
 
 .ui-field__hint {
   color: var(--text-faint);
-  font-size: var(--fs-caption);
-  line-height: 1.4;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
   overflow-wrap: anywhere;
 }
 
@@ -609,7 +704,7 @@
 
 .ui-input:focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+  box-shadow: var(--focus-halo);
 }
 
 .ui-input:disabled {
@@ -619,7 +714,7 @@
 
 /* 原生 select 自带一段内边距和箭头，文字会比同列 input 往右缩。去掉原生
    外观，用两道渐变画箭头，左内边距与 input 对齐。 */
-select.ui-input {
+:is(select, .ui-select-trigger).ui-input {
   appearance: none;
   padding-right: calc(var(--space-3) + 18px);
   background-image:
@@ -641,12 +736,12 @@ select.ui-input {
   gap: var(--space-1);
   min-width: 0;
   color: var(--text-dim);
-  font-size: var(--fs-caption);
-  font-weight: 500;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
 }
 
 .ui-form-compat label > input,
-.ui-form-compat label > select {
+.ui-form-compat label > :is(select, .ui-select-trigger) {
   width: 100%;
   min-height: var(--control-h);
   padding: 0 var(--space-3);
@@ -656,10 +751,10 @@ select.ui-input {
   background-color: var(--control);
   color: var(--text);
   font-size: var(--fs-ui);
-  font-weight: 400;
+  font-weight: var(--fw-regular);
 }
 
-.ui-form-compat label > select {
+.ui-form-compat label > :is(select, .ui-select-trigger) {
   appearance: none;
   padding-right: calc(var(--space-3) + 18px);
   background-image:
@@ -673,9 +768,9 @@ select.ui-input {
 }
 
 .ui-form-compat label > input:focus,
-.ui-form-compat label > select:focus {
+.ui-form-compat label > :is(select, .ui-select-trigger):focus {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
+  box-shadow: var(--focus-halo);
 }
 
 .ui-form-compat .search-picker,
@@ -694,13 +789,13 @@ select.ui-input {
   position: absolute;
   top: 0;
   right: 0;
-  line-height: 1.4;
+  line-height: var(--lh-ui);
 }
 
 .ui-form-compat .toolbar-hint {
   grid-column: 1 / -1;
   color: var(--text-faint);
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
 }
 
 .ui-form {
@@ -724,15 +819,16 @@ select.ui-input {
 .ui-error {
   margin: 0;
   color: var(--danger-text);
-  font-size: var(--fs-caption);
-  line-height: 1.5;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
 }
 
-/* 触屏输入框用 16px：低于 16px 时 iOS Safari 聚焦会整页放大。 */
+/* 触屏输入框用 16px：低于 16px 时 iOS Safari 聚焦会整页放大。
+   功能例外：不并入 --fs-dialog，见 docs/ui-baseline.md。 */
 @media (pointer: coarse) {
   .ui-input,
   .ui-form-compat label > input,
-  .ui-form-compat label > select {
+  .ui-form-compat label > :is(select, .ui-select-trigger) {
     font-size: 16px;
   }
 }
@@ -749,4 +845,769 @@ select.ui-input {
   .ui-switch.is-busy::after {
     animation: none;
   }
+}
+
+/* ── 可删除的 chip（如模型 variant）+ 模型编辑卡片 ────────── */
+.ui-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 4px 0 var(--space-2);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-xs);
+  background: var(--info-bg);
+  color: var(--info);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-flat);
+  white-space: nowrap;
+}
+
+.ui-chip__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ui-chip__x:hover {
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+}
+
+.ui-chip__x svg {
+  width: 12px;
+  height: 12px;
+}
+
+.ui-model-list {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ui-model-card {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.ui-model-list + .ui-actions {
+  margin-top: var(--space-1);
+}
+
+.ui-model-card .ui-field[role="group"] {
+  gap: var(--space-2);
+}
+
+.ui-model-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  /* 删除按钮比标题高，上下各吃掉一点，让标题行不把卡片顶得过高。 */
+  margin: calc(var(--space-1) * -1) 0;
+}
+
+.ui-model-card__title {
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+}
+
+/* 开关 + 两行说明：开关顶对齐标题行，说明小字压在标题下面。 */
+.ui-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.ui-switch-row > .ui-switch {
+  margin-top: 1px;
+}
+
+.ui-switch-row__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+}
+
+.ui-switch-row__text small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+/* 输入框占满剩余宽度，按钮贴右，不再把两者对半切成两列。 */
+.ui-inline-add {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ui-inline-add > .ui-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-actions--start {
+  justify-content: flex-start;
+}
+
+/* 某一栏带 hint 时，另一栏的输入框不被拉高。 */
+.ui-form__grid--top {
+  align-items: start;
+}
+
+/* Agent 签（Seg）与其下内容之间留出呼吸：不靠各页自己加 margin。 */
+.ui-seg--page {
+  margin-bottom: var(--space-5);
+}
+
+/* ── Provider 分组 + 卡片（opencode.json 自定义 provider 列表）──────────
+   分组头：标题 + 浅色计数 + 来源文件名，操作靠右，一行到底（窄屏文件名省略）。
+   一个 provider 一张卡，三行按重要性递减：
+   ① 状态点 + 名称 + id + Key 状态 + 操作
+   ② 模型（中性小标，带档位数 / 图片图标）
+   ③ Base URL（最小最淡，hover 看全量） */
+.ui-pgroup {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* 工具栏是列表块的一部分：跟在提示条 / Section 后面时按同一节奏
+   （--space-6）让位，不被夹成 0 间距。 */
+.ui-section + .ui-pgroup,
+.ui-note + .ui-pgroup,
+.ui-pgroup + .ui-pgroup,
+.ui-section + .ui-pgroup__toolbar,
+.ui-note + .ui-pgroup__toolbar {
+  margin-top: var(--space-6);
+}
+
+.ui-pgroup__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-h-sm);
+}
+
+/* 带 .ui-pgroup 前缀：压过 styles.css 的 `.modal h3`（12px / 灰 / 上外边距）。 */
+.ui-pgroup__label,
+.ui-pcard__title {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ui-pgroup .ui-pgroup__title {
+  flex: none;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-ui);
+}
+
+.ui-pgroup__count {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-pgroup__file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  /* 来源文件名只是脚注：比计数更小更淡，hover 看全路径。 */
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  opacity: 0.7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-pgroup__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.ui-pgroup__empty {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+
+.ui-pcard-list {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ui-pcard {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.ui-pcard__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ui-pcard__name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ui-pcard__id {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Key 状态跟在名称后：点已经表态，这里只用小字说明；只有「无 Key」才着色。 */
+.ui-pcard__status {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  white-space: nowrap;
+}
+
+.ui-pcard__status.is-warn {
+  color: var(--wait);
+}
+
+.ui-pcard__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.ui-pcard__missing {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
+}
+
+/* 模型：中性小标，一个模型一格，一眼能数出有几个；档位数与图片图标是次要标记。 */
+.ui-pcard__models {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.ui-pcard__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.ui-pcard__model-meta {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-pcard__model-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-dim);
+}
+
+/* Base URL 是确认性信息，压到最小最淡；超出省略，hover 看全量。 */
+.ui-pcard__url {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ui-pcard__url--missing {
+  color: var(--wait);
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .ui-pcard {
+    padding: var(--space-3);
+  }
+}
+
+/* ── Empty（空态）───────────────────────────────────────
+   图标复用 --fs-display（大数字档，窄屏自动降档），不再为图标
+   另起一套尺寸 token。min-height 的 vh 是视口相对量，例外保留。 */
+.ui-empty {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 45vh;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.ui-empty > svg {
+  width: var(--fs-display);
+  height: var(--fs-display);
+}
+
+.ui-empty h2 {
+  margin: var(--space-4) 0 var(--space-1);
+  color: var(--text);
+  font-size: var(--fs-dialog);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+}
+
+.ui-empty p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+/* ── Disclosure（Base UI Collapsible）───────────────────────
+   对标 shadcn Accordion：高级/次要表单默认收起，不再把版面撑长。 */
+.ui-disclosure {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+
+.ui-disclosure__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-disclosure__trigger:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.ui-disclosure__title {
+  flex: none;
+}
+
+.ui-disclosure__meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-weight: var(--fw-regular);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-disclosure__chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  color: var(--text-faint);
+  transition: transform 160ms var(--ease-out);
+}
+
+.ui-disclosure[data-open] .ui-disclosure__chevron {
+  transform: rotate(180deg);
+}
+
+.ui-disclosure__panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* ── SearchField（列表过滤）──────────────────────────────── */
+.ui-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ui-search__icon {
+  position: absolute;
+  left: var(--space-3);
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.ui-search__input {
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-3) 0 calc(var(--space-3) + 20px);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--control);
+  color: var(--text);
+  font-size: var(--fs-ui);
+}
+
+.ui-search__input::placeholder {
+  color: var(--text-faint);
+}
+
+.ui-search__input:focus {
+  border-color: var(--focus-ring);
+  box-shadow: var(--focus-halo);
+}
+
+.ui-search__input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+/* 设置列表工具栏：搜索占满剩余宽度，按钮贴右（对标 Linear / Vercel）。 */
+.ui-pgroup__toolbar {
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-bottom: var(--space-3);
+}
+
+.ui-pgroup__toolbar > .ui-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-pgroup__toolbar > .ui-btn {
+  flex: none;
+}
+
+/* 表单 Dialog（复用 Modal 外壳）：长表单滚动，底部操作 sticky。
+   对标 shadcn Dialog + sticky footer：新增/编辑不再把列表顶下去。 */
+.ui-form-dialog {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ui-form-dialog__body {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ui-form-dialog__footer {
+  position: sticky;
+  bottom: calc(var(--space-5) * -1);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin: 0 calc(var(--space-5) * -1) calc(var(--space-6) * -1);
+  padding: var(--space-3) var(--space-5) calc(var(--space-3) + var(--space-1));
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+@media (max-width: 640px) {
+  .ui-form-dialog__footer {
+    margin-right: calc(var(--space-4) * -1);
+    margin-left: calc(var(--space-4) * -1);
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+}
+
+/* ── Tooltip（Base UI Tooltip）──────────────────────────────── */
+.ui-tip-positioner {
+  z-index: 45;
+}
+
+.ui-tip {
+  max-width: 240px;
+  padding: 5px var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Dropdown Menu（Base UI Menu）──────────────────── */
+.ui-menu-positioner {
+  z-index: 60;
+}
+
+.ui-menu {
+  min-width: 196px;
+  max-width: min(260px, calc(100vw - 24px));
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  outline: none;
+}
+
+.ui-menu:focus-visible {
+  outline: none;
+}
+
+.ui-menu__label {
+  padding: 5px var(--space-2) 3px;
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  user-select: none;
+}
+
+.ui-menu__sep {
+  height: 1px;
+  margin: var(--space-1);
+  background: var(--line);
+}
+
+.ui-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.ui-menu__item:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.ui-menu__item[data-highlighted],
+.ui-menu__item:hover:not([data-disabled]) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ui-menu__item--danger {
+  color: var(--danger-text);
+}
+
+.ui-menu__item--danger[data-highlighted],
+.ui-menu__item--danger:hover:not([data-disabled]) {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.ui-menu__item[data-disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ui-menu__item > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+}
+
+.ui-menu__item[data-highlighted] > svg,
+.ui-menu__item:hover:not([data-disabled]) > svg {
+  color: var(--text);
+}
+
+.ui-menu__item--danger > svg,
+.ui-menu__item--danger[data-highlighted] > svg,
+.ui-menu__item--danger:hover:not([data-disabled]) > svg {
+  color: var(--danger-text);
+}
+
+.ui-menu__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-menu__item-meta {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Shared single-value choices. Catalog search uses the matching SearchablePicker. */
+.ui-select-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text);
+  font: var(--fw-regular) var(--fs-ui)/var(--lh-ui) var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.ui-select-trigger.ui-input,
+.ui-form-compat label > .ui-select-trigger {
+  background-image: none;
+  padding-right: 11px;
+  min-height: 36px;
+}
+.ui-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-select-icon { display: flex; flex: none; color: var(--text-faint); }
+.ui-select-icon svg { width: 14px; height: 14px; }
+.ui-select-trigger[data-popup-open] .ui-select-icon { transform: rotate(180deg); }
+.ui-select-trigger:hover:not(:disabled) { border-color: var(--line-strong); background-color: var(--control-hover); }
+.ui-select-trigger:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.ui-select-trigger:disabled { cursor: not-allowed; }
+.ui-select-positioner { z-index: 100; max-width: calc(100vw - 16px); }
+.ui-select-popup {
+  min-width: var(--anchor-width);
+  max-width: min(480px, calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+}
+.ui-select-list {
+  max-height: min(360px, var(--available-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+.ui-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-ui);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  outline: none;
+}
+.ui-select-option[data-highlighted] { background: var(--control-hover); }
+.ui-select-option[data-selected] { font-weight: var(--fw-medium); }
+.ui-select-option[data-disabled] { color: var(--text-faint); opacity: .5; cursor: not-allowed; }
+.ui-select-check { display: flex; flex: none; color: var(--accent); }
+.ui-select-check svg { width: 14px; height: 14px; }
+.ui-select-group { padding: 8px 9px 4px; color: var(--text-faint); font-size: var(--fs-meta); }
+@media (max-width: 760px) {
+  .ui-select-trigger, .ui-select-option { min-height: 44px; }
+}
+
+@media (max-width: 760px) {
+  .toolbar-select .ui-select-trigger,
+  .composer-session-controls .ui-select-trigger { min-height: 44px; }
+}
+
+@media (max-width: 760px) {
+  .ui-select-trigger.ui-input,
+  .ui-form-compat label > .ui-select-trigger { min-height: 44px; }
 }
