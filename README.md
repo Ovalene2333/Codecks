@@ -85,9 +85,34 @@ CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。C
 <details>
 <summary>浅色主题</summary>
 <br>
-<img src="docs/screenshots/desktop-home-light.png" alt="Codecks 浅色主题总览" width="100%">
-<br><br>
-<img src="docs/screenshots/desktop-chat-light.png" alt="Codecks 浅色主题会话页" width="100%">
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>总览</strong></td>
+    <td width="50%" align="center"><strong>会话</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-home-light.png" alt="Codecks 浅色主题总览" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-chat-light.png" alt="Codecks 浅色主题会话页" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>设置 · Agent</strong></td>
+    <td width="50%" align="center"><strong>设置 · 供应商</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-settings-agents-light.png" alt="Codecks 浅色主题设置 Agent 页" width="100%"></td>
+    <td><img src="docs/screenshots/desktop-settings-providers-light.png" alt="Codecks 浅色主题设置供应商页" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><strong>工具</strong></td>
+    <td width="33%" align="center"><strong>手机 · 会话</strong></td>
+    <td width="33%" align="center"><strong>手机 · 审批</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/desktop-tools-light.png" alt="Codecks 浅色主题工具页" width="100%"></td>
+    <td><img src="docs/screenshots/mobile-session-light.png" alt="Codecks 浅色主题手机会话页" width="100%"></td>
+    <td><img src="docs/screenshots/mobile-approval-light.png" alt="Codecks 浅色主题手机审批" width="100%"></td>
+  </tr>
+</table>
 </details>
 
 <p align="center"><sub>截图里的项目、会话和供应商都是演示数据。</sub></p>
