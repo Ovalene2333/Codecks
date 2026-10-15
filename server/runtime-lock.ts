@@ -18,6 +18,9 @@ export interface RuntimeLock {
   useWsl: boolean;
   listen?: string;
   startedAt: number;
+  /** 启动后端用的二进制（空表示 PATH 默认 `codex`），只做展示与 mismatch 提示。 */
+  codexBin?: string;
+  codexVersion?: string;
 }
 
 export interface RuntimeLockHooks {
@@ -120,6 +123,9 @@ export function readRuntimeLock(dataDir: string): RuntimeLock | undefined {
       listen: typeof raw.listen === "string" ? raw.listen : undefined,
       startedAt:
         typeof raw.startedAt === "number" ? raw.startedAt : 0,
+      codexBin: typeof raw.codexBin === "string" ? raw.codexBin : undefined,
+      codexVersion:
+        typeof raw.codexVersion === "string" ? raw.codexVersion : undefined,
     };
   } catch {
     return undefined;

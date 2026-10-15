@@ -205,6 +205,7 @@ export interface ThreadSummary {
   errorCode?: string;
   archived?: boolean;
   reasoningEffort?: string;
+  settingsDeferred?: boolean;
   personality?: Personality;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
@@ -219,6 +220,8 @@ export interface ThreadSummary {
    * when `model` is a placeholder such as OpenCode's `default`.
    */
   resolvedModel?: string;
+  /** 服务端已知的模型展示名（如 `GLM-5.3-Flash`）。缺省时客户端用目录兜底。 */
+  modelLabel?: string;
   /**
    * Turn that was still in progress when the Codex runtime process died.
    * Codex's own state DB has no completion record for it, so refreshes must
@@ -427,6 +430,20 @@ export interface RuntimeStatus {
   archiveError?: string;
   runtimeWsl?: boolean;
   modelConfig?: RuntimeModelConfig;
+  /** 正在运行的 Runtime 实际用的上下文配置（仅在线时有）。 */
+  modelConfigRunning?: RuntimeModelConfig;
+  /** 已保存的上下文配置与运行中的不一致，重启后生效。 */
+  modelConfigPending?: boolean;
+  /** 生效的后端二进制（`codex` 表示 PATH 默认）。 */
+  codexBin?: string;
+  /** 环境变量是否钉死了后端（此时设置页选择不生效）。 */
+  codexBinPinned?: boolean;
+  codexBinRunning?: string;
+  codexVersionRunning?: string;
+  codexVersionSelected?: string;
+  codexVersionMismatch?: { running: string; selected: string };
+  /** 上个 Deck 进程留下的后端（只提示、不自动杀）。 */
+  staleBackend?: { pid: number; codexBin?: string; codexVersion?: string };
 }
 
 export interface RpcMessage {

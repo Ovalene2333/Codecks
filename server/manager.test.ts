@@ -238,6 +238,27 @@ test("a real Codex thread has one identity independent of provider selection", (
   assert.equal(manager.listThreads()[0].providerId, "windows");
 });
 
+test("forceStop interrupts the in-flight turn and pins it as interrupted", async () => {
+  const manager = new CodexManager({} as any, "/tmp") as any;
+  manager.upsertThread({ id: "local", model: "m" }, {
+    id: "stuck",
+    cwd: "/work",
+    preview: "stuck",
+  });
+  const thread: any = manager.listThreads()[0];
+  thread.status = "running";
+  thread.activeTurnId = "turn-7";
+  manager.interrupt = async () => {
+    throw new Error("runtime unavailable");
+  };
+
+  await manager.forceStop("local", "stuck");
+  assert.equal(thread.status, "idle");
+  assert.equal(thread.activeTurnId, undefined);
+  assert.equal(thread.interruptedTurnId, "turn-7");
+  await assert.rejects(() => manager.forceStop("local", "missing"));
+});
+
 test("saved workspace settings override the defaults returned after a runtime restart", async () => {
   const settings = {
     get: () => ({
@@ -2311,3 +2332,211 @@ test("background terminal listing disables itself on an older runtime", async ()
   );
   assert.equal(calls, 1);
 });
+
+test("runtimeStatus reports the running model config and pending drift", async () => {
+  const provider = { id: "local", kind: "local-profile" };
+  const store = {
+    runtimeProviders: () => [provider],
+    runtimeProfile: () => provider,
+    listPublic: () => [],
+    get: () => provider,
+    revision: 1,
+    runtimeModelConfig: () => ({ modelContextWindow: 1_000_000 }),
+  } as any;
+  const manager = new CodexManager(store, "/tmp") as any;
+  manager.client = { online: true };
+  manager.runningModelConfig = { modelContextWindow: 500_000 };
+  const status = manager.runtimeStatus();
+  assert.deepEqual(status.modelConfig, { modelContextWindow: 1_000_000 });
+  assert.deepEqual(status.modelConfigRunning, {
+    modelContextWindow: 500_000,
+  });
+  assert.equal(status.modelConfigPending, true);
+  manager.runningModelConfig = { modelContextWindow: 1_000_000 };
+  assert.equal(manager.runtimeStatus().modelConfigPending, false);
+});
+
+test("resume pushes back Deck-saved approval settings that the rollout lost", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.threadSettings = {
+    get: () => ({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "read-only",
+    }),
+  };
+  manager.upsertThread(provider, { id: "t1", cwd: "/tmp" });
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/resume")
+        return {
+          approvalPolicy: "on-request",
+          approvalsReviewer: "auto_review",
+          sandbox: "workspace-write",
+        };
+      if (method === "turn/start") return { turn: { id: "turn-9" } };
+      return {};
+    },
+  });
+  await manager.sendTurn("provider", "t1", "hi");
+  const resume = calls.find((call) => call.method === "thread/resume");
+  assert.ok(resume);
+  assert.equal(resume.params.model, undefined);
+  assert.equal(resume.params.approvalPolicy, undefined);
+  const update = calls.find(
+    (call) => call.method === "thread/settings/update",
+  );
+  assert.ok(update);
+  assert.equal(update.params.approvalPolicy, "never");
+  assert.equal(update.params.approvalsReviewer, "user");
+  assert.deepEqual(update.params.sandboxPolicy, { type: "readOnly" });
+  assert.ok(calls.find((call) => call.method === "turn/start"));
+  assert.equal(manager.threads.get("t1").approvalPolicy, "never");
+  assert.equal(manager.threads.get("t1").approvalsReviewer, "user");
+  assert.equal(manager.threads.get("t1").sandbox, "read-only");
+});
+
+test("resume skips the settings push when the rollout already matches", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    {
+      runtimeProviders: () => [provider],
+      runtimeProfile: () => provider,
+      listPublic: () => [],
+      get: () => provider,
+    } as any,
+    "/tmp",
+  ) as any;
+  manager.threadSettings = {
+    get: () => ({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "read-only",
+    }),
+  };
+  manager.upsertThread(provider, { id: "t1", cwd: "/tmp" });
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/resume")
+        return {
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
+          sandbox: "read-only",
+        };
+      if (method === "turn/start") return { turn: { id: "turn-1" } };
+      return {};
+    },
+  });
+  await manager.sendTurn("provider", "t1", "hi");
+  assert.equal(
+    calls.filter((call) => call.method === "thread/settings/update").length,
+    0,
+  );
+  assert.ok(calls.find((call) => call.method === "turn/start"));
+});
+
+test("fork persists the branch settings to the thread settings store", async () => {
+  const provider = { id: "provider", kind: "local-profile", model: "m" };
+  const manager = new CodexManager(
+    { get: () => provider } as any,
+    "/tmp",
+  ) as any;
+  const saved: any[] = [];
+  manager.threadSettings = {
+    get: (_agent: string, id: string) =>
+      id === "src"
+        ? {
+            model: "gpt-x",
+            reasoningEffort: "high",
+            sandbox: "read-only",
+            approvalPolicy: "on-request",
+            approvalsReviewer: "auto_review",
+          }
+        : undefined,
+    update: async (agent: string, id: string, settings: unknown) => {
+      saved.push([agent, id, settings]);
+    },
+  };
+  manager.loadedThreads.add("src");
+  manager.upsertThread(provider, {
+    id: "src",
+    cwd: "/tmp",
+    name: "源会话",
+  });
+  manager.ensure = async () => ({
+    request: async (method: string, _params: any) => {
+      if (method === "thread/fork")
+        return { thread: { id: "branch", cwd: "/tmp" } };
+      return {};
+    },
+  });
+  await manager.forkThread("provider", "src", {});
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0][0], "codex");
+  assert.equal(saved[0][1], "branch");
+  assert.equal(saved[0][2].sandbox, "read-only");
+  assert.equal(saved[0][2].approvalPolicy, "on-request");
+  assert.equal(saved[0][2].approvalsReviewer, "auto_review");
+  assert.equal(saved[0][2].reasoningEffort, "high");
+});
+
+test("migrate falls back to auto_review reviewer like new threads", async () => {
+  const providers: Record<string, any> = {
+    source: { id: "source", name: "Source", model: "old", enabled: true },
+    target: {
+      id: "target",
+      name: "Target",
+      kind: "cc-switch",
+      model: "new",
+      baseUrl: "https://target.example/v1",
+      wireApi: "responses",
+      enabled: true,
+    },
+  };
+  const manager = new CodexManager(
+    { get: (id: string) => providers[id] } as any,
+    "/tmp",
+  ) as any;
+  const calls: any[] = [];
+  manager.ensure = async () => ({
+    request: async (method: string, params: any) => {
+      calls.push({ method, params });
+      if (method === "thread/fork")
+        return {
+          thread: {
+            id: "switched",
+            cwd: "/tmp/project",
+            modelProvider: compileRuntimeProvider(providers.target)
+              .modelProvider,
+          },
+        };
+      return {};
+    },
+  });
+  manager.upsertThread(providers.source, {
+    id: "old-thread",
+    cwd: "/tmp/project",
+    status: "idle",
+    sandbox: "workspace-write",
+    approvalPolicy: "never",
+  });
+  await manager.migrateThread("source", "old-thread", "target");
+  const fork = calls.find((call) => call.method === "thread/fork");
+  assert.equal(fork.params.approvalPolicy, "never");
+  assert.equal(fork.params.approvalsReviewer, "auto_review");
+  assert.equal(fork.params.sandbox, "workspace-write");
+});
+

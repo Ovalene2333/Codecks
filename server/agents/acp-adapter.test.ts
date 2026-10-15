@@ -1375,6 +1375,48 @@ test("sendTurn during a running turn queues and drains FIFO", async () => {
   await new Promise((resolve) => setTimeout(resolve, 30));
 });
 
+test("queued ACP turn applies the latest deferred model only after the active turn", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-acp-deferred-"));
+  const store = new ThreadSettingsStore(dir);
+  const held: RouteContext[] = [];
+  const prompts: Json[] = [];
+  const selected: string[] = [];
+  const fake = fakeAcpProcess({ routes: {
+    "session/new": (_params, ctx) => ctx.respond({
+      sessionId: "s-deferred",
+      models: {
+        currentModelId: "model-a",
+        availableModels: [
+          { modelId: "model-a", name: "A" },
+          { modelId: "model-b", name: "B" },
+          { modelId: "model-c", name: "C" },
+        ],
+      },
+    }),
+    "session/prompt": (params, ctx) => { prompts.push(params); held.push(ctx); },
+    "session/set_model": (params, ctx) => { selected.push(params.modelId); ctx.respond({}); },
+  } });
+  const adapter = adapterWith(fake, { threadSettings: store });
+  t.after(() => adapter.restart());
+  await adapter.startAll();
+  await adapter.createThread("", { cwd: "/tmp" });
+  await adapter.sendTurn("", "s-deferred", "first");
+  const queued = await adapter.sendTurn("", "s-deferred", "second");
+  assert.equal(queued.turn.status, "queued");
+  await store.defer(SPEC.id, "s-deferred", { model: "model-b" });
+  await store.defer(SPEC.id, "s-deferred", { model: "model-c" });
+  assert.deepEqual(selected, []);
+  assert.equal(prompts.length, 1);
+
+  held.shift()!.respond({ stopReason: "end_turn" });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  assert.deepEqual(selected, ["model-c"]);
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1].prompt[0].text, "second");
+  assert.equal(store.deferred(SPEC.id, "s-deferred"), undefined);
+  held.shift()!.respond({ stopReason: "end_turn" });
+});
+
 test("descriptor reports fallbackFor only for fallback agents", () => {
   const fake = fakeAcpProcess({});
   assert.equal(adapterWith(fake).descriptor().fallbackFor, undefined);

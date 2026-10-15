@@ -148,6 +148,7 @@ interface AcpSessionState {
   loading?: Promise<any[]>;
   /** running 期间收到的待发消息；turn 结束后按序 drain。 */
   pendingSends: { turnId: string; text: string; images?: TurnImage[] }[];
+  draining?: boolean;
   queueHolds?: number;
 }
 
@@ -1018,6 +1019,11 @@ export class AcpAdapter extends EventEmitter {
         value: model,
       });
       thread.resolvedModel = model;
+      // 展示名直接从选项表取：快照即时有 name，客户端不必再查目录。
+      const hit = flattenConfigOptions(option.options).find(
+        (item) => item.id === model,
+      );
+      if (hit?.name) thread.modelLabel = hit.name;
       return;
     }
     // ACP unstable `session/set_model`（claude-code-acp 等走 models 字段的 agent）。
@@ -1028,6 +1034,10 @@ export class AcpAdapter extends EventEmitter {
       });
       session.models.currentModelId = model;
       thread.resolvedModel = model;
+      const hit = session.models.availableModels.find(
+        (item) => item.modelId === model,
+      );
+      if (hit?.name) thread.modelLabel = hit.name;
     }
   }
 
@@ -1069,13 +1079,22 @@ export class AcpAdapter extends EventEmitter {
     const session = this.sessionFor(threadId);
     // ACP 没有 steer/queue 协议方法：turn 进行中先把消息排队，
     // runPrompt 收尾时按序 drain——行为对齐 Claude CLI 的 queued message。
-    if (thread.status === "running" || thread.status === "waiting") {
+    // draining / pendingSends 也排队，保证 FIFO；但 queueHolds（即时反馈
+    // 正在打断并等待空闲）时例外：反馈必须插到排队消息之前立即执行，
+    // 否则会被自己的 hold 挡在后面。
+    if (thread.status === "running" || thread.status === "waiting" ||
+      ((session.draining || session.pendingSends.length) && !session.queueHolds)) {
       const turnId = randomUUID();
       session.pendingSends.push({ turnId, text, images });
+      this.drainPendingSends(thread, session);
       return { turn: { id: turnId, status: "queued" } };
     }
     await this.ensureClient();
     await this.ensureLive(thread);
+    if (this.options.threadSettings?.deferred?.(this.id, threadId))
+      await this.options.threadSettings.applyDeferred(this.id, threadId, (settings) =>
+        this.updateThreadSettings(_providerId, threadId, settings),
+      );
     if (message) {
       assertMessageInput(thread, message, this.capabilities.messages!);
       if (messageBusy(thread)) {
@@ -1231,23 +1250,40 @@ export class AcpAdapter extends EventEmitter {
 
   /** turn 结束（完成/失败/取消）后发队列里的下一条，按 FIFO 逐条 drain。 */
   private drainPendingSends(thread: ThreadSummary, session: AcpSessionState) {
-    if (!this.online || !session.live || session.queueHolds || session.turnId || messageBusy(thread)) return;
+    if (!this.online || !session.live || session.queueHolds || session.turnId || session.draining || messageBusy(thread)) return;
     if (!this.threads.has(thread.id)) {
       session.pendingSends.length = 0;
       return;
     }
     const next = session.pendingSends.shift();
     if (!next) return;
+    session.draining = true;
     // 微任务延迟：让 turn/completed 与 thread.updated 先到达前端。
-    void Promise.resolve().then(() =>
-      !this.online || !session.live || session.queueHolds || session.turnId || messageBusy(thread)
-        ? session.pendingSends.unshift(next)
-        : this.beginTurn(thread, next.turnId, next.text, next.images),
-    );
+    void Promise.resolve().then(async () => {
+      if (!this.online || !session.live || session.queueHolds || session.turnId || messageBusy(thread)) {
+        session.pendingSends.unshift(next);
+        session.draining = false;
+        return;
+      }
+      try {
+        if (this.options.threadSettings?.deferred?.(this.id, thread.id))
+          await this.options.threadSettings.applyDeferred(this.id, thread.id, (settings) =>
+            this.updateThreadSettings(thread.providerId, thread.id, settings),
+          );
+        this.beginTurn(thread, next.turnId, next.text, next.images);
+      } catch (error) {
+        session.pendingSends.unshift(next);
+        thread.lastError = String(error instanceof Error ? error.message : error);
+        this.broadcast("thread.updated", thread);
+      } finally {
+        session.draining = false;
+      }
+    });
   }
 
   messageReady(threadId: string) {
-    return !this.sessions.get(threadId)?.turnId;
+    const session = this.sessions.get(threadId);
+    return !session?.turnId && !session?.draining;
   }
 
   holdMessageQueue(threadId: string) {
@@ -1303,6 +1339,41 @@ export class AcpAdapter extends EventEmitter {
       throw new Error(`${this.spec.name} 会话没有正在运行的任务`);
     this.client.notify("session/cancel", { sessionId: threadId });
     return { ok: true };
+  }
+
+  /**
+   * 紧急停止：连接崩溃丢事件时 turnId 可能永久挂在会话上，常规打断、
+   * 删除全部被占用检查挡住。不经状态校验：先尽力 cancel（失败不阻塞），
+   * 随后撤掉挂起审批并把本地状态强制归位 idle。
+   */
+  async forceStop(_providerId: string, threadId: string) {
+    const thread = this.mustThread(threadId);
+    const session = this.sessionFor(threadId);
+    if (session.turnId) {
+      try {
+        this.client.notify("session/cancel", { sessionId: threadId });
+      } catch {
+        // 连接不通时放弃打断，只归位本地状态。
+      }
+    }
+    for (const [id, approval] of this.approvals)
+      if (approval.threadId === threadId) {
+        try {
+          this.client.respond(approval.requestId, {
+            outcome: { outcome: "cancelled" },
+          });
+        } catch {
+          // 应答失败同样只意味着后端已不可达。
+        }
+        this.approvals.delete(id);
+        this.broadcast("approval.resolved", { agentId: this.id, approvalId: id });
+      }
+    const turnId = session.turnId || thread.activeTurnId;
+    session.turnId = undefined;
+    // 在途回合的 prompt 正常返回时 completeTurn/failTurn 会再次触发：
+    // activeTurnId 已被清空重复状态不该出现，failTurn 只写 status/lastError。
+    this.completeTurn(thread, turnId || "acp", "cancelled");
+    return { ok: true as const };
   }
 
   // ------------------------------------------------------------- approvals
@@ -1485,6 +1556,10 @@ export class AcpAdapter extends EventEmitter {
     if (!name) throw new Error("命令不能为空");
     await this.ensureClient();
     await this.ensureLive(thread);
+    if (this.options.threadSettings?.deferred?.(this.id, threadId))
+      await this.options.threadSettings.applyDeferred(this.id, threadId, (settings) =>
+        this.updateThreadSettings(_providerId, threadId, settings),
+      );
     // ACP 里斜杠命令就是普通 prompt 文本，/cmd args 由 agent 自己解析。
     const text = `/${name}${args?.trim() ? ` ${args.trim()}` : ""}`;
     return this.beginTurn(thread, randomUUID(), text);

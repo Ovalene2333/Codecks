@@ -100,8 +100,8 @@ export class WebTerminalTool implements DeckTool {
   descriptor(): ToolDescriptor {
     return {
       id: "terminal",
-      name: "Web Terminal",
-      description: "通过浏览器连接 Codecks Server 所在主机的交互式终端",
+      name: "网页终端",
+      description: "通过浏览器连接本机的交互式终端",
       icon: "terminal",
       available: true,
       pagePath: "/terminal",
@@ -156,7 +156,7 @@ export class WebTerminalTool implements DeckTool {
           this.sessions.size + this.pendingSessions >=
           (this.options.maxSessions || 8)
         )
-          throw new Error("Web Terminal 并发数已达上限");
+          throw new Error("网页终端并发数已达上限");
         starting = true;
         this.pendingSessions += 1;
 

@@ -27,6 +27,7 @@ import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
 import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
+import { listLocalAgentBins, probeLocalAgentBin, type LocalAgent } from "./local-agent-bins.js";
 import { AcpAdapter } from "./agents/acp-adapter.js";
 import {
   ensureAcpAgentsExample,
@@ -34,9 +35,11 @@ import {
 } from "./agents/acp-agents.js";
 import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
+import { foldTurns } from "./agents/turn-fold.js";
 import { registerMessageRoutes } from "./message-api.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentId } from "./agents/types.js";
+import type { ThreadSummary } from "./types.js";
 import { CLI_HELP, parseCli } from "./cli.js";
 import { formatHost, isIpv6Host, lanAddresses } from "./network.js";
 import { Pairing, PairRateLimiter } from "./pairing.js";
@@ -71,7 +74,16 @@ import {
   resolveWakeSession,
 } from "./wake-resolve.js";
 import { resolveThreadImage } from "./thread-image.js";
-import { readOpenCodeConfig, writeOpenCodeConfig } from "./opencode-config.js";
+import {
+  deleteOpenCodeProvider,
+  listOpenCodeProviders,
+  readOpenCodeConfig,
+  readOpenCodePermissions,
+  upsertOpenCodeProvider,
+  writeOpenCodeConfig,
+  writeOpenCodePermission,
+  type OpenCodeProviderFile,
+} from "./opencode-config.js";
 import { ToolRegistry } from "../plugin/server-registry.js";
 import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
@@ -184,7 +196,7 @@ const manager = new CodexAdapter(
 const claude = new ClaudeAdapter({
   claudeHome:
     process.env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_HOME || undefined,
-  claudeBin: process.env.CLAUDE_BIN || undefined,
+  claudeBin: process.env.CLAUDE_BIN || store.runtimeAgentBin("claude") || undefined,
   claudeWslBin: process.env.CLAUDE_WSL_BIN || undefined,
   useWsl,
   profileSource: async () => {
@@ -196,7 +208,7 @@ const claude = new ClaudeAdapter({
   threadSettings,
 });
 const opencode = new OpenCodeAdapter({
-  bin: process.env.OPENCODE_BIN || undefined,
+  bin: process.env.OPENCODE_BIN || store.runtimeAgentBin("opencode") || undefined,
   initialThreads,
   initialDirectories: [
     ...projects.list().map((project) => project.cwd),
@@ -309,8 +321,21 @@ const serverInfo = {
   startedAt: Date.now(),
   dataDir,
 };
-const fullSnapshot = () => ({
-  ...agents.snapshot(),
+const snapshotWithDeferredSettings = () => {
+  const snapshot = agents.snapshot();
+  const display = (thread: ThreadSummary) => {
+    const agentId = thread.agentId || "codex";
+    const pending = threadSettings.deferred(agentId, thread.id);
+    return pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread;
+  };
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map(display),
+    archivedThreads: snapshot.archivedThreads?.map(display),
+  };
+};
+const fullSnapshotRaw = () => ({
+  ...snapshotWithDeferredSettings(),
   server: { ...serverInfo, ccSwitch: store.ccSwitchPath || null },
   activities: activity.list(),
   projects: projects.list(),
@@ -324,6 +349,42 @@ const fullSnapshot = () => ({
   // 打开即有侧栏和标题，不必再等一次 GET /tools。
   tools: tools.list(),
 });
+// GET /api/snapshot 是高频大对象 churn 的主要来源（glibc 的 native 堆因此
+// 撑到数百 MB 不归还）。页面加载/关弹层后的动作簇只构建一次；每次变更
+// 由后到的刷新或 WS 广播刷新状态，150ms 内的暂缓可以接受。
+const SNAPSHOT_GET_MEMO_MS = 150;
+let snapshotGetCache: { at: number; value: ReturnType<typeof fullSnapshotRaw> } | undefined;
+const fullSnapshot = () => ({
+  ...fullSnapshotRaw(),
+});
+const saveThreadSettings = async (
+  id: AgentId,
+  threadId: string,
+  settings: Parameters<ThreadSettingsStore["defer"]>[2],
+  apply: (settings: Parameters<ThreadSettingsStore["defer"]>[2]) => Promise<unknown>,
+) => {
+  const snapshot = agents.get(id).snapshot();
+  const thread = [...snapshot.threads, ...(snapshot.archivedThreads || [])]
+    .find((item) => item.id === threadId);
+  if (!thread) throw new Error("会话不存在");
+  if (thread.status === "running" || thread.status === "waiting" || thread.status === "starting" || threadSettings.deferred(id, threadId)) {
+    await threadSettings.defer(id, threadId, settings);
+    snapshotGetCache = undefined;
+    if (thread.status !== "running" && thread.status !== "waiting" && thread.status !== "starting")
+      await threadSettings.applyDeferred(id, threadId, apply);
+    return;
+  }
+  await apply(settings);
+  await threadSettings.update(id, threadId, settings);
+  snapshotGetCache = undefined;
+};
+const snapshotGet = () => {
+  if (snapshotGetCache && Date.now() - snapshotGetCache.at < SNAPSHOT_GET_MEMO_MS)
+    return snapshotGetCache.value;
+  const value = fullSnapshotRaw();
+  snapshotGetCache = { at: Date.now(), value };
+  return value;
+};
 const app = express();
 // 快照/线程全文动辄数 MB，手机弱网下 gzip 是最便宜的收益：只压文本类，
 // 图片走 blob/octet-stream 不会被压缩中间件重复处理。
@@ -442,7 +503,7 @@ const agentId = (value: string | string[]) =>
 
 app.get(
   "/api/snapshot",
-  route(async () => fullSnapshot()),
+  route(async () => snapshotGet()),
 );
 app.get(
   "/api/tasks",
@@ -575,7 +636,7 @@ app.post(
     const watcher = (await watcherCache.ready()).find(
       (item) => item.pid === pid,
     );
-    if (!watcher) throw new Error(`pid ${pid} 不是正在运行的 deck-wake watcher`);
+    if (!watcher) throw new Error(`进程号 ${pid} 不是正在运行的 deck-wake 监督进程`);
     watcherLedger.markStopping(watcher);
     // watcher 由 setsid 拉起，是进程组组长：连同它等待的 ssh 一起停。
     try {
@@ -684,6 +745,52 @@ app.get(
     profiles: agents.profiles(agentId(req.params.agentId)),
   })),
 );
+const selectableAgent = (value: string | string[]): LocalAgent => {
+  const id = agentId(value);
+  if (id !== "claude" && id !== "opencode")
+    throw new Error("该 Agent 不支持本机版本切换");
+  return id;
+};
+app.get(
+  "/api/agents/:agentId/bins",
+  route(async (req) => {
+    const id = selectableAgent(req.params.agentId);
+    const envBin = id === "claude" ? process.env.CLAUDE_BIN : process.env.OPENCODE_BIN;
+    const selected = store.runtimeAgentBin(id);
+    return {
+      bins: await listLocalAgentBins(id, selected),
+      selected,
+      effective: envBin || selected || id,
+      pinned: Boolean(envBin?.trim()),
+    };
+  }),
+);
+app.put(
+  "/api/agents/:agentId/bin",
+  route(async (req) => {
+    const id = selectableAgent(req.params.agentId);
+    const envBin = id === "claude" ? process.env.CLAUDE_BIN : process.env.OPENCODE_BIN;
+    if (envBin?.trim()) throw new Error(`${id.toUpperCase()}_BIN 已指定，请修改环境变量后重启 Deck`);
+    const { bin } = z.object({ bin: z.string().max(1024) }).parse(req.body);
+    const selected = bin.trim();
+    if (selected && !await probeLocalAgentBin(selected))
+      throw new Error(`该后端不可用（无法执行 ${selected} --version）`);
+    const previous = store.runtimeAgentBin(id);
+    const adapter = id === "claude" ? claude : opencode;
+    const result = await agents.switchExecutable(
+      id,
+      async () => {
+        await store.updateRuntimeAgentBin(id, selected);
+        adapter.selectExecutable(selected);
+      },
+      async () => {
+        await store.updateRuntimeAgentBin(id, previous);
+        adapter.selectExecutable(previous);
+      },
+    );
+    return { result, snapshot: fullSnapshot() };
+  }),
+);
 app.get(
   "/api/agents/:agentId/models",
   route(async (req) =>
@@ -700,10 +807,14 @@ app.get(
  * Agent 启停与重载（不重启 Deck 主服务）：
  * - PUT  /agents/:id/enabled  启用/停用；有会话在运行时返回 applied:false，
  *   带 force 才会中断它们。显式选择落盘在 agent-settings.json。
- * - POST /agents/:id/reload   重启该 agent 的后端进程并重读配置与会话。
+ * - POST /agents/:id/reload   重载该 agent 的配置与会话；OpenCode 默认走
+ *   实例级 dispose（不打断进程），带 restart 强制重启后端进程再重读。
  * - POST /agents/reload       先按 acp-agents.json 增删改 ACP agent，再重载全部。
  */
-const agentForceSchema = z.object({ force: z.boolean().optional() });
+const agentForceSchema = z.object({
+  force: z.boolean().optional(),
+  restart: z.boolean().optional(),
+});
 app.put(
   "/api/agents/:agentId/enabled",
   route(async (req) => {
@@ -737,7 +848,10 @@ app.post(
   route(async (req) => {
     const id = agentId(req.params.agentId);
     const input = agentForceSchema.parse(req.body ?? {});
-    const result = await agents.reload(id, { force: input.force });
+    const result = await agents.reload(id, {
+      force: input.force,
+      restart: input.restart,
+    });
     return { result, snapshot: fullSnapshot() };
   }),
 );
@@ -832,6 +946,182 @@ app.put(
     return { path: file.path, applied, applyError };
   }),
 );
+/**
+ * OpenCode 自定义 provider：读 = 解析全局/项目 opencode.json(c) 的
+ * `provider`（V1）/`providers`（V2）段并脱敏；写 = 按文件已有格式回写。
+ * provider 改动不能 PATCH 热应用，保存后需「重载 OpenCode」生效。
+ */
+app.get(
+  "/api/agents/opencode/providers",
+  route(async (req) => {
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    const [global, project] = await Promise.all([
+      listOpenCodeProviders("global"),
+      directory
+        ? listOpenCodeProviders("project", directory)
+        : Promise.resolve(undefined),
+    ]);
+    const online = opencode.isOnline();
+    // 凭据（auth.json / 环境变量）只由 OpenCode 判断，不读取 auth.json。
+    // 这里只用内存缓存秒回（`/provider` 单次 1 秒多，不能挡列表渲染），
+    // 新鲜探测走下面的 /connected，前端在列表出来后再补。
+    const globalConnected = online ? opencode.cachedConnectedProviders() : undefined;
+    const projectConnected =
+      online && directory ? opencode.cachedConnectedProviders(directory) : undefined;
+    const annotate = (
+      file: OpenCodeProviderFile | undefined,
+      connected: Set<string> | undefined,
+    ) =>
+      file && connected
+        ? {
+            ...file,
+            providers: file.providers.map((provider) => ({
+              ...provider,
+              connected: connected.has(provider.id),
+            })),
+          }
+        : file;
+    return {
+      online,
+      global: annotate(global, globalConnected),
+      project: annotate(project, projectConnected),
+    };
+  }),
+);
+/**
+ * 新鲜的 connected 探测：列表接口只给缓存，这里现问 serve。
+ * 各自失败只落成 null（未知），不拖慢、不报错，前端徽标随后补齐。
+ */
+app.get(
+  "/api/agents/opencode/connected",
+  route(async (req) => {
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    if (!opencode.isOnline()) return { global: null, project: null };
+    const [global, project] = await Promise.all([
+      opencode.probeConnectedProviders(),
+      directory
+        ? opencode.probeConnectedProviders(directory)
+        : Promise.resolve(undefined),
+    ]);
+    return {
+      global: global ? [...global] : null,
+      project: project ? [...project] : null,
+    };
+  }),
+);
+/**
+ * OpenCode 工具免审规则：读 = 解析全局/项目 opencode.json(c) 的
+ * `permission` 段里的纯文本规则；写 = 单条增删改，其余配置原样保留。
+ * 生效同样要「重载 OpenCode」（全局配置按进程生命周期缓存）。
+ */
+app.get(
+  "/api/agents/opencode/permissions",
+  route(async (req) => {
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    const [global, project] = await Promise.all([
+      readOpenCodePermissions("global"),
+      directory
+        ? readOpenCodePermissions("project", directory)
+        : Promise.resolve(undefined),
+    ]);
+    return { online: opencode.isOnline(), global, project };
+  }),
+);
+app.put(
+  "/api/agents/opencode/permissions",
+  route(async (req) => {
+    const input = z
+      .object({
+        scope: z.enum(["global", "project"]),
+        directory: z.string().min(1).optional(),
+        tool: z.string().min(1).max(100),
+        rule: z.enum(["ask", "allow", "deny"]).nullable().optional(),
+      })
+      .parse(req.body);
+    if (input.scope === "project" && !input.directory?.trim())
+      throw new Error("项目范围必须提供 directory");
+    const file = await writeOpenCodePermission(
+      input.scope,
+      input.directory?.trim() || undefined,
+      input.tool,
+      input.rule ?? null,
+    );
+    return { path: file.path, rules: file.rules, needsReload: true };
+  }),
+);
+app.post(
+  "/api/agents/opencode/providers",
+  route(async (req) => {
+    const input = z
+      .object({
+        scope: z.enum(["global", "project"]),
+        directory: z.string().min(1).optional(),
+        id: z.string().min(1).max(64),
+        name: z.string().max(120).optional(),
+        npm: z.string().max(120).optional(),
+        baseURL: z.string().min(1).max(500),
+        apiKey: z.string().max(2000).optional(),
+        models: z
+          .array(
+            z.union([
+              z.string().min(1).max(200),
+              z.object({
+                id: z.string().min(1).max(200),
+                name: z.string().max(200).optional(),
+                variants: z.array(z.string().min(1).max(100)).max(50).optional(),
+                supportsImages: z.boolean().optional(),
+                sdk: z.string().max(120).optional(),
+              }),
+            ]),
+          )
+          .min(1)
+          .max(100),
+      })
+      .parse(req.body);
+    if (input.scope === "project" && !input.directory?.trim())
+      throw new Error("项目范围必须提供 directory");
+    const file = await upsertOpenCodeProvider(
+      input.scope,
+      input.directory?.trim() || undefined,
+      {
+        id: input.id,
+        name: input.name,
+        npm: input.npm,
+        baseURL: input.baseURL,
+        apiKey: input.apiKey,
+        models: input.models,
+      },
+    );
+    return { path: file.path, providers: file.providers, needsReload: true };
+  }),
+);
+app.delete(
+  "/api/agents/opencode/providers/:id",
+  route(async (req) => {
+    const scope = z.enum(["global", "project"]).parse(req.query.scope);
+    const directory =
+      typeof req.query.directory === "string" && req.query.directory.trim()
+        ? req.query.directory.trim()
+        : undefined;
+    if (scope === "project" && !directory)
+      throw new Error("项目范围必须提供 directory");
+    const file = await deleteOpenCodeProvider(
+      scope,
+      directory,
+      param(req.params.id),
+    );
+    return { path: file.path, providers: file.providers, needsReload: true };
+  }),
+);
 app.post(
   "/api/agents/:agentId/threads",
   route(async (req) => {
@@ -890,7 +1180,22 @@ app.get(
       ...(snapshot.archivedThreads || []),
     ].find((item) => item.id === threadId);
     if (thread) sessionSearch.capture(thread, full);
+    // 搜索索引吃全量；下发前折叠已完成回合的工具输出（?full=1 取全量）。
+    const body: any = full;
+    if (req.query.full !== "1" && Array.isArray(body?.turns))
+      body.turns = foldTurns(body.turns, thread?.activeTurnId);
     return full;
+  }),
+);
+app.get(
+  "/api/agents/:agentId/threads/:threadId/turns/:turnId",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    return agents.readTurn(
+      id,
+      param(req.params.threadId),
+      param(req.params.turnId),
+    );
   }),
 );
 app.get(
@@ -951,9 +1256,10 @@ app.patch(
       throw new Error("Codex 供应商切换必须使用会话迁移接口");
     if (input.name) await agents.renameThread(id, threadId, input.name);
     if (input.settings) {
-      await agents.updateThreadSettings(id, threadId, input.settings);
-      await threadSettings.update(id, threadId, input.settings);
-      if (input.settings.providerId) {
+      await saveThreadSettings(id, threadId, input.settings, (settings) =>
+        agents.updateThreadSettings(id, threadId, settings),
+      );
+      if (input.settings.providerId && !threadSettings.deferred(id, threadId)) {
         const snapshot = agents.get(id).snapshot();
         const thread = [
           ...snapshot.threads,
@@ -1040,6 +1346,16 @@ app.post(
       param(req.params.threadId),
       turnId,
     );
+  }),
+);
+app.post(
+  "/api/agents/:agentId/threads/:threadId/force-stop",
+  route(async (req) => {
+    const result = (await agents.forceStop(
+      agentId(req.params.agentId),
+      param(req.params.threadId),
+    )) as Record<string, unknown>;
+    return { ...result, snapshot: fullSnapshot() };
   }),
 );
 const findThreadSummary = (id: AgentId, threadId: string) => {
@@ -1333,8 +1649,7 @@ app.post(
   }),
 );
 app.put(
-  "/api/runtime/model-context",
-  route(async (req) => {
+  "/api/runtime/model-context",  route(async (req) => {
     const value = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
     const input = z
       .object({
@@ -1352,6 +1667,39 @@ app.put(
       modelContextWindow: input.modelContextWindow ?? undefined,
       modelAutoCompactTokenLimit: input.modelAutoCompactTokenLimit ?? undefined,
     });
+    return fullSnapshot();
+  }),
+);
+app.get(
+  "/api/runtime/codex-bins",
+  route(async () => {
+    const { listCodexBinCandidates } = await import("./codex-bins.js");
+    const bins = await listCodexBinCandidates(
+      process.env,
+      useWsl,
+      store.runtimeCodexBin?.() || "",
+    );
+    return {
+      bins,
+      selected: store.runtimeCodexBin?.() || "",
+      effective: manager.runtimeStatus().codexBin || "codex",
+      pinned: Boolean(
+        (useWsl ? process.env.CODEX_WSL_BIN : process.env.CODEX_BIN)?.trim(),
+      ),
+    };
+  }),
+);
+app.put(
+  "/api/runtime/codex-bin",
+  route(async (req) => {
+    const input = z.object({ bin: z.string().max(1024) }).parse(req.body);
+    const bin = (input.bin || "").trim();
+    if (bin) {
+      const { probeCodexVersion } = await import("./codex-bins.js");
+      const version = await probeCodexVersion(bin);
+      if (!version) throw new Error(`该后端不可用（无法执行 ${bin} --version）`);
+    }
+    await manager.updateRuntimeCodexBin(bin);
     return fullSnapshot();
   }),
 );
@@ -1593,6 +1941,9 @@ app.get(
       ...(manager.snapshot().archivedThreads || []),
     ].find((item) => item.id === threadId);
     if (thread) sessionSearch.capture(thread, full);
+    const legacyBody: any = full;
+    if (req.query.full !== "1" && Array.isArray(legacyBody?.turns))
+      legacyBody.turns = foldTurns(legacyBody.turns, thread?.activeTurnId);
     return full;
   }),
 );
@@ -1632,6 +1983,16 @@ app.post(
     );
   }),
 );
+app.post(
+  "/api/threads/:providerId/:threadId/force-stop",
+  route(async (req) => {
+    const result = (await manager.forceStop(
+      param(req.params.providerId),
+      param(req.params.threadId),
+    )) as Record<string, unknown>;
+    return { ...result, snapshot: fullSnapshot() };
+  }),
+);
 app.patch(
   "/api/threads/:providerId/:threadId",
   route(async (req) => {
@@ -1660,8 +2021,9 @@ app.patch(
     if (input.name)
       await manager.renameThread(providerId, threadId, input.name);
     if (input.settings) {
-      await manager.updateThreadSettings(providerId, threadId, input.settings);
-      await threadSettings.update("codex", threadId, input.settings);
+      await saveThreadSettings("codex", threadId, input.settings, (settings) =>
+        manager.updateThreadSettings(providerId, threadId, settings),
+      );
     }
     return fullSnapshot();
   }),
@@ -2009,7 +2371,17 @@ agents.on("event", (event) => {
     updateRuntimeLock(dataDir, {
       childPid: event.data?.pid,
       listen: event.data?.remoteUrl,
+      ...(event.data?.codexBin ? { codexBin: event.data.codexBin } : {}),
     });
+    // 版本探测后补进锁：只做展示与 mismatch 提示，不做任何自动清理。
+    if (event.data?.codexBin) {
+      void import("./codex-bins.js").then(({ probeCodexVersion }) =>
+        probeCodexVersion(event.data.codexBin).then((version) => {
+          if (version && !shuttingDown)
+            updateRuntimeLock(dataDir, { codexVersion: version });
+        }),
+      );
+    }
     return;
   }
   const activityUpdate = activity.ingest(event);
@@ -2135,14 +2507,14 @@ if (pairing) {
 }
 
 const runtimeStart = useWsl
-  ? startPhase("正在启动 WSL 中的 Agent runtime…", {
-      waitingLabel: "仍在等待 app-server",
+  ? startPhase("正在启动 WSL 中的 Agent 服务…", {
+      waitingLabel: "仍在等待 Codex 服务",
     })
   : undefined;
 agents
   .startAll()
   .then(() => {
-    runtimeStart?.done("Agent runtime 已就绪");
+    runtimeStart?.done("Agent 服务已就绪");
     sessionSearch.reconcile();
   })
   .catch((error) => {

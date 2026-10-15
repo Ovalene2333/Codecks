@@ -1,3 +1,4 @@
+import { Select } from "../../src/kit/Select";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -185,7 +186,7 @@ export function GitView({
           <header className="git-repo-bar">
             <div className="git-branch-control">
               <GitBranch />
-              <select
+              <Select
                 value={
                   snapshot?.branch?.startsWith("detached@")
                     ? ""
@@ -193,9 +194,9 @@ export function GitView({
                 }
                 aria-label="当前分支"
                 disabled={disabled || !snapshot?.branches.length}
-                onChange={(event) =>
-                  event.target.value &&
-                  void run("switch", { branch: event.target.value })
+                onValueChange={(nextValue) =>
+                  nextValue &&
+                  void run("switch", { branch: nextValue })
                 }
               >
                 {snapshot?.branch?.startsWith("detached@") ? (
@@ -206,7 +207,7 @@ export function GitView({
                     {branch}
                   </option>
                 ))}
-              </select>
+              </Select>
               <button
                 className="icon-btn"
                 type="button"

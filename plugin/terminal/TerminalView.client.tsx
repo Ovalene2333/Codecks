@@ -249,7 +249,7 @@ export function TerminalView({
   const connected = state === "connected";
 
   return (
-    <section className="web-terminal-tool" aria-label="Web Terminal">
+    <section className="web-terminal-tool" aria-label="网页终端">
       <header className="terminal-toolbar">
         <label>
           <FolderOpen />

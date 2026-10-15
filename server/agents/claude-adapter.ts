@@ -573,6 +573,11 @@ export class ClaudeAdapter extends EventEmitter {
     this.historyStatus = this.threads.size ? "cached" : "loading";
   }
 
+  /** 只改变之后新建的 Query；调用方先确认无忙碌会话，再重启这个 adapter。 */
+  selectExecutable(bin: string) {
+    this.options.claudeBin = findClaudeExecutable(bin || undefined);
+  }
+
   descriptor(): AgentDescriptor {
     const available = this.hasSupportedProfile();
     return {
@@ -614,6 +619,17 @@ export class ClaudeAdapter extends EventEmitter {
   listModels(providerId?: string) {
     this.resolveProfile(providerId);
     return (this.sdkModels || CLAUDE_MODELS).map((model) => ({ ...model }));
+  }
+
+  /** 已知目录里查模型展示名（model/id 双匹配），查不到就缺省。 */
+  private modelLabelOf(model?: string): string | undefined {
+    if (!model) return undefined;
+    const hit = (this.sdkModels || CLAUDE_MODELS).find(
+      (item) => item.model === model || item.id === model,
+    );
+    return hit?.displayName && hit.displayName !== model
+      ? hit.displayName
+      : undefined;
   }
 
   /**
@@ -811,7 +827,7 @@ export class ClaudeAdapter extends EventEmitter {
     for (const approval of this.approvals.values())
       approval.resolve({
         behavior: "deny",
-        message: "Claude Code adapter 已停止",
+        message: "Claude Code 服务已停止",
         interrupt: true,
       });
     this.active.clear();
@@ -1029,7 +1045,14 @@ export class ClaudeAdapter extends EventEmitter {
     }
     if (settings.model) {
       if (connected) await connected.query.setModel(settings.model);
-      this.currentSummary(thread).model = settings.model;
+      const summary = this.currentSummary(thread);
+      summary.model = settings.model;
+      // 格子与工具条读的是 resolvedModel；会话已即时切到新模型，
+      // 这里同步解锁，否则旧的 resolvedModel 要到下轮才被覆盖。
+      summary.resolvedModel = settings.model;
+      const label = this.modelLabelOf(settings.model);
+      if (label) summary.modelLabel = label;
+      else delete summary.modelLabel;
       if (connected) connected.model = settings.model;
     }
     if (settings.reasoningEffort !== undefined) {
@@ -1245,6 +1268,10 @@ export class ClaudeAdapter extends EventEmitter {
     const pending = { turnId, abort: new AbortController() };
     this.startingTurns.set(threadId, pending);
     try {
+      if (this.options.threadSettings?.deferred?.(this.id, threadId))
+        await this.options.threadSettings.applyDeferred(this.id, threadId, (settings) =>
+          this.updateThreadSettings(_providerId, threadId, settings),
+        );
       const current = this.active.get(threadId);
       if (current) {
         if (
@@ -1263,7 +1290,7 @@ export class ClaudeAdapter extends EventEmitter {
           );
       }
       if (this.startingTurns.get(threadId) !== pending)
-        throw new Error("Claude Code adapter 已停止");
+        throw new Error("Claude Code 服务已停止");
     } catch (error) {
       if (this.startingTurns.get(threadId) === pending)
         this.startingTurns.delete(threadId);
@@ -1319,6 +1346,57 @@ export class ClaudeAdapter extends EventEmitter {
     current.interrupted = true;
     await current.query.interrupt();
     return { ok: true };
+  }
+
+  /**
+   * 紧急停止：连接崩溃、完成事件丢失时本地状态可能永久卡在
+   * running/waiting。先尽力打断在途查询（失败不阻塞），随后撤掉挂起
+   * 审批并把本地状态强制归位 idle。
+   */
+  async forceStop(_providerId: string, threadId: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Claude Code 会话不存在");
+    const current = this.active.get(threadId);
+    const pending = this.startingTurns.get(threadId);
+    try {
+      if (current?.turnId) {
+        current.interrupted = true;
+        await current.query.interrupt();
+      } else pending?.abort.abort();
+    } catch {
+      // 打断失败不阻塞归位：紧急停止的本意就是不再等后端。
+    }
+    for (const [id, approval] of this.approvals)
+      if (approval.threadId === threadId) {
+        approval.resolve({
+          behavior: "deny",
+          message: "Claude Code 会话被紧急停止",
+        });
+        this.approvals.delete(id);
+        this.broadcast("approval.resolved", { agentId: this.id, approvalId: id });
+      }
+    if (current && current.turnId && current.turnId === thread.activeTurnId) {
+      current.turnId = undefined;
+      current.interrupted = false;
+      current.toolItems.clear();
+    } else if (!current?.turnId) this.startingTurns.delete(threadId);
+    const summary = this.currentSummary(thread);
+    const turnId = summary.activeTurnId;
+    if (summary.status !== "running" && summary.status !== "waiting") return;
+    summary.status = "idle";
+    summary.activeTurnId = undefined;
+    summary.compacting = undefined;
+    summary.lastError = undefined;
+    summary.updatedAt = Date.now();
+    this.broadcast("thread.updated", summary);
+    this.emitAgentEvent(summary, {
+      method: "turn/completed",
+      params: {
+        threadId,
+        turn: { id: turnId || "claude", status: "interrupted" },
+      },
+    });
+    return { ok: true as const };
   }
 
   /**
@@ -1734,7 +1812,11 @@ export class ClaudeAdapter extends EventEmitter {
   ) {
     thread = this.currentSummary(thread);
     if (message.type === "system" && message.subtype === "init") {
-      if (message.model) thread.resolvedModel = message.model;
+      if (message.model) {
+        thread.resolvedModel = message.model;
+        const initLabel = this.modelLabelOf(message.model);
+        if (initLabel) thread.modelLabel = initLabel;
+      }
       // init 帧的 effort 是「实际下发」的水平（已过模型支持度降级），且只在
       // 连接建立时出现一次；有 model 或 effort 字段就校正快照。effort 为
       // null/缺失值表示该模型不接受覆盖，快照清掉，回合标签回模型默认。
@@ -1771,6 +1853,8 @@ export class ClaudeAdapter extends EventEmitter {
           apiModel
         ) {
           thread.resolvedModel = apiModel;
+          const streamLabel = this.modelLabelOf(apiModel);
+          if (streamLabel) thread.modelLabel = streamLabel;
           this.stampTurnModel(thread, turnId, { model: apiModel });
         }
         if (!message.parent_tool_use_id)
@@ -1837,6 +1921,8 @@ export class ClaudeAdapter extends EventEmitter {
         apiModel !== "<synthetic>"
       ) {
         thread.resolvedModel = apiModel;
+        const assistantLabel = this.modelLabelOf(apiModel);
+        if (assistantLabel) thread.modelLabel = assistantLabel;
         this.stampTurnModel(thread, turnId, { model: apiModel });
       }
       // 每条 assistant 消息带本次 API 调用自身的 usage（流式分块时同一
@@ -2143,7 +2229,7 @@ export class ClaudeAdapter extends EventEmitter {
     if (!profile.supported)
       throw new Error(
         profile.official
-          ? "这个 Official 配置没有独立凭据；请选本机 Claude 使用已有登录态"
+          ? "这个官方配置没有独立凭据；请选本机 Claude 使用已有登录态"
           : "Claude Code 配置缺少有效的地址或认证凭据",
       );
     return profile;

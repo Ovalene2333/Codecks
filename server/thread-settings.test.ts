@@ -47,6 +47,51 @@ test("OpenCode thread settings survive a store restart", async () => {
   });
 });
 
+test("deferred settings keep the latest choice across restart and apply once", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-deferred-settings-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.update("codex", "thread-1", { model: "model-a" });
+  await store.defer("codex", "thread-1", { model: "model-b", sandbox: "read-only" });
+  await store.defer("codex", "thread-1", { model: "model-c" });
+  await store.update("codex", "thread-1", { model: "model-a" });
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.equal(restored.get("codex", "thread-1")?.model, "model-c");
+  assert.deepEqual(restored.deferred("codex", "thread-1"), {
+    model: "model-c",
+    sandbox: "read-only",
+  });
+  let applied;
+  await restored.applyDeferred("codex", "thread-1", async (settings) => {
+    applied = settings;
+  });
+  assert.deepEqual(applied, { model: "model-c", sandbox: "read-only" });
+  assert.equal(restored.deferred("codex", "thread-1"), undefined);
+  const afterApply = new ThreadSettingsStore(dir);
+  await afterApply.load();
+  assert.equal(afterApply.deferred("codex", "thread-1"), undefined);
+});
+
+test("failed or superseded deferred settings remain available for the next turn", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-deferred-failure-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.defer("claude", "thread-1", { model: "model-a" });
+  await assert.rejects(
+    store.applyDeferred("claude", "thread-1", async () => {
+      throw new Error("runtime unavailable");
+    }),
+    /runtime unavailable/,
+  );
+  assert.equal(store.deferred("claude", "thread-1")?.model, "model-a");
+  await store.applyDeferred("claude", "thread-1", async () => {
+    await store.defer("claude", "thread-1", { model: "model-b" });
+  });
+  assert.equal(store.deferred("claude", "thread-1")?.model, "model-b");
+  await store.remove("claude", "thread-1");
+  assert.equal(store.deferred("claude", "thread-1"), undefined);
+});
+
 test("resetting a service tier removes its saved override", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-tier-"));
   const store = new ThreadSettingsStore(dir);
@@ -214,4 +259,44 @@ test("clearWakeCode drops the mapping and empty settings entries", async () => {
   const again = await store.ensureWakeCode("opencode", "session-2");
   await store.remove("opencode", "session-2");
   assert.equal(store.findByWakeCode(again), undefined);
+});
+
+test("turn stats persist, dedupe by turn id, and drop with the thread", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-stats-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  await store.recordTurnStats("codex", "t-1", "turn-1", {
+    startedAt: 1_000,
+    endedAt: 3_000,
+    durationMs: 2_000,
+    outputTokens: 100,
+    tps: 50,
+  });
+  // 空快照不落地。
+  await store.recordTurnStats("codex", "t-1", "turn-0", {});
+  // 同 turnId 重记只原位覆盖。
+  await store.recordTurnStats("codex", "t-1", "turn-1", {
+    startedAt: 1_000,
+    endedAt: 4_000,
+    durationMs: 3_000,
+    outputTokens: 150,
+    tps: 50,
+  });
+
+  assert.deepEqual(store.turnStats("codex", "t-1", "turn-1"), {
+    turnId: "turn-1",
+    startedAt: 1_000,
+    endedAt: 4_000,
+    durationMs: 3_000,
+    outputTokens: 150,
+    tps: 50,
+  });
+  assert.equal(store.turnStats("codex", "t-1", "turn-0"), undefined);
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.deepEqual(restored.turnStats("codex", "t-1", "turn-1")?.tps, 50);
+
+  await restored.remove("codex", "t-1");
+  assert.equal(restored.turnStats("codex", "t-1", "turn-1"), undefined);
 });

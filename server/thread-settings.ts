@@ -54,13 +54,32 @@ export interface TurnModelStamp {
   reasoningEffort?: string;
 }
 
+/**
+ * 单个 turn 的用时/产出快照（TPS 显示用）。Codex 的 turn 自带信息里没有
+ * 计时与单轮 token，由 adapter 在 turn 结束时记录，readThread 回填到
+ * turn.stats；OpenCode 可从 message time/tokens 直接算，不走这里。
+ */
+export interface TurnStatsStamp {
+  turnId: string;
+  startedAt?: number;
+  endedAt?: number;
+  durationMs?: number;
+  outputTokens?: number;
+  tps?: number;
+}
+
 /** 单会话保留的快照上限，超出按时间顺序丢最旧的。 */
 const MAX_TURN_MODELS = 1_000;
+
+/** 单会话保留的回合统计上限，同上。 */
+const MAX_TURN_STATS = 1_000;
 
 interface StoredThreadSettings {
   version: 1;
   settings: Partial<Record<AgentId, Record<string, ThreadSettings>>>;
   turnModels?: Partial<Record<AgentId, Record<string, TurnModelStamp[]>>>;
+  turnStats?: Partial<Record<AgentId, Record<string, TurnStatsStamp[]>>>;
+  deferred?: Partial<Record<AgentId, Record<string, ThreadSettingsInput>>>;
 }
 
 const empty = (): StoredThreadSettings => ({ version: 1, settings: {} });
@@ -127,7 +146,48 @@ export class ThreadSettingsStore {
           }
         }
       }
-      this.data = { version: 1, settings, turnModels };
+      const turnStats: StoredThreadSettings["turnStats"] = {};
+      const rawTurnStats = parsed.turnStats;
+      if (rawTurnStats && typeof rawTurnStats === "object") {
+        for (const [agentId, group] of Object.entries(rawTurnStats)) {
+          if (!group || typeof group !== "object" || Array.isArray(group))
+            continue;
+          for (const [threadId, list] of Object.entries(group)) {
+            if (!Array.isArray(list)) continue;
+            const cleaned = list.flatMap((entry) => {
+              if (
+                !entry ||
+                typeof entry !== "object" ||
+                typeof entry.turnId !== "string" ||
+                !entry.turnId
+              )
+                return [];
+              const stamp: TurnStatsStamp = { turnId: entry.turnId };
+              for (const key of [
+                "startedAt",
+                "endedAt",
+                "durationMs",
+                "outputTokens",
+                "tps",
+              ] as const) {
+                const value = Number(entry[key]);
+                if (Number.isFinite(value) && value >= 0) stamp[key] = value;
+              }
+              return [stamp];
+            });
+            if (cleaned.length)
+              (turnStats[agentId as AgentId] ||= {})[threadId] = cleaned;
+          }
+        }
+      }
+      const deferred: StoredThreadSettings["deferred"] = {};
+      if (parsed.deferred && typeof parsed.deferred === "object") {
+        for (const [agentId, group] of Object.entries(parsed.deferred)) {
+          if (group && typeof group === "object" && !Array.isArray(group))
+            deferred[agentId] = group as Record<string, ThreadSettingsInput>;
+        }
+      }
+      this.data = { version: 1, settings, turnModels, turnStats, deferred };
     } catch (error: any) {
       // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
       // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
@@ -157,19 +217,49 @@ export class ThreadSettingsStore {
   ) {
     const next = clean(settings);
     const group = (this.data.settings[agentId] ||= {});
-    const merged = { ...group[threadId], ...next };
+    const pending = this.data.deferred?.[agentId]?.[threadId];
+    // pending 是最新选择，直接盖在已存值上；走 clean 拿到 ThreadSettings
+    // 类型（null 语义由下面三行显式处理，和 settings 保持一致）。
+    const merged: ThreadSettings = { ...group[threadId], ...next, ...clean(pending || {}) };
     if (agentId === "codex" && merged.model?.trim() === "default")
       delete merged.model;
-    if (settings.serviceTier === null) delete merged.serviceTier;
-    if (settings.archived === null || settings.archived === false)
+    if (settings.serviceTier === null || pending?.serviceTier === null) delete merged.serviceTier;
+    if (settings.archived === null || settings.archived === false || pending?.archived === null || pending?.archived === false)
       delete merged.archived;
     // 空串 effort 表示「回默认」：键本身要删掉，否则下次 get 还原出
     // 无效值。没传 effort 的更新不受影响（clean 已去掉 undefined）。
-    if (settings.reasoningEffort === "") delete merged.reasoningEffort;
+    if (settings.reasoningEffort === "" || pending?.reasoningEffort === "") delete merged.reasoningEffort;
     if (!Object.keys(merged).length) delete group[threadId];
     else group[threadId] = merged;
     await this.save();
     return this.get(agentId, threadId);
+  }
+
+  deferred(agentId: AgentId, threadId: string) {
+    const value = this.data.deferred?.[agentId]?.[threadId];
+    return value ? { ...value } : undefined;
+  }
+
+  async defer(agentId: AgentId, threadId: string, settings: ThreadSettingsInput) {
+    const group = (this.data.deferred ||= {});
+    const perAgent = (group[agentId] ||= {});
+    perAgent[threadId] = { ...perAgent[threadId], ...settings };
+    await this.update(agentId, threadId, settings);
+  }
+
+  async applyDeferred(
+    agentId: AgentId,
+    threadId: string,
+    apply: (settings: ThreadSettingsInput) => Promise<unknown>,
+  ) {
+    const current = this.data.deferred?.[agentId]?.[threadId];
+    if (!current) return;
+    await apply({ ...current });
+    if (this.data.deferred?.[agentId]?.[threadId] !== current) return;
+    delete this.data.deferred![agentId]![threadId];
+    if (!Object.keys(this.data.deferred![agentId]!).length)
+      delete this.data.deferred![agentId];
+    await this.save();
   }
 
   /** Migrate the last in-memory summary once, without replacing saved choices. */
@@ -234,10 +324,57 @@ export class ThreadSettingsStore {
     return Array.isArray(list) ? list : [];
   }
 
+  /**
+   * 记录某回合结束时的用时/产出快照；同 turnId 重复记录时原位覆盖。
+   * 只收有意义的数据（至少有时长或有产出），空快照不落地。
+   */
+  async recordTurnStats(
+    agentId: AgentId,
+    threadId: string,
+    turnId: string,
+    stamp: Omit<TurnStatsStamp, "turnId">,
+  ) {
+    if (!turnId) return;
+    const entry: TurnStatsStamp = { turnId };
+    for (const key of [
+      "startedAt",
+      "endedAt",
+      "durationMs",
+      "outputTokens",
+      "tps",
+    ] as const) {
+      const value = stamp[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0)
+        entry[key] = value;
+    }
+    if (
+      entry.durationMs == null &&
+      entry.outputTokens == null &&
+      entry.startedAt == null
+    )
+      return;
+    const perAgent = ((this.data.turnStats ||= {})[agentId] ||= {});
+    const list = (perAgent[threadId] ||= []);
+    const index = list.findIndex((item) => item.turnId === turnId);
+    if (index >= 0) list[index] = entry;
+    else list.push(entry);
+    if (list.length > MAX_TURN_STATS)
+      list.splice(0, list.length - MAX_TURN_STATS);
+    await this.save();
+  }
+
+  turnStats(agentId: AgentId, threadId: string, turnId: string) {
+    return this.data.turnStats?.[agentId]?.[threadId]?.find(
+      (entry) => entry.turnId === turnId,
+    );
+  }
+
   async remove(agentId: AgentId, threadId: string) {
     const group = this.data.settings[agentId];
     const models = this.data.turnModels?.[agentId];
-    if (!group?.[threadId] && !models?.[threadId]) return;
+    const stats = this.data.turnStats?.[agentId];
+    const deferred = this.data.deferred?.[agentId];
+    if (!group?.[threadId] && !models?.[threadId] && !stats?.[threadId] && !deferred?.[threadId]) return;
     if (group?.[threadId]) {
       delete group[threadId];
       if (!Object.keys(group).length) delete this.data.settings[agentId];
@@ -246,6 +383,15 @@ export class ThreadSettingsStore {
       delete models[threadId];
       if (!Object.keys(models).length)
         delete (this.data.turnModels || {})[agentId];
+    }
+    if (stats?.[threadId]) {
+      delete stats[threadId];
+      if (!Object.keys(stats).length)
+        delete (this.data.turnStats || {})[agentId];
+    }
+    if (deferred?.[threadId]) {
+      delete deferred[threadId];
+      if (!Object.keys(deferred).length) delete this.data.deferred![agentId];
     }
     await this.save();
   }

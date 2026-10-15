@@ -637,6 +637,33 @@ test("the core agent cannot be disabled", async () => {
   assert.equal(codex.stops, 0);
 });
 
+test("switching a binary leaves busy sessions alone and restores an old binary on failure", async () => {
+  const { kimi, registry } = kimiSetup({ enabled: true });
+  let selected = "previous";
+  const apply = async () => { selected = "next"; };
+  const rollback = async () => { selected = "previous"; };
+  kimi.busy = [summary("kimi", "k1", { status: "waiting" })];
+  assert.deepEqual(await registry.switchExecutable("kimi", apply, rollback), {
+    id: "kimi", reloaded: false, busyCount: 1,
+  });
+  assert.equal(selected, "previous");
+  assert.deepEqual(kimi.log, []);
+
+  kimi.busy = [];
+  kimi.failStart = "launch failed";
+  const result = await registry.switchExecutable("kimi", apply, rollback);
+  assert.equal(result.reloaded, false);
+  assert.match(result.error || "", /launch failed/);
+  assert.equal(selected, "previous");
+  assert.deepEqual(kimi.log, ["restart", "start", "restart", "start"]);
+
+  kimi.failStart = undefined;
+  kimi.log = [];
+  assert.equal((await registry.switchExecutable("kimi", apply, rollback)).reloaded, true);
+  assert.equal(selected, "next");
+  assert.deepEqual(kimi.log, ["restart", "start"]);
+});
+
 test("reload restarts the agent's backend and starts it again, in that order", async () => {
   const { kimi, registry } = kimiSetup({ enabled: true });
   const events: { type: string }[] = [];
@@ -646,6 +673,7 @@ test("reload restarts the agent's backend and starts it again, in that order", a
     id: "kimi",
     reloaded: true,
     busyCount: 0,
+    mode: "process",
   });
   assert.deepEqual(kimi.log, ["restart", "start"]);
   assert.ok(events.some((event) => event.type === "snapshot"));
@@ -680,6 +708,7 @@ test("reload skips a busy agent unless forced, and reports how many sessions", a
     id: "kimi",
     reloaded: true,
     busyCount: 2,
+    mode: "process",
   });
   assert.deepEqual(kimi.log, ["restart", "start"]);
 });

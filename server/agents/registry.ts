@@ -9,13 +9,21 @@ import type {
   AgentId,
   AgentSnapshot,
 } from "./types.js";
-import type { ThreadSummary, TurnImage } from "../types.js";
+import type {
+  ActiveTask,
+  ThreadSummary,
+  TurnImage,
+} from "../types.js";
+import type { AgentSkill } from "./types.js";
 import { activeTask } from "../tasks.js";
 
 /** 会话已被本进程接管或正有活动；只有未接管的空闲历史才可能被当作重复项隐藏。 */
 function engaged(thread: ThreadSummary) {
   return thread.controlMode === "managed" || thread.status !== "idle";
 }
+
+const TASK_SNAPSHOT_TTL_MS = 1_500;
+const SKILL_CACHE_TTL_MS = 30_000;
 
 /** 主 agent 能正常提供会话：已启用，已上线或正在启动，且历史读取没有失败。 */
 function usable(agent?: AgentDescriptor) {
@@ -54,6 +62,8 @@ export interface AgentReloadResult {
   reloaded: boolean;
   /** 发现的运行中/待审批会话数（force 时即被中断的数量）。 */
   busyCount: number;
+  /** 实际落地方式：OpenCode 的重载可能升级成进程重启。 */
+  mode?: "instances" | "process";
   error?: string;
 }
 
@@ -119,6 +129,16 @@ export class AgentRegistry extends EventEmitter {
   private forwarders = new Map<AgentId, (event: any) => void>();
   private locks = new Map<AgentId, Promise<unknown>>();
   private messageLocks = new Map<string, Promise<unknown>>();
+  private taskSnapshot?: { at: number; tasks: ActiveTask[] };
+  private taskRefresh?: Promise<ActiveTask[]>;
+  private skillCache = new Map<
+    string,
+    { at: number; value: { skills: AgentSkill[]; errors?: unknown[] } }
+  >();
+  private skillLoading = new Map<
+    string,
+    Promise<{ skills: AgentSkill[]; errors?: unknown[] }>
+  >();
 
   constructor(adapters: AgentAdapter[] = []) {
     super();
@@ -364,7 +384,7 @@ export class AgentRegistry extends EventEmitter {
    */
   async reload(
     id: AgentId,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; restart?: boolean } = {},
   ): Promise<AgentReloadResult> {
     const adapter = this.get(id);
     return this.serialized(id, async () => {
@@ -374,12 +394,16 @@ export class AgentRegistry extends EventEmitter {
       if (busy.length && !options.force)
         return { id, reloaded: false, busyCount: busy.length };
       try {
-        if (adapter.reload) await adapter.reload();
-        else {
+        let mode: AgentReloadResult["mode"];
+        if (!options.restart && adapter.reload) {
+          const light = await adapter.reload();
+          mode = light === "instances" || light === "process" ? light : undefined;
+        } else {
           adapter.restart();
           await adapter.startAll();
+          mode = "process";
         }
-        return { id, reloaded: true, busyCount: busy.length };
+        return { id, reloaded: true, mode, busyCount: busy.length };
       } catch (error: any) {
         return {
           id,
@@ -389,6 +413,43 @@ export class AgentRegistry extends EventEmitter {
         };
       } finally {
         this.announce();
+      }
+    });
+  }
+
+  /** 原子切换某个 Agent 的可执行文件；失败时恢复原选择和原后端。 */
+  async switchExecutable(
+    id: AgentId,
+    apply: () => Promise<void>,
+    rollback: () => Promise<void>,
+  ): Promise<AgentReloadResult> {
+    const adapter = this.get(id);
+    return this.serialized(id, async () => {
+      if (!this.isEnabled(id))
+        throw new Error(`${this.nameOf(id)} 未启用，请先在设置中启用`);
+      const busy = adapter.busyThreads();
+      if (busy.length) return { id, reloaded: false, busyCount: busy.length };
+      let changed = false;
+      try {
+        await apply();
+        changed = true;
+        adapter.restart();
+        await adapter.startAll();
+        return { id, reloaded: true, busyCount: 0 };
+      } catch (error: any) {
+        if (changed) {
+          try {
+            await rollback();
+            adapter.restart();
+            await adapter.startAll();
+          } catch (rollbackError: any) {
+            return {
+              id, reloaded: false, busyCount: 0,
+              error: `切换失败：${error?.message || error}；恢复旧后端失败：${rollbackError?.message || rollbackError}`,
+            };
+          }
+        }
+        return { id, reloaded: false, busyCount: 0, error: error?.message || String(error) };
       }
     });
   }
@@ -469,6 +530,20 @@ export class AgentRegistry extends EventEmitter {
     return adapter.readThread!(thread.providerId, threadId);
   }
 
+  /**
+   * 读单个回合全文（折叠展开用）：各 adapter 都能 readThread 全文，
+   * 这里按 turnId 切片返回，不新增 adapter 接口。折叠只发生在 HTTP
+   * 传输层，本接口恒返回未折叠原文。
+   */
+  async readTurn(id: AgentId, threadId: string, turnId: string) {
+    const full: any = await this.readThread(id, threadId);
+    const turn = Array.isArray(full?.turns)
+      ? full.turns.find((item: any) => String(item?.id || "") === String(turnId))
+      : undefined;
+    if (!turn) throw new Error("找不到该回合，可能已被撤回或压缩");
+    return { ...turn, agentId: id, threadId };
+  }
+
   async renameThread(id: AgentId, threadId: string, name: string) {
     const adapter = this.operation(id, "renameThread");
     const thread = this.thread(id, threadId);
@@ -522,6 +597,13 @@ export class AgentRegistry extends EventEmitter {
     const adapter = this.operation(id, "interrupt");
     const thread = this.thread(id, threadId);
     return adapter.interrupt!(thread.providerId, threadId, turnId);
+  }
+
+  /** 紧急停止：不经运行状态校验，把卡住的会话强制归位 idle。 */
+  async forceStop(id: AgentId, threadId: string) {
+    const adapter = this.operation(id, "forceStop");
+    const thread = this.thread(id, threadId);
+    return adapter.forceStop!(thread.providerId, threadId);
   }
 
   async sendMessage(id: AgentId, threadId: string, input: AgentMessageInput): Promise<AgentMessageReceipt> {
@@ -615,7 +697,35 @@ export class AgentRegistry extends EventEmitter {
   async listSkills(id: AgentId, threadId: string, forceReload = false) {
     const adapter = this.operation(id, "listSkills");
     const thread = this.thread(id, threadId);
-    return adapter.listSkills!(thread.providerId, threadId, forceReload);
+    const key = `${id}:${threadId}`;
+    const cached = this.skillCache.get(key);
+    if (!forceReload) {
+      if (cached && Date.now() - cached.at < SKILL_CACHE_TTL_MS) return cached.value;
+      const pending = this.skillLoading.get(key);
+      if (pending) return pending;
+    }
+    const loading = adapter
+      .listSkills!(thread.providerId, threadId, forceReload)
+      .then((value) => {
+        // 简单上限防长期运行时无界增长；列表重建很便宜。
+        if (this.skillCache.size > 128) {
+          for (const [k, entry] of this.skillCache)
+            if (Date.now() - entry.at >= SKILL_CACHE_TTL_MS)
+              this.skillCache.delete(k);
+          if (this.skillCache.size > 128) this.skillCache.clear();
+        }
+        this.skillCache.set(key, { at: Date.now(), value });
+        if (this.skillLoading.get(key) === loading)
+          this.skillLoading.delete(key);
+        return value;
+      })
+      .catch((error: unknown) => {
+        if (this.skillLoading.get(key) === loading)
+          this.skillLoading.delete(key);
+        throw error;
+      });
+    this.skillLoading.set(key, loading);
+    return loading;
   }
 
   async runSessionCommand(
@@ -681,6 +791,26 @@ export class AgentRegistry extends EventEmitter {
   }
 
   async listTasks() {
+    // 任务明细要对每个忙碌会话各发一次 thread/read，轮询频繁时代价高。
+    // 有缓存就先返回、后台再刷新，保证响应即时。
+    if (!this.taskSnapshot) return this.refreshTasks();
+    if (Date.now() - this.taskSnapshot.at > TASK_SNAPSHOT_TTL_MS)
+      void this.refreshTasks().catch(() => {});
+    return this.taskSnapshot.tasks;
+  }
+
+  /** 刷新任务快照；有并发刷新时跟随既有结果，避免重复 thread/read。 */
+  private refreshTasks(): Promise<ActiveTask[]> {
+    const pending = this.taskRefresh;
+    if (pending) return pending;
+    const refresh = this.buildTasks().finally(() => {
+      if (this.taskRefresh === refresh) this.taskRefresh = undefined;
+    });
+    this.taskRefresh = refresh;
+    return refresh;
+  }
+
+  private async buildTasks() {
     const tasks = await Promise.all(
       this.enabledAdapters().flatMap((adapter) =>
         adapter.busyThreads().map(async (thread) => {
@@ -710,7 +840,11 @@ export class AgentRegistry extends EventEmitter {
         }),
       ),
     );
-    return tasks.sort((left, right) => right.startedAt - left.startedAt);
+    this.taskSnapshot = {
+      at: Date.now(),
+      tasks: tasks.sort((left, right) => right.startedAt - left.startedAt),
+    };
+    return this.taskSnapshot.tasks;
   }
 
   async terminateBackgroundTerminal(

@@ -11,6 +11,14 @@ import {
 } from "../provider-config.js";
 import { configuredRuntimePort, findFreeListenPort } from "../runtime-port.js";
 import {
+  isPidAlive,
+  readRuntimeLock,
+} from "../runtime-lock.js";
+import {
+  probeCodexVersion,
+  resolveEffectiveCodexBin,
+} from "../codex-bins.js";
+import {
   windowsPathToWsl,
   WSL_CODEX_SHELL_COMMAND,
 } from "../runtime-platform.js";
@@ -84,7 +92,7 @@ const CODEX_CAPABILITIES: AgentCapabilities = {
 };
 
 const COMPACTION_TIMEOUT_MS = 10 * 60_000;
-const MODEL_CATALOG_TTL_MS = 30_000;
+const MODEL_CATALOG_TTL_MS = 10 * 60_000;
 
 /** Codex 没有字面量 "default" 模型：空串与占位都视同未指定，走供应商默认。 */
 function normalizeCodexModel(value: unknown): string | undefined {
@@ -92,6 +100,15 @@ function normalizeCodexModel(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "default") return undefined;
   return trimmed;
+}
+
+function sameModelConfig(a: RuntimeModelConfig, b: RuntimeModelConfig) {
+  return (
+    (a.modelContextWindow || undefined) ===
+      (b.modelContextWindow || undefined) &&
+    (a.modelAutoCompactTokenLimit || undefined) ===
+      (b.modelAutoCompactTokenLimit || undefined)
+  );
 }
 
 function stateDbOnlyUnsupported(error: unknown) {
@@ -135,10 +152,43 @@ export class CodexAdapter extends EventEmitter {
   private compactionTimers = new Map<string, NodeJS.Timeout>();
   private usageStore: CodexUsageStore;
   private rolloutUsageLoaded = false;
+  /**
+   * 进行中回合的产出基线（turn/progress 与 turn.stats 用）：turn/started
+   * 记录开始时间 + 当时累计 output/reasoning，turn/completed 按结束时累计
+   * 做差得到本轮产出。key 为 threadId，同时只跟踪一个活跃回合。
+   */
+  private runningTurns = new Map<
+    string,
+    {
+      turnId: string;
+      startedAt: number;
+      /** turn/started 时累计生成 token（output+reasoning），缺失则本轮不算 TPS。 */
+      generatedBefore?: number;
+      lastEmitAt: number;
+    }
+  >();
+  /**
+   * per-item 生成统计（思考/回复行行尾 TPS）：reasoning/agentMessage 的
+   * item/started 记录开始时间与当时累计 output/reasoning，item/completed
+   * 窗口内累计做差即为该 item 的产出。key 为 itemId，量有界。
+   */
+  private itemUsageWindows = new Map<
+    string,
+    { type: string; startedAt: number; output: number; reasoning: number }
+  >();
   private historyStatus: AgentHistoryStatus;
   private historyError?: string;
   private backgroundTerminalApi?: boolean;
   private modelCatalog = new Map<string, { at: number; models: ModelInfo[] }>();
+  private modelCatalogLoading = new Map<string, Promise<ModelInfo[]>>();
+  private ownerProviderIds?: Set<string>;
+  /** 本次实际启动后端用的二进制（空字符串表示 PATH 默认 `codex`）。 */
+  private runningCodexBin = "";
+  /** 本次实际启动后端时用的上下文配置快照：启动参数的真实值。 */
+  private runningModelConfig: RuntimeModelConfig = {};
+  private runningCodexVersion?: string;
+  /** 设置页选中的后端版本（后台探测，非阻塞）。 */
+  private selectedCodexVersion?: string;
 
   constructor(
     private store: ProviderStore,
@@ -170,12 +220,19 @@ export class CodexAdapter extends EventEmitter {
 
   async startAll() {
     await this.usageStore.load();
+    // 后台探测选中后端的版本：只用于设置页展示与 mismatch 提示。
+    void this.refreshSelectedCodexVersion();
     try {
       await this.ensure();
       await this.refreshAll();
+      // 后台预热模型目录：新建会话的模型选择卡不该在服务冷启动后
+      // 第一次打开时才等 runtime 拉目录。
+      for (const provider of this.store.runtimeProviders()) {
+        void this.refreshModelCatalog(provider.id).catch(() => {});
+      }
     } catch (error: any) {
       this.historyStatus = "error";
-      this.historyError = String(error?.message || "Codex Runtime 启动失败");
+      this.historyError = String(error?.message || "Codex 服务启动失败");
       this.broadcast("snapshot", this.snapshot());
       throw error;
     }
@@ -228,15 +285,23 @@ export class CodexAdapter extends EventEmitter {
     this.loadedThreads.clear();
     this.knownRollouts.clear();
     const profile = this.store.runtimeProfile();
+    // 生效后端：环境变量 > 设置页选择 > PATH 默认。每次启动都重新解析，
+    // Deck 重启后 PATH 变化也能体现（只提示、不自动杀旧进程）。
+    const effectiveBin = resolveEffectiveCodexBin(
+      process.env,
+      this.useWsl,
+      this.store.runtimeCodexBin?.() || "",
+    );
+    const modelConfig = this.store.runtimeModelConfig?.() || {};
     const client = new CodexClient(
       profile,
       this.dataDir,
-      this.codexBin,
+      effectiveBin || "codex",
       this.store.runtimeProviders(),
       `ws://127.0.0.1:${await this.resolveRuntimePort()}`,
       this.useWsl,
       (providerId) => this.projects?.overlayForProvider(providerId),
-      this.store.runtimeModelConfig?.() || {},
+      modelConfig,
     );
     this.client = client;
     client.on("notification", (msg) => this.onNotification(msg));
@@ -255,10 +320,31 @@ export class CodexAdapter extends EventEmitter {
       client.stop();
       throw new Error("运行时配置在启动期间已更新，请重试");
     }
+    this.runningCodexBin = effectiveBin;
+    this.runningModelConfig = { ...modelConfig };
+    this.runningCodexVersion = undefined;
+    // 版本探测是 best-effort：成了就补进快照提示，不阻塞启动。
+    void probeCodexVersion(effectiveBin || "codex").then((version) => {
+      if (this.client !== client) return;
+      this.runningCodexVersion = version;
+      this.broadcast("runtime.status", this.runtimeStatus());
+    });
     this.broadcast("runtime.process", {
       pid: client.pid,
       remoteUrl: this.runtimeUrl(),
+      codexBin: effectiveBin || "codex",
     });
+    const providerIds = new Set(
+      this.store.runtimeProviders().map((provider) => provider.id),
+    );
+    // 供应商集合变了，目录可能随鉴权变化；重启本身不清缓存，避免
+    // 重启后第一次打开模型选择卡又退化成阻塞等待。
+    if (
+      this.ownerProviderIds &&
+      [...providerIds].some((id) => !this.ownerProviderIds?.has(id))
+    )
+      this.modelCatalog.clear();
+    this.ownerProviderIds = providerIds;
     this.loadedProviderRevision = this.store.revision;
     this.loadedConnectionRevision = this.projects?.connectionRevision ?? 0;
     this.loadedProviderIds = new Set(
@@ -285,6 +371,8 @@ export class CodexAdapter extends EventEmitter {
     this.startingClient = undefined;
     this.loadedThreads.clear();
     this.knownRollouts.clear();
+    this.runningTurns.clear();
+    this.runningModelConfig = {};
   }
 
   providerStatuses() {
@@ -470,6 +558,157 @@ export class CodexAdapter extends EventEmitter {
     void this.usageStore.set(threadId, usage, meta).catch(() => undefined);
   }
 
+  /**
+   * 累计用量里的生成 token（output + reasoning）：total 存在时是累计值，
+   * 只有 last 时是单次调用值；起止口径一致时做差即本轮产出。
+   */
+  private generatedOf(usage?: TokenUsage | null) {
+    if (!usage) return undefined;
+    const output = Number(usage.output);
+    const reasoning = Number(usage.reasoningOutput);
+    if (!Number.isFinite(output) && !Number.isFinite(reasoning))
+      return undefined;
+    return (Number.isFinite(output) ? output : 0) +
+      (Number.isFinite(reasoning) ? reasoning : 0);
+  }
+
+  /** per-item 窗口差值按字段认领：reasoning 吃 reasoningOutput，回复吃 output。 */
+  private usageFields(usage?: TokenUsage | null) {
+    return {
+      output: Number(usage?.output) || 0,
+      reasoning: Number(usage?.reasoningOutput) || 0,
+    };
+  }
+
+  /**
+   * 思考/回复 item 的 per-item 产出：started 记基线，completed 用窗口内的
+   * 累计做差盖章 item.stats（delta<=0 或用时缺失就不编造）。tokenUsage
+   * 事件若晚于 item/completed 才到达，本 item 不计、下一个 item 的基线
+   * 已含该批 token，不会重复累计。
+   */
+  private noteItemUsage(
+    item: any,
+    method: string,
+    itemId: string,
+    existing: ThreadSummary,
+    now: number,
+  ) {
+    if (method === "item/started") {
+      if (this.itemUsageWindows.size > 400) this.itemUsageWindows.clear();
+      const baseline = this.usageFields(existing.tokenUsage);
+      this.itemUsageWindows.set(itemId, {
+        type: String(item.type),
+        startedAt: Number(item.startedAt) || now,
+        ...baseline,
+      });
+      return;
+    }
+    const entry = this.itemUsageWindows.get(itemId);
+    this.itemUsageWindows.delete(itemId);
+    if (!entry || entry.type !== item.type) return;
+    const startedAt = Number(entry.startedAt);
+    const endedAt = Number(item.endedAt) || now;
+    if (!(startedAt > 0 && endedAt > startedAt)) return;
+    const fields = this.usageFields(existing.tokenUsage);
+    const isReasoning = item.type === "reasoning";
+    const outputTokens = Math.max(
+      0,
+      (isReasoning ? fields.reasoning : fields.output) -
+        (isReasoning ? entry.reasoning : entry.output),
+    );
+    if (outputTokens <= 0) return;
+    item.stats = {
+      durationMs: endedAt - startedAt,
+      outputTokens,
+      tps: Math.round((outputTokens / ((endedAt - startedAt) / 1000)) * 10) / 10,
+    };
+  }
+
+  /**
+   * 把持久化的回合统计回填到 readThread 返回的 turn.stats（无则不碰，
+   * 由前端回落隐藏）。与 stampTurnModels 同一位置调用。
+   */
+  private stampTurnStats(thread: any) {
+    const turns = thread?.turns;
+    const store = this.threadSettings;
+    if (!Array.isArray(turns) || !store || typeof store.turnStats !== "function")
+      return;
+    for (const turn of turns) {
+      if (!turn || turn.stats) continue;
+      const stamp = store.turnStats(
+        this.id,
+        String(thread.id),
+        String(turn.id || ""),
+      );
+      if (stamp && (stamp.durationMs != null || stamp.outputTokens != null || stamp.startedAt != null))
+        turn.stats = { ...stamp };
+    }
+  }
+
+  /**
+   * turn/completed 结算：用时恒有（Deck 见证的起止），产出取起止累计
+   * 生成 token 差值（基线缺失则只留用时，不编造 TPS），持久化供历史回填。
+   */
+  private finishRunningTurn(existing: ThreadSummary, turnId?: unknown) {
+    const running = this.runningTurns.get(existing.id);
+    this.runningTurns.delete(existing.id);
+    if (!running) return;
+    const id = String(turnId || running.turnId || "");
+    if (!id) return;
+    const endedAt = Date.now();
+    const stamp: {
+      startedAt: number;
+      endedAt: number;
+      durationMs: number;
+      outputTokens?: number;
+      tps?: number;
+    } = {
+      startedAt: running.startedAt,
+      endedAt,
+      durationMs: Math.max(0, endedAt - running.startedAt),
+    };
+    if (running.generatedBefore != null) {
+      const generatedAfter = this.generatedOf(existing.tokenUsage);
+      if (generatedAfter != null) {
+        const outputTokens = Math.max(0, generatedAfter - running.generatedBefore);
+        stamp.outputTokens = outputTokens;
+        if (stamp.durationMs > 0 && outputTokens > 0)
+          stamp.tps =
+            Math.round((outputTokens / (stamp.durationMs / 1000)) * 10) / 10;
+      }
+    }
+    void this.threadSettings
+      ?.recordTurnStats(this.id, existing.id, id, stamp)
+      ?.catch(() => undefined);
+  }
+
+  /**
+   * tokenUsage/updated 自带累计用量：活跃回合内按 1Hz 推 turn/progress
+   * 供底部状态块显示实时 TPS。非活跃/无基线/节流窗内直接跳过。
+   */
+  private noteTurnProgress(existing: ThreadSummary, usage: TokenUsage) {
+    const turnId = String(existing.activeTurnId || "");
+    const running = this.runningTurns.get(existing.id);
+    if (!turnId || !running || running.turnId !== turnId) return;
+    if (running.generatedBefore == null) return;
+    const generated = this.generatedOf(usage);
+    if (generated == null) return;
+    const now = Date.now();
+    if (now - running.lastEmitAt < 1_000) return;
+    running.lastEmitAt = now;
+    this.broadcast("codex.event", {
+      agentId: this.id,
+      providerId: existing.providerId,
+      method: "turn/progress",
+      params: {
+        threadId: existing.id,
+        turnId: running.turnId,
+        outputTokens: Math.max(0, generated - running.generatedBefore),
+        elapsedMs: Math.max(0, now - running.startedAt),
+      },
+    });
+  }
+
   private officialProviders() {
     const providers =
       typeof this.store.runtimeProviders === "function"
@@ -523,6 +762,14 @@ export class CodexAdapter extends EventEmitter {
 
   runtimeStatus() {
     const modelConfig = this.store.runtimeModelConfig?.() || {};
+    const selectedBin = resolveEffectiveCodexBin(
+      process.env,
+      this.useWsl,
+      this.store.runtimeCodexBin?.() || "",
+    );
+    const envPinned = Boolean(
+      (this.useWsl ? process.env.CODEX_WSL_BIN : process.env.CODEX_BIN)?.trim(),
+    );
     return {
       online: this.client?.online ?? false,
       starting: Boolean(this.startingClient),
@@ -544,7 +791,75 @@ export class CodexAdapter extends EventEmitter {
       modelConfig.modelAutoCompactTokenLimit
         ? { modelConfig }
         : {}),
+      // 正在运行的进程实际用的值（仅在线时有）：与已保存的不一致
+      // 说明新值还没重启生效，设置页据此打标而不是让用户靠猜。
+      ...(this.client?.online
+        ? { modelConfigRunning: { ...this.runningModelConfig } }
+        : {}),
+      modelConfigPending:
+        Boolean(this.client?.online) &&
+        !sameModelConfig(modelConfig, this.runningModelConfig),
+      // 后端版本状态：只提示、不自动杀旧进程。env pin 最高优时 selected 即 env。
+      codexBin: selectedBin || "codex",
+      codexBinPinned: envPinned,
+      codexBinRunning: this.client?.online
+        ? this.runningCodexBin || "codex"
+        : undefined,
+      codexVersionRunning: this.runningCodexVersion,
+      codexVersionSelected: this.selectedCodexVersion,
+      codexVersionMismatch:
+        this.client?.online &&
+        Boolean(this.runningCodexVersion) &&
+        Boolean(this.selectedCodexVersion) &&
+        this.runningCodexVersion !== this.selectedCodexVersion
+          ? {
+              running: this.runningCodexVersion as string,
+              selected: this.selectedCodexVersion as string,
+            }
+          : undefined,
+      staleBackend: this.staleBackendInfo(),
     };
+  }
+
+  /** 探测选中后端的版本并缓存，失败时保持旧值（best-effort，不抛错）。 */
+  async refreshSelectedCodexVersion() {
+    try {
+      const selected = resolveEffectiveCodexBin(
+        process.env,
+        this.useWsl,
+        this.store.runtimeCodexBin?.() || "",
+      );
+      const version = await probeCodexVersion(selected || "codex");
+      if (version) {
+        this.selectedCodexVersion = version;
+        this.broadcast("runtime.status", this.runtimeStatus());
+      }
+      return version;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 上个 Deck 进程留下的后端（只提示、不杀）：
+   * 锁里的 Deck pid 已死，但记录的 app-server 子进程还活着，说明现在看到的
+   * 端口/会话可能属于那个旧后端。发现后由设置页提示用户手动处理。
+   */
+  private staleBackendInfo():
+    | { pid: number; codexBin?: string; codexVersion?: string }
+    | undefined {
+    try {
+      const lock = readRuntimeLock(this.dataDir);
+      if (!lock || lock.pid === process.pid) return undefined;
+      if (isPidAlive(lock.pid)) return undefined;
+      if (lock.childPid && isPidAlive(lock.childPid))
+        return {
+          pid: lock.childPid,
+          codexBin: lock.codexBin,
+          codexVersion: lock.codexVersion,
+        };
+    } catch {}
+    return undefined;
   }
 
   terminalCommand(providerId?: string, cwd?: string) {
@@ -631,6 +946,42 @@ export class CodexAdapter extends EventEmitter {
     }
   }
 
+  /**
+   * 切换本机后端：空字符串表示跟随 PATH/CODEX_BIN。
+   * 有会话运行时拒绝切换（与上下文设置同规则），由调用方提示用户。
+   */
+  async updateRuntimeCodexBin(bin: string) {
+    const busy = this.busyThreads();
+    if (busy.length)
+      throw new Error(
+        `仍有 ${busy.length} 个 Codex 会话正在运行或等待审批，请处理后再切换后端`,
+      );
+    const previous = this.store.runtimeCodexBin?.() || "";
+    await this.store.updateRuntimeCodexBin(bin);
+    this.selectedCodexVersion = undefined;
+    this.restart();
+    try {
+      await this.ensure();
+      await this.refreshAll();
+      await this.refreshSelectedCodexVersion();
+      return this.runtimeStatus();
+    } catch (error: any) {
+      await this.store.updateRuntimeCodexBin(previous);
+      this.restart();
+      try {
+        await this.ensure();
+        await this.refreshAll();
+      } catch (rollbackError: any) {
+        throw new Error(
+          `后端切换失败，恢复旧后端后 Runtime 仍无法启动：${rollbackError?.message || rollbackError}`,
+        );
+      }
+      throw new Error(
+        `后端切换未生效，已恢复旧后端并重启 Runtime：${error?.message || error}`,
+      );
+    }
+  }
+
   async createThread(
     providerId: string,
     input: {
@@ -649,7 +1000,7 @@ export class CodexAdapter extends EventEmitter {
       !this.loadedProviderIds.has(providerId) &&
       this.store.get(providerId)?.kind !== "local-profile"
     )
-      throw new Error("该供应商尚未装入 Runtime，请先在供应商设置中应用配置");
+      throw new Error("该供应商尚未装入服务，请先在供应商设置中应用配置");
     const client = await this.ensure(providerId);
     const provider = this.store.get(providerId)!;
     const runtimeProvider = compileRuntimeProvider(provider);
@@ -717,6 +1068,24 @@ export class CodexAdapter extends EventEmitter {
     const cached = this.modelCatalog.get(providerId);
     if (cached && Date.now() - cached.at < MODEL_CATALOG_TTL_MS)
       return cached.models.map((model) => ({ ...model }));
+    // 过期缓存立即返回、后台刷新：目录拉取可能赶上 runtime 冷启动，
+    // 阻塞等待会让新建会话的模型卡长时间空白（前端 8s 即超时）。
+    if (cached?.models.length) {
+      void this.refreshModelCatalog(providerId).catch(() => {});
+      return cached.models.map((model) => ({ ...model }));
+    }
+    const pending = this.modelCatalogLoading.get(providerId);
+    if (pending) return pending;
+    const loading = this.refreshModelCatalog(providerId).finally(() => {
+      if (this.modelCatalogLoading.get(providerId) === loading)
+        this.modelCatalogLoading.delete(providerId);
+    });
+    this.modelCatalogLoading.set(providerId, loading);
+    return loading;
+  }
+
+  private async refreshModelCatalog(providerId: string): Promise<ModelInfo[]> {
+    const cached = this.modelCatalog.get(providerId);
     const client = await this.ensure(providerId);
     const models: ModelInfo[] = [];
     try {
@@ -748,6 +1117,8 @@ export class CodexAdapter extends EventEmitter {
       if (cached?.models.length) return cached.models.map((model) => ({ ...model }));
       throw error;
     }
+    if (!models.length && cached?.models.length)
+      return cached.models.map((model) => ({ ...model }));
     this.modelCatalog.set(providerId, {
       at: Date.now(),
       models: models.map((model) => ({ ...model })),
@@ -900,6 +1271,14 @@ export class CodexAdapter extends EventEmitter {
     const existing = this.threads.get(threadId);
     if (existing) {
       if (nextModel) existing.model = nextModel;
+      if (nextModel) {
+        const labelHit = this.modelCatalog
+          .get(providerId)
+          ?.models.find(
+            (item) => item.model === nextModel || item.id === nextModel,
+          );
+        if (labelHit?.displayName) existing.modelLabel = labelHit.displayName;
+      }
       if (settings.reasoningEffort)
         existing.reasoningEffort = settings.reasoningEffort;
       if (settings.personality) existing.personality = settings.personality;
@@ -992,7 +1371,28 @@ export class CodexAdapter extends EventEmitter {
       },
       "idle",
     );
+    this.persistForkedSettings(result.thread.id);
     return this.threads.get(result.thread.id) || result.thread;
+  }
+
+  /**
+   * fork/迁移产生的新会话：把实际生效的设置记进 thread-settings。
+   * 不记的话下一次列表刷新后显示回落成服务端默认值（“fork 后重置”）。
+   */
+  private persistForkedSettings(newThreadId: string) {
+    const branch = this.threads.get(newThreadId);
+    if (!branch) return;
+    void this.threadSettings
+      ?.update(this.id, branch.id, {
+        model: normalizeCodexModel(branch.model),
+        reasoningEffort: branch.reasoningEffort,
+        personality: branch.personality,
+        sandbox: branch.sandbox,
+        approvalPolicy: branch.approvalPolicy,
+        approvalsReviewer: branch.approvalsReviewer,
+        serviceTier: branch.serviceTier,
+      })
+      .catch(() => undefined);
   }
 
   /** In-place conversation rewind. Codex does not revert workspace files. */
@@ -1095,7 +1495,7 @@ export class CodexAdapter extends EventEmitter {
         model: requestedModel,
         modelProvider: runtimeProvider.modelProvider,
         approvalPolicy: source.approvalPolicy || "on-request",
-        approvalsReviewer: source.approvalsReviewer || "user",
+        approvalsReviewer: source.approvalsReviewer || "auto_review",
         sandbox: source.sandbox || "workspace-write",
       });
     } catch (error: unknown) {
@@ -1130,6 +1530,7 @@ export class CodexAdapter extends EventEmitter {
       forkedFromId: sourceThreadId,
       migratedFrom: { providerId: sourceProviderId, threadId: sourceThreadId },
     });
+    this.persistForkedSettings(result.thread.id);
     return result.thread;
   }
 
@@ -1221,6 +1622,7 @@ export class CodexAdapter extends EventEmitter {
             ? { ...thread, tokenUsage: restored }
             : thread;
           this.stampTurnModels(normalized);
+          this.stampTurnStats(normalized);
           this.flagMissingHistory(normalized, includeTurns, restored);
           if (existing && restored) {
             existing.tokenUsage = restored;
@@ -1370,7 +1772,11 @@ export class CodexAdapter extends EventEmitter {
       assertMessageInput(existing, message, CODEX_CAPABILITIES.messages!);
     }
     const input = buildTurnInput(text, images);
-    const startTurn = () => {
+    const startTurn = async () => {
+      if (this.threadSettings?.deferred?.(this.id, threadId))
+        await this.threadSettings.applyDeferred(this.id, threadId, (settings) =>
+          this.updateThreadSettings(providerId, threadId, settings),
+        );
       // Do not re-send sandbox/approval here. thread/start, resume, and
       // thread/settings/update already applied them. Repeating the policy on
       // every turn/start makes Codex rebuild the instruction prefix and
@@ -1573,6 +1979,44 @@ export class CodexAdapter extends EventEmitter {
     });
   }
 
+  /**
+   * 紧急停止：完成事件在断流/后端异常中丢失时，会话可能永久卡在
+   * running/waiting。先尽力打断在途回合（后端已正常收尾的回合会按
+   * turn/completed 自愈），随后把该会话的挂起审批撤掉、本地状态强制
+   * 归位 idle。interruptedTurnId 记下回合 id，刷新不会把它恢复成 running。
+   */
+  async forceStop(providerId: string, threadId: string) {
+    const thread = this.threads.get(threadId);
+    if (!thread) throw new Error("Codex 会话不存在");
+    const turnId = thread.activeTurnId;
+    if (turnId)
+      void this.interrupt(providerId, threadId, turnId).catch(() => undefined);
+    for (const [approvalId, approval] of this.approvals)
+      if (String(approval.request?.params?.threadId || "") === threadId) {
+        const params = approval.request.params || {};
+        const itemId = params.itemId || params.item?.id;
+        // fileChange 明细只为挂起的审批服务，撤掉审批时一并回收。
+        if (itemId) this.pendingFileChanges.delete(itemId);
+        this.approvals.delete(approvalId);
+        this.broadcast("approval.resolved", { approvalId });
+      }
+    const compactionTimer = this.compactionTimers.get(threadId);
+    if (compactionTimer) {
+      clearTimeout(compactionTimer);
+      this.compactionTimers.delete(threadId);
+    }
+    this.runningTurns.delete(threadId);
+    if (thread.status !== "running" && thread.status !== "waiting") return { ok: true as const };
+    thread.status = "idle";
+    thread.interruptedTurnId = turnId;
+    thread.activeTurnId = undefined;
+    thread.lastError = undefined;
+    thread.errorCode = undefined;
+    thread.updatedAt = Date.now();
+    this.broadcast("thread.updated", thread);
+    return { ok: true as const };
+  }
+
   async backgroundTerminals(providerId: string, threadId: string) {
     if (this.backgroundTerminalApi === false)
       return { data: [], supported: false };
@@ -1616,7 +2060,7 @@ export class CodexAdapter extends EventEmitter {
     processId: string,
   ) {
     if (this.backgroundTerminalApi === false)
-      throw new Error("当前 Codex Runtime 不支持单独停止后台终端");
+      throw new Error("当前 Codex 服务不支持单独停止后台终端");
     const result = await (
       await this.ensure(providerId)
     ).request("thread/backgroundTerminals/terminate", { threadId, processId });
@@ -1691,7 +2135,7 @@ export class CodexAdapter extends EventEmitter {
       if (!isChatgptAccount(this.account)) {
         this.rateLimits = null;
         this.rateLimitsError =
-          "当前 Runtime 未使用 Official ChatGPT 登录，额度不可用";
+          "当前服务未使用官方 ChatGPT 登录，额度不可用";
         this.broadcast("runtime.status", this.runtimeStatus());
         return this.runtimeStatus();
       }
@@ -1700,7 +2144,7 @@ export class CodexAdapter extends EventEmitter {
         this.rateLimits = parseRateLimits(limitsRaw);
         this.rateLimitsError = this.rateLimits
           ? undefined
-          : "Official 账号额度暂不可用";
+          : "官方账号额度暂不可用";
       } catch (error: any) {
         this.rateLimits = null;
         this.rateLimitsError = String(error?.message || "额度读取失败");
@@ -1873,6 +2317,15 @@ export class CodexAdapter extends EventEmitter {
       this.broadcast("runtime.status", this.runtimeStatus());
     }
     const item = params.item;
+    if (item && typeof item === "object") {
+      // Deck 侧工具计时：item/started 落开始，item/completed 落结束；
+      // 原生 item 本无时间字段，历史重拉无计时则前端不展示。
+      const now = Date.now();
+      if (message.method === "item/started" && item.startedAt == null)
+        item.startedAt = now;
+      else if (message.method === "item/completed" && item.endedAt == null)
+        item.endedAt = now;
+    }
     if (item?.id && (item.type === "fileChange" || item.changes)) {
       const changes = parseFileChanges(item.changes);
       if (changes) {
@@ -1908,6 +2361,14 @@ export class CodexAdapter extends EventEmitter {
     const existing = threadId ? this.threads.get(threadId) : undefined;
     if (existing) {
       existing.controlMode = "managed";
+      // per-item 生成统计：reasoning/agentMessage 走窗口差值。
+      if (
+        (item?.type === "reasoning" || item?.type === "agentMessage") &&
+        (message.method === "item/started" || message.method === "item/completed")
+      ) {
+        const itemId = String(item.id || "");
+        if (itemId) this.noteItemUsage(item, message.method, itemId, existing, Date.now());
+      }
       if (message.method === "thread/status/changed") {
         const type = params.status?.type;
         existing.status =
@@ -1930,6 +2391,20 @@ export class CodexAdapter extends EventEmitter {
               reasoningEffort: existing.reasoningEffort,
             })
             ?.catch(() => undefined);
+        // 本轮产出基线：累计生成 token + 开始时间，供 turn/progress
+        // 直播与 turn/completed 结算 turn.stats。全新线程还没有任何
+        // tokenUsage 且 usageStore 也无记录（连续回退等场景都不会留
+        // 记录），基线按 0 起算——首回合的累计生成就是本轮产出；
+        // usageStore 有记录但内存没生效时保持未知，宁可不算不多算。
+        if (params.turn?.id)
+          this.runningTurns.set(existing.id, {
+            turnId: String(params.turn.id),
+            startedAt: Date.now(),
+            generatedBefore:
+              this.generatedOf(existing.tokenUsage) ??
+              (this.usageStore.get(existing.id) ? undefined : 0),
+            lastEmitAt: 0,
+          });
         existing.interruptedTurnId = undefined;
         existing.updatedAt = Date.now();
         existing.lastError = undefined;
@@ -1940,6 +2415,7 @@ export class CodexAdapter extends EventEmitter {
         existing.status = failed ? "error" : "idle";
         existing.activeTurnId = undefined;
         this.setCompacting(existing, false);
+        this.finishRunningTurn(existing, params.turn?.id);
         // interrupted 等非失败收尾也可能带 error 字段，只有 failed 才上横幅。
         const error = this.turnError(params.turn?.error);
         existing.lastError = failed ? error?.message : undefined;
@@ -1952,6 +2428,7 @@ export class CodexAdapter extends EventEmitter {
         existing.status = "error";
         existing.activeTurnId = undefined;
         this.setCompacting(existing, false);
+        this.runningTurns.delete(existing.id);
         existing.lastError = error?.message || "Codex 任务失败";
         existing.errorCode = error?.code;
         if (this.isUsageLimitError(error?.code)) void this.loadOfficialUsage();
@@ -1966,10 +2443,12 @@ export class CodexAdapter extends EventEmitter {
           parseTokenUsage(params.tokenUsage || params.usage || params) ||
           existing.tokenUsage;
         existing.tokenUsage = usage;
-        if (usage)
+        if (usage) {
           this.rememberUsage(existing.id, usage, {
             providerId: existing.providerId,
           });
+          this.noteTurnProgress(existing, usage);
+        }
       }
       if (
         message.method === "thread/compact/started" ||
@@ -2083,6 +2562,73 @@ export class CodexAdapter extends EventEmitter {
         existing.approvalsReviewer =
           reviewer as ThreadSummary["approvalsReviewer"];
     }
+    await this.restoreSavedThreadSettings(client, threadId);
+  }
+
+  /**
+   * thread/resume 只带 threadId：runtime 从 rollout 恢复的是落盘时的旧设置。
+   * Deck 侧若有更新的显式选择（之前 settings/update 已存进 thread-settings），
+   * 在这里补推一次，否则下一 turn 就按旧权限执行，而界面显示的还是新值。
+   * 只补与当前真相不一致的字段；model/modelProvider 不动，不触发 rebind。
+   */
+  private async restoreSavedThreadSettings(
+    client: { request: (method: string, params?: unknown) => Promise<any> },
+    threadId: string,
+  ) {
+    const saved = this.threadSettings?.get(this.id, threadId);
+    const existing = this.threads.get(threadId);
+    if (!saved || !existing) return;
+    const params: Record<string, unknown> = { threadId };
+    const nextModel = normalizeCodexModel(saved.model);
+    if (nextModel && nextModel !== normalizeCodexModel(existing.model))
+      params.model = nextModel;
+    if (
+      saved.reasoningEffort &&
+      saved.reasoningEffort !== existing.reasoningEffort
+    )
+      params.effort = saved.reasoningEffort;
+    if (saved.personality && saved.personality !== existing.personality)
+      params.personality = saved.personality;
+    if (
+      saved.approvalPolicy &&
+      saved.approvalPolicy !== existing.approvalPolicy
+    )
+      params.approvalPolicy = saved.approvalPolicy;
+    if (
+      saved.approvalsReviewer &&
+      saved.approvalsReviewer !== existing.approvalsReviewer
+    )
+      params.approvalsReviewer = saved.approvalsReviewer;
+    if (saved.sandbox && saved.sandbox !== existing.sandbox) {
+      const policy = sandboxPolicyFromMode(saved.sandbox);
+      if (policy) params.sandboxPolicy = policy;
+    }
+    if (saved.serviceTier && saved.serviceTier !== existing.serviceTier)
+      params.serviceTier = saved.serviceTier;
+    if (Object.keys(params).length === 1) return;
+    try {
+      await client.request("thread/settings/update", params);
+    } catch {
+      // best-effort：推不进去就保持 rollout 真相，下一次 turn 前的
+      // deferred 机制会再推一次；绝不能因为这个打断 resume/发消息。
+      return;
+    }
+    if (typeof params.model === "string") existing.model = params.model;
+    if (typeof params.effort === "string")
+      existing.reasoningEffort = params.effort;
+    if (typeof params.personality === "string")
+      existing.personality = params.personality as ThreadSummary["personality"];
+    if (typeof params.approvalPolicy === "string")
+      existing.approvalPolicy =
+        params.approvalPolicy as ThreadSummary["approvalPolicy"];
+    if (typeof params.approvalsReviewer === "string")
+      existing.approvalsReviewer =
+        params.approvalsReviewer as ThreadSummary["approvalsReviewer"];
+    if (saved.sandbox && params.sandboxPolicy) existing.sandbox = saved.sandbox;
+    if (typeof params.serviceTier === "string")
+      existing.serviceTier = params.serviceTier;
+    existing.updatedAt = Date.now();
+    this.broadcast("thread.updated", existing);
   }
 
   private markArchived(threadId: string, archived: boolean) {

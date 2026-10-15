@@ -263,7 +263,7 @@ export class CodexClient extends EventEmitter {
     }
     this.child.once("exit", (code) => {
       if (!this.stopping)
-        this.fail(new Error(`Codex app-server 已退出 (${code ?? "unknown"})`));
+        this.fail(new Error(`Codex 服务已退出 (${code ?? "unknown"})`));
     });
     this.child.stderr.on("data", (chunk) => {
       const text = chunk.toString();
@@ -288,7 +288,7 @@ export class CodexClient extends EventEmitter {
             try {
               this.handle(JSON.parse(line));
             } catch {
-              this.emit("log", `无法解析 app-server 输出: ${line}`);
+              this.emit("log", `无法解析 Codex 服务输出: ${line}`);
             }
           });
       }
@@ -313,7 +313,7 @@ export class CodexClient extends EventEmitter {
   }
 
   async request(method: string, params?: any, timeout = 20_000): Promise<any> {
-    if (!this.canSend()) throw new Error("Codex app-server 未运行");
+    if (!this.canSend()) throw new Error("Codex 服务未运行");
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -325,7 +325,7 @@ export class CodexClient extends EventEmitter {
       if (!this.send({ id, method, params })) {
         clearTimeout(timer);
         this.pending.delete(id);
-        reject(new Error("Codex app-server 未运行"));
+        reject(new Error("Codex 服务未运行"));
       }
     });
   }
@@ -347,7 +347,7 @@ export class CodexClient extends EventEmitter {
     this.socket?.close();
     this.socket = undefined;
     this.online = false;
-    const error = new Error("Codex app-server 已停止");
+    const error = new Error("Codex 服务已停止");
     for (const item of this.pending.values()) {
       clearTimeout(item.timer);
       item.reject(error);
@@ -437,12 +437,12 @@ export class CodexClient extends EventEmitter {
           try {
             this.handle(JSON.parse(String(data)));
           } catch {
-            this.emit("log", `无法解析 app-server WebSocket 输出`);
+            this.emit("log", `无法解析 Codex 服务输出`);
           }
         });
         socket.once("close", () => {
           if (!this.stopping)
-            this.fail(new Error("Codex app-server WebSocket 已断开"));
+            this.fail(new Error("Codex 服务连接已断开"));
         });
         return;
       } catch (error: any) {

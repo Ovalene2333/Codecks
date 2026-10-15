@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { AgentRegistry } from "./registry.js";
+import { MessageDeliveryQueue } from "../message-delivery.js";
 import { openCodePartToItem, OpenCodeAdapter } from "./opencode-adapter.js";
 
 test("OpenCode adapter binds provider models and preserves the completed turn id", async () => {
@@ -153,8 +155,7 @@ test("OpenCode adapter reload disposes directory instances and re-reads provider
   );
 });
 
-test("OpenCode adapter restarts when the global config is newer than the serve process", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "deck-opencode-global-"));
+test("OpenCode adapter restarts when the global config is newer than the serve process", async () => {  const dir = await mkdtemp(path.join(tmpdir(), "deck-opencode-global-"));
   const configFile = path.join(dir, "opencode.jsonc");
   await writeFile(configFile, "{}");
   let disposeCalls = 0;
@@ -177,7 +178,11 @@ test("OpenCode adapter restarts when the global config is newer than the serve p
       if (value.includes("/global/health"))
         return Response.json({ healthy: true });
       if (value.includes("/provider"))
-        return Response.json({ all: {} });
+        return Response.json({
+          all: {
+            openai: { name: "OpenAI", models: { "gpt-5": {} } },
+          },
+        });
       return Response.json([]);
     }) as typeof fetch,
   });
@@ -196,6 +201,54 @@ test("OpenCode adapter restarts when the global config is newer than the serve p
   (adapter as any).processStartedAt = Date.now();
   await adapter.reload();
   assert.ok(disposeCalls > 0, "fresh global config allows lightweight dispose");
+  adapter.restart();
+});
+
+test("OpenCode adapter escalation: dispose cannot fix an empty provider catalog", async () => {
+  let spawned = 0;
+  const child = new EventEmitter() as any;
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  const adapter = new OpenCodeAdapter({
+    spawnProcess: () => {
+      spawned += 1;
+      return child;
+    },
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/instance/dispose") && init?.method === "POST")
+        return Response.json(true);
+      if (value.includes("/global/health"))
+        return Response.json({ healthy: true });
+      if (value.includes("/provider")) {
+        // dispose 后新实例重建目录，但进程级 models.dev 注册表已坏，
+        // 目录仍然为空；只有重启后的新进程才按当前文件恢复供应商。
+        return spawned > 0
+          ? Response.json({
+              all: {
+                "opencode-go": {
+                  name: "OpenCode Go",
+                  models: { "glm-5.3-flash": { name: "GLM" } },
+                },
+              },
+            })
+          : Response.json({ all: {} });
+      }
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+
+  const mode = await adapter.reload();
+  assert.equal(mode, "process", "empty catalog after dispose must restart");
+  assert.equal(spawned, 1, "escalation should respawn the serve once");
+  assert.ok(
+    adapter
+      .listModels()
+      .some((model: any) => model.id === "opencode-go/glm-5.3-flash"),
+    "escalated reload must restore the provider catalog",
+  );
   adapter.restart();
 });
 
@@ -636,6 +689,38 @@ test("OpenCode ranks connected providers ahead of the rest of the catalog", asyn
       ["openai/gpt-5", false],
     ],
   );
+});
+
+test("OpenCode cached connected snapshot only serves loaded data", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async () =>
+      Response.json({ all: {}, connected: ["acme"] })) as typeof fetch,
+  });
+  // 离线：未知。
+  assert.equal(adapter.cachedConnectedProviders(), undefined);
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+  // 在线但没拉过目录：未知，且不发 HTTP（纯读缓存）。
+  assert.equal(adapter.cachedConnectedProviders(), undefined);
+  assert.equal(adapter.cachedConnectedProviders("/proj"), undefined);
+  await adapter.refreshAll();
+  assert.deepEqual([...adapter.cachedConnectedProviders()!], ["acme"]);
+  // 项目目录没有缓存就是未知；走一次模型目录后才有。
+  assert.equal(adapter.cachedConnectedProviders("/proj"), undefined);
+  await adapter.listModels(undefined, "/proj");
+  assert.deepEqual([...adapter.cachedConnectedProviders("/proj")!], ["acme"]);
+});
+
+test("OpenCode probe reports runtime-connected providers and stays unknown when offline", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async () =>
+      Response.json({ all: {}, connected: ["acme"] })) as typeof fetch,
+  });
+  // 离线：未知（undefined），不能被当成“无 Key”。
+  assert.equal(await adapter.probeConnectedProviders(), undefined);
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+  assert.deepEqual([...(await adapter.probeConnectedProviders())!], ["acme"]);
 });
 
 test("OpenCode model catalog uses the selected project's provider and default model", async () => {
@@ -1162,6 +1247,57 @@ test("OpenCode sends the picked effort as a variant the model advertises", async
   assert.equal(posts.length, 2);
 });
 
+test("OpenCode refuses an effort when the model declares no variants", async () => {
+  const posts: Array<{ body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/prompt_async") && init?.method === "POST") {
+        posts.push({ body: init.body ? String(init.body) : undefined });
+        return Response.json({ id: "msg" });
+      }
+      if (value.includes("/session") && init?.method === "POST")
+        return Response.json({ id: "s1", directory: "/work" });
+      if (value.includes("/provider"))
+        return Response.json({
+          all: {
+            acme: {
+              name: "Acme",
+              models: { "custom-model": { name: "Custom" } },
+            },
+          },
+          connected: ["acme"],
+        });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  await adapter.createThread("acme", {
+    cwd: "/work",
+    model: "acme/custom-model",
+  });
+  await adapter.updateThreadSettings("acme", "s1", {
+    model: "acme/custom-model",
+    reasoningEffort: "medium",
+  });
+
+  // OpenCode answers such a prompt with "Variant unavailable", so Deck fails
+  // fast and points at the missing config instead of sending it.
+  await assert.rejects(adapter.sendTurn("acme", "s1", "继续"), /未配置推理强度档位/);
+  await assert.rejects(
+    adapter.runSessionCommand("acme", "s1", "/init"),
+    /声明 variants/,
+  );
+  assert.equal(posts.length, 0);
+  assert.equal(
+    (adapter.listThreads()[0] as any).status !== "running",
+    true,
+    "被拒绝的发送不应把会话标记为运行中",
+  );
+});
+
 test("OpenCode normalization keeps todo tool payloads and hides step metadata", () => {
   const todo = openCodePartToItem({
     id: "prt-1",
@@ -1400,9 +1536,14 @@ test("OpenCode project external-directory approval writes native project config"
   const cwd = await mkdtemp(path.join(tmpdir(), "deck-opencode-approval-"));
   const replies: unknown[] = [];
   const patches: unknown[] = [];
+  const disposes: string[] = [];
   const adapter = new OpenCodeAdapter({ fetcher: (async (url, init) => {
     if (String(url).includes("/config") && init?.method === "PATCH") {
       patches.push(JSON.parse(String(init.body)));
+      return Response.json(true);
+    }
+    if (String(url).includes("/instance/dispose") && init?.method === "POST") {
+      disposes.push(String(url));
       return Response.json(true);
     }
     if (String(url).includes("/permission/") && init?.method === "POST") {
@@ -1412,6 +1553,7 @@ test("OpenCode project external-directory approval writes native project config"
     return Response.json([]);
   }) as typeof fetch });
   (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
   (adapter as any).threads.set("s1", {
     agentId: "opencode", id: "s1", providerId: "p", name: "n", preview: "", cwd,
     model: "default", status: "running", updatedAt: 1,
@@ -1424,10 +1566,49 @@ test("OpenCode project external-directory approval writes native project config"
   assert.ok(approval.availableDecisions.includes("allowForProject"));
   await adapter.resolveApproval(approval.id, { decision: "allowForProject" });
   assert.deepEqual(replies, [{ reply: "always" }]);
-  assert.deepEqual(patches, [{ permission: { external_directory: { "/opt/demo/assets/*": "allow" } } }]);
+  // PATCH /config 会 dispose 该目录实例、丢掉挂起的权限和在途回合，
+  // 持久授权只能落盘，绝不顺带热应用。
+  assert.deepEqual(patches, []);
   const saved = JSON.parse(await readFile(path.join(cwd, "opencode.json"), "utf8"));
   assert.deepEqual(saved.permission.external_directory, { "/opt/demo/assets/*": "allow" });
   assert.equal(adapter.snapshot().approvals.length, 0);
+  // 规则对新会话生效要等实例重建；排期的 dispose 必须在该项目空闲后才发生。
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(disposes.length, 1, "idle project must dispose its instance");
+  assert.match(disposes[0], /directory=/);
+});
+
+test("OpenCode project external-directory approval keeps the turn while the project is busy", async () => {
+  const cwd = await mkdtemp(path.join(tmpdir(), "deck-opencode-approval-busy-"));
+  const replies: unknown[] = [];
+  const disposes: string[] = [];
+  const adapter = new OpenCodeAdapter({ fetcher: (async (url, init) => {
+    if (String(url).includes("/instance/dispose") && init?.method === "POST") {
+      disposes.push(String(url));
+      return Response.json(true);
+    }
+    if (String(url).includes("/permission/") && init?.method === "POST") {
+      replies.push(JSON.parse(String(init.body)));
+      return Response.json(true);
+    }
+    if (String(url).includes("/session/status"))
+      return Response.json({ s1: { type: "busy" } });
+    return Response.json([]);
+  }) as typeof fetch });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).online = true;
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "n", preview: "", cwd,
+    model: "default", status: "running", updatedAt: 1,
+  });
+  (adapter as any).onEvent({ type: "permission.asked", properties: {
+    id: "per_1", sessionID: "s1", permission: "external_directory",
+    patterns: ["/opt/demo/assets/*"], always: ["/opt/demo/assets/*"], metadata: {},
+  } });
+  await adapter.resolveApproval("s1:per_1", { decision: "allowForProject" });
+  assert.deepEqual(replies, [{ reply: "always" }]);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(disposes, [], "busy project must not dispose its instance");
 });
 
 test("OpenCode restart kills the Windows process tree, not just cmd", async () => {
@@ -1551,6 +1732,7 @@ test("OpenCode crash does not taskkill a reused Windows PID", async () => {
 
   assert.equal(adapter.descriptor().online, false);
   assert.deepEqual(treeKilled, []);
+  adapter.restart();
 });
 
 test("OpenCode replied/rejected events clear stale question cards", () => {
@@ -1574,6 +1756,60 @@ test("OpenCode replied/rejected events clear stale question cards", () => {
     properties: { sessionID: "s1", requestID: "que_x" },
   });
   assert.equal(adapter.snapshot().approvals.length, 0);
+});
+
+test("OpenCode forceStop resets a stuck running thread without waiting for the backend", async () => {
+  const aborts: string[] = [];
+  const adapter = new OpenCodeAdapter({
+    idleGraceMs: 0,
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/abort") && init?.method === "POST") {
+        aborts.push(value);
+        throw new Error("fetch failed");
+      }
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/session"))
+        return Response.json([{ id: "s1", directory: "/work", title: "n" }]);
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  thread.status = "running";
+  thread.activeTurnId = "turn-9";
+  adapter.on("event", () => undefined);
+  (adapter as any).runningTurns.set("s1", {
+    turnId: "turn-9",
+    startedAt: 1,
+    outputs: new Map(),
+    lastEmitAt: 0,
+  });
+
+  const result = await adapter.forceStop("p", "s1");
+  assert.deepEqual(result, { ok: true });
+  assert.ok(aborts.some((value) => value.includes("/session/s1/abort")));
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "s1")?.status,
+    "idle",
+  );
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "s1")?.activeTurnId,
+    undefined,
+  );
+
+  // 卡在等待确认时同样要撤掉挂起的审批。
+  thread.status = "waiting";
+  (adapter as any).threads.get("s1").status = "waiting";
+  (adapter as any).approvals.set("s1:que_x", { id: "s1:que_x", sessionID: "s1" });
+  await adapter.forceStop("p", "s1");
+  assert.equal(adapter.snapshot().approvals.length, 0);
+  assert.equal(
+    adapter.listThreads().find((item) => item.id === "s1")?.status,
+    "idle",
+  );
+  await assert.rejects(() => adapter.forceStop("p", "missing"));
 });
 
 test("OpenCode new threads hide the random slug until the first message", async () => {
@@ -2616,4 +2852,331 @@ test("OpenCode request aborts a hung connection instead of waiting forever", asy
     (adapter as any).request("/session", { retry: false, timeoutMs: 20 }),
     /连接闪断/,
   );
+});
+
+
+test("OpenCode crash recovery releases queued messages on the original session exactly once", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-serve-recovery-"));
+  const children: any[] = [];
+  const prompts: any[] = [];
+  const adapter = new OpenCodeAdapter({
+    port: 4096,
+    spawnProcess: () => {
+      const child = new EventEmitter() as any;
+      child.stderr = new EventEmitter();
+      child.kill = () => true;
+      children.push(child);
+      return child;
+    },
+    fetcher: (async (url, init) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname === "/global/health") return Response.json({ healthy: true });
+      if (pathname === "/session") return Response.json([
+        { id: "recovery-session", directory: "/work", title: "Recovery", time: { updated: 1 } },
+      ]);
+      if (pathname === "/provider") return Response.json({ all: {} });
+      if (pathname.endsWith("/prompt_async")) {
+        prompts.push(JSON.parse(String(init?.body)));
+        return new Response(null, { status: 204 });
+      }
+      return Response.json({});
+    }) as typeof fetch,
+  });
+  const registry = new AgentRegistry([adapter]);
+  const queue = new MessageDeliveryQueue({ file: path.join(dir, "messages.json"), agents: registry, timer: false });
+  t.after(async () => {
+    queue.close();
+    adapter.restart();
+    await rm(dir, { recursive: true, force: true });
+  });
+  await queue.load();
+  await adapter.startAll();
+  await queue.enqueue("opencode", "recovery-session", "queue", { text: "original request" });
+  await queue.tick();
+  assert.equal(prompts.length, 1);
+  // Simulate a process dying during a turn, including stale compaction state.
+  const thread = adapter.listThreads()[0];
+  thread.compacting = true;
+  children[0].emit("exit", null, "SIGTERM");
+  assert.equal(thread.status, "offline");
+  assert.equal(thread.activeTurnId, undefined);
+  await queue.enqueue("opencode", thread.id, "queue", { text: "continue after checking files" });
+  await queue.tick();
+  assert.equal(queue.list()[1].status, "queued");
+  assert.equal(prompts.length, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  assert.equal(children.length, 2, "unexpected exit must restart serve");
+  assert.equal(adapter.descriptor().online, true);
+  assert.equal(registry.messageState("opencode", thread.id).ready, true);
+  await queue.tick();
+  assert.equal(queue.list()[1].status, "delivered");
+  assert.equal(queue.list()[1].disposition, "started");
+  assert.equal(prompts.length, 2, "old accepted request must not be replayed");
+  assert.equal(prompts[1].parts[0].text, "continue after checking files");
+  await queue.tick();
+  assert.equal(prompts.length, 2, "queued request must only be sent once");
+});
+
+test("OpenCode explicit shutdown cancels crash recovery", async (t) => {
+  const adapter = new OpenCodeAdapter();
+  t.after(() => adapter.restart());
+  let starts = 0;
+  adapter.startAll = async () => { starts++; };
+  (adapter as any).scheduleRecovery();
+  adapter.restart();
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  assert.equal(starts, 0);
+});
+
+
+test("OpenCode automatic recovery stops after three failed attempts", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const adapter = new OpenCodeAdapter();
+  t.after(() => adapter.restart());
+  let starts = 0;
+  adapter.startAll = async () => { starts++; throw new Error("demo unavailable"); };
+  (adapter as any).scheduleRecovery();
+  for (const delay of [1_000, 2_000, 4_000]) {
+    t.mock.timers.tick(delay - 1);
+    assert.equal(starts, [1_000, 2_000, 4_000].indexOf(delay));
+    t.mock.timers.tick(1);
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  t.mock.timers.tick(60_000);
+  assert.equal(starts, 3);
+});
+
+
+test("OpenCode shutdown during a failed recovery does not schedule another restart", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const adapter = new OpenCodeAdapter();
+  t.after(() => adapter.restart());
+  let starts = 0;
+  let rejectStart!: (error: Error) => void;
+  adapter.startAll = () => {
+    starts++;
+    return new Promise<void>((_resolve, reject) => { rejectStart = reject; });
+  };
+  (adapter as any).scheduleRecovery();
+  t.mock.timers.tick(1_000);
+  adapter.restart();
+  rejectStart(new Error("demo unavailable"));
+  await Promise.resolve();
+  await Promise.resolve();
+  t.mock.timers.tick(60_000);
+  assert.equal(starts, 1);
+});
+
+test("OpenCode stamps tool timings and per-turn stats with TPS", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1_000 } },
+            parts: [{ id: "p1", type: "text", text: "做点事" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "a",
+              modelID: "m",
+              time: { created: 1_100, completed: 3_100 },
+              tokens: {
+                input: 100,
+                output: 80,
+                reasoning: 20,
+                cache: { read: 0, write: 0 },
+              },
+            },
+            parts: [
+              {
+                id: "r1",
+                type: "reasoning",
+                text: "先看一眼",
+                time: { start: 1_100, end: 1_900 },
+              },
+              {
+                id: "t1",
+                type: "tool",
+                tool: "bash",
+                state: {
+                  status: "completed",
+                  input: { command: "ls" },
+                  output: "ok",
+                  time: { start: 1_200, end: 2_000 },
+                },
+              },
+              {
+                id: "p2",
+                type: "text",
+                text: "done",
+                time: { start: 2_100, end: 3_000 },
+              },
+            ],
+          },
+        ]);
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.turns.length, 1);
+  const turn = loaded.turns[0];
+  assert.deepEqual(turn.stats, {
+    startedAt: 1_000,
+    endedAt: 3_100,
+    durationMs: 2_100,
+    outputTokens: 100,
+    tps: 47.6,
+  });
+  const tool = turn.items.find((item: any) => item.id === "t1");
+  assert.equal(tool.startedAt, 1_200);
+  assert.equal(tool.endedAt, 2_000);
+  const text = turn.items.find((item: any) => item.id === "p2");
+  assert.equal(text.startedAt, 2_100);
+  assert.equal(text.endedAt, 3_000);
+  // per-part stats：reasoning 认领 tokens.reasoning，text 认领 tokens.output。
+  const reasoning = turn.items.find((item: any) => item.id === "r1");
+  assert.deepEqual(reasoning.stats, {
+    durationMs: 800,
+    outputTokens: 20,
+    tps: 25,
+  });
+  assert.deepEqual(text.stats, {
+    durationMs: 900,
+    outputTokens: 80,
+    tps: 88.9,
+  });
+
+});
+
+test("OpenCode emits throttled turn/progress while the turn runs", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  thread.status = "running";
+  thread.activeTurnId = "turn-1";
+
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  const updated = (id: string, output: number) =>
+    (adapter as any).onEvent({
+      type: "message.updated",
+      properties: {
+        sessionID: "s1",
+        info: { id, sessionID: "s1", role: "assistant", tokens: { output, reasoning: 0 } },
+      },
+    });
+  const progress = () =>
+    events.filter((event) => event?.data?.method === "turn/progress");
+  // mock 时钟可能从 0 起跳：先走 2 秒，保证首样本越过 1 秒节流窗。
+  t.mock.timers.tick(2_000);
+  updated("a1", 10);
+  updated("a1", 25);
+  updated("a2", 5);
+  // 首个样本立即推送，1 秒内后续样本被节流。
+  assert.equal(progress().length, 1);
+  assert.equal(progress()[0].data.params.outputTokens, 10);
+  // 1 秒后按 messageId 去重累计再推一次。
+  t.mock.timers.tick(1_500);
+  updated("a2", 7);
+  assert.equal(progress().length, 2);
+  const second = progress()[1].data.params;
+  assert.equal(second.threadId, "s1");
+  assert.equal(second.turnId, "turn-1");
+  assert.equal(second.outputTokens, 32);
+  assert.equal(second.elapsedMs, 1_500);
+});
+
+test("OpenCode forwards per-part stats when a reasoning/text part completes", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      return Response.json([{ id: "s1", directory: "/work" }]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const thread: any = adapter.listThreads().find((item) => item.id === "s1");
+  thread.status = "running";
+  thread.activeTurnId = "turn-1";
+
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  const partUpdated = (part: any) =>
+    (adapter as any).onEvent({
+      type: "message.part.updated",
+      properties: { sessionID: "s1", part },
+    });
+  const itemUpdates = () =>
+    events
+      .filter((event) => event?.data?.method === "item/updated")
+      .map((event) => event.data.params.item);
+  t.mock.timers.tick(2_000);
+
+  // usage 落在 part 完成之前：message.updated 已送出 tokens。
+  (adapter as any).onEvent({
+    type: "message.updated",
+    properties: {
+      sessionID: "s1",
+      info: { id: "m1", sessionID: "s1", role: "assistant", tokens: { output: 300, reasoning: 100 } },
+    },
+  });
+  partUpdated({
+    id: "r1",
+    type: "reasoning",
+    messageID: "m1",
+    text: "想一下",
+    time: { start: 1_000, end: 1_500 },
+  });
+  assert.deepEqual(itemUpdates()[0]?.stats, {
+    durationMs: 500,
+    outputTokens: 100,
+    tps: 200,
+  });
+  partUpdated({
+    id: "p1",
+    type: "text",
+    messageID: "m1",
+    text: "回话",
+    time: { start: 1_600, end: 3_100 },
+  });
+  assert.deepEqual(itemUpdates()[1]?.stats, {
+    durationMs: 1_500,
+    outputTokens: 300,
+    tps: 200,
+  });
+  // 没 tokens（无法认领）时保持原样，不编造 stats。
+  partUpdated({
+    id: "p2",
+    type: "text",
+    messageID: "mX",
+    text: "unknown",
+    time: { start: 1_000, end: 2_000 },
+  });
+  assert.equal(itemUpdates()[2]?.stats, undefined);
 });

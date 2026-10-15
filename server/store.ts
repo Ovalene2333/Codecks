@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -222,10 +223,49 @@ export class ProviderStore {
   }
 
   async updateRuntimeModelConfig(config: RuntimeModelConfig) {
-    const next = normalizeRuntimeModelConfig(config);
-    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
-    this.modelConfig = next;
+    const merged = {
+      ...this.readRuntimeConfigExtra(),
+      ...normalizeRuntimeModelConfig(config),
+    };
+    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(merged, null, 2)}\n`);
+    this.modelConfig = normalizeRuntimeModelConfig(merged);
     return this.runtimeModelConfig();
+  }
+
+  /** 已保存的后端选择（`codexBin` 为空表示跟随 PATH/CODEX_BIN，见 codex-bins）。 */
+  runtimeCodexBin(): string {
+    return this.readRuntimeConfigExtra().codexBin || "";
+  }
+
+  async updateRuntimeCodexBin(bin: string) {
+    const extra = this.readRuntimeConfigExtra();
+    const next = { ...extra, codexBin: (bin || "").trim() };
+    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
+    this.modelConfig = normalizeRuntimeModelConfig(next);
+    return this.runtimeCodexBin();
+  }
+
+  /** Claude/OpenCode 的本机 CLI 选择与 Codex 一起保存在 runtime-config.json。 */
+  runtimeAgentBin(agent: "claude" | "opencode"): string {
+    const key = agent === "claude" ? "claudeBin" : "opencodeBin";
+    const value = this.readRuntimeConfigExtra()[key];
+    return typeof value === "string" ? value : "";
+  }
+
+  async updateRuntimeAgentBin(agent: "claude" | "opencode", bin: string) {
+    const key = agent === "claude" ? "claudeBin" : "opencodeBin";
+    const next = { ...this.readRuntimeConfigExtra(), [key]: bin.trim() };
+    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
+    return this.runtimeAgentBin(agent);
+  }
+
+  private readRuntimeConfigExtra(): Record<string, any> {
+    try {
+      const raw = readFileSync(this.runtimeConfigFile, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return { ...(parsed as object) };
+    } catch {}
+    return {};
   }
 
   async upsert(

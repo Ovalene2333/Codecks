@@ -131,6 +131,37 @@ test('runtime model context settings persist outside config.toml', async () => {
   )
 })
 
+test('runtime codex backend selection persists and survives model updates', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-bin-'))
+  const store = new ProviderStore(dir)
+  await store.load()
+  assert.equal(store.runtimeCodexBin(), '')
+  await store.updateRuntimeCodexBin('/opt/demo/bin/codex')
+  assert.equal(store.runtimeCodexBin(), '/opt/demo/bin/codex')
+  await store.updateRuntimeModelConfig({ modelContextWindow: 500_000 })
+  // 模型设置写入不得丢掉后端选择。
+  assert.equal(store.runtimeCodexBin(), '/opt/demo/bin/codex')
+  const reloaded = new ProviderStore(dir)
+  await reloaded.load()
+  assert.equal(reloaded.runtimeCodexBin(), '/opt/demo/bin/codex')
+})
+
+test('Claude and OpenCode executable choices persist independently of Codex settings', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-agent-executables-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const store = new ProviderStore(dir)
+  await store.load()
+  await store.updateRuntimeCodexBin('/opt/demo/bin/codex')
+  await store.updateRuntimeAgentBin('claude', '/opt/demo/bin/claude')
+  await store.updateRuntimeAgentBin('opencode', '/opt/demo/bin/opencode')
+  await store.updateRuntimeModelConfig({ modelContextWindow: 500_000 })
+  const reloaded = new ProviderStore(dir)
+  await reloaded.load()
+  assert.equal(reloaded.runtimeCodexBin(), '/opt/demo/bin/codex')
+  assert.equal(reloaded.runtimeAgentBin('claude'), '/opt/demo/bin/claude')
+  assert.equal(reloaded.runtimeAgentBin('opencode'), '/opt/demo/bin/opencode')
+})
+
 test('refreshCcSwitch rediscovers a newly available database', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'codex-deck-'))
   const file = path.join(dir, 'cc-switch.db')

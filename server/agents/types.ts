@@ -144,8 +144,11 @@ export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
    * 不重启 Deck 的「重载」：重新读取该 agent 的配置与会话。缺省实现是
    * `restart()`（停后端进程）再 `startAll()`；adapter 若不能安全地停掉
    * 后端（Claude 的长连接会话），提供自己的轻量实现。
+   * 返回值报告实际落地方式：`instances` = 实例级缓存失效重建（进程没动），
+   * `process` = 后端进程整体重启（重载中途升级出来的重启也算 process）。
+   * 缺省实现没有细分类，返回 undefined。
    */
-  reload?(): Promise<void>;
+  reload?(): Promise<"instances" | "process" | void>;
   repairHistory?(): Promise<void>;
   busyThreads(): ThreadSummary[];
   /**
@@ -201,6 +204,12 @@ export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
     threadId: string,
     turnId: string,
   ): Promise<unknown>;
+  /**
+   * 紧急停止：完成事件在断流/后端异常中丢失时，会话可能永久卡在
+   * running/waiting，常规打断、删除、归档都会被占用检查挡住。这里不经
+   * 任何运行状态校验：先尽力打断后端任务，再把本地状态强制归位 idle。
+   */
+  forceStop?(providerId: string, threadId: string): Promise<unknown>;
   resolveApproval?(
     approvalId: string,
     body:
