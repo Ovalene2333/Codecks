@@ -36,6 +36,23 @@ export function changeKindLabel(kind: unknown): string {
   return "修改";
 }
 
+/** 文件改动类型的中文显示名；`changeKindLabel` 的英文值仍用作 CSS 类名。 */
+const CHANGE_KIND_TEXT: Record<string, string> = {
+  add: "新增",
+  create: "新增",
+  update: "修改",
+  modify: "修改",
+  delete: "删除",
+  remove: "删除",
+  move: "移动",
+  rename: "重命名",
+  changes: "改动",
+};
+
+export function changeKindText(label: string): string {
+  return CHANGE_KIND_TEXT[label.toLowerCase()] || label;
+}
+
 export const basename = (p: string) =>
   p.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || p;
 

@@ -323,13 +323,13 @@ function LostRow({
       timeTitle={`发现于 ${new Date(lost.endedAt).toLocaleString("zh-CN")}`}
       detail={
         <span className="home-row-step">
-          <b>watcher 失联 · {lost.label}</b>
+          <b>监督进程失联 · {lost.label}</b>
           {lost.state ? <code>{lost.state}</code> : null}
           <span>{lost.reason}</span>
         </span>
       }
       title={[
-        `${lost.label} · 代号 ${lost.code} · pid ${lost.pid}`,
+        `${lost.label} · 代号 ${lost.code} · 进程号 ${lost.pid}`,
         lost.reason,
         lost.lastLine ? `日志末行：${lost.lastLine}` : "",
         `$ ${lost.command}`,
@@ -345,8 +345,8 @@ function LostRow({
             <button
               type="button"
               className="home-row-done"
-              title="通知会话：发一条唤醒说明 watcher 已失联"
-              aria-label="通知会话 watcher 已失联"
+              title="通知会话：发一条唤醒说明监督进程已失联"
+              aria-label="通知会话：监督进程已失联"
               onClick={notify}
             >
               <Send />
@@ -418,7 +418,7 @@ function AttentionPanel({
             tone={failed ? "error" : "wait"}
             lead={failed ? <CircleAlert /> : <Hourglass />}
             time={failed ? relativeTime(thread.updatedAt) : roughly("已等", now - since)}
-            detail={failed ? error : "等你回复"}
+            detail={failed ? error : "待确认"}
             title={failed ? `${thread.name}\n${thread.lastError || error}` : undefined}
             onOpen={() => onOpen(thread)}
           />
@@ -447,9 +447,9 @@ function unseenDetail(item: HomeItem) {
   const reply = replyPreview(turn?.reply);
   if (!turn) return reply || "有新回复";
   const tone = turnTone(turn.status);
-  const result = `${turnResultLabel(turn.status)} · 用时 ${formatDuration(turn.endedAt - turn.startedAt)}`;
+  const result = `${turnResultLabel(turn.status)}，用时 ${formatDuration(turn.endedAt - turn.startedAt)}`;
   if (!reply) return result;
-  return tone === "ok" ? reply : `${turnResultLabel(turn.status)} · ${reply}`;
+  return tone === "ok" ? reply : `${turnResultLabel(turn.status)}：${reply}`;
 }
 
 function UnseenPanel({
@@ -674,7 +674,7 @@ function WatchPanel({
       {sorted.length ? null : (
         <li className="home-empty">
           <b>没有正在监督的远端任务</b>
-          <span>让 agent 用 deck-wake 挂上 watcher，远端任务结束时会自动唤醒会话。</span>
+          <span>让 agent 用 deck-wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
         </li>
       )}
       {sorted.map((watcher) => {
@@ -682,7 +682,7 @@ function WatchPanel({
           ? threadOf.get(activityKey(watcher.agentId, watcher.threadId))
           : undefined;
         const title = [
-          `${watcher.label} · 代号 ${watcher.code} · pid ${watcher.pid}`,
+          `${watcher.label} · 代号 ${watcher.code} · 进程号 ${watcher.pid}`,
           watcher.state && watcher.stateAt
             ? `状态 ${watcher.state}（${relativeTime(watcher.stateAt)}）`
             : "",
@@ -709,10 +709,10 @@ function WatchPanel({
               <button
                 type="button"
                 className="home-row-done"
-                title="停止这个 watcher（不会再唤醒会话）"
-                aria-label={`停止 watcher ${watcher.label}`}
+                title="停止这个监督进程（不会再唤醒会话）"
+                aria-label={`停止监督进程 ${watcher.label}`}
                 onClick={() => {
-                  if (window.confirm(`停止 watcher「${watcher.label}」？远端任务不受影响，但结束时不会再唤醒会话。`))
+                  if (window.confirm(`停止监督进程「${watcher.label}」？远端任务不受影响，但结束时不会再唤醒会话。`))
                     post(`/monitor/watchers/${watcher.pid}/stop`).catch(() => {});
                 }}
               >

@@ -176,7 +176,7 @@ export function ApprovalCard({
           ? [
               {
                 id: "allowForProject",
-                label: "此项目始终允许（写入 OpenCode 项目配置）",
+                label: "此项目始终允许（会写入项目配置）",
                 body: { decision: "allowForProject" as const },
                 tone: "neutral" as const,
               },
@@ -225,7 +225,6 @@ export function ApprovalCard({
         </span>
         <div>
           <b>{title}</b>
-          <small>请确认是否允许 {actor} 继续执行</small>
         </div>
       </header>
       <div className="approval-content">
@@ -369,8 +368,8 @@ function permissionItemsFrom(raw: unknown): PermissionItem[] {
       typeof item === "string"
         ? { key: item, name: item }
         : {
-            key: String(item.name || item.id || "permission"),
-            name: String(item.name || item.id || "permission"),
+            key: String(item.name || item.id || "权限"),
+            name: String(item.name || item.id || "权限"),
             granted: item.granted,
           },
     );
@@ -607,7 +606,7 @@ function QuestionApproval({
         <div>
           <b>{actor} 需要你回答</b>
           <small>
-            已完成 {completed}/{items.length} · 请完成下列问题后继续
+            已完成 {completed}/{items.length}
           </small>
         </div>
       </header>

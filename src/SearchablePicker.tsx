@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { Combobox } from "@base-ui/react/combobox";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 
 export interface SearchableOption {
@@ -60,57 +61,7 @@ export function groupSearchableOptions(options: SearchableOption[]) {
   return { plain, groups };
 }
 
-interface PickerAnchor {
-  left: number;
-  width: number;
-  maxHeight: number;
-  top?: number;
-  bottom?: number;
-}
-
-/* Narrow screens get a bottom sheet: a fixed dropdown next to the trigger is
-   cramped under the thumb and gets clipped by scrollable modal bodies. */
 const SHEET_QUERY = "(max-width: 760px)";
-const DROPDOWN_MIN_SPACE = 240;
-/** Rows rendered per chunk; long catalogs grow on scroll instead of up front. */
-const ROW_CHUNK = 60;
-
-function isSheetLayout() {
-  return (
-    typeof window !== "undefined" && window.matchMedia(SHEET_QUERY).matches
-  );
-}
-
-function anchorFor(trigger: HTMLElement | null): PickerAnchor | undefined {
-  if (!trigger) return undefined;
-  const box = trigger.getBoundingClientRect();
-  const margin = 8;
-  const width = Math.min(
-    Math.max(box.width, 260),
-    window.innerWidth - margin * 2,
-  );
-  const left = Math.min(
-    Math.max(margin, box.left),
-    window.innerWidth - margin - width,
-  );
-  const spaceBelow = window.innerHeight - box.bottom;
-  const spaceAbove = box.top;
-  const preferAbove =
-    spaceBelow < DROPDOWN_MIN_SPACE && spaceAbove > spaceBelow;
-  return preferAbove
-    ? {
-        left,
-        width,
-        bottom: window.innerHeight - box.top + 4,
-        maxHeight: Math.max(0, spaceAbove - margin - 4),
-      }
-    : {
-        left,
-        width,
-        top: box.bottom + 4,
-        maxHeight: Math.max(0, spaceBelow - margin - 4),
-      };
-}
 
 export function SearchablePicker({
   value,
@@ -135,182 +86,135 @@ export function SearchablePicker({
   loading?: boolean;
   disabled?: boolean;
   fallbackLabel?: string;
-  /**
-   * 目录里有 connected 供应商时，在搜索行提供「仅已连接」开关（默认开，
-   * 对齐 opencode 自身的选择器）。输入关键字时暂时放开过滤，让未连接的
-   * 供应商也能被搜到。
-   */
   connectedToggle?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
-  const [limit, setLimit] = useState(ROW_CHUNK);
-  const [anchor, setAnchor] = useState<PickerAnchor>();
-  const [sheet, setSheet] = useState(false);
-  const [connectedOnly, setConnectedOnly] = useState(true);
-  const rootRef = useRef<HTMLSpanElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-
-  const hasConnected = useMemo(
-    () => options.some((option) => option.connected),
-    [options],
+  const [sheet, setSheet] = useState(
+    () =>
+      typeof window !== "undefined" && window.matchMedia(SHEET_QUERY).matches,
   );
-  const showConnectedToggle = connectedToggle && hasConnected;
+  const [viewport, setViewport] = useState<{
+    height: number;
+    bottom: number;
+  }>();
+  const [connectedOnly, setConnectedOnly] = useState(true);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [listElement, setListElement] = useState<HTMLDivElement | null>(null);
+  const showConnectedToggle =
+    connectedToggle && options.some((option) => option.connected);
   const filtered = useMemo(() => {
-    // 无分组项（如「跟随默认」占位）不受过滤影响。
     const base =
       showConnectedToggle && connectedOnly && !query.trim()
         ? options.filter((option) => option.connected || !option.group)
         : options;
-    return filterSearchableOptions(base, query);
-  }, [options, query, connectedOnly, showConnectedToggle]);
-  const segments = useMemo(() => groupSearchableOptions(filtered), [filtered]);
-  const selected = options.find((option) => option.value === value);
-
-  /* Long catalogs (OpenCode lists hundreds of models) only need the rows the
-     user can actually see; the rest arrive as they scroll. */
-  const showMore = () => setLimit((current) => current + ROW_CHUNK);
-  const resetLimit = (atLeast = 0) =>
-    setLimit(Math.max(ROW_CHUNK, atLeast + ROW_CHUNK));
-
-  const refreshAnchor = () => {
-    if (isSheetLayout()) {
-      setSheet(true);
-      setAnchor(undefined);
-      return;
-    }
-    setSheet(false);
-    setAnchor(anchorFor(triggerRef.current));
-  };
-
-  const openPanel = () => {
-    if (disabled || (loading && !options.length)) return;
-    refreshAnchor();
-    setQuery("");
-    const selectedIndex = Math.max(
-      0,
-      options.findIndex((option) => option.value === value),
+    const segments = groupSearchableOptions(
+      filterSearchableOptions(base, query),
     );
-    setActive(selectedIndex);
-    // Render far enough to show the current pick when the panel opens.
-    resetLimit(selectedIndex);
-    setOpen(true);
-  };
-
-  const closePanel = (refocus = true) => {
-    setOpen(false);
-    setQuery("");
-    setLimit(ROW_CHUNK);
-    if (refocus) triggerRef.current?.focus();
-  };
-
-  const commit = (option: SearchableOption | undefined) => {
-    if (!option) return;
-    onChange(option.value);
-    closePanel();
-  };
+    return [
+      ...segments.plain,
+      ...segments.groups.flatMap((group) =>
+        group.items.map((option, index) =>
+          index === 0 && group.meta
+            ? { ...option, groupMeta: group.meta }
+            : option,
+        ),
+      ),
+    ];
+  }, [options, query, connectedOnly, showConnectedToggle]);
+  const values = useMemo(
+    () => options.map((option) => option.value),
+    [options],
+  );
+  const filteredValues = useMemo(
+    () => filtered.map((option) => option.value),
+    [filtered],
+  );
+  const selected = options.find((option) => option.value === value);
+  const virtualized = filtered.length > 100;
+  const virtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => listElement,
+    estimateSize: (index) => {
+      const option = filtered[index];
+      return (
+        (option.hint && option.hint !== option.label ? 52 : 40) +
+        (option.group && option.group !== filtered[index - 1]?.group ? 32 : 0)
+      );
+    },
+    getItemKey: (index) => filtered[index].value,
+    overscan: 6,
+    enabled: open && virtualized,
+  });
 
   useEffect(() => {
-    if (!open) return;
-    /* On the sheet layout the keyboard would cover the list, so only focus the
-       filter box when a physical pointer is in use. */
-    if (!sheet) searchRef.current?.focus();
-    const onDocPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (rootRef.current?.contains(target)) return;
-      if (panelRef.current?.contains(target)) return;
-      closePanel(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closePanel();
-      }
-    };
-    window.addEventListener("resize", refreshAnchor);
-    document.addEventListener("scroll", refreshAnchor, true);
-    document.addEventListener("pointerdown", onDocPointerDown);
-    document.addEventListener("keydown", onKey);
+    const media = window.matchMedia(SHEET_QUERY);
+    const update = () => setSheet(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  // Keep the sheet above the software keyboard, including Safari's visual viewport.
+  useEffect(() => {
+    if (!open || !sheet || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const update = () =>
+      setViewport({
+        height: viewport.height,
+        bottom: Math.max(
+          0,
+          window.innerHeight - viewport.height - viewport.offsetTop,
+        ),
+      });
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
     return () => {
-      window.removeEventListener("resize", refreshAnchor);
-      document.removeEventListener("scroll", refreshAnchor, true);
-      document.removeEventListener("pointerdown", onDocPointerDown);
-      document.removeEventListener("keydown", onKey);
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
     };
   }, [open, sheet]);
 
+  // Reopening reveals the selected model, including picks far down a large catalog.
   useLayoutEffect(() => {
     if (!open) return;
-    const list = listRef.current;
-    const row = listRef.current?.querySelector<HTMLElement>(
-      `[data-idx="${active}"]`,
-    );
-    if (!list || !row) return;
-    const top =
-      row.getBoundingClientRect().top -
-      list.getBoundingClientRect().top +
-      list.scrollTop;
-    if (top < list.scrollTop) {
-      list.scrollTop = top;
-    } else if (top + row.offsetHeight > list.scrollTop + list.clientHeight) {
-      list.scrollTop = top + row.offsetHeight - list.clientHeight;
-    }
-  }, [active, open]);
+    const frame = requestAnimationFrame(() => {
+      const index = filtered.findIndex((option) => option.value === value);
+      if (virtualized)
+        virtualizer.scrollToIndex(Math.max(0, index), { align: "auto" });
+      else
+        listElement
+          ?.querySelector('[aria-selected="true"]')
+          ?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    open,
+    query,
+    connectedOnly,
+    value,
+    filtered,
+    virtualized,
+    virtualizer,
+    listElement,
+  ]);
 
-  useEffect(() => {
-    if (open && active >= filtered.length) setActive(0);
-  }, [filtered.length, active, open]);
-
-  // Keyboard navigation can walk past the rows rendered so far.
-  useEffect(() => {
-    if (open && active >= limit) resetLimit(active);
-  }, [active, limit, open]);
-
-  const onSearchKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setActive((current) => Math.min(current + 1, filtered.length - 1));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActive((current) => Math.max(current - 1, 0));
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      setActive(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      setActive(Math.max(0, filtered.length - 1));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      commit(filtered[active]);
-    } else if (event.key === "Tab") {
-      closePanel(false);
-    }
-  };
-
-  let flatIndex = -1;
-  let budget = limit;
-  const renderOption = (option: SearchableOption) => {
-    flatIndex += 1;
-    const index = flatIndex;
-    if (budget <= 0) return null;
-    budget -= 1;
-    return (
-      <button
-        type="button"
-        key={option.value}
-        role="option"
-        aria-selected={option.value === value}
-        className={`search-picker-option${index === active ? " active" : ""}${
-          option.value === value ? " selected" : ""
-        }`}
-        data-idx={index}
+  const renderOption = (option: SearchableOption, index: number) => (
+    <>
+      {option.group && option.group !== filtered[index - 1]?.group && (
+        <div className="search-picker-group" role="presentation">
+          <span>{option.group}</span>
+          {option.groupMeta && <em>{option.groupMeta}</em>}
+        </div>
+      )}
+      <Combobox.Item
+        value={option.value}
+        index={index}
+        className="search-picker-option"
+        aria-label={
+          option.group ? `${option.label} · ${option.group}` : option.label
+        }
         title={option.hint || option.label}
-        onMouseEnter={() => setActive(index)}
-        onClick={() => commit(option)}
       >
         <span className="search-picker-option-main">
           <span className="search-picker-option-label">{option.label}</span>
@@ -321,154 +225,163 @@ export function SearchablePicker({
         {option.meta && (
           <span className="search-picker-option-meta">{option.meta}</span>
         )}
-        {option.value === value && <Check className="search-picker-check" />}
-      </button>
-    );
-  };
+        <Combobox.ItemIndicator>
+          <Check className="search-picker-check" />
+        </Combobox.ItemIndicator>
+      </Combobox.Item>
+    </>
+  );
 
   return (
-    <span ref={rootRef} className={`search-picker${open ? " open" : ""}`}>
-      <button
-        type="button"
-        ref={triggerRef}
-        className="search-picker-trigger"
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => (open ? closePanel() : openPanel())}
-        onKeyDown={(event) => {
-          if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-            event.preventDefault();
-            openPanel();
-          }
-        }}
-      >
-        <span
-          className={`search-picker-label${
-            selected || fallbackLabel ? "" : " is-placeholder"
-          }`}
+    <Combobox.Root
+      items={values}
+      filteredItems={filteredValues}
+      filter={null}
+      value={value}
+      onValueChange={(next) => {
+        if (next !== null) onChange(next);
+      }}
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        setQuery("");
+      }}
+      inputValue={query}
+      onInputValueChange={setQuery}
+      autoHighlight
+      virtualized={virtualized}
+      modal={sheet}
+      disabled={disabled || (loading && !options.length)}
+      onItemHighlighted={(next, details) => {
+        if (
+          virtualized &&
+          next !== undefined &&
+          details.reason === "keyboard"
+        ) {
+          const index = filteredValues.indexOf(next);
+          if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
+        }
+      }}
+    >
+      <span className={`search-picker${open ? " open" : ""}`}>
+        <Combobox.Trigger
+          className="search-picker-trigger"
+          aria-label={ariaLabel}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && open) {
+              event.stopPropagation();
+              setOpen(false);
+            }
+          }}
         >
-          {selected?.label || fallbackLabel || placeholder}
-        </span>
-        <ChevronDown />
-      </button>
-      {open &&
-        createPortal(
-          <>
-            {sheet && <div className="search-picker-backdrop" />}
-            <div
-              ref={panelRef}
-              className={`search-picker-panel${sheet ? " sheet" : ""}`}
-              role="listbox"
-              aria-label={ariaLabel}
-              style={{
-                left: anchor?.left,
-                width: anchor?.width,
-                top: anchor?.top,
-                bottom: anchor?.bottom,
-                maxHeight: anchor?.maxHeight,
-              }}
-            >
-              {sheet && (
-                <div className="search-picker-sheet-head">
-                  <span>{ariaLabel}</span>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label="关闭"
-                    onClick={() => closePanel()}
-                  >
-                    <X />
-                  </button>
-                </div>
+          <span
+            className={`search-picker-label${selected || fallbackLabel ? "" : " is-placeholder"}`}
+          >
+            {selected?.label || fallbackLabel || placeholder}
+          </span>
+          <ChevronDown />
+        </Combobox.Trigger>
+      </span>
+      <Combobox.Portal>
+        {sheet && <Combobox.Backdrop className="search-picker-backdrop" />}
+        <Combobox.Positioner
+          className={`search-picker-positioner${sheet ? " sheet" : ""}`}
+          sideOffset={6}
+          align="start"
+          collisionPadding={8}
+          style={
+            sheet && viewport
+              ? ({
+                  "--picker-viewport-height": `${viewport.height}px`,
+                  "--picker-keyboard-offset": `${viewport.bottom}px`,
+                } as React.CSSProperties)
+              : undefined
+          }
+        >
+          <Combobox.Popup
+            className={`search-picker-panel${sheet ? " sheet" : ""}`}
+            initialFocus={sheet ? false : searchRef}
+            onMouseDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                setOpen(false);
+              }
+            }}
+          >
+            {sheet && (
+              <div className="search-picker-sheet-head">
+                <span>{ariaLabel}</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="关闭选择器"
+                  onClick={() => setOpen(false)}
+                >
+                  <X />
+                </button>
+              </div>
+            )}
+            <div className="search-picker-search">
+              <Search />
+              <Combobox.Input
+                ref={searchRef}
+                placeholder="输入关键字筛选…"
+                aria-label={`筛选${ariaLabel}`}
+              />
+              {showConnectedToggle && (
+                <button
+                  type="button"
+                  className={`search-picker-filter${connectedOnly ? " on" : ""}`}
+                  aria-pressed={connectedOnly}
+                  onClick={() => setConnectedOnly((current) => !current)}
+                >
+                  仅已连接
+                </button>
               )}
-              <div className="search-picker-search">
-                <Search />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  placeholder="输入关键字筛选…"
-                  aria-label={`筛选${ariaLabel}`}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    setActive(0);
-                    setLimit(ROW_CHUNK);
-                  }}
-                  onKeyDown={onSearchKeyDown}
-                />
-                {showConnectedToggle && (
-                  <button
-                    type="button"
-                    className={`search-picker-filter${
-                      connectedOnly ? " on" : ""
-                    }`}
-                    aria-pressed={connectedOnly}
-                    title={
-                      connectedOnly
-                        ? "只看已连接的供应商，点按显示全部"
-                        : "正在显示全部供应商，点按只看已连接"
-                    }
-                    onClick={() => {
-                      setConnectedOnly((value) => !value);
-                      setActive(0);
-                      setLimit(ROW_CHUNK);
-                    }}
-                  >
-                    已连接
-                  </button>
-                )}
-              </div>
-              <div
-                className="search-picker-list"
-                ref={listRef}
-                onScroll={(event) => {
-                  const list = event.currentTarget;
-                  if (
-                    list.scrollTop + list.clientHeight >=
-                    list.scrollHeight - 240
-                  )
-                    showMore();
-                }}
-              >
-                {loading && !options.length ? (
-                  <p className="search-picker-empty">
-                    {loadingText || "正在读取…"}
-                  </p>
-                ) : !filtered.length ? (
-                  <p className="search-picker-empty">{emptyText}</p>
-                ) : (
-                  <>
-                    {segments.plain.map(renderOption)}
-                    {segments.groups.map(
-                      (group) =>
-                        // Group headings only appear while rows are still left.
-                        budget > 0 && (
-                          <div
-                            key={group.name}
-                            className="search-picker-group-wrap"
-                          >
-                            <div className="search-picker-group">
-                              <span>{group.name}</span>
-                              {group.meta && <em>{group.meta}</em>}
-                            </div>
-                            {group.items.map(renderOption)}
-                          </div>
-                        ),
-                    )}
-                    {filtered.length > limit && (
-                      <p className="search-picker-more">
-                        继续滚动查看剩余 {filtered.length - limit}{" "}
-                        项，或输入关键字筛选
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
             </div>
-          </>,
-          document.body,
-        )}
-    </span>
+            <Combobox.List
+              className="search-picker-list"
+              ref={setListElement}
+              aria-label={ariaLabel}
+            >
+              {!filtered.length ? (
+                <p className="search-picker-empty">
+                  {loading ? loadingText || "正在读取…" : emptyText}
+                </p>
+              ) : virtualized ? (
+                <div
+                  style={{
+                    height: virtualizer.getTotalSize(),
+                    position: "relative",
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((row) => (
+                    <div
+                      key={row.key}
+                      data-index={row.index}
+                      ref={virtualizer.measureElement}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${row.start}px)`,
+                      }}
+                    >
+                      {renderOption(filtered[row.index], row.index)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                filtered.map((option, index) => (
+                  <div key={option.value}>{renderOption(option, index)}</div>
+                ))
+              )}
+            </Combobox.List>
+          </Combobox.Popup>
+        </Combobox.Positioner>
+      </Combobox.Portal>
+    </Combobox.Root>
   );
 }

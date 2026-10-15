@@ -1,5 +1,5 @@
 import { FilePenLine } from "lucide-react";
-import { changeKindLabel, shortenPath } from "../format";
+import { changeKindLabel, changeKindText, shortenPath } from "../format";
 import type { FileChange } from "../types";
 
 function diffLineClass(line: string) {
@@ -34,7 +34,7 @@ export function FileDiff({
           <details key={`${row.path || "file"}-${index}`} className="file-diff-card">
             <summary>
               <FilePenLine />
-              <span className={`kind ${kind}`}>{kind}</span>
+              <span className={`kind ${kind}`}>{changeKindText(kind)}</span>
               <code className="file-path" title={row.path || path}>
                 {path || "未命名文件"}
               </code>

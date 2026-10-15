@@ -27,7 +27,7 @@ export function agentHealth(agent: AgentDescriptor): AgentHealth {
     return {
       tone: "ok",
       label: "备选待命",
-      note: `主 agent 可用，${agent.name} 的重复会话已隐藏`,
+      note: `主 Agent 可用，${agent.name} 的重复会话已隐藏`,
     };
   if (agent.historyStatus === "error")
     return { tone: "warn", label: "历史读取失败", note: agent.historyError };

@@ -211,7 +211,7 @@ export function App() {
   const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
   const [wakeThread, setWakeThread] = useState<ThreadSummary | null>(null);
-  const [phoneSettings, setPhoneSettings] = useState(false);
+  const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
     const [taskScope, setTaskScope] = useState<string | null>();
   const [page, setPage] = useState(() =>
     isToolPath(location.pathname) ? "tools" : "workspace",
@@ -382,7 +382,7 @@ export function App() {
         );
         setSnapshot((current) => ({ ...current, runtime }));
       } catch (error: any) {
-        pushToast(error?.message || "Official 额度刷新失败");
+        pushToast(error?.message || "官方额度刷新失败");
       }
     },
     [pushToast],
@@ -601,7 +601,7 @@ export function App() {
       const thread = threadForApproval(approval, threads);
       sendSystemNotification({
         title: "Codex Deck · 需要确认",
-        body: `${thread?.name || "Codex Session"}\n${approvalPreview(approval)}`,
+        body: `${thread?.name || "Codex 会话"}\n${approvalPreview(approval)}`,
         tag: `codex-deck-approval-${approval.id}`,
         requireInteraction: true,
         onClick: () => {
@@ -866,15 +866,6 @@ export function App() {
     [snapshot.threads, snapshot.archivedThreads],
   );
 
-  const forkCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const thread of allThreads) {
-      if (!thread.forkedFromId) continue;
-      map.set(thread.forkedFromId, (map.get(thread.forkedFromId) || 0) + 1);
-    }
-    return map;
-  }, [allThreads]);
-
   const current = allThreads.find((thread) => sessionKey(thread) === selected);
 
   /** 会话的 deck-wake 状态：唤醒代号绑定（wakeCodes）+ 本机 watcher（wakeWatchers）。 */
@@ -1008,7 +999,7 @@ export function App() {
   const archiveProject = (project: ProjectGroup) => {
     const targets = threadsForProject(snapshot.threads, project.key);
     if (!targets.length) {
-      pushToast("这个项目没有可归档的现有会话");
+      pushToast("这个项目没有可归档的会话");
       return;
     }
     if (
@@ -1027,7 +1018,7 @@ export function App() {
       body: (
         <p>
           将归档 <b>{project.name}</b> 下的 <b>{targets.length}</b>{" "}
-          个现有会话？可在归档箱恢复。 不会改动磁盘上的项目文件。
+          个未归档会话？可在归档箱恢复。不会改动磁盘上的项目文件。
           {running ? " 运行中或待确认的会话可能无法归档。" : ""}
         </p>
       ),
@@ -1251,6 +1242,7 @@ export function App() {
         onUsage={() => setUsageOpen("stats")}
         onTasks={() => setTaskScope(current.id)}
         onAppearance={() => setSettingsModal({ tab: "interface" })}
+        onSessionSettings={() => setSessionSettingsOpen(true)}
         onOpenOrigin={() => openOrigin(current)}
         wake={wakeFor(current)}
         onWake={() => setWakeThread(current)}
@@ -1269,7 +1261,7 @@ export function App() {
           <p>
             {pairingAvailable
               ? "输入终端里显示的 6 位配对验证码，或直接粘贴访问令牌。令牌只保存在这个浏览器中。"
-              : "输入服务端设置的 REMOTE_TOKEN。令牌只保存在这个浏览器中。"}
+              : "输入启动服务时设置的访问令牌。令牌只保存在这个浏览器中。"}
           </p>
           {pairingAvailable && (
             <>
@@ -1404,7 +1396,6 @@ export function App() {
         selected={selected}
         unseenSessions={unseenSessions}
         expandedProjects={expandedProjects}
-        forkCounts={forkCounts}
         runtime={snapshot.runtime}
         notificationPermission={notificationPermission}
         archiveError={snapshot.runtime?.archiveError}
@@ -1543,7 +1534,7 @@ export function App() {
               {
                 id: "terminal",
                 label: "终端",
-                detail: "打开 Web Terminal",
+                detail: "打开网页终端",
                 icon: <Terminal />,
                 onClick: () => openTool("/terminal"),
               },
@@ -1588,7 +1579,7 @@ export function App() {
             },
             {
               label: "Codex 额度",
-              detail: "Official 账号额度状态",
+              detail: "官方账号额度状态",
               icon: <Gauge />,
               onClick: () => setUsageOpen("limits"),
             },
@@ -1662,7 +1653,7 @@ export function App() {
               title: "删除供应商",
               body: (
                 <p>
-                  确定删除 <b>{provider.name}</b>？现有 Session 历史不会删除。
+                  确定删除 <b>{provider.name}</b>？已有会话历史不会删除。
                 </p>
               ),
               danger: true,
@@ -1675,8 +1666,8 @@ export function App() {
               title: "保存上下文设置并重启？",
               body: (
                 <p>
-                  新设置需要重启共享的 <b>Codex Runtime</b> 才能生效。
-                  现有历史不会删除；如果有任务正在运行或等待审批，本次保存会被拒绝。
+                  新设置需要重启共享的 <b>Codex 服务</b> 才能生效。
+                  已有历史不会删除；如果有任务正在运行或待确认，本次保存会被拒绝。
                 </p>
               ),
               confirmLabel: "保存并重启",
@@ -1764,7 +1755,7 @@ export function App() {
             const next = await saveProject(projectEdit, { defaults, name });
             pushToast(
               next.connectionApplied
-                ? "已保存，并已应用到 Runtime"
+                ? "已保存，并已应用到服务"
                 : next.connectionPending
                   ? "已保存。有会话在运行，空闲后可在「设置 › 供应商」中应用"
                   : "以后在此目录新建将使用这些设置",
@@ -1775,8 +1766,8 @@ export function App() {
       {historyHelp && (
         <Modal title="历史会话" onClose={() => setHistoryHelp(null)}>
           <p>
-            这条记录来自已有 Codex 历史，可以查看内容。Deck 不会假接管外部 stdin
-            会话。
+            这条记录来自已有 Codex 历史，可以查看内容；它是外部终端里的会话，Deck
+            只展示不接管。
           </p>
           <button
             className="primary"
@@ -1789,7 +1780,7 @@ export function App() {
               else pushToast("复制失败");
             }}
           >
-            复制 --remote 命令
+            复制终端接入命令
           </button>
         </Modal>
       )}
@@ -1827,7 +1818,7 @@ export function App() {
               disabled:
                 !capabilitiesFor(snapshot.agents, sheet).sessionSettings ||
                 sessionKey(sheet) !== selected,
-              onClick: () => setPhoneSettings(true),
+              onClick: () => setSessionSettingsOpen(true),
             },
             {
               label: "远程唤醒",
@@ -1854,7 +1845,7 @@ export function App() {
                 ),
             },
             {
-              label: "复制为整段分支",
+              label: "复制成独立分支",
               disabled:
                 !capabilitiesFor(snapshot.agents, sheet).fork ||
                 sheet.status === "running" ||
@@ -1956,23 +1947,30 @@ export function App() {
           onClose={() => setWakeThread(null)}
         />
       )}
-      {phoneSettings &&
+      {sessionSettingsOpen &&
         current &&
         capabilitiesFor(snapshot.agents, current).sessionSettings && (
-          <Modal title="会话设置" onClose={() => setPhoneSettings(false)}>
-            <div className="phone-session-settings">
+          <Modal
+            title="会话设置"
+            className="session-settings-modal"
+            onClose={() => setSessionSettingsOpen(false)}
+          >
+            <div className="session-settings-body">
               <SessionToolbar
                 thread={current}
                 variant="panel"
-                locked={
-                  current.status === "running" || current.status === "waiting"
-                }
+                showCompact={false}
                 onSettings={async (settings) => {
-                  await api(threadPath(current), {
-                    method: "PATCH",
-                    body: JSON.stringify({ settings }),
-                  });
-                  refresh();
+                  try {
+                    await api(threadPath(current), {
+                      method: "PATCH",
+                      body: JSON.stringify({ settings }),
+                    });
+                  } catch (error) {
+                    pushToast(error instanceof Error ? error.message : "保存会话设置失败");
+                  } finally {
+                    void refresh();
+                  }
                 }}
                 onCompact={() =>
                   post(
@@ -1981,6 +1979,23 @@ export function App() {
                 }
               />
             </div>
+            <footer className="session-settings-footer">
+              <span className="session-settings-saved">
+                <i aria-hidden="true" />
+                {current.settingsDeferred
+                  ? "已保存，将从下一轮开始生效"
+                  : current.status === "running" || current.status === "waiting"
+                    ? "修改不会影响当前任务"
+                    : "设置自动保存"}
+              </span>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => setSessionSettingsOpen(false)}
+              >
+                完成
+              </button>
+            </footer>
           </Modal>
         )}
       {usageOpen && (

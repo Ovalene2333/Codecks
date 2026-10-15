@@ -203,6 +203,8 @@ export interface ThreadSummary {
    * such as OpenCode's `default`. Display only — `model` stays the setting.
    */
   resolvedModel?: string;
+  /** 服务端已知的模型展示名（如 `GLM-5.3-Flash`）。缺省时用 id 兜底。 */
+  modelLabel?: string;
   status: "starting" | "running" | "waiting" | "idle" | "error" | "offline";
   updatedAt: number;
   activeTurnId?: string;
@@ -210,6 +212,7 @@ export interface ThreadSummary {
   errorCode?: string;
   archived?: boolean;
   reasoningEffort?: string;
+  settingsDeferred?: boolean;
   personality?: Personality;
   sandbox?: SandboxMode;
   approvalPolicy?: ApprovalPolicy;
@@ -442,6 +445,20 @@ export interface RuntimeSnapshot {
   archiveError?: string;
   runtimeWsl?: boolean;
   modelConfig?: RuntimeModelConfig;
+  /** 正在运行的 Runtime 实际用的上下文配置（仅在线时有）。 */
+  modelConfigRunning?: RuntimeModelConfig;
+  /** 已保存的上下文配置与运行中的不一致，重启后生效。 */
+  modelConfigPending?: boolean;
+  /** 生效的后端二进制（`codex` 表示 PATH 默认）。 */
+  codexBin?: string;
+  /** 环境变量是否钉死了后端（此时设置页选择不生效）。 */
+  codexBinPinned?: boolean;
+  codexBinRunning?: string;
+  codexVersionRunning?: string;
+  codexVersionSelected?: string;
+  codexVersionMismatch?: { running: string; selected: string };
+  /** 上个 Deck 进程留下的后端（只提示、不自动杀）。 */
+  staleBackend?: { pid: number; codexBin?: string; codexVersion?: string };
 }
 
 export interface AgentCapabilities {
@@ -508,6 +525,8 @@ export interface AgentReloadResult {
   /** 有会话在运行且没有 force 时为 false。 */
   reloaded: boolean;
   busyCount: number;
+  /** 实际落地方式：`instances` = 实例级重载（进程没动），`process` = 后端进程重启。 */
+  mode?: "instances" | "process";
   error?: string;
 }
 

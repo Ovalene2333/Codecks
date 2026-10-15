@@ -95,7 +95,7 @@ function applyResolvedAppearance(resolved: ResolvedAppearance) {
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute(
       "content",
-      resolved.theme === "light" ? "#f4f6f9" : "#10131a",
+      resolved.theme === "light" ? "#fbfbfc" : "#101113",
     );
 }
 

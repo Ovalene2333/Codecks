@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useState } from "react";
 import { defaultAgentId, isAgentEnabled } from "../agents";
 import { ModelPicker } from "../ModelPicker";
@@ -22,6 +23,7 @@ import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
 import { Button, Field, Group, Section, Seg } from "../kit";
 import { Modal } from "../ui";
 import { OpenCodeAgentsSection } from "./OpenCodeAgentsSection";
+import { OpenCodePermissionsSection } from "./OpenCodePermissionsSection";
 
 export type ProjectDefaultsSave = Omit<
   ProjectDefaults,
@@ -186,27 +188,27 @@ export function ProjectDefaultsModal({
           >
             <Group pad>
               <Field label="默认 Agent">
-                <select
+                <Select
                   className="ui-input"
                   value={defaults.agentId}
-                  onChange={(event) => patch({ agentId: event.target.value })}
+                  onValueChange={(nextValue) => patch({ agentId: nextValue })}
                 >
                   {agentOptions.map((agent) => (
                     <option key={agent.id} value={agent.id}>
                       {agent.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
             </Group>
             <h4 className="ui-subhead">Codex</h4>
             <Group pad>
               <Field label="供应商">
-                <select
+                <Select
                   className="ui-input"
                   value={defaults.providerId || ""}
-                  onChange={(event) =>
-                    patch({ providerId: event.target.value || undefined })
+                  onValueChange={(nextValue) =>
+                    patch({ providerId: nextValue || undefined })
                   }
                 >
                   <option value="">沿用全局默认</option>
@@ -215,7 +217,7 @@ export function ProjectDefaultsModal({
                       {provider.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
               <div className="ui-form__grid ui-form-compat">
                 <ModelPicker
@@ -227,14 +229,14 @@ export function ProjectDefaultsModal({
               </div>
               <div className="ui-form__grid">
                 <Field label="沙箱">
-                  <select
+                  <Select
                     className="ui-input"
                     value={defaults.sandbox || "workspace-write"}
-                    onChange={(event) =>
+                    onValueChange={(nextValue) =>
                       setDefaults((current) => ({
                         ...current,
                         ...settingsForSandboxMode(
-                          event.target.value as SandboxMode,
+                          nextValue as SandboxMode,
                           approvalMode(
                             current.approvalPolicy,
                             current.approvalsReviewer,
@@ -248,20 +250,20 @@ export function ProjectDefaultsModal({
                         {option.label}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </Field>
                 <Field label="审批">
-                  <select
+                  <Select
                     className="ui-input"
                     value={approvalMode(
                       defaults.approvalPolicy,
                       defaults.approvalsReviewer,
                     )}
-                    onChange={(event) =>
+                    onValueChange={(nextValue) =>
                       setDefaults((current) => ({
                         ...current,
                         ...settingsForApprovalMode(
-                          event.target.value as ApprovalMode,
+                          nextValue as ApprovalMode,
                           current.sandbox || "workspace-write",
                         ),
                       }))
@@ -272,20 +274,19 @@ export function ProjectDefaultsModal({
                         {option.label}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </Field>
               </div>
             </Group>
             <h4 className="ui-subhead">Claude Code</h4>
             <Group pad>
               <Field label="权限模式">
-                <select
+                <Select
                   className="ui-input"
                   value={defaults.permissionMode || "default"}
-                  onChange={(event) =>
+                  onValueChange={(nextValue) =>
                     patch({
-                      permissionMode: event.target
-                        .value as ClaudePermissionMode,
+                      permissionMode: nextValue as ClaudePermissionMode,
                     })
                   }
                 >
@@ -294,13 +295,13 @@ export function ProjectDefaultsModal({
                       {option.label}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
             </Group>
           </Section>
           <Section
             title="Codex 连接"
-            desc="写入共享 Runtime。留空使用默认值；有会话运行时先记录，空闲后应用。"
+            desc="写入共享运行时。留空使用默认值；有会话运行时先记录，空闲后应用。"
           >
             <Group pad>
               <div className="ui-form__grid ui-form__grid--3">
@@ -372,6 +373,7 @@ export function ProjectDefaultsModal({
               cwd={project.cwd}
               enabled={isAgentEnabled(opencode)}
             />
+            <OpenCodePermissionsSection defaultCwd={project.cwd} />
           </div>
         ) : null}
       </div>

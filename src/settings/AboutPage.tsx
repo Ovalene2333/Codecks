@@ -27,7 +27,7 @@ function platformLabel(platform?: string, wsl?: boolean) {
         : platform === "linux"
           ? "Linux"
           : platform || "未知";
-  return wsl ? `${name} · WSL Runtime` : name;
+  return wsl ? `${name} · WSL` : name;
 }
 
 function browserLabel() {
@@ -52,7 +52,7 @@ const standalone = () =>
   (window.matchMedia?.("(display-mode: standalone)").matches ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true);
 
-/** 关于：版本、服务端与本设备信息，一键复制诊断信息（不含令牌与 Key）。 */
+/** 关于：版本、服务端与本设备信息，一键复制诊断信息（不含访问令牌与密钥）。 */
 export function AboutPage({
   snapshot,
   notificationPermission,
@@ -191,7 +191,7 @@ export function AboutPage({
         <Group>
           <Row
             dot={runtime?.online ? "ok" : runtime?.starting ? "busy" : "error"}
-            title="Codex Runtime"
+            title="Codex 服务"
             desc={
               runtime?.online
                 ? runtime.remoteUrl
@@ -234,7 +234,7 @@ export function AboutPage({
       </Section>
       <Section
         title="诊断"
-        desc="提交问题时请附上。仅含版本、状态与错误首行，不含令牌、API Key 与会话内容。"
+        desc="提交问题时请附上。仅含版本、状态与错误首行，不含访问令牌、API 密钥与会话内容。"
       >
         <Group>
           <Row

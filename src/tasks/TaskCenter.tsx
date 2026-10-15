@@ -89,7 +89,7 @@ export function TaskCenter({
   };
 
   const interrupt = async (task: ActiveTask) => {
-    if (!task.turnId) throw new Error("这个任务缺少可中断的 Turn ID");
+    if (!task.turnId) throw new Error("这个任务没有可中断的轮次");
     await post(
       threadActionPath(
         { id: task.threadId, agentId: task.agentId } as ThreadSummary,
@@ -112,7 +112,7 @@ export function TaskCenter({
   return (
     <>
       <Drawer
-        title={scopeThreadId ? "此 Session 的任务" : "任务中心"}
+        title={scopeThreadId ? "此会话的任务" : "任务中心"}
         className="task-drawer"
         onClose={onClose}
       >
@@ -130,7 +130,7 @@ export function TaskCenter({
                 {value === "all"
                   ? "全部"
                   : value === "running"
-                    ? "运行"
+                    ? "运行中"
                     : "待确认"}
                 <em>{counts[value]}</em>
               </button>
@@ -150,11 +150,11 @@ export function TaskCenter({
           {!loading && !visible.length && (
             <div className="task-empty">
               <Activity />
-              <b>没有匹配的活动任务</b>
+              <b>没有进行中的任务</b>
               <small>
                 {scopeThreadId
-                  ? "此 Session 当前空闲"
-                  : "所有受管 Session 当前空闲"}
+                  ? "此会话当前空闲"
+                  : "所有受管会话当前空闲"}
               </small>
             </div>
           )}
@@ -238,8 +238,8 @@ export function TaskCenter({
                 <p className="task-phase">
                   <Cpu />
                   {task.status === "waiting"
-                    ? "等待用户确认"
-                    : "Agent 正在处理当前 Turn"}
+                    ? "待确认"
+                    : "Agent 正在处理当前轮次"}
                 </p>
               )}
               {task.detailError && (
@@ -266,11 +266,11 @@ export function TaskCenter({
               <p>
                 {confirm.kind === "process" ? (
                   <>
-                    确定停止 <b>{confirm.command}</b>？当前 Turn 会继续运行。
+                    确定停止 <b>{confirm.command}</b>？当前轮次会继续运行。
                   </>
                 ) : (
                   <>
-                    确定中断 <b>{confirm.task.threadName}</b> 的当前 Turn？
+                    确定中断 <b>{confirm.task.threadName}</b> 的当前轮次？
                   </>
                 )}
               </p>

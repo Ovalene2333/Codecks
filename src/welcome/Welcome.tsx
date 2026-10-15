@@ -1,5 +1,5 @@
 import { Folder, Plus } from "lucide-react";
-import deckLogo from "../assets/logo.svg";
+import { BrandMark } from "../layout/BrandMark";
 import type { ProjectGroup } from "../projects";
 import type { RuntimeSnapshot } from "../types";
 import { usageChipMetric } from "../usage/format";
@@ -21,14 +21,14 @@ export function Welcome({
 }) {
   const usage = usageChipMetric(runtime?.rateLimits, runtime?.rateLimitsError);
   const runtimeLabel = runtime?.online
-    ? "Runtime 在线"
+    ? "Codex 已连接"
     : runtime?.starting
-      ? "Runtime 启动中"
-      : "Runtime 未连接";
+      ? "Codex 启动中"
+      : "Codex 未连接";
   return (
     <div className="welcome work-entry">
       <div className="welcome-stack">
-        <img className="welcome-logo" src={deckLogo} alt="" />
+        <BrandMark className="welcome-logo" />
         <h1>开始工作</h1>
         <p className="welcome-lead">从最近的项目继续，或新建一个会话。</p>
         <p className="welcome-status">
@@ -39,7 +39,7 @@ export function Welcome({
           </span>
           {runtime?.configPending && <span>供应商待应用</span>}
           <button type="button" className="welcome-usage" onClick={onUsage}>
-            Official {usage}
+            官方额度 {usage}
           </button>
         </p>
         <div className="recent-head">

@@ -113,9 +113,9 @@ export function MonitorUsage({
       </div>
       {totals.total > 0 ? (
         <p className="monitor-usage-split">
-          输入 {formatTokens(totals.input) || 0}
-          {totals.cachedInput ? ` · 缓存 ${formatTokens(totals.cachedInput)}` : ""}
-          {` · 输出 ${formatTokens(totals.output) || 0}`}
+          <span>输入 {formatTokens(totals.input) || 0}</span>
+          {totals.cachedInput ? <span>缓存 {formatTokens(totals.cachedInput)}</span> : null}
+          <span>输出 {formatTokens(totals.output) || 0}</span>
         </p>
       ) : null}
       {hasLimits ? (

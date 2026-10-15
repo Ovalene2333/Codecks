@@ -19,7 +19,7 @@ import type {
 import { SessionDefaultsSection } from "./SessionDefaultsSection";
 
 const PERMISSION_TEXT: Record<DeckNotificationPermission, string> = {
-  granted: "浏览器已授权，由下方开关控制推送。",
+  granted: "浏览器已授权，由下方开关控制。",
   denied: "已被浏览器拒绝；需在浏览器站点设置中重新允许通知。",
   default: "尚未授权。授权后，审批与新回复将推送系统通知。",
   unsupported: "当前浏览器不支持系统通知。",
@@ -119,7 +119,7 @@ export function SessionPage({
           <Row
             dim={!granted}
             title="需要审批"
-            desc="Agent 请求执行命令或改文件时"
+            desc="Agent 请求执行命令或修改文件时"
             side={
               <Switch
                 label="需要审批时提醒"
@@ -149,7 +149,7 @@ export function SessionPage({
           <Row
             dim={!granted}
             title="仅在后台时提醒"
-            desc="页面位于前台时不推送，切至后台或锁屏后才通知"
+            desc="页面在前台时不通知，切到后台或锁屏后才通知"
             side={
               <Switch
                 label="仅在页面不在前台时提醒"

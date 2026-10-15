@@ -118,6 +118,19 @@ function appendCapped(list: any[], event: any) {
 
 export function appendCodexEvent(events: any[], event: any) {
   const method = event?.method;
+  if (method === "turn/progress") {
+    // 直播 TPS 小包：同回合只保留最新一条，原位替换不堆积，
+    // 既不挤掉正常事件，也不参与 149 上限计数。
+    const keyOf = (item: any) =>
+      `${item?.agentId || "codex"}:${item?.params?.threadId || ""}:${item?.params?.turnId || ""}`;
+    const key = keyOf(event);
+    return [
+      ...events.filter(
+        (item) => item?.method !== "turn/progress" || keyOf(item) !== key,
+      ),
+      event,
+    ];
+  }
   if (
     method === "item/agentMessage/delta" ||
     method === "item/commandExecution/outputDelta"

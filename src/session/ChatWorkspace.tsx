@@ -6,7 +6,6 @@ import { loadModelCatalog, modelCatalogCache } from "../ModelPicker";
 import { SwrCache } from "../swr-cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
-import { SessionToolbar } from "../layout/SessionToolbar";
 import type {
   AgentCapabilities,
   Approval,
@@ -30,11 +29,14 @@ import { approvalBelongsToThread } from "./approvals";
 import {
   approvalMode,
   approvalModeLabel,
+  personalityLabel,
+  sandboxLabel,
   settingsForApprovalMode,
   settingsForSandboxMode,
 } from "../codexLabels";
-import { ConfirmDialog, RenderErrorBoundary } from "../ui";
-import { Composer } from "./Composer";
+import { CLAUDE_PERMISSION_OPTIONS } from "../layout/SessionToolbar";
+import { ConfirmDialog, RenderErrorBoundary, THREAD_STATUS_LABELS } from "../ui";
+import { Composer, type ComposerContextPatch } from "./Composer";
 import { messageControls } from "./message-controls";
 import { mergeMessageDeliveries } from "./message-deliveries";
 import type { LoadedUserMessage } from "./user-message-reconcile";
@@ -49,6 +51,7 @@ import {
 import type { ComposerImage } from "./images";
 import { readComposerDraft, writeComposerDraft } from "./drafts";
 import { collectStreamed } from "./streaming";
+import { applyExpandedTurns, fetchTurnDetail } from "./turn-stats";
 import {
   loadedUserMessages,
   reconcilePendingUserMessages,
@@ -62,6 +65,8 @@ import {
 import { draftFromUserMessage, userMessageText } from "./user-message";
 
 const EMPTY_TURNS: any[] = [];
+// 默认值必须是稳定引用：内联 `= []` 每次渲染都是新数组，会让依赖它的 effect 无限重跑。
+const EMPTY_DELIVERIES: MessageDelivery[] = [];
 
 /** 执行失败横幅：可折叠成单行预览，也可忽略整条（同签名的新错误会再次弹出）。 */
 function TaskErrorNotice({
@@ -134,7 +139,6 @@ function TaskErrorNotice({
     </div>
   );
 }
-
 type SessionCommand = { name: string; hint?: string };
 
 /** agent 自报的 `/` 命令列表（opencode、ACP），按会话缓存、落盘。 */
@@ -161,7 +165,7 @@ export function ChatWorkspace({
   provider,
   agentName,
   capabilities,
-  messageDeliveries = [],
+  messageDeliveries = EMPTY_DELIVERIES,
   approvals,
   events,
   origin,
@@ -176,6 +180,7 @@ export function ChatWorkspace({
   onUsage,
   onTasks,
   onAppearance,
+  onSessionSettings,
   onOpenOrigin,
   onWake,
 }: {
@@ -204,6 +209,7 @@ export function ChatWorkspace({
   onUsage: () => void;
   onTasks: () => void;
   onAppearance: () => void;
+  onSessionSettings?: () => void;
   onOpenOrigin?: () => void;
   onWake?: () => void;
 }) {
@@ -221,9 +227,13 @@ export function ChatWorkspace({
     [messageDeliveries, deliveryReceipts]);
   useEffect(() => {
     for (const item of messageDeliveries) observedDeliveryIds.current.add(item.id);
-    setDeliveryReceipts((current) => current.filter((receipt) =>
-      !messageDeliveries.some((item) => item.id === receipt.id),
-    ));
+    setDeliveryReceipts((current) => {
+      const next = current.filter((receipt) =>
+        !messageDeliveries.some((item) => item.id === receipt.id),
+      );
+      // 没有回执被移除时保留原数组，避免无意义的重渲染。
+      return next.length === current.length ? current : next;
+    });
   }, [messageDeliveries]);
   const [error, setError] = useState("");
   const [threadLoadSettled, setThreadLoadSettled] = useState(false);
@@ -252,6 +262,33 @@ export function ChatWorkspace({
   const fullRef = useRef(full);
   fullRef.current = full;
   const loadVersion = useRef(0);
+  // 已展开的回合详情（turnId -> 未折叠原文）：completed 回合内容不可变，
+  // 后续重拉回来的折叠态按 id 覆盖回去，展开态不丢失。切会话时清空。
+  const expandedTurns = useRef(new Map<string, any>());
+  const expandInflight = useRef(new Map<string, Promise<void>>());
+  const expandTurn = useCallback(
+    (turnId: string) => {
+      const key = String(turnId || "");
+      if (!key || expandedTurns.current.has(key)) return;
+      if (expandInflight.current.has(key)) return;
+      const job: Promise<void> = fetchTurnDetail(thread, key)
+        .then((turn) => {
+          expandedTurns.current.set(key, turn);
+          setFull((current: any) =>
+            applyExpandedTurns(current, expandedTurns.current),
+          );
+        })
+        .catch((err: Error) => {
+          onToast(`加载完整输出失败：${err.message}`);
+        })
+        .finally(() => {
+          if (expandInflight.current.get(key) === job)
+            expandInflight.current.delete(key);
+        });
+      expandInflight.current.set(key, job);
+    },
+    [thread.agentId, thread.providerId, thread.id, onToast],
+  );
   const updateDraft = (next: typeof draft) => {
     setDraft(writeComposerDraft(threadCacheKey, next));
   };
@@ -265,10 +302,13 @@ export function ChatWorkspace({
       )
         .then((data) => {
           if (version !== loadVersion.current) return;
-          const next = (thread.agentId || "codex") === "claude" &&
+          const loaded =
+            (thread.agentId || "codex") === "claude" &&
             shouldKeepLoadedThread(fullRef.current, data)
-            ? fullRef.current
-            : data;
+              ? fullRef.current
+              : data;
+          // 叠加本会话已展开的回合详情（折叠重拉不吞展开态）。
+          const next = applyExpandedTurns(loaded, expandedTurns.current);
           setFull(next);
           setPendingUsers((current) =>
             reconcilePendingUserMessages(
@@ -293,6 +333,8 @@ export function ChatWorkspace({
   useEffect(() => {
     setThreadLoadSettled(false);
     loadVersion.current += 1;
+    expandedTurns.current.clear();
+    expandInflight.current.clear();
     const cached = readThreadCache(threadCacheKey);
     fullRef.current = cached || undefined;
     setFull(cached || undefined);
@@ -367,6 +409,8 @@ export function ChatWorkspace({
       const method = String(events[index]?.method || "");
       const event = events[index];
       if (!method || method.toLowerCase().endsWith("/delta")) continue;
+      // turn/progress 是 1Hz 直播小包：只喂底部状态块，不触发全文重拉。
+      if (method === "turn/progress") continue;
       if (event?.providerId && event.providerId !== thread.providerId) continue;
       if ((event?.agentId || "codex") !== (thread.agentId || "codex")) continue;
       if (event?.params?.threadId && event.params.threadId !== thread.id) continue;
@@ -378,6 +422,7 @@ export function ChatWorkspace({
     const event = latestSyncEvent;
     const method = String(event?.method || "");
     if (!method || method.toLowerCase().endsWith("/delta")) return;
+    if (method === "turn/progress") return;
     if (event?.providerId && event.providerId !== thread.providerId) return;
     if ((event?.agentId || "codex") !== (thread.agentId || "codex")) return;
     if (event?.params?.threadId && event.params.threadId !== thread.id) return;
@@ -428,11 +473,11 @@ export function ChatWorkspace({
         command.kind,
       )
     )
-      throw new Error(`${agentName} 暂不支持这个 Codecks 命令`);
+      throw new Error(`${agentName} 暂不支持这个命令`);
     if (command.kind === "compact" && !capabilities.sessionSettings)
       throw new Error(`${agentName} 暂不支持压缩上下文`);
     if (command.kind === "model" && !capabilities.models)
-      throw new Error(`${agentName} 暂不支持从 Codecks 切换模型`);
+      throw new Error(`${agentName} 暂不支持切换模型`);
     if (command.kind === "permissions" && !capabilities.sessionSettings)
       throw new Error(`${agentName} 暂不支持修改会话权限`);
     if (command.kind === "skills" && !capabilities.skills)
@@ -465,12 +510,12 @@ export function ChatWorkspace({
       }
       if (command.kind === "new-session") {
         setStatusNote(
-          `当前目录 ${thread.cwd || "未知"}\n点击左上角「新建会话」可开新 OpenCode 会话，历史会话在左侧列表按目录分组。`,
+          `当前目录 ${thread.cwd || "未知"}\n点击「新建会话」可开新 OpenCode 会话，历史会话在会话列表按目录分组。`,
         );
         return;
       }
       if (command.kind === "sessions") {
-        setStatusNote("左侧会话列表已按目录分组，直接点击即可切换 OpenCode 会话。");
+        setStatusNote("会话列表已按目录分组，直接点击即可切换 OpenCode 会话。");
         return;
       }
       if (command.kind === "thinking") {
@@ -478,7 +523,7 @@ export function ChatWorkspace({
         return;
       }
       if (command.kind === "details") {
-        setStatusNote("工具执行细节保留在时间线里，点击对应工具卡即可展开查看入参与输出。");
+        setStatusNote("工具执行细节保留在时间线里，点击对应工具卡即可展开查看输入与输出。");
         return;
       }
       if (command.kind === "help") {
@@ -512,21 +557,21 @@ export function ChatWorkspace({
         [
           `模型 ${thread.resolvedModel || thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
           thread.agentId === "claude"
-            ? `权限 ${thread.permissionMode || "default"}`
+            ? `权限 ${CLAUDE_PERMISSION_OPTIONS.find((option) => option.value === (thread.permissionMode || "default"))?.label || "按需询问"}`
             : thread.agentId === "opencode"
               ? ""
-              : `沙箱 ${thread.sandbox || "workspace-write"} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
-          `状态 ${thread.status}${thread.activeTurnId ? ` · Turn ${thread.activeTurnId}` : ""}`,
+              : `沙箱 ${sandboxLabel(thread.sandbox || "workspace-write")} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
+          `状态 ${THREAD_STATUS_LABELS[thread.status] || thread.status}${thread.activeTurnId ? " · 进行中" : ""}`,
           thread.agentId === "opencode"
             ? ""
             : `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
           thread.personality && thread.agentId !== "opencode"
-            ? `性格 ${thread.personality}`
+            ? `风格 ${personalityLabel(thread.personality)}`
             : "",
           `上下文 ${used}`,
           provider?.name ? `供应商 ${provider.name}` : "",
           `目录 ${thread.cwd || "未知"}`,
-          `Thread ${thread.id}`,
+          `会话 ID ${thread.id}`,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -546,11 +591,14 @@ export function ChatWorkspace({
         setCommandModal({ kind: "model" });
         return;
       }
-      if (locked) throw new Error("任务运行中，暂时不能修改模型");
-      await saveSettings({
+      const applied = await saveSettings({
         model: command.model,
         reasoningEffort: command.reasoningEffort,
       });
+      if (applied && locked)
+        setStatusNote(
+          `模型已保存（${command.model}${command.reasoningEffort ? ` · ${command.reasoningEffort}` : ""}），将从下一轮开始生效`,
+        );
       return;
     }
     if (command.kind === "permissions") {
@@ -577,18 +625,17 @@ export function ChatWorkspace({
       ];
       if (!sandboxes.includes(command.sandbox as SandboxMode))
         throw new Error(
-          "Sandbox 应为 read-only、workspace-write 或 danger-full-access",
+          "沙箱只能填 read-only、workspace-write 或 danger-full-access",
         );
       if (
         command.approvalMode &&
         !approvalModes.includes(command.approvalMode as ApprovalMode)
       )
         throw new Error(
-          "审批模式应为 untrusted、on-request、auto-review 或 never",
+          "审批模式只能填 untrusted、on-request、auto-review 或 never",
         );
-      if (locked) throw new Error("任务运行中，暂时不能修改权限");
       const sandbox = command.sandbox as SandboxMode;
-      await saveSettings(
+      const applied = await saveSettings(
         command.approvalMode
           ? settingsForApprovalMode(
               command.approvalMode as ApprovalMode,
@@ -599,6 +646,7 @@ export function ChatWorkspace({
               approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
             ),
       );
+      if (applied && locked) setStatusNote("权限已保存，将从下一轮开始生效");
       return;
     }
     if (command.kind === "skills") {
@@ -614,12 +662,13 @@ export function ChatWorkspace({
       return;
     }
     if (command.kind === "fast") {
-      if (locked) throw new Error("任务运行中，暂时不能切换 Fast 模式");
       const enabled = command.enabled ?? thread.serviceTier !== "fast";
       const applied = await saveSettings({
         serviceTier: enabled ? "fast" : null,
       });
-      if (applied) setStatusNote(`Fast 模式已${enabled ? "开启" : "关闭"}`);
+      if (applied) setStatusNote(
+        locked ? `Fast 模式已保存，将从下一轮${enabled ? "开启" : "关闭"}` : `Fast 模式已${enabled ? "开启" : "关闭"}`,
+      );
       return;
     }
     if (command.kind === "review")
@@ -936,6 +985,32 @@ export function ChatWorkspace({
       return false;
     }
   };
+  // 格子段快捷菜单：单槽直改；审批/沙箱沿用命令面板里的配对规则，
+  // 改一边时把另一边带上，避免出现「自动批准 + 只读」这类冲突组合。
+  const saveContextPatch = (patch: ComposerContextPatch) => {
+    if (patch.approvalMode) {
+      return saveSettings(
+        settingsForApprovalMode(
+          patch.approvalMode,
+          thread.sandbox || "workspace-write",
+        ),
+      );
+    }
+    if (patch.sandbox) {
+      return saveSettings(
+        settingsForSandboxMode(
+          patch.sandbox,
+          approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
+        ),
+      );
+    }
+    if (patch.reasoningEffort !== undefined) {
+      return saveSettings({ reasoningEffort: patch.reasoningEffort });
+    }
+    if (patch.permissionMode) {
+      return saveSettings({ permissionMode: patch.permissionMode });
+    }
+  };
   const forkFrom = async (lastTurnId?: string) => {
     try {
       const agentId = thread.agentId || "codex";
@@ -978,6 +1053,32 @@ export function ChatWorkspace({
     thread.id,
     thread.activeTurnId,
     thread.agentId,
+  ]);
+  // 本会话活跃回合的最新 turn/progress（底部状态块的实时 TPS 用）：
+  // 事件数组里同回合只保留一条，从尾部倒扫命中即停。
+  const activeProgress = useMemo(() => {
+    if (thread.status !== "running" && thread.status !== "waiting")
+      return undefined;
+    const wantAgent = thread.agentId || "codex";
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.method !== "turn/progress") continue;
+      if ((event?.agentId || "codex") !== wantAgent) continue;
+      if (event?.params?.threadId !== thread.id) continue;
+      if (
+        thread.activeTurnId &&
+        event?.params?.turnId !== thread.activeTurnId
+      )
+        continue;
+      return event.params;
+    }
+    return undefined;
+  }, [
+    events,
+    thread.status,
+    thread.agentId,
+    thread.id,
+    thread.activeTurnId,
   ]);
   const threadApprovals = approvals.filter((approval) =>
     approvalBelongsToThread(approval, thread),
@@ -1063,6 +1164,8 @@ export function ChatWorkspace({
           streamed={streamed}
           streamedItems={streamedItems}
           streamedEntries={streamedEntries}
+          turnProgress={activeProgress}
+          onExpandTurn={expandTurn}
           pendingUsers={pendingUsers}
           messageDeliveries={queuedMessages}
           deliveryHistoryBefore={deliveryHistoryBefore.current}
@@ -1188,16 +1291,11 @@ export function ChatWorkspace({
             .catch((err: Error) => setError(err.message))
         }
         focusRequest={composerFocusRequest}
-        sessionControls={
-          capabilities.sessionSettings ? (
-            <SessionToolbar
-              thread={headerThread}
-              locked={locked}
-              onSettings={saveSettings}
-              onCompact={compact}
-              showCompact={false}
-            />
-          ) : undefined
+        onSessionSettings={
+          capabilities.sessionSettings ? onSessionSettings : undefined
+        }
+        onQuickSetting={
+          capabilities.sessionSettings ? saveContextPatch : undefined
         }
       />
       {commandModal && (
@@ -1257,3 +1355,4 @@ export function ChatWorkspace({
     </main>
   );
 }
+

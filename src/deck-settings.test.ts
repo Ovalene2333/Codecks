@@ -5,6 +5,7 @@ import {
   DEFAULT_DECK_SETTINGS,
   getDeckSettings,
   normalizeDeckSettings,
+  normalizeSidebarWidth,
   resetDeckSettings,
   updateDeckSettings,
 } from "./deck-settings.js";
@@ -34,6 +35,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
     notifyOnlyHidden: true,
     hiddenTools: ["git", "terminal"],
     toolOpenTarget: "inline",
+    sidebarWidth: 260,
   });
   assert.deepEqual(next, {
     sendKey: "mod-enter",
@@ -48,6 +50,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
     notifyOnlyHidden: true,
     hiddenTools: ["git", "terminal"],
     toolOpenTarget: "inline",
+    sidebarWidth: 260,
   });
 
   const mixed = normalizeDeckSettings({
@@ -62,6 +65,18 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
   assert.equal(mixed.notifyApprovals, DEFAULT_DECK_SETTINGS.notifyApprovals);
   assert.equal(mixed.toolOpenTarget, DEFAULT_DECK_SETTINGS.toolOpenTarget);
   assert.deepEqual(mixed.hiddenTools, DEFAULT_DECK_SETTINGS.hiddenTools);
+  assert.equal(mixed.sidebarWidth, 0);
+});
+
+test("normalizeSidebarWidth clamps to the usable range", () => {
+  assert.equal(normalizeSidebarWidth(0), 0);
+  assert.equal(normalizeSidebarWidth(-40), 0);
+  assert.equal(normalizeSidebarWidth(Number.NaN), 0);
+  assert.equal(normalizeSidebarWidth("300" as never), 0);
+  assert.equal(normalizeSidebarWidth(239.4), 240);
+  assert.equal(normalizeSidebarWidth(300), 300);
+  assert.equal(normalizeSidebarWidth(900), 480);
+  assert.equal(normalizeDeckSettings({ sidebarWidth: 900 }).sidebarWidth, 480);
 });
 
 test("old reading sizes migrate without overriding explicit message typography", () => {

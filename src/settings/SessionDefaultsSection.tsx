@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useEffect, useState } from "react";
 import { put } from "../api";
 import { defaultAgentId, isAgentEnabled } from "../agents";
@@ -66,9 +67,9 @@ function deriveForm(
 }
 
 const MODE_HINT: Record<DefaultsMode, string> = {
-  last: "每次新建时记录所选并用于下次预填；各项目同时记录其首次使用的设置。此处的修改可能在下次新建后被覆盖。",
+  last: "新建会话时记住选择，下次自动预填；项目首次使用的设置也会被记住。这里改完，可能在下次新建后又被覆盖。",
   pinned:
-    "新建时始终预填此处设置，新建会话不回写；项目的默认值仍然优先。",
+    "新建会话时始终用这里的设置，新建后不会回写；项目的默认值仍然优先。",
 };
 
 /**
@@ -159,11 +160,11 @@ export function SessionDefaultsSection({
             />
           </Field>
           <Field label="默认 Agent">
-            <select
+            <Select
               className="ui-input"
               value={form.agentId}
-              onChange={(event) =>
-                patch({ agentId: event.target.value as AgentId })
+              onValueChange={(nextValue) =>
+                patch({ agentId: nextValue as AgentId })
               }
             >
               {agentOptions.map((agent) => (
@@ -171,23 +172,23 @@ export function SessionDefaultsSection({
                   {agent.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         </Group>
         <h4 className="ui-subhead">Codex</h4>
         <Group pad>
           <Field label="供应商">
-            <select
+            <Select
               className="ui-input"
               value={form.providerId}
-              onChange={(event) => patch({ providerId: event.target.value })}
+              onValueChange={(nextValue) => patch({ providerId: nextValue })}
             >
               {providers.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <div className="ui-form__grid ui-form-compat">
             <ModelPicker
@@ -205,13 +206,13 @@ export function SessionDefaultsSection({
           </div>
           <div className="ui-form__grid">
             <Field label="沙箱">
-              <select
+              <Select
                 className="ui-input"
                 value={form.sandbox}
-                onChange={(event) =>
+                onValueChange={(nextValue) =>
                   setForm((current) => {
                     const next = settingsForSandboxMode(
-                      event.target.value as SandboxMode,
+                      nextValue as SandboxMode,
                       current.approval,
                     );
                     return {
@@ -230,16 +231,16 @@ export function SessionDefaultsSection({
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="审批">
-              <select
+              <Select
                 className="ui-input"
                 value={form.approval}
-                onChange={(event) =>
+                onValueChange={(nextValue) =>
                   setForm((current) => {
                     const next = settingsForApprovalMode(
-                      event.target.value as ApprovalMode,
+                      nextValue as ApprovalMode,
                       current.sandbox,
                     );
                     return {
@@ -258,19 +259,19 @@ export function SessionDefaultsSection({
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
           </div>
         </Group>
         <h4 className="ui-subhead">Claude Code</h4>
         <Group pad>
           <Field label="权限模式">
-            <select
+            <Select
               className="ui-input"
               value={form.permissionMode}
-              onChange={(event) =>
+              onValueChange={(nextValue) =>
                 patch({
-                  permissionMode: event.target.value as ClaudePermissionMode,
+                  permissionMode: nextValue as ClaudePermissionMode,
                 })
               }
             >
@@ -279,7 +280,7 @@ export function SessionDefaultsSection({
                   {option.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         </Group>
         {error && <p className="ui-error">{error}</p>}

@@ -1,4 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   Activity,
   BarChart3,
@@ -17,9 +22,16 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import deckLogo from "../assets/logo.svg";
+import { BrandMark } from "./BrandMark";
+import { Menu, MenuItem, MenuLabel, MenuSep, Tip } from "../kit";
 import type { DeckNotificationPermission } from "../notifications";
-import { useDeckSettings } from "../deck-settings";
+import {
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  normalizeSidebarWidth,
+  updateDeckSettings,
+  useDeckSettings,
+} from "../deck-settings";
 import type { ProjectGroup } from "../projects";
 import type {
   Provider,
@@ -49,7 +61,6 @@ export function Sidebar({
   selected,
   unseenSessions,
   expandedProjects,
-  forkCounts,
   runtime,
   notificationPermission,
   archiveError,
@@ -99,7 +110,6 @@ export function Sidebar({
   selected?: string;
   unseenSessions: ReadonlySet<string>;
   expandedProjects: Set<string>;
-  forkCounts: Map<string, number>;
   runtime?: RuntimeSnapshot;
   notificationPermission: DeckNotificationPermission;
   archiveError?: string;
@@ -133,9 +143,86 @@ export function Sidebar({
   providers: Provider[];
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
-  const toolsMenuRef = useRef<HTMLDivElement>(null);
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const { hiddenTools } = useDeckSettings();
+  const asideRef = useRef<HTMLElement>(null);
+  const { hiddenTools, sidebarWidth } = useDeckSettings();
+  /* 拖拽中的临时状态：跟随鼠标时直接改 DOM，不经过 React，避免每次移动都重渲染整个会话列表。 */
+  const drag = useRef<{ startX: number; startWidth: number; pointerId: number } | null>(null);
+
+  const commitWidth = (width: number) => {
+    const next = normalizeSidebarWidth(width);
+    const aside = asideRef.current;
+    if (aside) {
+      if (next > 0) aside.style.setProperty("--shell-sidebar", `${next}px`);
+      else aside.style.removeProperty("--shell-sidebar");
+    }
+    if (next !== sidebarWidth) updateDeckSettings({ sidebarWidth: next });
+  };
+
+  const endResize = (event: ReactPointerEvent<HTMLDivElement>, commit: boolean) => {
+    const session = drag.current;
+    if (!session || event.pointerId !== session.pointerId) return;
+    drag.current = null;
+    asideRef.current?.classList.remove("is-resizing");
+    if (document.body.style.cursor === "col-resize")
+      document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* 捕获已释放：忽略 */
+    }
+    if (commit && asideRef.current)
+      commitWidth(asideRef.current.getBoundingClientRect().width);
+  };
+
+  const onResizePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    const aside = asideRef.current;
+    if (!aside) return;
+    event.preventDefault();
+    drag.current = {
+      startX: event.clientX,
+      startWidth: aside.getBoundingClientRect().width,
+      pointerId: event.pointerId,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    aside.classList.add("is-resizing");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const session = drag.current;
+    const aside = asideRef.current;
+    if (!session || !aside || event.pointerId !== session.pointerId) return;
+    const width = Math.min(
+      SIDEBAR_WIDTH_MAX,
+      Math.max(SIDEBAR_WIDTH_MIN, Math.round(session.startWidth + (event.clientX - session.startX))),
+    );
+    aside.style.setProperty("--shell-sidebar", `${width}px`);
+  };
+
+  const onResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const current =
+      sidebarWidth > 0
+        ? sidebarWidth
+        : Math.round(asideRef.current?.getBoundingClientRect().width ?? 288);
+    const step = event.shiftKey ? 48 : 16;
+    let next: number | null = null;
+    if (event.key === "ArrowLeft") next = current - step;
+    else if (event.key === "ArrowRight") next = current + step;
+    else if (event.key === "Home") next = SIDEBAR_WIDTH_MIN;
+    else if (event.key === "End") next = SIDEBAR_WIDTH_MAX;
+    else if (event.key === "Backspace" || event.key === "Delete") next = 0;
+    else return;
+    event.preventDefault();
+    commitWidth(next);
+  };
+  const hasWorkspaceTools =
+    !hiddenTools.includes("terminal") ||
+    !hiddenTools.includes("git") ||
+    !hiddenTools.includes("text-editor") ||
+    !hiddenTools.includes("commands");
   const searching = Boolean(query.trim());
   const emptyKind = searching
     ? "search"
@@ -173,34 +260,35 @@ export function Sidebar({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => {
-    if (!toolsOpen) return;
-    const close = (event: PointerEvent | KeyboardEvent) => {
-      if (event instanceof KeyboardEvent) {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          setToolsOpen(false);
-        }
-        return;
-      }
-      if (!toolsMenuRef.current?.contains(event.target as Node)) {
-        setToolsOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", close);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", close);
-    };
-  }, [toolsOpen]);
-
   return (
     <aside
+      ref={asideRef}
       className={`sidebar ${show ? "show" : ""} ${hiddenOnMobile ? "mobile-hidden" : ""}`}
+      style={
+        sidebarWidth > 0
+          ? ({ "--shell-sidebar": `${sidebarWidth}px` } as never)
+          : undefined
+      }
     >
+      <div
+        className="sidebar-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整侧栏宽度"
+        aria-valuemin={SIDEBAR_WIDTH_MIN}
+        aria-valuemax={SIDEBAR_WIDTH_MAX}
+        aria-valuenow={sidebarWidth > 0 ? sidebarWidth : undefined}
+        aria-valuetext={sidebarWidth > 0 ? `${sidebarWidth} 像素` : "自动宽度"}
+        tabIndex={0}
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={(event) => endResize(event, true)}
+        onPointerCancel={(event) => endResize(event, false)}
+        onKeyDown={onResizeKeyDown}
+        onDoubleClick={() => commitWidth(0)}
+      />
       <div className="brand">
-        <img className="brand-logo" src={deckLogo} alt="" />
+        <BrandMark className="brand-logo" />
         <div>
           <b>Codex Deck</b>
         </div>
@@ -216,7 +304,7 @@ export function Sidebar({
             value={query}
             onChange={(event) => onQuery(event.target.value)}
             placeholder="搜索项目、会话与内容"
-            aria-label="搜索项目、会话和会话内容"
+            aria-label="搜索项目、会话与内容"
           />
           {query && (
             <button className="icon-btn" onClick={() => onQuery("")}>
@@ -238,7 +326,7 @@ export function Sidebar({
             aria-selected={library === "active"}
             onClick={() => onLibrary("active")}
           >
-            现有 <em>{sessionCount}</em>
+            未归档 <em>{sessionCount}</em>
           </button>
           <button
             type="button"
@@ -273,7 +361,7 @@ export function Sidebar({
           {loading && !projectCount
             ? "正在读取项目…"
             : loading
-              ? `同步中 · ${projectCount} 项目`
+              ? `同步中 · ${projectCount} 个项目`
               : searching
                 ? `${matchCount} 个匹配 · ${projects.length} 个项目${contentSearchPending ? " · 检索中" : contentSearchProgress?.building ? ` · 已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
                 : library === "archived"
@@ -345,7 +433,6 @@ export function Sidebar({
             unseenSessions={unseenSessions}
             wakeStates={wakeStates}
             collapsed={!searching && !expandedProjects.has(project.key)}
-            forkCounts={forkCounts}
             searchQuery={query}
             searchMatches={searchMatches}
             onToggle={() => onToggleProject(project.key)}
@@ -395,168 +482,123 @@ export function Sidebar({
                 ? "清除搜索或状态筛选后重试"
                 : emptyKind === "archived"
                   ? "归档的会话会出现在这里"
-                  : "点右上角新建，开始一个 Codex 会话"}
+                  : "点「新建」开始一个会话"}
             </small>
           </div>
         )}
       </div>
       <div className="sidebar-footer">
         <UsageChip runtime={runtime} onOpen={() => onUsage("limits")} />
-        <div className="sidebar-footer-actions">
-          <button
-            type="button"
-            className="sidebar-task-entry"
-            onClick={onTasks}
+        <div className="sidebar-footer-actions" role="toolbar" aria-label="侧栏快捷入口">
+          <Tip
+            content={
+              activeCount > 0 ? `任务 · ${activeCount} 项进行中` : "任务"
+            }
           >
-            <Activity />
-            <span>任务</span>
-            {(counts.running > 0 || counts.waiting > 0) && (
-              <b>{counts.running + counts.waiting}</b>
-            )}
-          </button>
-          <button
-            type="button"
-            className="sidebar-settings-entry"
-            onClick={onProviders}
-          >
-            <Settings />
-            <span>设置</span>
-          </button>
-          <div className="sidebar-tools-wrap" ref={toolsMenuRef}>
             <button
               type="button"
-              className={toolsOpen ? "active" : ""}
-              aria-haspopup="menu"
-              aria-expanded={toolsOpen}
-              onClick={() => setToolsOpen((open) => !open)}
+              className="sidebar-footer-btn sidebar-task-entry"
+              aria-label={
+                activeCount > 0 ? `任务（${activeCount} 项进行中）` : "任务"
+              }
+              onClick={onTasks}
             >
-              <Wrench />
-              <span>工具</span>
+              <Activity />
+              {activeCount > 0 ? <b>{activeCount}</b> : null}
             </button>
-            {toolsOpen && (
-              <div className="sidebar-tools-popover" role="menu">
-                <div className="sidebar-tools-title">
-                  <b>工具</b>
-                  <small>工作区与账号</small>
-                </div>
-                {!hiddenTools.includes("terminal") && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setToolsOpen(false);
-                      onTools();
-                    }}
+          </Tip>
+          <Menu
+            align="start"
+            side="top"
+            trigger={
+              <button
+                type="button"
+                className="sidebar-footer-btn sidebar-tools-entry"
+                aria-label="工具"
+                title="工具"
+              >
+                <Wrench />
+              </button>
+            }
+          >
+            {hasWorkspaceTools ? (
+              <>
+                <MenuLabel>工作区工具</MenuLabel>
+                {!hiddenTools.includes("terminal") ? (
+                  <MenuItem
+                    icon={<Terminal />}
+                    onSelect={() => onTools()}
                   >
-                    <Terminal />
-                    <span>
-                      <b>终端</b>
-                      <small>打开 Web Terminal</small>
-                    </span>
-                  </button>
-                )}
-                {!hiddenTools.includes("git") && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setToolsOpen(false);
-                      onTools("/git");
-                    }}
-                  >
-                    <GitBranch />
-                    <span>
-                      <b>Git 管理</b>
-                      <small>改动、提交与分支</small>
-                    </span>
-                  </button>
-                )}
-                {!hiddenTools.includes("text-editor") && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setToolsOpen(false);
-                      onTools("/text-editor");
-                    }}
-                  >
-                    <FileText />
-                    <span>
-                      <b>文本编辑器</b>
-                      <small>查看与编辑宿主机文件</small>
-                    </span>
-                  </button>
-                )}
-                {!hiddenTools.includes("commands") && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setToolsOpen(false);
-                      onTools("/commands");
-                    }}
-                  >
-                    <Zap />
-                    <span>
-                      <b>快捷指令</b>
-                      <small>一键执行常用命令</small>
-                    </span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onUsage("stats");
-                  }}
-                >
-                  <BarChart3 />
-                  <span>
-                    <b>用量统计</b>
-                    <small>按会话与项目查看</small>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setToolsOpen(false);
-                    onUsage("limits");
-                  }}
-                >
-                  <Gauge />
-                  <span>
-                    <b>Codex 额度</b>
-                    <small>Official 账号额度状态</small>
-                  </span>
-                </button>
-                {notificationPermission !== "unsupported" ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setToolsOpen(false);
-                      onNotifications();
-                    }}
-                    disabled={notificationPermission === "denied"}
-                  >
-                    <BellRing />
-                    <span>
-                      <b>系统提醒</b>
-                      <small>
-                        {notificationPermission === "granted"
-                          ? "已开启"
-                          : notificationPermission === "denied"
-                            ? "浏览器已阻止"
-                            : "审批与任务通知"}
-                      </small>
-                    </span>
-                  </button>
+                    终端
+                  </MenuItem>
                 ) : null}
-              </div>
-            )}
-          </div>
+                {!hiddenTools.includes("git") ? (
+                  <MenuItem
+                    icon={<GitBranch />}
+                    onSelect={() => onTools("/git")}
+                  >
+                    Git 管理
+                  </MenuItem>
+                ) : null}
+                {!hiddenTools.includes("text-editor") ? (
+                  <MenuItem
+                    icon={<FileText />}
+                    onSelect={() => onTools("/text-editor")}
+                  >
+                    文本编辑器
+                  </MenuItem>
+                ) : null}
+                {!hiddenTools.includes("commands") ? (
+                  <MenuItem
+                    icon={<Zap />}
+                    onSelect={() => onTools("/commands")}
+                  >
+                    快捷指令
+                  </MenuItem>
+                ) : null}
+                <MenuSep />
+              </>
+            ) : null}
+            <MenuLabel>用量与提醒</MenuLabel>
+            <MenuItem
+              icon={<BarChart3 />}
+              onSelect={() => onUsage("stats")}
+            >
+              用量统计
+            </MenuItem>
+            <MenuItem
+              icon={<Gauge />}
+              onSelect={() => onUsage("limits")}
+            >
+              Codex 额度
+            </MenuItem>
+            {notificationPermission !== "unsupported" ? (
+              <MenuItem
+                icon={<BellRing />}
+                disabled={notificationPermission === "denied"}
+                meta={
+                  notificationPermission === "granted"
+                    ? "已开启"
+                    : notificationPermission === "denied"
+                      ? "已阻止"
+                      : undefined
+                }
+                onSelect={() => onNotifications()}
+              >
+                系统提醒
+              </MenuItem>
+            ) : null}
+          </Menu>
+          <Tip content="设置">
+            <button
+              type="button"
+              className="sidebar-footer-btn sidebar-settings-entry"
+              aria-label="设置"
+              onClick={onProviders}
+            >
+              <Settings />
+            </button>
+          </Tip>
         </div>
       </div>
     </aside>

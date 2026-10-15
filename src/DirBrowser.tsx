@@ -53,7 +53,7 @@ export function DirBrowser({
           >
             <Home />
           </button>
-          <code title={listing?.path}>{listing?.path || "此电脑"}</code>
+          <code title={listing?.path}>{listing?.path || "根目录"}</code>
         </div>
         <div className="dir-list">
           {listing?.entries.map((entry) => (

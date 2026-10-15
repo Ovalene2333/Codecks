@@ -1,10 +1,17 @@
+import { Select } from "../kit/Select";
 import { useState } from "react";
-import { Plus, RefreshCw, SquareTerminal, Trash2, X } from "lucide-react";
-import { post, remove } from "../api";
-import { Badge, Button, Field, Group, Note, Row, Section } from "../kit";
-import type { AgentProfile, Provider, Snapshot } from "../types";
+import { Plus, RefreshCw, SquareTerminal, Trash2 } from "lucide-react";
+import { post, put, remove } from "../api";
+import { Badge, Button, Field, Group, Note, Row, Section, Seg } from "../kit";
+import { Modal } from "../ui";
+import type {
+  AgentProfile,
+  Provider,
+  Snapshot,
+} from "../types";
 import { copyTerminalCommand } from "./CodexPage";
 import { useDirtyFlag } from "./dirty";
+import { OpenCodeProvidersSection } from "./OpenCodeProvidersSection";
 
 type ReloadResult = Snapshot & {
   restarted: boolean;
@@ -12,8 +19,9 @@ type ReloadResult = Snapshot & {
   ccSwitch: string | null;
 };
 
+type AgentTab = "codex" | "claude" | "opencode";
+
 const EMPTY_FORM = {
-  agentId: "codex",
   name: "",
   baseUrl: "",
   apiKey: "",
@@ -29,8 +37,10 @@ export const isClaudeProvider = (p: Provider) => {
 };
 
 /**
- * 供应商：不常用，放在设置导航的角落。CC Switch 同步（只读）+ 自定义
- * 供应商的增删。Runtime 状态只在顶部提示一次，不在每一行重复。
+ * 供应商：按 Agent 分签（Codex / Claude / OpenCode）。
+ * Codex 与 Claude 是 Deck 代管的自定义供应商增删；OpenCode 是
+ * opencode.json 自定义供应商的文件编辑。Runtime 状态只在
+ * Codex 签顶部提示一次，不在每一行重复。
  */
 export function ProvidersPage({
   providers,
@@ -41,6 +51,7 @@ export function ProvidersPage({
   onSaved,
   onToast,
   onConfirmDelete,
+  onNeedsReload,
 }: {
   providers: Provider[];
   claudeProfiles?: AgentProfile[];
@@ -50,7 +61,10 @@ export function ProvidersPage({
   onSaved: (snapshot: Snapshot) => void;
   onToast: (message: string) => void;
   onConfirmDelete: (provider: Provider, run: () => Promise<void>) => void;
+  /** OpenCode 供应商写入成功后点亮「OpenCode 有配置等待生效」提示条。 */
+  onNeedsReload?: () => void;
 }) {
+  const [tab, setTab] = useState<AgentTab>("codex");
   const [form, setForm] = useState(EMPTY_FORM);
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -65,7 +79,7 @@ export function ProvidersPage({
     providers.some((p) => p.kind === "cc-switch") ||
     claudeProfiles.some((p) => p.kind === "cc-switch");
   const ccProviders = providers.filter((p) => p.kind === "cc-switch");
-  const otherProviders = providers.filter((p) => p.kind !== "cc-switch");
+  const codexCustom = providers.filter((p) => p.kind === "custom");
   const claudeProviders: Provider[] = claudeProfiles.map((profile) => ({
     ...profile,
     kind:
@@ -76,7 +90,9 @@ export function ProvidersPage({
     online: Boolean(profile.online),
     hasApiKey: Boolean(profile.hasApiKey),
   }));
-  const isClaudeForm = form.agentId === "claude";
+  const claudeCustom = claudeProviders.filter((p) => p.kind === "custom");
+  const claudeCc = claudeProviders.filter((p) => p.kind === "cc-switch");
+  const isClaudeForm = tab === "claude";
 
   const reloadRuntime = async () => {
     setReloading(true);
@@ -86,14 +102,14 @@ export function ProvidersPage({
       if (result.restarted)
         onToast(
           result.ccSwitch
-            ? "已重新读取 CC Switch 并重启 Runtime"
-            : "已刷新本地供应商并重启 Runtime（未使用 CC Switch）",
+            ? "已重新读取 CC Switch 并重启服务"
+            : "已刷新本地供应商并重启服务（未使用 CC Switch）",
         );
       else
         onToast(
           result.ccSwitch
-            ? `已重新读取 CC Switch；${result.busyCount} 个会话仍在运行或等待审批，空闲后经「应用」重启`
-            : `已刷新本地供应商；${result.busyCount} 个会话仍在运行，未重启 Runtime`,
+            ? `已重新读取 CC Switch；${result.busyCount} 个会话仍在运行或待确认，空闲后经「应用」重启`
+            : `已刷新本地供应商；${result.busyCount} 个会话仍在运行，未重启服务`,
         );
     } catch (err: any) {
       onToast(err.message);
@@ -121,6 +137,7 @@ export function ProvidersPage({
       onSaved(
         await post(isClaudeForm ? "/claude/providers" : "/providers", {
           ...form,
+          agentId: isClaudeForm ? "claude" : "codex",
           kind: "custom",
         }),
       );
@@ -137,17 +154,11 @@ export function ProvidersPage({
   const providerDesc = (p: Provider) =>
     [
       p.model,
-      p.kind === "cc-switch"
-        ? p.baseUrl || "官方登录"
-        : p.kind === "custom"
-          ? `${p.baseUrl} · ${p.agentId === "claude" ? "Anthropic Messages" : p.wireApi === "chat" ? "Chat Completions" : "Responses"}`
-          : p.agentId === "claude"
-            ? "使用本机 Claude 登录、settings.json 或环境变量"
-            : "使用当前 Codex 登录",
-      p.baseUrl && !p.hasApiKey ? "无独立 Key" : null,
+      p.kind === "cc-switch" ? p.baseUrl || "官方登录" : p.baseUrl,
+      p.baseUrl && !p.hasApiKey ? "无独立密钥" : null,
     ]
       .filter(Boolean)
-      .join(" · ");
+      .join("，");
   const providerRow = (p: Provider) => (
     <Row
       key={p.id}
@@ -171,7 +182,7 @@ export function ProvidersPage({
               size="sm"
               variant="ghost"
               iconOnly
-              title={`复制用 ${p.name} 从终端接入的命令`}
+              title={`复制终端接入命令：${p.name}`}
               aria-label={`复制用 ${p.name} 从终端接入的命令`}
               onClick={() =>
                 void copyTerminalCommand(onToast, {
@@ -214,202 +225,224 @@ export function ProvidersPage({
       </Section>
     ) : null;
 
-  return (
-    <>
-      {runtime?.configPending ? (
-        <Note
-          tone="warn"
-          icon={<RefreshCw />}
-          title="供应商配置有更新"
-          action={
-            <Button
-              size="sm"
-              variant="primary"
-              busy={applying}
-              onClick={() => void applyPending()}
-            >
-              应用
-            </Button>
-          }
-        >
-          所有任务空闲后应用；运行中的会话不会被自动中断。
-        </Note>
-      ) : runtime && !runtime.online ? (
-        <Note tone="warn" icon={<RefreshCw />}>
-          {runtime.starting
-            ? "Codex Runtime 启动中，供应商稍后装入。"
-            : "Codex Runtime 未运行，供应商尚未装入。"}
-        </Note>
+  const customRows = isClaudeForm ? claudeCustom : codexCustom;
+  const closeForm = () => {
+    setAdding(false);
+    setForm(EMPTY_FORM);
+    setError("");
+  };
+  const customForm = (
+    <Section
+      title={isClaudeForm ? "Claude 自定义供应商" : "Codex 自定义供应商"}
+      desc="凭据只保存在本机。"
+      actions={
+        adding ? undefined : (
+          <Button
+            size="sm"
+            onClick={() => {
+              setForm(EMPTY_FORM);
+              setError("");
+              setAdding(true);
+            }}
+          >
+            <Plus />
+            添加
+          </Button>
+        )
+      }
+    >
+      {customRows.length ? (
+        <Group>{customRows.map(providerRow)}</Group>
       ) : null}
-      <Note>
-        无需安装 CC Switch。可使用本机 CLI 登录，或在这里添加 Codex、Claude
-        自定义供应商。
-      </Note>
-      {providerSection("Codex · 本机与自定义", otherProviders)}
-      {providerSection(
-        "Claude · 本机与自定义",
-        claudeProviders.filter((p) => p.kind !== "cc-switch"),
-      )}
-      {providerSection("Codex · CC Switch", ccProviders)}
-      {providerSection(
-        "Claude · CC Switch",
-        claudeProviders.filter((p) => p.kind === "cc-switch"),
-      )}
-      <Section title="CC Switch · 可选兼容">
-        <Group>
-          <Row
-            dot={hasCcSwitch ? "ok" : "off"}
-            title={hasCcSwitch ? "已连接 · 只读同步" : "未检测到 · 不影响使用"}
-            desc={
-              hasCcSwitch
-                ? "供应商是会话的启动配置；运行中的会话不随 CC Switch 的当前项变化。"
-                : "使用本机或自定义供应商即可；以后安装 CC Switch 时，重新读取即可同步。"
-            }
-            side={
-              <Button
-                size="sm"
-                busy={reloading}
-                title="刷新本地配置与可选 CC Switch 来源；空闲时重启 Codex Runtime"
-                onClick={reloadRuntime}
-              >
-                <RefreshCw className={reloading ? "ui-spin" : undefined} />
-                {reloading ? "读取中…" : "重新读取"}
-              </Button>
-            }
-          />
-        </Group>
-      </Section>
-      <Section
-        title="自定义供应商"
-        desc="Codex 使用 OpenAI 兼容接口；Claude 使用 Anthropic 兼容接口。凭据只保存在本机服务端。"
-        actions={
-          adding ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setAdding(false);
-                setForm(EMPTY_FORM);
-                setError("");
-              }}
-            >
-              <X />
-              取消
-            </Button>
-          ) : (
-            <Button size="sm" onClick={() => setAdding(true)}>
-              <Plus />
-              添加
-            </Button>
-          )
-        }
-      >
-        {adding && (
-          <form onSubmit={save}>
-            <Group pad>
-              <Field label="Agent">
-                <select
-                  className="ui-input"
-                  value={form.agentId}
-                  onChange={(e) =>
-                    setForm({ ...form, agentId: e.target.value })
-                  }
-                >
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                </select>
-              </Field>
-              <Field label="显示名称">
+    </Section>
+  );
+  const formDialog = adding ? (
+    <Modal title="新增供应商" className="ui-panel" onClose={closeForm}>
+      <div className="ui-panel__body">
+        <form onSubmit={save} className="ui-form-dialog">
+          <div className="ui-form-dialog__body">
+            <Field label="显示名称">
+              <input
+                className="ui-input"
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="例如：公司网关"
+              />
+            </Field>
+            <Field label="服务地址">
+              <input
+                className="ui-input"
+                required
+                type="url"
+                value={form.baseUrl}
+                onChange={(e) =>
+                  setForm({ ...form, baseUrl: e.target.value })
+                }
+                placeholder={
+                  isClaudeForm
+                    ? "https://api.example.com"
+                    : "https://api.example.com/v1"
+                }
+              />
+            </Field>
+            <div className="ui-form__grid">
+              <Field label={isClaudeForm ? "默认模型（可选）" : "模型"}>
                 <input
                   className="ui-input"
-                  required
-                  autoFocus
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="例如：公司网关"
-                />
-              </Field>
-              <Field label="Base URL">
-                <input
-                  className="ui-input"
-                  required
-                  type="url"
-                  value={form.baseUrl}
+                  required={!isClaudeForm}
+                  value={form.model}
                   onChange={(e) =>
-                    setForm({ ...form, baseUrl: e.target.value })
+                    setForm({ ...form, model: e.target.value })
                   }
                   placeholder={
-                    isClaudeForm
-                      ? "https://claude.example.com"
-                      : "https://api.example.com/v1"
+                    isClaudeForm ? "留空跟随 Claude 默认模型" : "模型 ID"
                   }
                 />
               </Field>
-              <div className="ui-form__grid">
-                <Field label={isClaudeForm ? "默认模型（可选）" : "模型"}>
-                  <input
-                    className="ui-input"
-                    required={!isClaudeForm}
-                    value={form.model}
-                    onChange={(e) =>
-                      setForm({ ...form, model: e.target.value })
-                    }
-                    placeholder={
-                      isClaudeForm ? "留空跟随 Claude 默认模型" : "模型 ID"
-                    }
-                  />
-                </Field>
-                <Field label={isClaudeForm ? "认证方式" : "接口"}>
-                  <select
-                    className="ui-input"
-                    value={isClaudeForm ? form.authType : form.wireApi}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        [isClaudeForm ? "authType" : "wireApi"]: e.target.value,
-                      })
-                    }
-                  >
-                    {isClaudeForm ? (
-                      <>
-                        <option value="api-key">API Key</option>
-                        <option value="auth-token">Auth Token</option>
-                      </>
-                    ) : (
-                      <>
-                        <option value="responses">Responses</option>
-                        <option value="chat">Chat Completions</option>
-                      </>
-                    )}
-                  </select>
-                </Field>
-              </div>
-              <Field
-                label={
-                  isClaudeForm && form.authType === "auth-token"
-                    ? "Auth Token"
-                    : "API Key"
-                }
-              >
-                <input
+              <Field label={isClaudeForm ? "认证方式" : "接口"}>
+                <Select
                   className="ui-input"
-                  required
-                  type="password"
-                  autoComplete="off"
-                  value={form.apiKey}
-                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-                />
+                  value={isClaudeForm ? form.authType : form.wireApi}
+                  onValueChange={(nextValue) =>
+                    setForm({
+                      ...form,
+                      [isClaudeForm ? "authType" : "wireApi"]: nextValue,
+                    })
+                  }
+                >
+                  {isClaudeForm ? (
+                    <>
+                      <option value="api-key">API 密钥</option>
+                      <option value="auth-token">认证令牌</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="responses">Responses</option>
+                      <option value="chat">Chat Completions</option>
+                    </>
+                  )}
+                </Select>
               </Field>
-              {error && <p className="ui-error">{error}</p>}
-              <div className="ui-actions">
-                <Button type="submit" variant="primary" busy={saving}>
-                  {saving ? "添加中…" : "添加并连接"}
+            </div>
+            <Field
+              label={
+                isClaudeForm && form.authType === "auth-token"
+                  ? "认证令牌"
+                  : "API 密钥"
+              }
+            >
+              <input
+                className="ui-input"
+                required
+                type="password"
+                autoComplete="off"
+                value={form.apiKey}
+                onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+              />
+            </Field>
+            {error && <p className="ui-error">{error}</p>}
+          </div>
+          <div className="ui-form-dialog__footer">
+            <Button type="button" onClick={closeForm}>
+              取消
+            </Button>
+            <Button type="submit" variant="primary" busy={saving}>
+              {saving ? "添加中…" : "添加并连接"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </Modal>
+  ) : null;
+
+  return (
+    <>
+      <Seg<AgentTab>
+        label="按 Agent 查看供应商"
+        className="ui-seg--page"
+        value={tab}
+        onChange={(next) => {
+          setTab(next);
+          setAdding(false);
+          setError("");
+        }}
+        items={[
+          { value: "codex", label: "Codex" },
+          { value: "claude", label: "Claude" },
+          { value: "opencode", label: "OpenCode" },
+        ]}
+      />
+      {tab === "codex" && (
+        <>
+          {runtime?.configPending ? (
+            <Note
+              tone="warn"
+              icon={<RefreshCw />}
+              title="供应商配置有更新"
+              action={
+                <Button
+                  size="sm"
+                  variant="primary"
+                  busy={applying}
+                  onClick={() => void applyPending()}
+                >
+                  应用
                 </Button>
-              </div>
+              }
+            >
+              所有任务空闲后应用；运行中的会话不会被自动中断。
+            </Note>
+          ) : runtime && !runtime.online ? (
+            <Note tone="warn" icon={<RefreshCw />}>
+              {runtime.starting
+                ? "Codex 服务启动中，供应商稍后装入。"
+                : "Codex 服务未运行，供应商尚未装入。"}
+            </Note>
+          ) : null}
+          {providerSection("CC Switch", ccProviders)}
+          <Section title="CC Switch">
+            <Group>
+              <Row
+                dot={hasCcSwitch ? "ok" : "off"}
+                title={hasCcSwitch ? "已连接，只读同步" : "未检测到，不影响使用"}
+                desc={
+                  hasCcSwitch
+                    ? "切换当前项不影响运行中的会话。"
+                    : "未安装不影响使用；安装后点「重新读取」同步。"
+                }
+                side={
+                  <Button
+                    size="sm"
+                    busy={reloading}
+                    title="重新读取本地与 CC Switch 供应商"
+                    onClick={reloadRuntime}
+                  >
+                    <RefreshCw className={reloading ? "ui-spin" : undefined} />
+                    {reloading ? "读取中…" : "重新读取"}
+                  </Button>
+                }
+              />
             </Group>
-          </form>
-        )}
-      </Section>
+          </Section>
+          {customForm}
+          {formDialog}
+        </>
+      )}
+      {tab === "claude" && (
+        <>
+          {providerSection("CC Switch", claudeCc)}
+          {customForm}
+          {formDialog}
+        </>
+      )}
+      {tab === "opencode" && (
+        <OpenCodeProvidersSection
+          defaultCwd={defaultCwd}
+          onToast={onToast}
+          onNeedsReload={onNeedsReload}
+        />
+      )}
     </>
   );
 }

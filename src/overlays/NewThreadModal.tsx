@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Sparkles } from "lucide-react";
 import { api, post } from "../api";
@@ -297,9 +298,9 @@ export function NewThreadModal({
               </button>
             </div>
           ) : null}
-          <select
+          <Select
             value={agentId}
-            onChange={(event) => selectAgent(event.target.value as AgentId)}
+            onValueChange={(nextValue) => selectAgent(nextValue as AgentId)}
           >
             {listedAgents.map((agent) => (
               <option
@@ -316,18 +317,18 @@ export function NewThreadModal({
                   : ""}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         {agentId === "codex" ? (
           <>
             <label>
               供应商
-              <select
+              <Select
                 value={form.providerId}
-                onChange={(e) =>
+                onValueChange={(nextValue) =>
                   setForm((current) => ({
                     ...current,
-                    providerId: e.target.value,
+                    providerId: nextValue,
                     // 换供应商时顺手丢掉占位，避免目录卡住时误提交。
                     ...(current.model.trim() === "default"
                       ? { model: "" }
@@ -340,7 +341,7 @@ export function NewThreadModal({
                     {p.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <ModelPicker
               providerId={form.providerId}
@@ -355,17 +356,16 @@ export function NewThreadModal({
           <>
             <label>
               Claude 配置档
-              <select
+              <Select
                 value={form.providerId}
                 disabled={profilesLoading || profiles.length === 0}
-                onChange={(event) => {
+                onValueChange={(nextValue) => {
                   const profile = profiles.find(
-                    (item) => item.id === event.target.value,
+                    (item) => item.id === nextValue,
                   );
                   if (profile?.official) {
-                    event.currentTarget.value = form.providerId;
                     window.alert(
-                      "you can't choose it because the world IS NOT Anthropic's world",
+                      "官方登录档位不能在这里选择，请在终端完成登录后使用。",
                     );
                     return;
                   }
@@ -374,7 +374,7 @@ export function NewThreadModal({
                     return;
                   }
                   setError("");
-                  setForm({ ...form, providerId: event.target.value });
+                  setForm({ ...form, providerId: nextValue });
                 }}
               >
                 {profilesLoading ? (
@@ -395,7 +395,7 @@ export function NewThreadModal({
                 ) : (
                   <option value="">未找到可用的 Claude 配置</option>
                 )}
-              </select>
+              </Select>
             </label>
             <ModelPicker
               agentId="claude"
@@ -408,12 +408,12 @@ export function NewThreadModal({
             />
             <label>
               Claude 权限
-              <select
+              <Select
                 value={form.permissionMode}
-                onChange={(event) =>
+                onValueChange={(nextValue) =>
                   setForm({
                     ...form,
-                    permissionMode: event.target.value as ClaudePermissionMode,
+                    permissionMode: nextValue as ClaudePermissionMode,
                   })
                 }
               >
@@ -422,7 +422,7 @@ export function NewThreadModal({
                     {option.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
           </>
         ) : (
@@ -456,13 +456,13 @@ export function NewThreadModal({
               profiles.length > 1 ? (
               <label>
                 配置档
-                <select
+                <Select
                   value={form.providerId}
                   disabled={profilesLoading}
-                  onChange={(event) =>
+                  onValueChange={(nextValue) =>
                     setForm((current) => ({
                       ...current,
-                      providerId: event.target.value,
+                      providerId: nextValue,
                     }))
                   }
                 >
@@ -476,7 +476,7 @@ export function NewThreadModal({
                       </option>
                     ))
                   )}
-                </select>
+                </Select>
               </label>
             ) : null}
           </>
@@ -551,14 +551,14 @@ export function NewThreadModal({
           <>
             <div className="form-grid">
               <label>
-                Sandbox
-                <select
+                沙箱
+                <Select
                   value={form.sandbox}
-                  onChange={(e) =>
+                  onValueChange={(nextValue) =>
                     setForm({
                       ...form,
                       ...settingsForSandboxMode(
-                        e.target.value as SandboxMode,
+                        nextValue as SandboxMode,
                         approvalMode(
                           form.approvalPolicy,
                           form.approvalsReviewer,
@@ -572,20 +572,20 @@ export function NewThreadModal({
                       {option.label}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label>
-                Approvals
-                <select
+                审批策略
+                <Select
                   value={approvalMode(
                     form.approvalPolicy,
                     form.approvalsReviewer,
                   )}
-                  onChange={(e) =>
+                  onValueChange={(nextValue) =>
                     setForm({
                       ...form,
                       ...settingsForApprovalMode(
-                        e.target.value as ApprovalMode,
+                        nextValue as ApprovalMode,
                         form.sandbox,
                       ),
                     })
@@ -596,25 +596,25 @@ export function NewThreadModal({
                       {option.label}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </div>
             <label>
-              Personality
-              <select
+              回复风格
+              <Select
                 value={form.personality}
-                onChange={(e) =>
+                onValueChange={(nextValue) =>
                   setForm({
                     ...form,
-                    personality: e.target.value as "" | Personality,
+                    personality: nextValue as "" | Personality,
                   })
                 }
               >
-                <option value="">Default</option>
-                <option value="pragmatic">Pragmatic</option>
-                <option value="friendly">Friendly</option>
-                <option value="none">None</option>
-              </select>
+                <option value="">默认</option>
+                <option value="pragmatic">务实</option>
+                <option value="friendly">友好</option>
+                <option value="none">无</option>
+              </Select>
             </label>
           </>
         )}

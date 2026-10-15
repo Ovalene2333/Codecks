@@ -1,10 +1,12 @@
 import {
   Component,
   useEffect,
+  useId,
   useRef,
   type ErrorInfo,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { ThreadSummary } from "./types";
 import { overlayMarkOf } from "./deck-history";
@@ -100,6 +102,15 @@ export class RenderErrorBoundary extends Component<
   }
 }
 
+export const THREAD_STATUS_LABELS: Record<string, string> = {
+  starting: "启动中",
+  running: "运行中",
+  waiting: "待确认",
+  idle: "空闲",
+  error: "异常",
+  offline: "离线",
+};
+
 export function Status({
   status,
   compact,
@@ -111,14 +122,7 @@ export function Status({
   unseen?: boolean;
   label?: string;
 }) {
-  const labels = {
-    starting: "启动中",
-    running: "运行中",
-    waiting: "待确认",
-    idle: "空闲",
-    error: "异常",
-    offline: "离线",
-  };
+  const labels = THREAD_STATUS_LABELS;
   const showUnseen = Boolean(unseen && status === "idle");
   return (
     <span
@@ -145,16 +149,57 @@ export function Modal({
   /** 返回 false 表示拒绝关闭（调用方自己弹确认）。 */
   onClose: () => void | boolean;
 }) {
+  const dialog = useRef<HTMLElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  );
+  const focusCycle = useRef(0);
+  const titleId = useId();
   useOverlayHistory(onClose);
-  return (
+  useEffect(() => {
+    const cycle = ++focusCycle.current;
+    dialog.current
+      ?.querySelector<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )
+      ?.focus();
+    return () => {
+      queueMicrotask(() => {
+        if (
+          focusCycle.current === cycle &&
+          previousFocus.current?.isConnected
+        ) {
+          previousFocus.current.focus();
+        }
+      });
+    };
+  }, []);
+  // 挂到 body：嵌套弹层（设置里再开弹窗）不能被祖先的 transform /
+  // 动画包含块关在里面——.modal-backdrop 是 fixed inset:0，只有在
+  // body 下才真正铺满视口。DOM 顺序在后，z-index 相同时也画在上层。
+  // 无 DOM 环境（SSR / 测试）内联返回，renderToStaticMarkup 拿不到
+  // portal 内容。
+  const overlay = (
     <div className="modal-backdrop" onMouseDown={() => onClose()}>
       <section
+        ref={dialog}
         className={`modal${className ? ` ${className}` : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }}
       >
         <header>
           {leading}
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button
             type="button"
             className="icon-btn"
@@ -169,6 +214,9 @@ export function Modal({
       </section>
     </div>
   );
+  return typeof document === "undefined"
+    ? overlay
+    : createPortal(overlay, document.body);
 }
 
 export function ConfirmDialog({

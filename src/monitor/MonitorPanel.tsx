@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, LayoutList, Plus, Search, SunMoon } from "lucide-react";
 import { sessionKey } from "../format";
-import { Button } from "../kit";
+import { Button, Empty } from "../kit";
 import type { DeckNotificationPermission } from "../notifications";
 import type { ProjectGroup } from "../projects";
 import { approvalBelongsToThread } from "../session/approvals";
@@ -68,7 +68,7 @@ function StatusStrip({
   const items = [
     {
       key: "waiting",
-      label: "待处理",
+      label: "待确认",
       count: counts.waiting,
       target: hasApprovals ? "monitor-approvals" : "home-attention",
     },
@@ -304,17 +304,17 @@ export function MonitorPanel({
                     />
                   ) : null}
                   {all.length === 0 ? (
-                    <div className="monitor-empty">
-                      {query ? <Search /> : <Activity />}
-                      <h2>
-                        {loading
+                    <Empty
+                      icon={query ? <Search /> : <Activity />}
+                      title={
+                        loading
                           ? "正在读取会话…"
                           : query
                             ? "没有匹配的会话"
-                            : "暂无会话"}
-                      </h2>
-                      <p>可在会话列表搜索、筛选或新建会话。</p>
-                    </div>
+                            : "暂无会话"
+                      }
+                      desc="可在会话列表搜索、筛选或新建会话。"
+                    />
                   ) : searching ? (
                     <section className="monitor-section" aria-label="搜索结果">
                       <div className="monitor-section-heading">

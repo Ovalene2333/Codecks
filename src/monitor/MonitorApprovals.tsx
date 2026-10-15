@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { DeckNotificationPermission } from "../notifications";
 import { ApprovalCard, type ApprovalDraft } from "../session/ApprovalCard";
+import { bulkApprovableApprovals, isGoneError } from "../session/approvalBulk";
 import { threadForApproval } from "../session/approvals";
 import type { Approval, ApprovalResolveBody, ThreadSummary } from "../types";
 import { RenderErrorBoundary } from "../ui";
@@ -29,7 +30,8 @@ function typingTarget(target: EventTarget | null) {
 
 /**
  * 监控台的审批队列：一次一条，←/→ 或左右滑动切换；处理完停在同一位置，
- * 下一条自动顶上来，不回到第一条。不提供批量批准——每条都该被看一眼。
+ * 下一条自动顶上来，不回到第一条。标题栏另有“全部允许”：只纳权限类，
+ * 问答与需选档的一律跳过，留给逐条处理。
  */
 export function MonitorApprovals({
   approvals,
@@ -51,6 +53,8 @@ export function MonitorApprovals({
   onResolve: (id: string, body: ApprovalResolveBody) => void | Promise<void>;
 }) {
   const [resolvingId, setResolvingId] = useState<string>();
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState("");
   const resolvingRef = useRef(false);
   const [resolveError, setResolveError] = useState<{
     id: string;
@@ -116,8 +120,27 @@ export function MonitorApprovals({
 
   if (!active) return null;
 
+  const bulkTargets = bulkApprovableApprovals(approvals);
+
+  const resolveAll = async () => {
+    if (bulkBusy || resolvingRef.current || !bulkTargets.length) return;
+    setBulkBusy(true);
+    setBulkError("");
+    setResolveError(undefined);
+    let failed = 0;
+    for (const item of bulkTargets) {
+      try {
+        await onResolve(item.id, { decision: "acceptForSession" });
+      } catch (error) {
+        if (!isGoneError(error)) failed += 1;
+      }
+    }
+    setBulkBusy(false);
+    if (failed) setBulkError(`${failed} 条未能通过，请逐条处理`);
+  };
+
   const resolve = async (id: string, body: ApprovalResolveBody) => {
-    if (resolvingRef.current) return;
+    if (resolvingRef.current || bulkBusy) return;
     resolvingRef.current = true;
     setResolvingId(id);
     setResolveError(undefined);
@@ -158,6 +181,23 @@ export function MonitorApprovals({
         <ShieldAlert aria-hidden="true" />
         <h2>待处理审批</h2>
         <b className="monitor-count">{approvals.length}</b>
+        {bulkTargets.length > 1 ? (
+          <button
+            type="button"
+            className="text-btn"
+            disabled={bulkBusy || Boolean(resolvingId)}
+            onClick={() => void resolveAll()}
+            aria-label={`全部允许其余 ${bulkTargets.length} 条权限请求`}
+            title={`本会话内始终允许其余 ${bulkTargets.length} 条权限请求；问答类需逐条处理`}
+          >
+            {bulkBusy ? "正在允许…" : "全部允许"}
+          </button>
+        ) : null}
+        {bulkError ? (
+          <span className="monitor-bulk-error" role="alert">
+            {bulkError}
+          </span>
+        ) : null}
         {approvals.length > 1 ? (
           <nav className="monitor-approvals-nav" aria-label="切换审批">
             <button
@@ -209,7 +249,7 @@ export function MonitorApprovals({
             onClick={() => onOpenThread(thread)}
           >
             <span>
-              <small>Session</small>
+              <small>会话</small>
               <b>{thread.name}</b>
             </span>
             <ExternalLink aria-hidden="true" />

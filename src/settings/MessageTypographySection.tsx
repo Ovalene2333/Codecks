@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useState, type CSSProperties } from "react";
 import { useDeckSettings, updateDeckSettings } from "../deck-settings";
 import {
@@ -8,7 +9,7 @@ import {
   sameTypography,
   type MessageTypography,
 } from "../message-typography";
-import { Button, Choice, Group, Row, Section } from "../kit";
+import { Button, Choice, Group, Row, Section, Slider } from "../kit";
 import { AssistantMarkdown } from "../session/markdown";
 
 const PREVIEW = `## 消息排版预览
@@ -79,13 +80,13 @@ export function MessageTypographySection() {
           title="排版模板"
           desc={selected ? `当前：${selected.name}` : "当前：自定义"}
           side={
-            <select
+            <Select
               className="ui-input message-template-select"
               aria-label="排版模板"
               value={selected?.id || "custom"}
-              onChange={(event) => {
+              onValueChange={(nextValue) => {
                 const template = templates.find(
-                  (item) => item.id === event.target.value,
+                  (item) => item.id === nextValue,
                 );
                 if (template)
                   updateDeckSettings({
@@ -112,7 +113,7 @@ export function MessageTypographySection() {
                   ))}
                 </optgroup>
               )}
-            </select>
+            </Select>
           }
         />
         <Row
@@ -147,24 +148,21 @@ export function MessageTypographySection() {
                   : undefined
               }
               side={
-                <label className="message-range">
-                  <input
-                    type="range"
-                    aria-label={range.label}
+                <div className="message-range">
+                  <Slider
+                    label={range.label}
                     min={range.min}
                     max={range.max}
                     step={range.step}
                     value={typography[key]}
-                    onChange={(event) =>
-                      patch({ [key]: Number(event.target.value) })
-                    }
+                    onChange={(next) => patch({ [key]: next })}
                   />
                   <output>
                     {key === "contentWidth" && typography[key] === 0
                       ? "铺满"
                       : `${Number(typography[key].toFixed(2))}${range.unit}`}
                   </output>
-                </label>
+                </div>
               }
             />
           );

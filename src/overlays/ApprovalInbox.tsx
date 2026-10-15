@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { DeckNotificationPermission } from "../notifications";
 import { ApprovalCard, type ApprovalDraft } from "../session/ApprovalCard";
+import { bulkApprovableApprovals, isGoneError } from "../session/approvalBulk";
 import { threadForApproval } from "../session/approvals";
 import type { Approval, ApprovalResolveBody, ThreadSummary } from "../types";
 import { RenderErrorBoundary, useOverlayHistory } from "../ui";
@@ -41,6 +42,8 @@ export function ApprovalInbox({
       window.matchMedia("(max-width: 760px)").matches,
   );
   const [resolvingId, setResolvingId] = useState<string>();
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState("");
   const resolvingRef = useRef(false);
   const [resolveError, setResolveError] = useState<{
     id: string;
@@ -137,8 +140,27 @@ export function ApprovalInbox({
     lastIndex.current = index;
     setActiveId(approvals[index].id);
   };
+  const bulkTargets = bulkApprovableApprovals(approvals);
+
+  const resolveAll = async () => {
+    if (bulkBusy || resolvingRef.current || !bulkTargets.length) return;
+    setBulkBusy(true);
+    setBulkError("");
+    setResolveError(undefined);
+    let failed = 0;
+    for (const item of bulkTargets) {
+      try {
+        await onResolve(item.id, { decision: "acceptForSession" });
+      } catch (error) {
+        if (!isGoneError(error)) failed += 1;
+      }
+    }
+    setBulkBusy(false);
+    if (failed) setBulkError(`${failed} 条未能通过，请逐条处理`);
+  };
+
   const resolve = async (id: string, body: ApprovalResolveBody) => {
-    if (resolvingRef.current) return;
+    if (resolvingRef.current || bulkBusy) return;
     resolvingRef.current = true;
     setResolvingId(id);
     setResolveError(undefined);
@@ -223,6 +245,18 @@ export function ApprovalInbox({
               </button>
             </nav>
           ) : null}
+          {bulkTargets.length > 1 ? (
+            <button
+              type="button"
+              className="approval-inbox-bulk"
+              disabled={bulkBusy || Boolean(resolvingId)}
+              onClick={() => void resolveAll()}
+              aria-label={`全部允许其余 ${bulkTargets.length} 条权限请求`}
+              title={`本会话内始终允许其余 ${bulkTargets.length} 条权限请求；问答类需逐条处理`}
+            >
+              {bulkBusy ? "正在允许…" : "全部允许"}
+            </button>
+          ) : null}
           {notificationPermission === "default" ? (
             <button
               type="button"
@@ -244,6 +278,11 @@ export function ApprovalInbox({
           </button>
         </header>
 
+        {bulkError ? (
+          <p className="error-banner approval-inbox-error" role="alert">
+            {bulkError}
+          </p>
+        ) : null}
         {thread ? (
           <button
             type="button"
@@ -254,7 +293,7 @@ export function ApprovalInbox({
             }}
           >
             <span>
-              <small>Session</small>
+              <small>会话</small>
               <b>{thread.name}</b>
             </span>
             <ExternalLink aria-hidden="true" />

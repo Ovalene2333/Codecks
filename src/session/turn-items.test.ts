@@ -142,38 +142,100 @@ test("maps OpenCode edit tools to Chinese labels with file targets", () => {
 });
 
 test("groups consecutive OpenCode edits into one tool group", () => {
-  const grouped = groupTurnItems([
+  const grouped = groupTurnItems(
+    [
+      {
+        id: "e1",
+        type: "commandExecution",
+        tool: "edit",
+        command: "docs/HANDOVER.md",
+        input: { filePath: "/work/docs/HANDOVER.md" },
+        aggregatedOutput: "Edit applied successfully.",
+      },
+      {
+        id: "e2",
+        type: "commandExecution",
+        tool: "edit",
+        command: "docs/OTHER.md",
+        input: { filePath: "/work/docs/OTHER.md" },
+        aggregatedOutput: "Edit applied successfully.",
+      },
+      { id: "m", type: "agentMessage", text: "done" },
+      {
+        id: "e3",
+        type: "commandExecution",
+        tool: "edit",
+        command: "docs/THIRD.md",
+        input: { filePath: "/work/docs/THIRD.md" },
+        aggregatedOutput: "Edit applied successfully.",
+      },
+    ],
+    "/work",
+  );
+  // Different files keep the multi-file toolGroup; solitary edit stays a row.
+  assert.equal(grouped[0].kind, "toolGroup");
+  assert.equal((grouped[0] as any).files.length, 2);
+  assert.equal(grouped[1].kind, "item");
+  assert.equal(grouped[2].kind, "item");
+});
+
+test("merges interleaved same-file edit/read into one file touch group", () => {
+  const edit = (id: string) => ({
+    id,
+    type: "commandExecution",
+    tool: "edit",
+    status: "completed",
+    command: "src/a.ts",
+    input: { filePath: "/work/src/a.ts" },
+    aggregatedOutput: "Edit applied successfully.",
+  });
+  const read = (id: string) => ({
+    id,
+    type: "commandExecution",
+    tool: "read",
+    status: "completed",
+    command: "src/a.ts",
+    input: { filePath: "/work/src/a.ts" },
+    aggregatedOutput: "",
+  });
+  const [group, ...rest] = groupTurnItems(
+    [edit("e1"), read("r1"), edit("e2"), read("r2")],
+    "/work",
+  );
+  assert.equal(rest.length, 0);
+  assert.equal(group.kind, "fileTouchGroup");
+  assert.equal((group as any).file, "src/a.ts");
+  assert.deepEqual((group as any).actions, [
+    { kind: "edit", count: 2 },
+    { kind: "read", count: 2 },
+  ]);
+  assert.equal((group as any).items.length, 4);
+});
+
+test("does not merge file touches with real output or broken runs", () => {
+  const items = [
     {
       id: "e1",
       type: "commandExecution",
       tool: "edit",
-      command: "docs/HANDOVER.md",
-      input: { filePath: "/work/docs/HANDOVER.md" },
-      aggregatedOutput: "Edit applied successfully.",
+      status: "completed",
+      command: "src/a.ts",
+      input: { filePath: "/work/src/a.ts" },
+      aggregatedOutput: "+ line added",
     },
     {
-      id: "e2",
+      id: "r1",
       type: "commandExecution",
-      tool: "edit",
-      command: "docs/HANDOVER.md",
-      input: { filePath: "/work/docs/HANDOVER.md" },
-      aggregatedOutput: "Edit applied successfully.",
+      tool: "read",
+      status: "inProgress",
+      command: "src/a.ts",
+      input: { filePath: "/work/src/a.ts" },
+      aggregatedOutput: "",
     },
-    { id: "m", type: "agentMessage", text: "done" },
-    {
-      id: "e3",
-      type: "commandExecution",
-      tool: "edit",
-      command: "docs/OTHER.md",
-      input: { filePath: "/work/docs/OTHER.md" },
-      aggregatedOutput: "Edit applied successfully.",
-    },
-  ]);
-  assert.equal(grouped[0].kind, "toolGroup");
-  assert.equal((grouped[0] as any).items.length, 2);
-  assert.equal(grouped[1].kind, "item");
-  //  solitary edit stays a single row (now rendered as 编辑).
-  assert.equal(grouped[2].kind, "item");
+  ];
+  const grouped = groupTurnItems(items, "/work");
+  assert.equal(grouped.length, 2);
+  assert.ok(grouped.every((entry) => entry.kind === "item"));
 });
 
 test("includes OpenCode reads in the per-turn read summary", () => {
@@ -272,9 +334,9 @@ test("TurnBlock renders read overview, collapsed updates, and expandable tools",
       },
     }),
   );
-  assert.match(html, /class="tool-row file-change-group ok"/);
+  assert.match(html, /class="rail-row tool-row file-change-group ok"/);
   assert.doesNotMatch(html, /<details[^>]*file-change-group[^>]* open/);
-  assert.match(html, />update</);
+  assert.match(html, />修改</);
   assert.match(html, />2 个文件</);
   assert.match(html, /本轮已读取/);
   assert.match(html, />2 个文件</);
@@ -325,10 +387,10 @@ test("TurnBlock renders subagent cards with status and expandable output", () =>
       },
     }),
   );
-  assert.match(html, /class="tool-row subagent-row running"/);
+  assert.match(html, /class="rail-row tool-row subagent-row running"/);
   assert.match(html, /子代理执行中/);
   assert.match(html, /class="subagent-activity"[^>]*>正在读取 src 目录</);
-  assert.match(html, /class="tool-row subagent-row ok"/);
+  assert.match(html, /class="rail-row tool-row subagent-row ok"/);
   assert.match(html, /审查改动/);
   assert.match(html, /explore/);
   assert.match(html, /共 3 处建议/);
@@ -371,7 +433,7 @@ test("TurnBlock renders Codex subAgentActivity ticks and collapses bursts", () =
     }),
   );
   // 三条连续 started 收成一个分组行，不再出现三条虚线 unknown 卡。
-  assert.match(html, /class="tool-row subagent-row subagent-ticks ok"/);
+  assert.match(html, /class="rail-row tool-row subagent-row subagent-ticks ok"/);
   assert.match(html, /子代理启动/);
   assert.match(html, /3 条/);
   assert.match(html, /p3_stronger、f7_second、non_qwen_research/);
@@ -432,7 +494,7 @@ test("TurnBlock renders collabAgentToolCall cards and plain wait rows", () => {
       },
     }),
   );
-  assert.match(html, /class="tool-row subagent-row ok"/);
+  assert.match(html, /class="rail-row tool-row subagent-row ok"/);
   assert.match(html, /启动子代理/);
   assert.match(html, /核对实验结果并汇总/);
   assert.match(html, /gpt-5 · high/);
@@ -472,7 +534,7 @@ test("TurnBlock renders unknown item types as quiet tool rows", () => {
       },
     }),
   );
-  assert.match(html, /class="tool-row unknown-item"/);
+  assert.match(html, /class="rail-row tool-row unknown-item"/);
   assert.match(html, /brandNewThing/);
   assert.match(html, /某种新条目/);
   assert.match(html, /&quot;nested&quot;: true/);
@@ -510,10 +572,11 @@ test("TurnBlock collapses consecutive OpenCode edits and hides trivial output", 
       },
     }),
   );
-  // Three stacked rows become one collapsed group row.
-  assert.match(html, /tool-group edit-group/);
-  assert.match(html, /3 次/);
+  // Three stacked same-file rows become one collapsed touch row: no
+  // "3 次", just 编辑 + file; expanded list keeps one entry per run.
+  assert.match(html, /file-touch-group ok/);
   assert.match(html, /docs\/HANDOVER\.md/);
+  assert.doesNotMatch(html, /3 次</);
   assert.doesNotMatch(html, /Edit applied successfully/);
 
   const single = renderToStaticMarkup(

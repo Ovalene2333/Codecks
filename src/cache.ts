@@ -187,6 +187,7 @@ function compactThread(thread: ThreadSummary): ThreadSummary {
     cwd: thread.cwd,
     model: thread.model,
     resolvedModel: thread.resolvedModel,
+    modelLabel: thread.modelLabel,
     reasoningEffort: thread.reasoningEffort,
     status: thread.status,
     activeTurnId: thread.activeTurnId,

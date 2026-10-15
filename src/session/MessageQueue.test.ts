@@ -29,8 +29,21 @@ test("all current transports default the composer to queue without a mode select
       onChange: noop, onImages: noop, onSend: noop, onCommand: noop, onStop: noop,
     }));
     assert.doesNotMatch(html, /role="tablist"|发送模式/);
-    assert.match(html, /class="send" title="追加">/);
+    assert.match(html, /data-slot="prompt-input"/);
+    assert.match(html, /data-slot="prompt-input-footer"/);
+    assert.match(html, /class="prompt-input__button send" title="追加"/);
   }
+});
+
+test("composer keeps secondary session settings behind one icon button", () => {
+  const html = renderToStaticMarkup(createElement(Composer, {
+    thread, capabilities: { sessionSettings: true } as AgentCapabilities,
+    text: "", images: [], sending: false, onSessionSettings: noop,
+    onChange: noop, onImages: noop, onSend: noop, onCommand: noop, onStop: noop,
+  }));
+  assert.match(html, /aria-label="添加图片"/);
+  assert.match(html, /aria-label="会话设置"/);
+  assert.doesNotMatch(html, /发送说明|composer-model-trigger|composer-session-controls/);
 });
 
 test("queued messages appear as user bubbles in the timeline with full text and promotion actions", () => {

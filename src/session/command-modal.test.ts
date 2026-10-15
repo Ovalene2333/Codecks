@@ -44,7 +44,7 @@ test("permissions command renders browser-friendly controls", async () => {
   assert.match(html, /class="primary"/);
 });
 
-test("locked model command keeps settings visible but disables changes", async () => {
+test("running model command permits saving settings for the next turn", async () => {
   const { CommandModal } = await import("./CommandModal.tsx");
   const html = renderToStaticMarkup(
     createElement(CommandModal, {
@@ -58,6 +58,6 @@ test("locked model command keeps settings visible but disables changes", async (
   );
 
   assert.match(html, /模型与推理强度/);
-  assert.match(html, /任务结束后才能修改模型/);
-  assert.match(html, /disabled=""/);
+  assert.match(html, /修改会在下一轮任务开始时生效/);
+  assert.doesNotMatch(html, /disabled=""/);
 });

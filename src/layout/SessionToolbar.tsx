@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import type {
   ApprovalMode,
   ApprovalPolicy,
@@ -21,23 +22,21 @@ export const CLAUDE_PERMISSION_OPTIONS: {
   value: ClaudePermissionMode;
   label: string;
 }[] = [
-  { value: "default", label: "Ask when needed" },
-  { value: "acceptEdits", label: "Auto-accept edits" },
-  { value: "plan", label: "Plan mode" },
-  { value: "dontAsk", label: "Deny prompts" },
-  { value: "bypassPermissions", label: "Bypass permissions" },
+  { value: "default", label: "按需询问" },
+  { value: "acceptEdits", label: "自动接受编辑" },
+  { value: "plan", label: "计划模式" },
+  { value: "dontAsk", label: "拒绝提示" },
+  { value: "bypassPermissions", label: "跳过权限确认" },
 ];
 
 export function SessionToolbar({
   thread,
-  locked,
   onSettings,
   onCompact,
   variant = "inline",
   showCompact = true,
 }: {
   thread: ThreadSummary;
-  locked?: boolean;
   onSettings: (settings: {
     model?: string;
     reasoningEffort?: string;
@@ -52,153 +51,185 @@ export function SessionToolbar({
   variant?: "inline" | "panel";
   showCompact?: boolean;
 }) {
+  const agentId = thread.agentId || "codex";
+  const isCodex = agentId === "codex";
+  const modelFields = (
+    <ModelPicker
+      agentId={agentId}
+      cwd={thread.cwd}
+      compact
+      providerId={thread.providerId}
+      model={thread.model}
+      reasoningEffort={thread.reasoningEffort || ""}
+      reasoningLabel={variant === "panel" ? "推理强度" : undefined}
+      onChange={(next) => onSettings(next)}
+    />
+  );
+  const claudePermissionField = (
+    <label className="toolbar-select">
+      <span className="toolbar-field-label">权限</span>
+      <Select
+        aria-label="Claude 权限"
+        title="Claude 权限"
+        value={thread.permissionMode || "default"}
+        onValueChange={(nextValue) =>
+          onSettings({
+            permissionMode: nextValue as ClaudePermissionMode,
+          })
+        }
+      >
+        {CLAUDE_PERMISSION_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+  const sessionModeField = thread.sessionModes?.length ? (
+    <label className="toolbar-select">
+      <span className="toolbar-field-label">模式</span>
+      <Select
+        aria-label="会话模式"
+        title="会话模式"
+        value={thread.sessionMode || ""}
+        onValueChange={(nextValue) => onSettings({ sessionMode: nextValue })}
+      >
+        {!thread.sessionMode && <option value="">默认</option>}
+        {thread.sessionModes.map((mode) => (
+          <option
+            key={mode.id}
+            value={mode.id}
+            title={mode.description || undefined}
+          >
+            {mode.name || mode.id}
+          </option>
+        ))}
+      </Select>
+    </label>
+  ) : null;
+  const sandboxField = (
+    <label className="toolbar-select">
+      <span className="toolbar-field-label">沙箱</span>
+      <Select
+        aria-label="沙箱"
+        title="沙箱"
+        value={
+          typeof thread.sandbox === "string"
+            ? thread.sandbox
+            : "workspace-write"
+        }
+        onValueChange={(nextValue) =>
+          onSettings(
+            settingsForSandboxMode(
+              nextValue as SandboxMode,
+              approvalMode(thread.approvalPolicy, thread.approvalsReviewer),
+            ),
+          )
+        }
+      >
+        {SANDBOX_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+  const approvalField = (
+    <label className="toolbar-select">
+      <span className="toolbar-field-label">审批策略</span>
+      <Select
+        aria-label="审批策略"
+        title="审批策略"
+        value={approvalMode(thread.approvalPolicy, thread.approvalsReviewer)}
+        onValueChange={(nextValue) =>
+          onSettings(
+            settingsForApprovalMode(
+              nextValue as ApprovalMode,
+              thread.sandbox || "workspace-write",
+            ),
+          )
+        }
+      >
+        {APPROVAL_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </Select>
+    </label>
+  );
+  const personalityField = (
+    <label className="toolbar-select">
+      <span className="toolbar-field-label">回复风格</span>
+      <Select
+        aria-label="回复风格"
+        title="回复风格"
+        value={thread.personality || ""}
+        onValueChange={(nextValue) =>
+          onSettings({
+            personality: (nextValue || undefined) as
+              Personality | undefined,
+          })
+        }
+      >
+        <option value="">默认</option>
+        <option value="pragmatic">务实</option>
+        <option value="friendly">友好</option>
+        <option value="none">无</option>
+      </Select>
+    </label>
+  );
+  const executionFields = isCodex ? (
+    <>
+      {sandboxField}
+      {approvalField}
+    </>
+  ) : agentId === "claude" ? (
+    claudePermissionField
+  ) : agentId === "opencode" ? null : (
+    sessionModeField
+  );
+  const executionTitle =
+    !isCodex && agentId !== "claude" ? "会话模式" : "执行权限";
+
   return (
     <div
-      className={`session-toolbar session-toolbar--${variant} ${locked ? "locked" : ""}`}
+      className={`session-toolbar session-toolbar--${variant}`}
     >
-      <div className="toolbar-fields">
-        <ModelPicker
-          agentId={thread.agentId || "codex"}
-          cwd={thread.cwd}
-          compact
-          disabled={locked}
-          providerId={thread.providerId}
-          model={thread.model}
-          reasoningEffort={thread.reasoningEffort || ""}
-          onChange={(next) => onSettings(next)}
-        />
-        {thread.agentId === "claude" ? (
-          <label className="toolbar-select">
-            <span className="toolbar-field-label">权限</span>
-            <select
-              aria-label="Claude permissions"
-              title="Claude permissions"
-              disabled={locked}
-              value={thread.permissionMode || "default"}
-              onChange={(event) =>
-                onSettings({
-                  permissionMode: event.target.value as ClaudePermissionMode,
-                })
-              }
-            >
-              {CLAUDE_PERMISSION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : thread.agentId === "opencode" ? null : thread.agentId &&
-          thread.agentId !== "codex" ? (
-          // ACP 等通用 agent：没有 codex 沙箱/审批语义；有 sessionModes 时给
-          // 模式切换（对应 ACP session/set_mode）。
-          thread.sessionModes?.length ? (
-            <label className="toolbar-select">
-              <span className="toolbar-field-label">模式</span>
-              <select
-                aria-label="Session mode"
-                title="Session mode"
-                disabled={locked}
-                value={thread.sessionMode || ""}
-                onChange={(event) =>
-                  onSettings({ sessionMode: event.target.value })
-                }
-              >
-                {!thread.sessionMode && <option value="">默认</option>}
-                {thread.sessionModes.map((mode) => (
-                  <option
-                    key={mode.id}
-                    value={mode.id}
-                    title={mode.description || undefined}
-                  >
-                    {mode.name || mode.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null
-        ) : (
-          <>
-            <label className="toolbar-select">
-              <span className="toolbar-field-label">沙箱</span>
-              <select
-                aria-label="Sandbox"
-                title="Sandbox"
-                disabled={locked}
-                value={
-                  typeof thread.sandbox === "string"
-                    ? thread.sandbox
-                    : "workspace-write"
-                }
-                onChange={(event) =>
-                  onSettings(
-                    settingsForSandboxMode(
-                      event.target.value as SandboxMode,
-                      approvalMode(
-                        thread.approvalPolicy,
-                        thread.approvalsReviewer,
-                      ),
-                    ),
-                  )
-                }
-              >
-                {SANDBOX_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="toolbar-select">
-              <span className="toolbar-field-label">审批</span>
-              <select
-                aria-label="Approvals"
-                title="Approvals"
-                disabled={locked}
-                value={approvalMode(
-                  thread.approvalPolicy,
-                  thread.approvalsReviewer,
-                )}
-                onChange={(event) =>
-                  onSettings(
-                    settingsForApprovalMode(
-                      event.target.value as ApprovalMode,
-                      thread.sandbox || "workspace-write",
-                    ),
-                  )
-                }
-              >
-                {APPROVAL_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="toolbar-select">
-              <span className="toolbar-field-label">风格</span>
-              <select
-                aria-label="Personality"
-                title="Personality"
-                disabled={locked}
-                value={thread.personality || ""}
-                onChange={(event) =>
-                  onSettings({
-                    personality: (event.target.value || undefined) as
-                      Personality | undefined,
-                  })
-                }
-              >
-                <option value="">Default</option>
-                <option value="pragmatic">Pragmatic</option>
-                <option value="friendly">Friendly</option>
-                <option value="none">None</option>
-              </select>
-            </label>
-          </>
-        )}
-      </div>
-      {locked && <small className="toolbar-hint">任务结束后生效</small>}
+      {variant === "panel" ? (
+        <>
+          <section className="session-settings-section">
+            <h3>模型与推理</h3>
+            <div className="session-settings-grid">
+              {modelFields}
+              {isCodex && personalityField}
+            </div>
+          </section>
+          {executionFields && (
+            <section className="session-settings-section">
+              <h3>{executionTitle}</h3>
+              <div className="session-settings-grid">{executionFields}</div>
+            </section>
+          )}
+        </>
+      ) : (
+        <div className="toolbar-fields">
+          {modelFields}
+          {agentId === "claude" ? (
+            claudePermissionField
+          ) : agentId === "opencode" ? null : isCodex ? (
+            <>
+              {sandboxField}
+              {approvalField}
+              {personalityField}
+            </>
+          ) : (
+            sessionModeField
+          )}
+        </div>
+      )}
       {showCompact && (thread.agentId || "codex") === "codex" && (
         <button
           type="button"

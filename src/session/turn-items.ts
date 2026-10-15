@@ -4,19 +4,89 @@ export type TurnRenderEntry =
   | { kind: "item"; item: any }
   | { kind: "fileChangeGroup"; items: any[]; changes: any[] }
   | { kind: "subAgentGroup"; items: any[] }
-  | { kind: "toolGroup"; items: any[]; label: string; files: string[] };
+  | { kind: "toolGroup"; items: any[]; label: string; files: string[] }
+  | {
+      kind: "fileTouchGroup";
+      file: string;
+      actions: { kind: "edit" | "read"; count: number }[];
+      items: any[];
+    };
 
 export function reasoningText(item: any) {
   const summary = displayText(item?.summary).trim();
   return summary || displayText(item?.content).trim();
 }
 
-export function groupTurnItems(items: any[]): TurnRenderEntry[] {
+/** 文件读写类 item 的归一化动作：kind 与目标文件（cwd 已裁剪）。 */
+function fileTouchOf(item: any, cwd?: string): { kind: "edit" | "read"; file: string } | undefined {
+  if (item?.type !== "commandExecution") return undefined;
+  const presentation = commandPresentation(item, cwd);
+  if (presentation.kind !== "edit" && presentation.kind !== "read") return undefined;
+  const file = presentation.target.trim();
+  if (!file) return undefined;
+  return { kind: presentation.kind, file };
+}
+
+/**
+ * 无额外信息的回执才算“可静默合并”：出错、运行中、带描述或带真实输出
+ * （如 diff、命令回显）都会丢信息，必须留在逐条渲染路径。
+ */
+function isSilentTouch(item: any): boolean {
+  if (item?.status === "inProgress" || item?.status === "failed") return false;
+  if (item?.error) return false;
+  const description = displayText(
+    item?.description ?? item?.input?.description,
+  ).trim();
+  if (description) return false;
+  return isTrivialToolOutput(displayText(item?.aggregatedOutput));
+}
+
+/**
+ * 连续 edit/read 同文件的死板回执收成一组：纯编辑一行、读取一行。
+ * 中间插入 explore/shell/fileChange 即断组，避免吞掉真实的执行序列。
+ */
+function tryTakeFileTouchGroup(
+  items: any[],
+  index: number,
+  cwd?: string,
+): { group: TurnRenderEntry; next: number } | undefined {
+  const first = fileTouchOf(items[index], cwd);
+  if (!first || !isSilentTouch(items[index])) return undefined;
+  const file = first.file;
+  const touched: any[] = [];
+  const actions = new Map<"edit" | "read", number>();
+  let cursor = index;
+  while (cursor < items.length) {
+    const touch = fileTouchOf(items[cursor], cwd);
+    if (!touch || touch.file !== file || !isSilentTouch(items[cursor])) break;
+    touched.push(items[cursor]);
+    actions.set(touch.kind, (actions.get(touch.kind) || 0) + 1);
+    cursor += 1;
+  }
+  if (touched.length < 2) return undefined;
+  return {
+    group: {
+      kind: "fileTouchGroup",
+      file,
+      actions: [...actions.entries()].map(([kind, count]) => ({ kind, count })),
+      items: touched,
+    },
+    next: cursor,
+  };
+}
+
+export function groupTurnItems(items: any[], cwd?: string): TurnRenderEntry[] {
   const grouped: TurnRenderEntry[] = [];
   for (let index = 0; index < items.length;) {
     const item = items[index];
     if (item?.type === "reasoning" && !reasoningText(item)) {
       index += 1;
+      continue;
+    }
+    const touchGroup = tryTakeFileTouchGroup(items, index, cwd);
+    if (touchGroup) {
+      grouped.push(touchGroup.group);
+      index = touchGroup.next;
       continue;
     }
     if (isGroupableEdit(item)) {
@@ -31,7 +101,7 @@ export function groupTurnItems(items: any[]): TurnRenderEntry[] {
           items: editItems,
           label: "编辑",
           files: unique(
-            editItems.map((entry) => openCodeFileTarget(entry)),
+            editItems.map((entry) => openCodeFileTarget(entry, cwd)),
           ),
         });
         continue;
@@ -351,7 +421,7 @@ function jsonText(value: unknown) {
 }
 
 export function toolCallPresentation(item: any) {
-  const tool = String(item?.tool || item?.name || item?.type || "tool");
+  const tool = String(item?.tool || item?.name || item?.type || "工具");
   const scope = String(item?.server || item?.namespace || "");
   const input = jsonText(item?.arguments ?? item?.input);
   const output =

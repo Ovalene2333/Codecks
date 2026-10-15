@@ -24,7 +24,7 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     finally { actionPending.current = false; setActing(false); }
   };
   const canFeedback = item.status === "queued" && item.mode === "queue" && onFeedback;
-  const status = item.status === "delivered" ? "后端已受理，正在同步聊天记录"
+  const status = item.status === "delivered" ? "已受理，正在同步聊天记录"
     : item.status === "interrupting" ? "正在停止当前任务"
     : item.status === "sending" ? "正在发送"
     : item.status === "failed" ? "发送未完成"

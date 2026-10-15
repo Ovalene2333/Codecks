@@ -5,17 +5,18 @@ import type {
   SandboxMode,
 } from "./types";
 
+// 选项的 value 是 Codex 原生枚举，必须原样透传；label 只用于界面显示。
 export const SANDBOX_OPTIONS: { value: SandboxMode; label: string }[] = [
-  { value: "read-only", label: "Read Only" },
-  { value: "workspace-write", label: "Workspace Write" },
-  { value: "danger-full-access", label: "Full Access" },
+  { value: "read-only", label: "只读" },
+  { value: "workspace-write", label: "工作区可写" },
+  { value: "danger-full-access", label: "完全访问" },
 ];
 
 export const APPROVAL_OPTIONS: { value: ApprovalMode; label: string }[] = [
-  { value: "untrusted", label: "Untrusted" },
-  { value: "on-request", label: "Ask for approval" },
-  { value: "auto-review", label: "Approve for me" },
-  { value: "never", label: "Never ask" },
+  { value: "untrusted", label: "不受信任" },
+  { value: "on-request", label: "每次询问" },
+  { value: "auto-review", label: "自动批准" },
+  { value: "never", label: "从不询问" },
 ];
 
 export function approvalMode(
@@ -71,20 +72,57 @@ export function approvalModeLabel(
 }
 
 const EFFORT_LABELS: Record<string, string> = {
-  none: "None",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "Extra High",
-  "x-high": "Extra High",
-  max: "Max",
-  ultra: "Ultra",
+  none: "无",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  "x-high": "极高",
+  max: "最高",
+  ultra: "极致",
 };
 
 export function reasoningEffortLabel(value: string) {
   const key = value.trim().toLowerCase();
   return EFFORT_LABELS[key] || value;
+}
+
+/**
+ * 输入框格子带里的压缩显示：全压成两个字，完整名称走 title/aria。
+ * 推理强度与手填值天然 ≤2 字，直接原样发过。
+ */
+const CONTEXT_SHORT_LABELS: Record<string, string> = {
+  只读: "只读",
+  工作区可写: "可写",
+  完全访问: "完全",
+  不受信任: "不信",
+  每次询问: "询问",
+  自动批准: "自动",
+  从不询问: "从不",
+  按需询问: "按需",
+  自动接受编辑: "接受",
+  计划模式: "计划",
+  拒绝提示: "拒绝",
+  跳过权限确认: "跳过",
+};
+
+export function contextShortLabel(label: string) {
+  return CONTEXT_SHORT_LABELS[label] || label;
+}
+
+export function sandboxLabel(value: string) {
+  return SANDBOX_OPTIONS.find((option) => option.value === value)?.label || value;
+}
+
+const PERSONALITY_LABELS: Record<string, string> = {
+  pragmatic: "务实",
+  friendly: "友好",
+  none: "无",
+};
+
+export function personalityLabel(value: string) {
+  return PERSONALITY_LABELS[value] || value;
 }
 
 /**

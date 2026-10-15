@@ -20,7 +20,7 @@ export function TodoPanel({
   ).length;
   const allDone = completed === normalized.length;
   return (
-    <div className={`tool-row todo-row ${allDone ? "ok" : "running"}`}>
+    <div className={`rail-row tool-row todo-row ${allDone ? "ok" : "running"}`}>
       <div className="todo-head">
         <ListTodo />
         <span className="tool-action">{title}</span>

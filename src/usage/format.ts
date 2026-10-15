@@ -65,7 +65,7 @@ export function rankedQuotaWindows(limits?: RateLimits | null): QuotaWindowRow[]
   };
   push("primary", "主窗口", limits?.primary);
   push("secondary", "次窗口", limits?.secondary);
-  push("monthly", "月度", limits?.monthly);
+  push("monthly", "月度额度", limits?.monthly);
   for (const [id, window] of Object.entries(limits?.byLimitId || {}))
     push(`limit:${id}`, id, window);
   rows.sort(
@@ -81,6 +81,15 @@ export function usageWindow(limits?: RateLimits | null) {
   return rankedQuotaWindows(limits)[0]?.window;
 }
 
+/**
+ * 收起态（侧栏芯片、欢迎页）显示的窗口短标签，如 5h / 7d / 月度额度。
+ * 注意：这里故意不用重置倒计时——快照过期时倒计时恒为“即将重置”，
+ * 且缺数据时直接消失；窗口时长一定有值，收起态显示更稳定。
+ */
+export function usageWindowLabel(limits?: RateLimits | null): string {
+  return rankedQuotaWindows(limits)[0]?.label || "";
+}
+
 export function remainingPercent(usedPercent?: number) {
   if (usedPercent == null || !Number.isFinite(usedPercent)) return undefined;
   return Math.max(0, Math.min(100, Math.round(100 - usedPercent)));
@@ -90,11 +99,12 @@ export function usageChipMetric(
   limits?: RateLimits | null,
   error?: string,
 ): string {
-  const window = usageWindow(limits);
+  const rows = rankedQuotaWindows(limits);
+  const window = rows[0]?.window;
   if (error || !window || window.usedPercent == null) return USAGE_UNAVAILABLE;
   const pct = remainingPercent(window.usedPercent)!;
-  const reset = formatResetCountdown(window);
-  return reset ? `${pct}% · ${reset}` : `${pct}%`;
+  const label = rows[0]?.label || "";
+  return label ? `${pct}% · ${label}` : `${pct}%`;
 }
 
 export function usageTone(limits?: RateLimits | null) {

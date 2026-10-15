@@ -101,9 +101,9 @@ export function ChatHeader({
             {thread.agentId === "claude" && (
               <span className={`claude-connection ${thread.claudeConnected ? "connected" : ""}`}
                 title={thread.claudeConnected
-                  ? "Deck 当前持有此会话的 Claude SDK 连接"
-                  : "Deck 当前没有持有此会话的 Claude SDK 连接"}>
-                Deck {thread.claudeConnected ? "已连接" : "未连接"}
+                  ? "此会话与 Claude 保持连接"
+                  : "此会话与 Claude 未连接"}>
+                Claude {thread.claudeConnected ? "已连接" : "未连接"}
               </span>
             )}
             {!canSwitchProvider && (
@@ -157,7 +157,7 @@ export function ChatHeader({
               disabled={locked || (thread.agentId === "claude" && thread.claudeConnected)}
               title={thread.agentId === "claude" && thread.claudeConnected
                 ? "Claude 会话仍保持连接；可创建分支并为分支选择其他供应商"
-                : "为此 Session 切换供应商"}
+                : "为此会话切换供应商"}
             >
               <ArrowRightLeft />
               <span>
@@ -173,11 +173,11 @@ export function ChatHeader({
               onClick={onWake}
               title={
                 wake?.lost?.length
-                  ? `deck-wake watcher 失联：${wake.lost[0].label}（点开处理）`
+                  ? `deck-wake 监督进程失联：${wake.lost[0].label}（点开处理）`
                   : wake?.watcher
                   ? `deck-wake 监督中：${wake.watcher.label} · 代号 ${wake.watcher.code}`
                   : wake?.code
-                    ? `远程唤醒已开启 · 代号 ${wake.code}（本机暂无 watcher）`
+                    ? `远程唤醒已开启 · 代号 ${wake.code}（本机暂无监督进程）`
                     : "远程唤醒未开启"
               }
               aria-label="远程唤醒"

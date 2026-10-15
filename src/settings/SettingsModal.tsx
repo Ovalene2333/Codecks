@@ -16,14 +16,18 @@ import {
   MessageSquare,
   Palette,
   Plug,
+  RefreshCw,
   Wrench,
 } from "lucide-react";
 import type { DeckNotificationPermission } from "../notifications";
+import { Button, Note } from "../kit";
 import { OpenCodeAgentsSection } from "../overlays/OpenCodeAgentsSection";
 import type { Provider, Snapshot } from "../types";
 import { Modal, useOverlayHistory } from "../ui";
 import { AboutPage } from "./AboutPage";
 import { AgentsPanel, ReloadAllButton } from "./AgentsPanel";
+import { CodexBackendSection, LocalBackendSection } from "./BackendSection";
+import { OpenCodeServiceRow } from "./OpenCodeServiceRow";
 import { CodexPage } from "./CodexPage";
 import { DataPage } from "./DataPage";
 import { DirtyContext } from "./dirty";
@@ -44,7 +48,7 @@ export type SettingsPage =
   | "about"
   | "providers";
 /** 有详情页的 Agent。其余 Agent 只有列表里的启用/重载。 */
-type AgentDetail = "codex" | "opencode";
+type AgentDetail = "codex" | "claude" | "opencode";
 /** 打开设置时直达的位置：一级页面，或某个 Agent 的详情。 */
 export type SettingsTab = SettingsPage | AgentDetail;
 
@@ -58,23 +62,27 @@ type NavItem = {
 const NAV: NavItem[] = [
   { id: "interface", label: "界面", icon: Palette, desc: "主题、动画、消息排版与模板，仅作用于当前设备。" },
   { id: "session", label: "会话", icon: MessageSquare, desc: "新建会话的默认值、输入方式与系统提醒。" },
-  { id: "agents", label: "Agent", icon: Bot, desc: "停用的 Agent 不启动，也不出现在新建会话中。修改 opencode.json、acp-agents.json 或 CLI 配置后重载即可生效，无需重启 Deck。" },
+  { id: "agents", label: "Agent", icon: Bot, desc: "停用的 Agent 不启动，也不出现在新建会话中。改完配置后重载即可生效，无需重启。" },
+  { id: "providers", label: "供应商", icon: Plug, desc: "管理 Codex、Claude、OpenCode 的自定义供应商；CC Switch 为可选只读来源。" },
   { id: "tools", label: "工具", icon: Wrench, desc: "工具菜单的显示项与打开方式。" },
   { id: "shortcuts", label: "快捷键", icon: Keyboard, desc: "桌面端键盘快捷键一览。" },
   { id: "data", label: "数据", icon: Database, desc: "设置备份、本地缓存与重置。" },
   { id: "about", label: "关于", icon: Info, desc: "版本、运行状态与诊断信息。" },
 ];
-/** 不常用：放在导航最下方的角落，不和日常设置并列。 */
-const PROVIDERS_NAV: NavItem = {
-  id: "providers",
-  label: "供应商",
-  icon: Plug,
-  desc: "使用本机登录或添加 Codex、Claude 自定义供应商；CC Switch 是可选的只读配置来源。",
-};
-const ALL_NAV = [...NAV, PROVIDERS_NAV];
+/**
+ * 分组侧栏（对标 shadcn Settings Page / Vercel SidebarGroup）：
+ * 通用 → 模型与 Agent → 系统。供应商不再沉底，跟 Agent 相邻。
+ */
+const GROUPS: { label: string; items: SettingsPage[] }[] = [
+  { label: "通用", items: ["interface", "session", "shortcuts"] },
+  { label: "模型与 Agent", items: ["agents", "providers"] },
+  { label: "系统", items: ["tools", "data", "about"] },
+];
+const ALL_NAV = NAV;
 const AGENT_DETAILS: Record<AgentDetail, string> = {
-  codex: "Codex 为核心 Agent：供应商与共享 Runtime 依附于它。",
-  opencode: "主代理与子代理的启用和模型，写入 opencode.json。",
+  claude: "管理 Claude Code 使用的本机 CLI 版本。",
+  codex: "Codex 为核心 Agent：供应商与共享运行时依附于它。",
+  opencode: "运行时、代理与权限。",
 };
 
 const COMPACT_QUERY = "(max-width: 640px)";
@@ -105,7 +113,7 @@ const pageKey = (page: SettingsPage, detail: AgentDetail | null) =>
   page === "agents" && detail ? `agent:${detail}` : page;
 
 function resolveInitial(tab?: SettingsTab) {
-  if (tab === "codex" || tab === "opencode")
+  if (tab === "codex" || tab === "claude" || tab === "opencode")
     return { page: "agents" as SettingsPage, detail: tab as AgentDetail };
   return { page: (tab || "interface") as SettingsPage, detail: null };
 }
@@ -151,6 +159,11 @@ export function SettingsModal({
     () => new Set(page ? [pageKey(page, detail)] : []),
   );
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
+  /**
+   * OpenCode 的供应商/权限/代理写入返回 needsReload：全局提示条提醒
+   * "有配置在等生效"，并提供跳到 Agent→OpenCode 服务页重载的捷径。
+   */
+  const [needsReload, setNeedsReload] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const actions = useAgentActions({ onSaved, onToast, onConfirm });
   const agents = snapshot.agents || [];
@@ -206,14 +219,14 @@ export function SettingsModal({
     return false;
   };
 
-  const navItem = (item: NavItem, minor?: boolean) => {
+  const navItem = (item: NavItem) => {
     const Icon = item.icon;
     const current = active === item.id;
     return (
       <button
         key={item.id}
         type="button"
-        className={`settings-nav__item${minor ? " is-minor" : ""}${current ? " is-active" : ""}`}
+        className={`settings-nav__item${current ? " is-active" : ""}`}
         aria-current={current ? "page" : undefined}
         onClick={() => go(item.id)}
       >
@@ -226,39 +239,30 @@ export function SettingsModal({
     );
   };
 
-  /** 手机的分类列表：同样两组，供应商单独放最下面。 */
+  /** 手机的分类列表：与桌面同构的三个分组。 */
   const compactIndex = (
     <div className="settings-index">
-      <div className="ui-group">
-        {NAV.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className="settings-index__item"
-              onClick={() => go(item.id)}
-            >
-              <Icon aria-hidden />
-              <span>{item.label}</span>
-              {dirtyIn(item.id) ? <i className="settings-nav__dirty" /> : null}
-              <ChevronRight className="settings-index__chevron" aria-hidden />
-            </button>
-          );
-        })}
-      </div>
-      <div className="ui-group settings-index__minor">
-        <button
-          type="button"
-          className="settings-index__item"
-          onClick={() => go("providers")}
-        >
-          <Plug aria-hidden />
-          <span>供应商</span>
-          {dirtyIn("providers") ? <i className="settings-nav__dirty" /> : null}
-          <ChevronRight className="settings-index__chevron" aria-hidden />
-        </button>
-      </div>
+      {GROUPS.map((group) => (
+        <div key={group.label} className="ui-group">
+          {group.items.map((id) => {
+            const item = NAV.find((entry) => entry.id === id)!;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className="settings-index__item"
+                onClick={() => go(item.id)}
+              >
+                <Icon aria-hidden />
+                <span>{item.label}</span>
+                {dirtyIn(item.id) ? <i className="settings-nav__dirty" /> : null}
+                <ChevronRight className="settings-index__chevron" aria-hidden />
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 
@@ -266,10 +270,10 @@ export function SettingsModal({
     ALL_NAV.find((item) => item.id === id) || NAV[0];
   const agentName = (id: AgentDetail) =>
     agents.find((agent) => agent.id === id)?.name ||
-    (id === "codex" ? "Codex" : "OpenCode");
+    (id === "codex" ? "Codex" : id === "claude" ? "Claude Code" : "OpenCode");
 
   const head = (key: string): { title: string; desc: string; actions?: ReactNode } => {
-    if (key === "agent:codex" || key === "agent:opencode") {
+    if (key === "agent:codex" || key === "agent:claude" || key === "agent:opencode") {
       const id = key.slice(6) as AgentDetail;
       return { title: agentName(id), desc: AGENT_DETAILS[id] };
     }
@@ -304,38 +308,73 @@ export function SettingsModal({
             agents={agents}
             actions={actions}
             onOpen={(agent) =>
-              agent.id === "codex" || agent.id === "opencode"
+              agent.id === "codex" || agent.id === "claude" || agent.id === "opencode"
                 ? () => go("agents", agent.id as AgentDetail)
                 : undefined
             }
           />
         );
+      case "agent:claude":
+        return <LocalBackendSection agent="claude" onSaved={onSaved} onToast={onToast} />;
       case "agent:codex":
         return (
-          <CodexPage
-            agent={agents.find((agent) => agent.id === "codex")}
-            runtime={runtime}
-            providers={providers}
-            defaultCwd={defaultCwd}
-            onOpenProviders={() => go("providers")}
-            onSaved={onSaved}
-            onToast={onToast}
-            onConfirmRuntimeRestart={onConfirmRuntimeRestart}
-          />
+          <>
+            <CodexBackendSection runtime={runtime} onSaved={onSaved} onToast={onToast} />
+            <CodexPage
+              agent={agents.find((agent) => agent.id === "codex")}
+              runtime={runtime}
+              providers={providers}
+              defaultCwd={defaultCwd}
+              onOpenProviders={() => go("providers")}
+              onSaved={onSaved}
+              onToast={onToast}
+              onConfirmRuntimeRestart={onConfirmRuntimeRestart}
+            />
+          </>
         );
       case "agent:opencode": {
         const opencode = agents.find((agent) => agent.id === "opencode");
         return (
-          <OpenCodeAgentsSection
-            enabled={opencode?.enabled !== false}
-            reloading={actions.pending.opencode === "reload"}
-            onReload={() =>
-              void actions.reload({
-                id: "opencode",
-                name: opencode?.name || "OpenCode",
-              })
-            }
-          />
+          <>
+            <LocalBackendSection
+              agent="opencode"
+              onSaved={onSaved}
+              onToast={onToast}
+              serviceRow={
+                <OpenCodeServiceRow
+                  agent={opencode}
+                  enabled={opencode?.enabled !== false}
+                  pending={
+                    actions.pending.opencode === "reload" ||
+                    actions.pending.opencode === "restart"
+                      ? (actions.pending.opencode as "reload" | "restart")
+                      : undefined
+                  }
+                  busyAll={actions.reloadingAll}
+                  onReload={async () => {
+                    await actions.reload({
+                      id: "opencode",
+                      name: opencode?.name || "OpenCode",
+                    });
+                    setNeedsReload(false);
+                  }}
+                  onRestart={async () => {
+                    await actions.restart({
+                      id: "opencode",
+                      name: opencode?.name || "OpenCode",
+                    });
+                    setNeedsReload(false);
+                  }}
+                />
+              }
+            />
+            <OpenCodeAgentsSection
+              enabled={opencode?.enabled !== false}
+              onToast={onToast}
+              onNeedsReload={() => setNeedsReload(true)}
+              onOpenProviders={() => go("providers")}
+            />
+          </>
         );
       }
       case "tools":
@@ -351,6 +390,7 @@ export function SettingsModal({
       case "data":
         return (
           <DataPage
+            snapshot={snapshot}
             preferences={snapshot.preferences}
             appearance={appearance}
             onSaved={onSaved}
@@ -377,6 +417,7 @@ export function SettingsModal({
             onSaved={onSaved}
             onToast={onToast}
             onConfirmDelete={onConfirmDelete}
+            onNeedsReload={() => setNeedsReload(true)}
           />
         );
       default:
@@ -412,10 +453,14 @@ export function SettingsModal({
           <div className="settings-layout">
             {!compact ? (
               <nav className="settings-nav" aria-label="设置分类">
-                {NAV.map((item) => navItem(item))}
-                <div className="settings-nav__foot">
-                  {navItem(PROVIDERS_NAV, true)}
-                </div>
+                {GROUPS.map((group) => (
+                  <div key={group.label} className="settings-nav__group">
+                    <p className="settings-nav__label">{group.label}</p>
+                    {group.items.map((id) =>
+                      navItem(NAV.find((entry) => entry.id === id)!),
+                    )}
+                  </div>
+                ))}
               </nav>
             ) : null}
             <div className="ui-panel__body settings-body" ref={bodyRef}>
@@ -455,6 +500,25 @@ export function SettingsModal({
                         ) : null}
                       </div>
                     </header>
+                    {needsReload && (
+                      <Note
+                        tone="warn"
+                        icon={<RefreshCw />}
+                        title="OpenCode 有配置等待生效"
+                        action={
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            title="打开 OpenCode 服务页重载"
+                            onClick={() => go("agents", "opencode")}
+                          >
+                            去重载
+                          </Button>
+                        }
+                      >
+                        供应商、权限或代理的改动需要重载 OpenCode 才生效。
+                      </Note>
+                    )}
                     {content(key)}
                   </div>
                 );

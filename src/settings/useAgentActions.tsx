@@ -38,11 +38,11 @@ export function useAgentActions({
   onToast: (message: string) => void;
   onConfirm: ConfirmFn;
 }) {
-  const [pending, setPending] = useState<Record<string, "toggle" | "reload">>(
-    {},
-  );
+  const [pending, setPending] = useState<
+    Record<string, "toggle" | "reload" | "restart">
+  >({});
   const [reloadingAll, setReloadingAll] = useState(false);
-  const mark = (id: string, kind: "toggle" | "reload") =>
+  const mark = (id: string, kind: "toggle" | "reload" | "restart") =>
     setPending((current) => ({ ...current, [id]: kind }));
   const unmark = (id: string) =>
     setPending((current) => {
@@ -103,41 +103,58 @@ export function useAgentActions({
     }
   };
 
+  /**
+   * 重载（reload）：让配置变动生效的轻量动作——OpenCode 走实例级 dispose
+   * 重读目录，进程不动（除非服务端自检发现坏的目录，升级为重启）；
+   * Codex / Claude 的重载本来就是重启进程。
+   * 重启（restart）：显式杀掉后端进程重建，重载救不回目录 / 模型缓存时用。
+   */
   const reload = async (
     agent: Pick<AgentDescriptor, "id" | "name">,
-    force = false,
+    options: { force?: boolean; restart?: boolean } = {},
   ): Promise<void> => {
-    mark(agent.id, "reload");
+    const { force = false, restart = false } = options;
+    mark(agent.id, restart ? "restart" : "reload");
+    const verb = restart ? "重启" : "重载";
     try {
       const { result, snapshot } = await post<AgentReloadResponse>(
         `${path(agent.id)}/reload`,
-        force ? { force: true } : undefined,
+        force || restart ? { ...(force ? { force: true } : {}), ...(restart ? { restart: true } : {}) } : undefined,
       );
       onSaved(snapshot);
       if (result.error)
-        onToast(`${agent.name} 重载失败：${firstLine(result.error)}`);
+        onToast(`${agent.name} ${verb}失败：${firstLine(result.error)}`);
       else if (!result.reloaded)
         onConfirm(
           {
-            title: `重载 ${agent.name}？`,
+            title: `${verb} ${agent.name}？`,
             body: (
               <p>
                 {agent.name} 有 <b>{result.busyCount}</b>{" "}
-                个会话正在运行或等待审批，重载会中断它们。
+                个会话正在运行或等待审批，{verb}会中断它们。
               </p>
             ),
-            confirmLabel: "仍要重载",
+            confirmLabel: `仍要${verb}`,
             danger: true,
           },
-          () => reload(agent, true),
+          () => reload(agent, { force: true, restart }),
         );
-      else onToast(`已重载 ${agent.name}`);
+      else if (restart || result.mode === "process")
+        onToast(
+          `已重启 ${agent.name} 服务（进程级缓存已丢弃，配置与会话已重新读取）`,
+        );
+      else onToast(`已重载 ${agent.name}（实例缓存已失效，进程未动）`);
     } catch (error: any) {
-      onToast(error?.message || "重载失败");
+      onToast(error?.message || `${verb}失败`);
     } finally {
       unmark(agent.id);
     }
   };
+
+  const restart = async (
+    agent: Pick<AgentDescriptor, "id" | "name">,
+    force = false,
+  ): Promise<void> => reload(agent, { force, restart: true });
 
   const reloadAll = async (): Promise<void> => {
     setReloadingAll(true);
@@ -154,7 +171,7 @@ export function useAgentActions({
       const changes = [
         ...response.sync.added.map((id) => `新增 ${label(id)}`),
         ...response.sync.replaced.map((id) => `更新 ${label(id)}`),
-        ...response.sync.removed.map((id) => `移除 ${id}`),
+        ...response.sync.removed.map((id) => `移除 ${label(id)}`),
       ];
       if (changes.length) parts.push(changes.join("、"));
       const busy = response.results.filter(
@@ -177,7 +194,7 @@ export function useAgentActions({
     }
   };
 
-  return { pending, reloadingAll, toggle, reload, reloadAll };
+  return { pending, reloadingAll, toggle, reload, restart, reloadAll };
 }
 
 export type AgentActions = ReturnType<typeof useAgentActions>;

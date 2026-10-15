@@ -57,11 +57,12 @@ function AgentRow({
       dim={!enabled}
       title={agent.name}
       onOpen={onOpen}
+      reserveOpenSlot
       openLabel={onOpen ? `${agent.name} 设置` : undefined}
       badges={
         <>
           {locked ? (
-            <Badge title="Codex 为核心 Agent：供应商与共享 Runtime 依附于它，不可停用">
+              <Badge title="Codex 为核心 Agent：供应商与共享运行时依附于它，不可停用">
               核心
             </Badge>
           ) : null}
@@ -85,9 +86,13 @@ function AgentRow({
             variant="ghost"
             iconOnly
             title={
-              enabled
-                ? `重载 ${agent.name}：重启后端并重新读取配置与会话`
-                : `${agent.name} 未启用，启用后才能重载`
+              agent.id === "opencode"
+                ? enabled
+                  ? "重载 OpenCode：失效实例缓存并重读配置与供应商目录，进程不动；若重载自检发现目录仍坏（如启动时拉取 models.dev 失败），会自动升级为重启服务"
+                  : "OpenCode 未启用，启用后才能重载"
+                : enabled
+                  ? `重载 ${agent.name}：重启服务并重新读取配置与会话`
+                  : `${agent.name} 未启用，启用后才能重载`
             }
             aria-label={`重载 ${agent.name}`}
             disabled={!enabled || Boolean(pending) || actions.reloadingAll}
@@ -123,7 +128,7 @@ export function ReloadAllButton({ actions }: { actions: AgentActions }) {
     <Button
       size="sm"
       busy={actions.reloadingAll}
-      title="按 acp-agents.json 增删改 ACP Agent，并重载全部已启用的 Agent；有会话运行的将跳过"
+      title="增删改 ACP Agent 描述后，可重载全部已启用的 Agent；有会话运行的将跳过"
       onClick={() => void actions.reloadAll()}
     >
       <RefreshCw className={actions.reloadingAll ? "ui-spin" : undefined} />
@@ -165,7 +170,7 @@ export function AgentsPanel({
         desc={
           acp.length
             ? undefined
-            : "没有注册 ACP Agent。可在 .data/acp-agents.json 中声明 command/args 接入。"
+            : "没有注册 ACP Agent。在数据目录的 acp-agents.json 里按格式声明即可接入。"
         }
       >
         {acp.length ? <Group>{acp.map(row)}</Group> : null}

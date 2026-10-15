@@ -39,7 +39,7 @@ function subscribe(listener: Listener) {
 }
 
 export function useActivities() {
-  return useSyncExternalStore(subscribe, () => activities);
+  return useSyncExternalStore(subscribe, () => activities, () => activities);
 }
 
 /** 所有计时器共用一个 1 秒节拍，卡片再多也只有一个 interval。 */
@@ -67,5 +67,9 @@ function subscribeNow(listener: Listener) {
 
 /** step 越大重渲染越少：快照按 step 取整，同一档内不会触发更新。 */
 export function useNow(step = 1_000) {
-  return useSyncExternalStore(subscribeNow, () => Math.floor(now / step) * step);
+  return useSyncExternalStore(
+    subscribeNow,
+    () => Math.floor(now / step) * step,
+    () => 0,
+  );
 }

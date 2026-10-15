@@ -39,7 +39,6 @@ test("project rows render body-search context and highlight the query", () => {
       library="active"
       unseenSessions={new Set()}
       collapsed={false}
-      forkCounts={new Map()}
       searchQuery="searchable phrase"
       searchMatches={new Map([["codex:thread-1", match]])}
       onToggle={() => undefined}

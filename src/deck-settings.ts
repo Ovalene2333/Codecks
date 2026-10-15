@@ -36,6 +36,8 @@ export interface DeckLocalSettings {
   hiddenTools: string[];
   /** 桌面端打开工具的方式：新标签页 / 当前页。移动端始终在应用内打开。 */
   toolOpenTarget: ToolOpenTarget;
+  /** 桌面端侧栏宽度（px）；0 表示跟随界面默认值（可随窗口自适应）。 */
+  sidebarWidth: number;
 }
 
 export const DECK_SETTINGS_KEY = "codex-deck:settings:v1";
@@ -50,12 +52,27 @@ export const DEFAULT_DECK_SETTINGS: DeckLocalSettings = {
   notifyOnlyHidden: false,
   hiddenTools: [],
   toolOpenTarget: "tab",
+  sidebarWidth: 0,
 };
 
 const oneOf = <T extends string>(value: unknown, options: T[], fallback: T) =>
   options.includes(value as T) ? (value as T) : fallback;
 const bool = (value: unknown, fallback: boolean) =>
   typeof value === "boolean" ? value : fallback;
+
+/** 桌面端侧栏宽度的可用区间（px）。 */
+export const SIDEBAR_WIDTH_MIN = 240;
+export const SIDEBAR_WIDTH_MAX = 480;
+
+/** 侧栏宽度合法化：非正数/非法值回到 0（自动），其余钳到可用区间。 */
+export function normalizeSidebarWidth(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+    return 0;
+  return Math.min(
+    SIDEBAR_WIDTH_MAX,
+    Math.max(SIDEBAR_WIDTH_MIN, Math.round(value)),
+  );
+}
 
 export function normalizeDeckSettings(value: unknown): DeckLocalSettings {
   const input =
@@ -94,6 +111,7 @@ export function normalizeDeckSettings(value: unknown): DeckLocalSettings {
       ["tab", "inline"],
       d.toolOpenTarget,
     ),
+    sidebarWidth: normalizeSidebarWidth(input.sidebarWidth),
   };
 }
 

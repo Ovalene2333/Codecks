@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import { SwrCache, useSwr } from "../swr-cache";
@@ -31,7 +32,7 @@ export type CommandModalKind =
 const titles: Record<CommandModalKind["kind"], string> = {
   model: "模型与推理强度",
   permissions: "权限与审批",
-  skills: "可用 Skills",
+  skills: "可用技能",
   mention: "引用工作区文件",
   mcp: "MCP 服务器",
 };
@@ -114,14 +115,13 @@ function ModelCommand({ thread, locked, onSettings, onClose }: any) {
         providerId={thread.providerId}
         model={next.model}
         reasoningEffort={next.reasoningEffort}
-        disabled={locked}
         onChange={setNext}
       />
-      {locked && <p className="command-help">任务结束后才能修改模型。</p>}
+      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
       <button
         type="button"
         className="primary"
-        disabled={locked || !next.model}
+        disabled={!next.model}
         onClick={async () => {
           if (await onSettings(next)) onClose();
         }}
@@ -152,13 +152,12 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
   return (
     <div className="form command-form">
       <label>
-        Sandbox
-        <select
+        沙箱
+        <Select
           value={sandbox}
-          disabled={locked}
-          onChange={(event) => {
+          onValueChange={(nextValue) => {
             const settings = settingsForSandboxMode(
-              event.target.value as SandboxMode,
+              nextValue as SandboxMode,
               selectedApprovalMode,
             );
             setSandbox(settings.sandbox);
@@ -172,15 +171,14 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
       <label>
-        Approvals
-        <select
+        审批策略
+        <Select
           value={selectedApprovalMode}
-          disabled={locked}
-          onChange={(event) => {
-            const mode = event.target.value as ApprovalMode;
+          onValueChange={(nextValue) => {
+            const mode = nextValue as ApprovalMode;
             const settings = settingsForApprovalMode(mode, sandbox);
             setSelectedApprovalMode(mode);
             setSandbox(settings.sandbox);
@@ -191,13 +189,12 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
-      {locked && <p className="command-help">任务结束后才能修改权限。</p>}
+      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
       <button
         type="button"
         className="primary"
-        disabled={locked}
         onClick={async () => {
           if (
             await onSettings({
@@ -226,11 +223,10 @@ function ClaudePermissionsCommand({
     <div className="form command-form">
       <label>
         Claude 权限
-        <select
+        <Select
           value={permissionMode}
-          disabled={locked}
-          onChange={(event) =>
-            setPermissionMode(event.target.value as ClaudePermissionMode)
+          onValueChange={(nextValue) =>
+            setPermissionMode(nextValue as ClaudePermissionMode)
           }
         >
           {CLAUDE_PERMISSION_OPTIONS.map((option) => (
@@ -238,13 +234,12 @@ function ClaudePermissionsCommand({
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
       </label>
-      {locked && <p className="command-help">任务结束后才能修改权限。</p>}
+      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
       <button
         type="button"
         className="primary"
-        disabled={locked}
         onClick={async () => {
           if (await onSettings({ permissionMode })) onClose();
         }}
@@ -281,7 +276,7 @@ function SkillsCommand({ thread, initialQuery, onInsert }: any) {
         className="command-search"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="搜索 Skill"
+        placeholder="搜索技能"
       />
       <div className="command-list">
         {skills.map((skill: any) => (
@@ -296,7 +291,7 @@ function SkillsCommand({ thread, initialQuery, onInsert }: any) {
               {skill.name}
             </b>
             <span>{skill.description || "无说明"}</span>
-            <small>{skill.enabled ? skill.scope || "skill" : "已停用"}</small>
+            <small>{skill.enabled ? skill.scope || "技能" : "已停用"}</small>
           </button>
         ))}
       </div>
@@ -363,7 +358,7 @@ function McpCommand({ thread, verbose }: any) {
               <summary>
                 <b>{server.name}</b>
                 <span>
-                  {authLabel(server.authStatus)} · {tools.length} tools
+                  {authLabel(server.authStatus)} · {tools.length} 个工具
                 </span>
               </summary>
               <div>
@@ -435,10 +430,10 @@ function mentionPath(root: string, value: string) {
 function authLabel(value: unknown) {
   if (typeof value === "string") return value;
   if (value && typeof value === "object")
-    return Object.keys(value)[0] || "unknown";
-  return "unknown";
+    return Object.keys(value)[0] || "未知";
+  return "未知";
 }
 
 function resourceLabel(value: any) {
-  return String(value?.name || value?.title || value?.uri || "unnamed");
+  return String(value?.name || value?.title || value?.uri || "未命名");
 }

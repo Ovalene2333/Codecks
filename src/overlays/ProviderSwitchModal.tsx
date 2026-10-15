@@ -1,3 +1,4 @@
+import { Select } from "../kit/Select";
 import { useState } from "react";
 import { ArrowRightLeft } from "lucide-react";
 import { api, post } from "../api";
@@ -70,7 +71,7 @@ export function ProviderSwitchModal({
     }
   };
   return (
-    <Modal title="切换此 Session 的供应商" onClose={() => !busy && onClose()}>
+    <Modal title="切换此会话的供应商" onClose={() => !busy && onClose()}>
       <form className="form" onSubmit={submit}>
         <div className="migration-note">
           <ArrowRightLeft />
@@ -84,18 +85,18 @@ export function ProviderSwitchModal({
             </b>
             <p>
               {isClaude
-                ? "Claude 会保留当前 Session ID 和完整历史；切换只修改此会话的供应商绑定，不会更改配置来源的当前项。"
+                ? "Claude 会保留当前会话与完整历史；切换只改这个会话的供应商，不会改动配置来源的当前项。"
                 : unsent
-                  ? "此会话尚未发送过消息，没有可 fork 的历史。切换后将在目标供应商下沿用当前项目目录与会话设置。"
-                  : "Codex 会 fork 当前 Session 的完整历史，并让新分支使用目标供应商；原分支保留，运行中或待审批时不能切换。"}
+                  ? "此会话还没发过消息，没有可分支的历史。切换后沿用当前目录与会话设置。"
+                  : "Codex 会基于当前会话的完整历史创建分支，新分支使用目标供应商；原分支保留，运行中或待审批时不能切换。"}
             </p>
           </div>
         </div>
         <label>
           {isClaude ? "目标 Claude 配置档" : "目标供应商"}
-          <select
+          <Select
             value={targetProviderId}
-            onChange={(e) => setTargetProviderId(e.target.value)}
+            onValueChange={(nextValue) => setTargetProviderId(nextValue)}
             disabled={choices.length === 0}
           >
             {choices.length === 0 && <option value="">没有其他可用配置</option>}
@@ -104,7 +105,7 @@ export function ProviderSwitchModal({
                 {provider.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         {!isClaude && targetProviderId && (
           <ModelPicker

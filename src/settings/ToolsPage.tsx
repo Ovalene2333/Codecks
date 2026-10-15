@@ -10,9 +10,9 @@ import { Badge, Button, Choice, Group, Row, Section, Switch } from "../kit";
 
 /** 旧服务端快照里没有 tools 时的兜底列表（与 plugin/*.server.ts 一致）。 */
 const FALLBACK_TOOLS: ToolDescriptor[] = [
-  { id: "terminal", name: "Web Terminal", description: "通过浏览器连接服务端所在主机的交互式终端", icon: "terminal", available: true },
+  { id: "terminal", name: "网页终端", description: "通过浏览器连接本机的交互式终端", icon: "terminal", available: true },
   { id: "git", name: "Git 管理", description: "查看改动、管理暂存区与分支，并同步远端仓库", icon: "git", available: true },
-  { id: "text-editor", name: "文本编辑器", description: "浏览宿主机文件系统，查看、编辑、查找并保存文本文件", icon: "text-editor", available: true },
+  { id: "text-editor", name: "文本编辑器", description: "浏览本机文件系统，查看、编辑、查找并保存文本文件", icon: "text-editor", available: true },
   { id: "commands", name: "快捷指令", description: "在指定目录一键执行常用指令", icon: "commands", available: true },
 ];
 

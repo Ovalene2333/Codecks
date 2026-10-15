@@ -73,9 +73,19 @@ export function openCodePartToItem(part: any): any | undefined {
   )
     return undefined;
   if (part.type === "text")
-    return { id: String(part.id), type: "agentMessage", text: part.text || "" };
+    return {
+      id: String(part.id),
+      type: "agentMessage",
+      text: part.text || "",
+      ...(part.stats ? { stats: part.stats } : {}),
+    };
   if (part.type === "reasoning")
-    return { id: String(part.id), type: "reasoning", summary: part.text || "" };
+    return {
+      id: String(part.id),
+      type: "reasoning",
+      summary: part.text || "",
+      ...(part.stats ? { stats: part.stats } : {}),
+    };
   if (part.type === "tool") {
     const state = part.state || {};
     if (part.tool === "task") {

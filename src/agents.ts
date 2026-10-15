@@ -201,6 +201,15 @@ export function threadRemovePath(
     : threadPath(thread);
 }
 
+/** 紧急停止：同样双路由——Codex 走旧 manager 路由，其它走通用 Agent API。 */
+export function threadForceStopPath(
+  thread: Pick<ThreadSummary, "id" | "agentId" | "providerId">,
+) {
+  return agentIdFor(thread) === "codex"
+    ? `/threads/${thread.providerId}/${thread.id}/force-stop`
+    : `${threadPath(thread)}/force-stop`;
+}
+
 export function threadActionPath(
   thread: Pick<ThreadSummary, "id" | "agentId">,
   action: "turns" | "interrupt",

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { Folder, GitBranch, LoaderCircle } from "lucide-react";
+import { Folder, GitBranch } from "lucide-react";
 import type { ThreadSummary, MessageDelivery } from "../types";
 import { RenderErrorBoundary } from "../ui";
 import { TurnBlock } from "./TurnBlock";
@@ -27,6 +27,8 @@ export function Timeline({
   streamed,
   streamedItems,
   streamedEntries,
+  turnProgress,
+  onExpandTurn,
   pendingUsers: pendingMessages,
   messageDeliveries: deliveryRecords = EMPTY_DELIVERIES,
   deliveryHistoryBefore,
@@ -53,6 +55,14 @@ export function Timeline({
   streamed: StreamedAgentMessage[];
   streamedItems: StreamedTurnItem[];
   streamedEntries: StreamedEntry[];
+  /** 本会话活跃回合的最新 turn/progress（底部状态块实时 TPS 用）。 */
+  turnProgress?: {
+    turnId?: string;
+    outputTokens?: number;
+    elapsedMs?: number;
+  };
+  /** 展开被折叠的回合工具输出（按 turn 粒度懒加载全文）。 */
+  onExpandTurn?: (turnId: string) => void;
   pendingUsers: PendingUserMessage[];
   messageDeliveries?: MessageDelivery[];
   deliveryHistoryBefore?: ReadonlyMap<string, LoadedUserMessage[]>;
@@ -246,8 +256,14 @@ export function Timeline({
       ) : (
         <div className="session-meta">
           <Folder />
-          {thread.cwd}
-          <span>{thread.resolvedModel || thread.model}</span>
+          <span className="session-meta-cwd" title={thread.cwd || undefined}>
+            {thread.cwd}
+          </span>
+          {thread.resolvedModel || thread.model ? (
+            <span className="session-meta-model">
+              {thread.resolvedModel || thread.model}
+            </span>
+          ) : null}
         </div>
       )}
       {origin && (
@@ -258,13 +274,18 @@ export function Timeline({
         </button>
       )}
       <div className="timeline-turns">
-        {(Array.isArray(turns) ? turns : []).map((turn, index) => (
+        {(Array.isArray(turns) ? turns : []).map((turn, index) => {
+          const turnIdStr = String(turn?.id || "");
+          const isActiveTurn = thread.activeTurnId
+            ? turnIdStr === String(thread.activeTurnId)
+            : index === (Array.isArray(turns) ? turns : []).length - 1;
+          return (
           <RenderErrorBoundary
             key={turn?.id || index}
-            resetKey={String(turn?.id || index)}
+            resetKey={turnIdStr || String(index)}
             fallback={
               <section className="turn-block">
-                <header className="turn-head">Turn {index + 1} 无法显示</header>
+                <div className="rail-row rail-row--meta">第 {index + 1} 轮无法显示</div>
               </section>
             }
           >
@@ -288,15 +309,18 @@ export function Timeline({
               pendingUsers={pendingUsers.filter(
                 (message) => message.turnId === String(turn?.id || ""),
               )}
+              turnProgress={isActiveTurn ? turnProgress : undefined}
               onCopy={onCopy}
               onForkFrom={onForkFrom}
               onEditUserMessage={onEditUserMessage}
               onRetryUserMessage={onRetryUserMessage}
               onRevertUserMessage={onRevertUserMessage}
+              onExpandTurn={onExpandTurn}
               messageActionsDisabled={messageActionsDisabled}
             />
           </RenderErrorBoundary>
-        ))}
+          );
+        })}
         {pendingUsers
           .filter(
             (message) =>
@@ -312,7 +336,7 @@ export function Timeline({
           )
           .map((message) => (
             <section className="turn-block optimistic-turn" key={message.id}>
-              <header className="turn-head">正在发送</header>
+              <div className="rail-row rail-row--meta">正在发送</div>
               <div className="message user">
                 {message.images.length > 0 && (
                   <div className="message-images">
@@ -325,16 +349,6 @@ export function Timeline({
               </div>
             </section>
           ))}
-        {streamed.length === 0 &&
-          streamedItems.length === 0 &&
-          (thread.status === "running" || thread.status === "waiting") && (
-            <div className="message agent response-pending" role="status">
-              <span className="response-pending-spinner" aria-hidden="true">
-                <LoaderCircle />
-              </span>
-              <span>正在等待响应</span>
-            </div>
-          )}
         {!hasActiveTurn &&
           (streamed.length > 0 || streamedItems.length > 0) && (
             <TurnBlock
@@ -356,7 +370,9 @@ export function Timeline({
               onEditUserMessage={onEditUserMessage}
               onRetryUserMessage={onRetryUserMessage}
               onRevertUserMessage={onRevertUserMessage}
+              onExpandTurn={onExpandTurn}
               messageActionsDisabled={messageActionsDisabled}
+              turnProgress={turnProgress}
             />
           )}
         <MessageQueue

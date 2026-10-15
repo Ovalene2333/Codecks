@@ -21,12 +21,19 @@ test("usage chip never paints a fake 0% when limits are missing", () => {
   assert.notEqual(usageChipMetric(null), "0%");
 });
 
-test("usage chip formats remaining percent and reset countdown", () => {
+test("usage chip shows remaining percent and window label", () => {
+  assert.equal(
+    usageChipMetric({
+      primary: { usedPercent: 31.2, windowDurationMins: 300 },
+    }),
+    "69% · 5h",
+  );
+  // 没有时长声明时退回窗口名。
   assert.equal(
     usageChipMetric({
       primary: { usedPercent: 31.2, resetAfterSeconds: 5 * 3600 },
     }),
-    "69% · 5h",
+    "69% · 主窗口",
   );
   assert.equal(usageTone({ primary: { usedPercent: 90 } }), "warn");
   assert.equal(
@@ -51,9 +58,9 @@ test("window length uses days and hours instead of raw minutes", () => {
 test("usage chip falls back to secondary when primary is missing", () => {
   assert.equal(
     usageChipMetric({
-      secondary: { usedPercent: 12, resetAfterSeconds: 3600 },
+      secondary: { usedPercent: 12, windowDurationMins: 10080 },
     }),
-    "88% · 1h",
+    "88% · 7d",
   );
 });
 
@@ -62,9 +69,16 @@ test("expired windows say 即将重置 instead of 0s", () => {
   assert.equal(formatResetCountdown({ resetsAt: past }), RESET_IMMINENT);
   assert.equal(formatResetLabel({ resetsAt: past }), RESET_IMMINENT);
   assert.equal(formatResetCountdown({ resetAfterSeconds: 0 }), RESET_IMMINENT);
+  // 收起态不跟倒计时走：过期快照也不再冒出“即将重置”。
   assert.equal(
-    usageChipMetric({ primary: { usedPercent: 44, resetsAt: past } }),
-    "56% · 即将重置",
+    usageChipMetric({
+      primary: {
+        usedPercent: 44,
+        resetsAt: past,
+        windowDurationMins: 300,
+      },
+    }),
+    "56% · 5h",
   );
 });
 
@@ -87,7 +101,7 @@ test("ranked quota windows put the easier-to-hit window first", () => {
   assert.deepEqual(
     rows.map((row) => [row.id, row.label, row.remaining]),
     [
-      ["monthly", "月度", 5],
+      ["monthly", "月度额度", 5],
       ["secondary", "7d", 12],
       ["primary", "5h", 60],
     ],
@@ -95,10 +109,10 @@ test("ranked quota windows put the easier-to-hit window first", () => {
   // chip 跟首页一样按「更容易触顶」选窗口，不是永远主窗口。
   assert.equal(
     usageChipMetric({
-      primary: { usedPercent: 40, resetAfterSeconds: 3_600 },
-      secondary: { usedPercent: 88, resetAfterSeconds: 86_400 },
+      primary: { usedPercent: 40, windowDurationMins: 300 },
+      secondary: { usedPercent: 88, windowDurationMins: 10_080 },
     }),
-    "12% · 1d",
+    "12% · 7d",
   );
   assert.equal(
     usageTone({

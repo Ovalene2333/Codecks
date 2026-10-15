@@ -12,8 +12,8 @@ export function messageControls(thread: ThreadSummary, capabilities?: AgentCapab
         : behavior === "steer" ? "直接反馈给当前任务，无需停止。"
         : "会先停止当前任务，确认结束后再发送这条消息。",
       placeholder: thread.compacting ? "正在压缩上下文"
-        : !busy ? "发送新指令…"
-        : mode === "queue" ? "添加当前任务结束后处理的消息…"
+        : !busy ? "发送消息…"
+        : mode === "queue" ? "添加指令…"
         : behavior === "steer" ? "输入反馈，供当前任务参考…"
         : "输入反馈，将先停止当前任务再发送…",
     };
@@ -38,7 +38,7 @@ export function messageControls(thread: ThreadSummary, capabilities?: AgentCapab
     placeholder: thread.compacting ? "正在压缩上下文"
       : blocked ? "可先编辑，任务结束或停止后发送…"
       : busy && behavior === "steer" ? "输入反馈，供当前任务参考…"
-      : busy && behavior === "queue" ? "添加当前任务结束后处理的消息…"
-      : `${label}…`,
+      : busy && behavior === "queue" ? "添加指令…"
+      : "发送消息…",
   };
 }

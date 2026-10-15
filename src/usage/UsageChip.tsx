@@ -7,11 +7,14 @@ import {
   formatResetLabel,
   formatWindowLength,
   remainingPercent,
+  RESET_IMMINENT,
   usageChipMetric,
   usageTone,
   usageWindow,
+  usageWindowLabel,
 } from "./format";
 import { Drawer } from "../ui";
+import { Tip } from "../kit";
 import { formatTokens, relativeTime } from "../format";
 import { buildUsageStats, type UsageTotals } from "./stats";
 import { estimateCost, formatCost, planPrice } from "./cost";
@@ -25,24 +28,51 @@ export function UsageChip({
   runtime?: RuntimeSnapshot;
   onOpen: () => void;
 }) {
+  const window = usageWindow(runtime?.rateLimits);
+  const windowLabel = usageWindowLabel(runtime?.rateLimits);
   const metric = usageChipMetric(runtime?.rateLimits, runtime?.rateLimitsError);
   const tone = runtime?.rateLimits ? usageTone(runtime.rateLimits) : "muted";
-  const pct = remainingPercent(usageWindow(runtime?.rateLimits)?.usedPercent);
+  const pct =
+    runtime?.rateLimitsError || !window
+      ? undefined
+      : remainingPercent(window.usedPercent);
+  // 只有算出未来时间的倒计时才进提示；过期快照的“即将重置”不再打扰收起态。
+  const reset =
+    pct != null && window ? formatResetLabel(window) : undefined;
+  const resetText = reset && reset !== RESET_IMMINENT ? `（${reset}）` : "";
+  const tipText =
+    pct != null
+      ? `${CODEX_QUOTA_TITLE} · 剩余 ${pct}% · ${windowLabel || "当前"}窗口${resetText}`
+      : `${CODEX_QUOTA_TITLE} · ${metric}`;
   return (
-    <button
-      type="button"
-      className={`usage-chip ${tone}`}
-      title={CODEX_QUOTA_TITLE}
-      onClick={onOpen}
-    >
-      <span className="usage-chip-label">{CODEX_QUOTA_TITLE}</span>
-      <span className="usage-chip-metric">{metric}</span>
-      {pct != null ? (
-        <i className="usage-chip-track" aria-hidden="true">
-          <b style={{ width: `${pct}%` }} />
-        </i>
-      ) : null}
-    </button>
+    <Tip content={tipText} align="start">
+      <button
+        type="button"
+        className={`usage-chip ${tone}${pct != null ? " has-track" : ""}`}
+        aria-label={tipText}
+        onClick={onOpen}
+      >
+        <Gauge className="usage-chip-icon" aria-hidden="true" />
+        <span className="usage-chip-label">{CODEX_QUOTA_TITLE}</span>
+        <span className="usage-chip-metric">
+          {pct != null ? (
+            <>
+              {pct}%
+              {windowLabel ? (
+                <span className="usage-chip-window">{windowLabel}</span>
+              ) : null}
+            </>
+          ) : (
+            "—"
+          )}
+        </span>
+        {pct != null ? (
+          <i className="usage-chip-track" aria-hidden="true">
+            <b style={{ width: `${pct}%` }} />
+          </i>
+        ) : null}
+      </button>
+    </Tip>
   );
 }
 
@@ -145,8 +175,8 @@ function UsageStats({
 
   return (
     <div className="usage-stats">
-      <section className="usage-summary" aria-label="累计 token 用量">
-        <span>累计 token</span>
+      <section className="usage-summary" aria-label="累计 Token 用量">
+        <span>累计 Token</span>
         <strong>{formatTokens(stats.totals.total)}</strong>
         <div className="usage-summary-grid">
           <UsageMetric label="输入" value={stats.totals.input} />
@@ -158,7 +188,7 @@ function UsageStats({
         <span>估算费用</span>
         <strong>{formatCost(cost)}</strong>
         <p className="usage-note">
-          按社区 API 目录价（sub2api 口径）折算，仅供订阅用量参考。
+          按公开 API 目录价折算，仅供参考。
         </p>
       </section>
       <div className="usage-level" role="tablist" aria-label="统计层级">
@@ -209,14 +239,13 @@ function UsageStats({
       ) : (
         <div className="usage-empty">
           <Gauge />
-          <b>暂无 session 用量</b>
-          <span>运行一次任务后，累计 token 会显示在这里。</span>
+          <b>暂无会话用量</b>
+          <span>运行一次任务后，累计 Token 会显示在这里。</span>
         </div>
       )}
       {stats.totals.reasoningOutput > 0 ? (
         <p className="usage-note">
-          推理输出 {formatTokens(stats.totals.reasoningOutput)}
-          ，已包含在输出或总量中。
+          {`推理输出 ${formatTokens(stats.totals.reasoningOutput)}，已包含在输出或总量中。`}
         </p>
       ) : null}
     </div>
@@ -297,9 +326,7 @@ function OfficialLimits({
       </p>
       {quota ? (
         <p className="usage-plan" title="阶段用量 ÷ 窗口已用百分比，按窗口长度放大到一个月">
-          估算本期额度 ≈ {formatTokens(quota.monthlyQuota)} tok/月
-          （{quota.windowLabel}窗口实测 {formatTokens(quota.stageTokens)} tok ≈{" "}
-          {Math.round(quota.usedPercent)}%）
+          {`估算本期额度 ≈ ${formatTokens(quota.monthlyQuota)} Token/月（${quota.windowLabel}窗口实测 ${formatTokens(quota.stageTokens)} Token ≈ ${Math.round(quota.usedPercent)}%）`}
         </p>
       ) : null}
       {runtime?.rateLimitsError || !limits ? (
@@ -337,8 +364,7 @@ function OfficialLimits({
         </div>
       )}
       <p className="usage-note">
-        额度来自 Runtime 的 Official ChatGPT 登录，不是当前 session
-        的中转供应商。
+        额度按官方 ChatGPT 登录计算，与当前会话使用的供应商无关。
       </p>
     </div>
   );

@@ -128,7 +128,7 @@ export function CodexPage({
           }),
         );
         setBaseline(contextForm);
-        onToast("上下文设置已保存，Codex Runtime 已重启");
+        onToast("上下文设置已保存，Codex 服务已重启");
       } catch (err: any) {
         setContextError(err.message);
         throw err;
@@ -161,16 +161,20 @@ export function CodexPage({
             badges={
               runtime?.configPending ? <Badge tone="warn">待应用</Badge> : null
             }
-            desc={`${codexProviders.length} 个可用${current ? ` · 当前 ${current.name}` : ""}`}
+            desc={
+              current
+                ? `${codexProviders.length} 个可用，当前 ${current.name}`
+                : `${codexProviders.length} 个可用`
+            }
           />
           <Row
             dot={
               runtime?.online ? "ok" : runtime?.starting ? "busy" : "error"
             }
-            title="Runtime"
+            title="服务"
             desc={
               runtime?.online
-                ? `${runtime.remoteUrl} · 仅监听本机，不经过 LAN / CF`
+                ? runtime.remoteUrl
                 : runtime?.starting
                   ? "启动中"
                   : runtime?.error?.split(/\r?\n/)[0] || "未运行"
@@ -183,13 +187,13 @@ export function CodexPage({
               runtime?.online ? (
                 <Button
                   size="sm"
-                  title="复制从终端接入同一 Runtime 的命令"
+                  title="复制从终端接入同一服务的命令"
                   onClick={() =>
                     void copyTerminalCommand(onToast, { cwd: defaultCwd })
                   }
                 >
                   <SquareTerminal />
-                  复制终端命令
+                  终端接入
                 </Button>
               ) : undefined
             }
@@ -198,15 +202,22 @@ export function CodexPage({
       </Section>
       <Section
         title="上下文"
-        desc="留空使用模型与 Runtime 默认值；实际可用上限取决于模型和账号。"
+        desc="留空使用默认值。"
+        actions={
+          runtime?.modelConfigPending ? (
+            <Badge
+              tone="warn"
+              title="已保存的值与正在运行的服务不一致，重启后生效"
+            >
+              待重启生效
+            </Badge>
+          ) : undefined
+        }
       >
         <form onSubmit={requestContextSave}>
           <Group pad>
             <div className="ui-form__grid">
-              <Field
-                label="最大上下文"
-                hint={<code>model_context_window</code>}
-              >
+              <Field label="最大上下文">
                 <input
                   className="ui-input"
                   type="number"
@@ -223,10 +234,7 @@ export function CodexPage({
                   placeholder="例如 1000000"
                 />
               </Field>
-              <Field
-                label="自动压缩阈值"
-                hint={<code>model_auto_compact_token_limit</code>}
-              >
+              <Field label="自动压缩阈值">
                 <input
                   className="ui-input"
                   type="number"
@@ -247,8 +255,7 @@ export function CodexPage({
             {contextError && <p className="ui-error">{contextError}</p>}
             <div className="ui-actions ui-actions--split">
               <span className="ui-field__hint">
-                保存将重启共享 Runtime；运行中或待审批时无法保存。不改写
-                ~/.codex/config.toml。
+                保存后重启共享服务；有任务运行时无法保存。
               </span>
               <Button
                 type="submit"
@@ -272,7 +279,7 @@ export function CodexPage({
                   ? "ok"
                   : "busy"
             }
-            title="State DB"
+            title="索引"
             desc={
               agent?.historyStatus === "error"
                 ? agent.historyError || "索引读取失败"
@@ -286,7 +293,7 @@ export function CodexPage({
                 size="sm"
                 busy={repairing}
                 disabled={agent?.historyStatus === "loading"}
-                title="扫描原生 rollout 并修复 Codex State DB"
+                title="重新扫描并修复索引"
                 onClick={repairHistory}
               >
                 {repairing ? "修复中…" : "修复"}

@@ -1,3 +1,4 @@
+import { Select } from "./kit/Select";
 import {
   useEffect,
   useId,
@@ -34,11 +35,11 @@ export const modelCatalogCache = new SwrCache<ModelInfo[]>({
   maxPersistChars: 300_000,
 });
 
-function withTimeout<T>(task: Promise<T>, ms: number, path: string): Promise<T> {
+function withTimeout<T>(task: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`模型目录读取超时：${path}`)),
+      () => reject(new Error("模型目录读取超时，请稍后重试")),
       ms,
     );
   });
@@ -49,7 +50,7 @@ function withTimeout<T>(task: Promise<T>, ms: number, path: string): Promise<T> 
 
 export function loadModelCatalog(path: string) {
   return modelCatalogCache.load(path, () =>
-    withTimeout(api<ModelInfo[]>(path), CATALOG_TIMEOUT_MS, path).then(
+    withTimeout(api<ModelInfo[]>(path), CATALOG_TIMEOUT_MS).then(
       (list) => (Array.isArray(list) ? list : []),
     ),
   );
@@ -105,6 +106,7 @@ export function ModelPicker({
   reasoningEffort,
   onChange,
   compact,
+  reasoningLabel,
   disabled,
 }: {
   agentId?: AgentId;
@@ -114,6 +116,7 @@ export function ModelPicker({
   reasoningEffort: string;
   onChange: (next: { model: string; reasoningEffort: string }) => void;
   compact?: boolean;
+  reasoningLabel?: string;
   disabled?: boolean;
 }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -296,17 +299,19 @@ export function ModelPicker({
       {efforts.length > 0 ? (
         <label className={compact ? "toolbar-select" : undefined}>
           {compact ? (
-            <span className="toolbar-field-label">推理</span>
+            <span className="toolbar-field-label">
+              {reasoningLabel || "推理"}
+            </span>
           ) : (
             "推理强度"
           )}
-          <select
+          <Select
             value={reasoningEffort}
             disabled={disabled}
             aria-label="推理强度"
             title="推理强度"
-            onChange={(e) =>
-              onChange({ model, reasoningEffort: e.target.value })
+            onValueChange={(nextValue) =>
+              onChange({ model, reasoningEffort: nextValue })
             }
           >
             {/* 空值表示「跟随模型/CLI 默认」。claude、opencode 支持随时清除；
@@ -321,13 +326,15 @@ export function ModelPicker({
                 {reasoningEffortLabel(item.reasoningEffort)}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
       ) : (
         showFallbackEffort && (
           <label className={compact ? "toolbar-select" : undefined}>
             {compact ? (
-              <span className="toolbar-field-label">推理</span>
+              <span className="toolbar-field-label">
+                {reasoningLabel || "推理"}
+              </span>
             ) : (
               "推理强度"
             )}

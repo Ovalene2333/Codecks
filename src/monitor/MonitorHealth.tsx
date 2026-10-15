@@ -100,7 +100,7 @@ export function MonitorHealth({
   const sessionNotes = [
     sessions.locked ? `${sessions.locked} 个被其它进程占用` : "",
     sessions.offline ? `${sessions.offline} 个离线` : "",
-    sessions.connected ? `${sessions.connected} 个 Claude 常驻连接` : "",
+    sessions.connected ? `${sessions.connected} 个 Claude 活跃连接` : "",
   ].filter(Boolean);
   // 各 agent 的后端进程（app-server / opencode / ACP agent），按 agent 聚合。
   const serverRows = (() => {
@@ -178,20 +178,20 @@ export function MonitorHealth({
             <span>
               未启用 <b>{inactive.length}</b>
             </span>
-            <em>{inactive.map((row) => row.agent.name).join(" · ")}</em>
+            <em>{inactive.map((row) => row.agent.name).join("、")}</em>
           </summary>
           <ul className="monitor-health-list">{inactive.map(renderRow)}</ul>
         </details>
       ) : null}
       {sessionNotes.length ? (
-        <p className="monitor-muted">会话：{sessionNotes.join(" · ")}</p>
+        <p className="monitor-muted">会话：{sessionNotes.join("，")}</p>
       ) : null}
       <div className="monitor-usage-block">
         <div className="monitor-usage-subhead">
           <span>本机</span>
           {stats ? (
             <small>
-              {stats.platform}/{stats.arch} · {stats.cpuCount} 核
+              {stats.platform}/{stats.arch} {stats.cpuCount} 核
             </small>
           ) : null}
         </div>
@@ -214,7 +214,7 @@ export function MonitorHealth({
               ) : null}
               <dt>Deck</dt>
               <dd title={`Deck 进程 PID ${stats.deck.pid} · Node ${stats.deck.node}`}>
-                {formatBytes(stats.deck.rss)} · 已运行 {formatDuration(stats.deck.uptimeSec * 1_000)} ·{" "}
+                {formatBytes(stats.deck.rss)}，已运行 {formatDuration(stats.deck.uptimeSec * 1_000)}，
                 {stats.deck.clients} 个客户端
               </dd>
               {serverRows.map((row) => (
@@ -227,8 +227,8 @@ export function MonitorHealth({
                   >
                     {row.measured ? formatBytes(row.rss) : "—"}
                     {row.pids.length > 1
-                      ? ` · ${row.pids.length} 个进程`
-                      : ` · PID ${row.pids[0]}`}
+                      ? `，${row.pids.length} 个进程`
+                      : `，PID ${row.pids[0]}`}
                   </dd>
                 </Fragment>
               ))}

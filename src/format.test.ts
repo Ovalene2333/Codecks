@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   changeKindLabel,
+  changeKindText,
   displayCommand,
   displayText,
   distinctPreview,
@@ -134,4 +135,11 @@ test("userImageParts reads data-url attachments from user messages", () => {
     }),
     [{ url: "data:image/png;base64,abc=" }],
   );
+});
+
+test("changeKindText shows Chinese labels for change kinds", () => {
+  assert.equal(changeKindText("update"), "修改");
+  assert.equal(changeKindText("add"), "新增");
+  assert.equal(changeKindText("changes"), "改动");
+  assert.equal(changeKindText("修改"), "修改");
 });

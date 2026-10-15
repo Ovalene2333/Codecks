@@ -14,10 +14,19 @@ import {
   Undo2,
   Wrench,
 } from "lucide-react";
-import { displayCommand, displayText, fmtTime } from "../format";
+import { changeKindText, displayCommand, displayText, fmtTime } from "../format";
+import { activityKey, useActivities, useNow } from "../monitor/activity-store";
 import type { FileChange, ThreadSummary } from "../types";
 import { FileDiff } from "./FileDiff";
 import { AssistantMarkdown, DeferredImage } from "./markdown";
+import {
+  formatFoldedSize,
+  formatToolDuration,
+  formatTps,
+  formatTurnDuration,
+  progressTps,
+  statsLine,
+} from "./turn-stats";
 import { assistantImageParts, userImageParts } from "./images";
 import type {
   StreamedAgentMessage,
@@ -66,7 +75,7 @@ function UnknownItem({ item }: { item: any }) {
     item?.title || item?.command || item?.path || item?.tool || item?.name,
   );
   return (
-    <details className="tool-row unknown-item">
+    <details className="rail-row tool-row unknown-item">
       <summary>
         <Puzzle />
         <span className="tool-action">{type}</span>
@@ -93,6 +102,7 @@ function SubAgentCard({
   tag,
   output,
   activity,
+  time,
 }: {
   state: "running" | "failed" | "interrupted" | "ok";
   action: string;
@@ -100,9 +110,10 @@ function SubAgentCard({
   tag?: string;
   output?: string;
   activity?: string;
+  time?: string;
 }) {
   return (
-    <div className={`tool-row subagent-row ${state}`}>
+    <div className={`rail-row tool-row subagent-row ${state}`}>
       <details>
         <summary>
           <Bot />
@@ -117,6 +128,7 @@ function SubAgentCard({
               {tag}
             </span>
           ) : null}
+          {time ? <span className="tool-time">{time}</span> : null}
         </summary>
         {output ? <pre>{output}</pre> : null}
       </details>
@@ -125,6 +137,43 @@ function SubAgentCard({
           {activity}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** 工具行用时芯片：有起止计时才显示，只在展开态出现。 */
+function ToolTime({ item }: { item: any }) {
+  const text = formatToolDuration(item?.startedAt, item?.endedAt);
+  return text ? <span className="tool-time">{text}</span> : null;
+}
+
+/**
+ * 被折叠的工具输出加载入口：预览 + 体量 + 按回合粒度懒加载全文。
+ * 回合级去重由 ChatWorkspace 的 expandTurn 保证，多点几次也只拉一次。
+ */
+function FoldedLoad({
+  item,
+  turnId,
+  onExpandTurn,
+}: {
+  item: any;
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
+}) {
+  if (!item?.folded || !turnId || !onExpandTurn) return null;
+  const size = formatFoldedSize(item.outputChars);
+  return (
+    <div className="folded-load">
+      {item.outputPreview ? (
+        <pre className="folded-preview">{`${item.outputPreview}…`}</pre>
+      ) : null}
+      <button
+        type="button"
+        className="folded-load-button"
+        onClick={() => onExpandTurn(turnId)}
+      >
+        加载完整输出{size ? `（${size}）` : ""}
+      </button>
     </div>
   );
 }
@@ -140,6 +189,8 @@ function TurnItemInner({
   onRevertUserMessage,
   messageActionsDisabled,
   thread,
+  turnId,
+  onExpandTurn,
 }: {
   item: any;
   streamed?: string;
@@ -151,6 +202,8 @@ function TurnItemInner({
   onRevertUserMessage?: (item: any) => void;
   messageActionsDisabled?: boolean;
   thread: ThreadSummary;
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
 }) {
   // Per-agent adapters get first pick at items they understand (extension
   // payloads, agent-specific tool shapes); everything else falls through to
@@ -230,20 +283,22 @@ function TurnItemInner({
   }
   if (item.type === "enteredReviewMode")
     return (
-      <div className="tool-row review-row">
+      <div className="rail-row tool-row review-row">
         <ScanSearch />
         正在审查 {displayText(item.review) || "当前改动"}
       </div>
     );
   if (item.type === "exitedReviewMode")
     return (
-      <div className="tool-row review-row done">
+      <div className="rail-row tool-row review-row done">
         <ScanSearch />
         审查完成
       </div>
     );
   if (item.type === "agentMessage") {
     const images = assistantImageParts(item);
+    // 该条回复自己的生成统计（用时/TPS，服务端在 item 上盖章）。
+    const itemStats = statsLine(item.stats);
     return (
       <div className={`message agent ${streaming ? "streaming" : ""}`}>
         <AssistantMarkdown
@@ -262,17 +317,21 @@ function TurnItemInner({
             ))}
           </div>
         )}
+        {itemStats ? <div className="message-stats">{itemStats}</div> : null}
         {streaming && <i />}
       </div>
     );
   }
   if (item.type === "reasoning")
     return (
-      <details className="tool-row reasoning">
+      <details className="rail-row tool-row reasoning">
         <summary>
           <Activity />
           思考过程
         </summary>
+        {item.stats ? (
+          <div className="tool-time">{statsLine(item.stats)}</div>
+        ) : null}
         <div>{reasoningText(item)}</div>
       </details>
     );
@@ -284,20 +343,24 @@ function TurnItemInner({
           ? "failed"
           : "ok";
     return (
-      <SubAgentCard
-        state={state}
-        action={
-          state === "running"
-            ? "子代理执行中"
-            : state === "failed"
-              ? "子代理失败"
-              : "子代理"
-        }
-        title={displayText(item.title) || "子代理"}
-        tag={displayText(item.agent)}
-        output={displayText(item.aggregatedOutput)}
-        activity={displayText(item.activity)}
-      />
+      <Fragment>
+        <SubAgentCard
+          state={state}
+          action={
+            state === "running"
+              ? "子代理执行中"
+              : state === "failed"
+                ? "子代理失败"
+                : "子代理"
+          }
+          title={displayText(item.title) || "子代理"}
+          tag={displayText(item.agent)}
+          output={displayText(item.aggregatedOutput)}
+          activity={displayText(item.activity)}
+          time={formatToolDuration(item.startedAt, item.endedAt)}
+        />
+        <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
+      </Fragment>
     );
   }
   // Codex 多代理：subAgentActivity 是子代理生命周期的 tick
@@ -417,7 +480,7 @@ function TurnItemInner({
             .join("\n\n");
     return (
       <details
-        className={`tool-row command-row ${presentation.kind}-row ${state}`}
+        className={`rail-row tool-row command-row ${presentation.kind}-row ${state}`}
       >
         <summary>
           {presentation.kind === "read" ? (
@@ -437,7 +500,9 @@ function TurnItemInner({
             {presentation.target || command}
           </code>
         </summary>
+        <ToolTime item={item} />
         {detail ? <pre>{detail}</pre> : null}
+        <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
       </details>
     );
   }
@@ -454,13 +519,13 @@ function TurnItemInner({
           ? "failed"
           : "ok";
     const detail = [
-      input ? `Input\n${input}` : "",
-      output ? `Output\n${output}` : "",
+      input ? `输入\n${input}` : "",
+      output ? `输出\n${output}` : "",
     ]
       .filter(Boolean)
       .join("\n\n");
     return (
-      <details className={`tool-row tool-call-row ${state}`}>
+      <details className={`rail-row tool-row tool-call-row ${state}`}>
         <summary>
           <Wrench />
           <span className="tool-action">{tool}</span>
@@ -470,7 +535,9 @@ function TurnItemInner({
             </code>
           ) : null}
         </summary>
+        <ToolTime item={item} />
         {detail ? <pre>{detail}</pre> : null}
+        <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
       </details>
     );
   }
@@ -504,10 +571,14 @@ function FileChangeGroup({
   items,
   changes,
   cwd,
+  turnId,
+  onExpandTurn,
 }: {
   items: any[];
   changes: FileChange[];
   cwd?: string;
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
 }) {
   const label = fileChangeGroupLabel(changes);
   const state = items.some((item) => item?.status === "failed")
@@ -515,15 +586,26 @@ function FileChangeGroup({
     : items.some((item) => item?.status === "inProgress")
       ? "running"
       : "ok";
+  const foldedChars = items.reduce(
+    (sum, item) => sum + (item?.folded ? Number(item.outputChars) || 0 : 0),
+    0,
+  );
   return (
-    <details className={`tool-row file-change-group ${state}`}>
+    <details className={`rail-row tool-row file-change-group ${state}`}>
       <summary>
         <Files />
-        <span className={`tool-action ${label}`}>{label}</span>
+        <span className={`tool-action ${label}`}>{changeKindText(label)}</span>
         <span className="file-change-count">{changes.length} 个文件</span>
       </summary>
       <div className="file-change-group-content">
         <FileDiff changes={changes} cwd={cwd} />
+        {foldedChars > 0 ? (
+          <FoldedLoad
+            item={{ folded: true, outputChars: foldedChars }}
+            turnId={turnId}
+            onExpandTurn={onExpandTurn}
+          />
+        ) : null}
       </div>
     </details>
   );
@@ -531,7 +613,7 @@ function FileChangeGroup({
 
 /**
  * OpenCode 连续编辑的收敛行：截图里 `已执行 docs/HANDOVER.md × 7`
- * 会收成一行 `编辑 7 次 · docs/HANDOVER.md`，点开看每次的真实输出，
+ * 会收成一行 `编辑 docs/HANDOVER.md`，点开看每次的真实输出，
  * `Edit applied successfully.` 这类回执不再逐条占一行。
  */
 function ToolGroup({
@@ -539,11 +621,15 @@ function ToolGroup({
   label,
   files,
   cwd,
+  turnId,
+  onExpandTurn,
 }: {
   items: any[];
   label: string;
   files: string[];
   cwd?: string;
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
 }) {
   const state = items.some((item) => item?.status === "failed")
     ? "failed"
@@ -555,14 +641,19 @@ function ToolGroup({
     distinct.length <= 1
       ? (distinct[0] || `${items.length} 次`)
       : `${distinct.length} 个文件`;
+  const foldedChars = items.reduce(
+    (sum, item) => sum + (item?.folded ? Number(item.outputChars) || 0 : 0),
+    0,
+  );
   return (
-    <details className={`tool-row tool-group edit-group ${state}`}>
+    <details
+      className={`rail-row tool-row tool-group edit-group ${state}`}
+      title={items.length > 1 ? `共 ${items.length} 次` : undefined}
+    >
       <summary>
         <Pencil />
         <span className="tool-action edit">{label}</span>
-        <span className="file-change-count">
-          {items.length} 次 · {headline}
-        </span>
+        <span className="file-change-count">{headline}</span>
       </summary>
       <ul className="tool-group-list">
         {items.map((item, index) => {
@@ -588,6 +679,72 @@ function ToolGroup({
           );
         })}
       </ul>
+      {foldedChars > 0 ? (
+        <FoldedLoad
+          item={{ folded: true, outputChars: foldedChars }}
+          turnId={turnId}
+          onExpandTurn={onExpandTurn}
+        />
+      ) : null}
+    </details>
+  );
+}
+
+/**
+ * 同文件连续 edit/read 的收敛行：折叠时每类动作一行
+ * （编辑 a.ts / 读取 a.ts），展开看各次回执；groupTurnItems 已把带
+ * 真实输出或报错的条目排除在外，这里不会藏信息。
+ */
+function FileTouchGroup({
+  file,
+  actions,
+  items,
+  turnId,
+  onExpandTurn,
+}: {
+  file: string;
+  actions: { kind: "edit" | "read"; count: number }[];
+  items: any[];
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
+}) {
+  const state = items.some((item) => item?.status === "failed")
+    ? "failed"
+    : items.some((item) => item?.status === "inProgress")
+      ? "running"
+      : "ok";
+  // 动作词：两类都有收成「读写」，只有一类就是它自己；颜色跟着最重的动作。
+  const bothKinds =
+    actions.some((action) => action.kind === "edit") &&
+    actions.some((action) => action.kind === "read");
+  const actionLabel = bothKinds
+    ? "读写"
+    : actions[0]?.kind === "edit"
+      ? "编辑"
+      : "读取";
+  return (
+    <details className={`rail-row tool-row file-touch-group ${state}`}>
+      <summary>
+        {bothKinds || actions[0]?.kind === "edit" ? (
+          <Pencil />
+        ) : (
+          <BookOpenText />
+        )}
+        <span className={`tool-action ${bothKinds ? "edit" : actions[0]?.kind}`}>
+          {actionLabel}
+        </span>
+        <code className="tool-command" title={file}>
+          {file}
+        </code>
+      </summary>
+      <ul>
+        {items.map((item, index) => (
+          <li key={String(item?.id || index)}>
+            <code>{file}</code>
+          </li>
+        ))}
+      </ul>
+      <FoldedLoad item={items[0]} turnId={turnId} onExpandTurn={onExpandTurn} />
     </details>
   );
 }
@@ -602,7 +759,7 @@ function SubAgentTickGroup({ items }: { items: any[] }) {
   ];
   return (
     <details
-      className={`tool-row subagent-row subagent-ticks ${kinds.includes("interrupted") ? "interrupted" : "ok"}`}
+      className={`rail-row tool-row subagent-row subagent-ticks ${kinds.includes("interrupted") ? "interrupted" : "ok"}`}
     >
       <summary>
         <Bot />
@@ -635,7 +792,7 @@ function SubAgentTickGroup({ items }: { items: any[] }) {
 function ReadSummary({ targets }: { targets: string[] }) {
   if (targets.length === 0) return null;
   return (
-    <details className="tool-row read-summary">
+    <details className="rail-row tool-row read-summary">
       <summary>
         <BookOpenText />
         <span className="tool-action read">本轮已读取</span>
@@ -683,11 +840,19 @@ interface TurnBlockProps {
   streamedItems?: StreamedTurnItem[];
   streamedEntries?: StreamedEntry[];
   pendingUsers?: PendingUserMessage[];
+  /** 活跃回合的 turn/progress（状态行的实时 TPS 用；仅活跃回合块收到）。 */
+  turnProgress?: {
+    turnId?: string;
+    outputTokens?: number;
+    elapsedMs?: number;
+  };
   onCopy?: () => void;
   onForkFrom?: (turnId: string) => void;
   onEditUserMessage?: (turnId: string, item: any) => void;
   onRetryUserMessage?: (turnId: string, item: any) => void;
   onRevertUserMessage?: (turnId: string, item: any) => void;
+  /** 展开被折叠的回合工具输出（回合粒度懒加载，回调引用需保持稳定）。 */
+  onExpandTurn?: (turnId: string) => void;
   messageActionsDisabled?: boolean;
 }
 
@@ -742,9 +907,21 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
     prev.onForkFrom !== next.onForkFrom ||
     prev.onEditUserMessage !== next.onEditUserMessage ||
     prev.onRetryUserMessage !== next.onRetryUserMessage ||
-    prev.onRevertUserMessage !== next.onRevertUserMessage
+    prev.onRevertUserMessage !== next.onRevertUserMessage ||
+    prev.onExpandTurn !== next.onExpandTurn
   )
     return false;
+  if (prev.turnProgress !== next.turnProgress) {
+    const a = prev.turnProgress;
+    const b = next.turnProgress;
+    if (
+      (a == null) !== (b == null) ||
+      a?.turnId !== b?.turnId ||
+      a?.outputTokens !== b?.outputTokens ||
+      a?.elapsedMs !== b?.elapsedMs
+    )
+      return false;
+  }
   return (
     streamSignature(prev.streamed) === streamSignature(next.streamed) &&
     streamItemsSignature(prev.streamedItems) ===
@@ -765,11 +942,13 @@ function TurnBlockInner({
   streamedItems = [],
   streamedEntries,
   pendingUsers = [],
+  turnProgress,
   onCopy,
   onForkFrom,
   onEditUserMessage,
   onRetryUserMessage,
   onRevertUserMessage,
+  onExpandTurn,
   messageActionsDisabled,
 }: TurnBlockProps) {
   const active =
@@ -829,7 +1008,7 @@ function TurnBlockInner({
     let run: any[] = [];
     const flushRun = () => {
       if (!run.length) return;
-      liveUnits.push(...groupTurnItems(run));
+      liveUnits.push(...groupTurnItems(run, thread.cwd));
       run = [];
     };
     for (const entry of ordered) {
@@ -849,7 +1028,7 @@ function TurnBlockInner({
     flushRun();
   }
   const renderEntries: LiveUnit[] = [
-    ...groupTurnItems(turnItems.slice(0, historyItems.length)),
+    ...groupTurnItems(turnItems.slice(0, historyItems.length), thread.cwd),
     ...liveUnits,
   ];
   const newLiveIds = new Set(
@@ -861,13 +1040,11 @@ function TurnBlockInner({
     const sentIds = new Set(message.liveItemIds || []);
     const index = renderEntries.findIndex((entry) => {
       const ids: string[] =
-        entry.kind === "fileChangeGroup" ||
-        entry.kind === "toolGroup" ||
-        entry.kind === "subAgentGroup"
-          ? entry.items.map((item: any) => String(item?.id || ""))
-          : entry.kind === "item"
-            ? [String(entry.item?.id || "")]
-            : [];
+        entry.kind === "item"
+          ? [String(entry.item?.id || "")]
+          : entry.kind === "message"
+            ? []
+            : entry.items.map((item: any) => String(item?.id || ""));
       return ids.some((id: string) => newLiveIds.has(id) && !sentIds.has(id));
     });
     if (index < 0) pendingAtEnd.push(message);
@@ -881,16 +1058,12 @@ function TurnBlockInner({
   // 会话当前设置。打标过的回合不回落 effort，「当时没设」就是没设。
   const model = turn.model || thread.resolvedModel || thread.model;
   const effort = turn.model ? turn.reasoningEffort : thread.reasoningEffort;
+  const stats = statsLine(turn.stats);
   return (
     <section
       className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
       data-turn-id={turn?.id ? String(turn.id) : undefined}
     >
-      <header className="turn-head">
-        Turn {index} · {fmtTime(started)}
-        {model ? ` · ${model}` : ""}
-        {effort ? ` · ${effort}` : ""}
-      </header>
       <ReadSummary targets={readTargets} />
       {renderEntries.map((entry, itemIndex) => {
         const pendingMarkup = (pendingBefore.get(itemIndex) || []).map(
@@ -920,6 +1093,8 @@ function TurnBlockInner({
                 items={entry.items}
                 changes={entry.changes as FileChange[]}
                 cwd={thread.cwd}
+                turnId={turn?.id ? String(turn.id) : undefined}
+                onExpandTurn={onExpandTurn}
               />
             </Fragment>
           );
@@ -932,6 +1107,21 @@ function TurnBlockInner({
                 label={entry.label}
                 files={entry.files}
                 cwd={thread.cwd}
+                turnId={turn?.id ? String(turn.id) : undefined}
+                onExpandTurn={onExpandTurn}
+              />
+            </Fragment>
+          );
+        if (entry.kind === "fileTouchGroup")
+          return (
+            <Fragment key={`file-touch-${entry.items[0]?.id || itemIndex}`}>
+              {pendingMarkup}
+              <FileTouchGroup
+                file={entry.file}
+                actions={entry.actions}
+                items={entry.items}
+                turnId={turn?.id ? String(turn.id) : undefined}
+                onExpandTurn={onExpandTurn}
               />
             </Fragment>
           );
@@ -976,6 +1166,8 @@ function TurnBlockInner({
             }
             messageActionsDisabled={messageActionsDisabled}
             thread={thread}
+            turnId={turn?.id ? String(turn.id) : undefined}
+            onExpandTurn={onExpandTurn}
           />
         );
         return targeted ? (
@@ -997,18 +1189,152 @@ function TurnBlockInner({
       {pendingAtEnd.map((message) => (
         <OptimisticUserMessage key={message.id} message={message} />
       ))}
-      {completed && turn.id && onForkFrom && (
-        <button
-          type="button"
-          className="fork-from-turn"
-          onClick={() => onForkFrom(turn.id)}
-        >
-          <GitFork />
-          从此处分支
-        </button>
-      )}
+      <TurnMetaLine
+        thread={thread}
+        turn={turn}
+        index={index}
+        turnProgress={turnProgress}
+        onForkFrom={onForkFrom}
+        active={active}
+        completed={completed}
+        started={started}
+        model={model}
+        effort={effort}
+      />
     </section>
   );
 }
 
 export const TurnBlock = memo(TurnBlockInner, turnBlockEqual);
+
+/**
+ * 回合收针行（Turn meta）：每回合末尾一行，像 git graph 上的一个 commit node。
+ * 进行中：扳手图标 + 阶段词 + 实时秒表 + 实时 TPS，全靠左一行干净。
+ * 结束后沉淀为静态元信息：常驻分支按钮靠左，右端是第 n 轮、结束时间、
+ * 模型 + effort（用时/TPS 不上尾行，在各段与工具详情里看）；
+ * 中缝留白撑开。
+ */
+function TurnMetaLine({
+  thread,
+  turn,
+  index,
+  turnProgress,
+  onForkFrom,
+  active,
+  completed,
+  started,
+  model,
+  effort,
+}: {
+  thread: ThreadSummary;
+  turn: any;
+  index: number;
+  turnProgress?: {
+    turnId?: string;
+    outputTokens?: number;
+    elapsedMs?: number;
+  };
+  onForkFrom?: (turnId: string) => void;
+  active: boolean;
+  completed: boolean;
+  started: number;
+  model?: string;
+  effort?: string;
+}) {
+  const activities = useActivities();
+  const now = useNow(1_000);
+  const activity = activities.get(activityKey(thread.agentId, thread.id));
+  const waiting = active && thread.status === "waiting";
+  const stepType = activity?.step?.item?.type;
+  const freshProgress =
+    turnProgress &&
+    (!turn.id ||
+      !turnProgress.turnId ||
+      turnProgress.turnId === String(turn.id))
+      ? turnProgress
+      : undefined;
+  const phaseLabel = waiting
+    ? "等待确认"
+    : stepType === "reasoning"
+      ? "正在思考"
+      : stepType === "agentMessage"
+        ? "输出回复"
+        : "正在运行";
+  const startedAt = activity?.turnStartedAt ?? started ?? now;
+  // 运行秒表沿用「用时 x.x s」口径，与思考/回复段的统计同一套样式；
+  // 结束回合用 turn.stats 的终值，共用同一列宽与运行态跨行对齐。
+  const usageText = active
+    ? `用时 ${formatTurnDuration(Math.max(0, now - startedAt))}`
+    : usageOf(turn);
+  const tpsText = active
+    ? waiting
+      ? ""
+      : progressTps(freshProgress)
+    : formatTps(turn?.stats?.tps);
+  const forkable = completed && turn.id && onForkFrom ? onForkFrom : undefined;
+  if (active) {
+    return (
+      <div
+        className={`rail-row rail-row--meta rail-row--running${waiting ? " rail-row--waiting" : ""}`}
+        aria-label={`第 ${index} 轮，${phaseLabel}`}
+      >
+        <Wrench />
+        <span className="rail-row__phase">{phaseLabel}</span>
+        <span className="rail-row__usage">{usageText}</span>
+        <span className="rail-row__tps">{tpsText}</span>
+      </div>
+    );
+  }
+  // 结束时间：回合更新时间就是收针时刻，老数据回落到推算的开始时间。
+  const endedAt = Date.parse(turn?.updatedAt || "") || started;
+  return (
+    <div className="rail-row rail-row--meta" aria-label={`第 ${index} 轮`}>
+      {forkable ? (
+        <button
+          type="button"
+          className="rail-row__fork"
+          onClick={() => forkable(turn.id)}
+          title="从此处分支，可先在输入框编辑再发送；直接发送即用原文重试"
+          aria-label="从此处分支"
+        >
+          <GitFork />
+          创建分支
+        </button>
+      ) : null}
+      <span className="rail-row__usage">{usageText}</span>
+      <span className="rail-row__tps">{tpsText}</span>
+      <span className="rail-row__spacer" aria-hidden="true" />
+      <span className="rail-row__round">第 {index} 轮</span>
+      <span className="rail-row__end">{fmtTime(endedAt)}</span>
+      {/* 窄屏把 用时/TPS/模型 换到第二行的断行点；桌面隐藏。 */}
+      <i className="rail-row__break" aria-hidden="true" />
+      {model ? (
+        <span
+          className="rail-row__model"
+          title={model !== shortModel(model) ? model : undefined}
+        >
+          {effort ? `${shortModel(model)}-${effort}` : shortModel(model)}
+        </span>
+      ) : effort ? (
+        <span className="rail-row__effort">{effort}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/** 表头模型缩写：裁掉供应商前缀（opencode-go/glm-5.3 → glm-5.3），全称悬停可见。 */
+function shortModel(model?: string) {
+  return String(model || "").split("/").pop() || "";
+}
+
+/** 已结束回合的总用时（收针行的「用时」列）：优先 stats，老数据回推。 */
+function usageOf(turn: any) {
+  const stats = turn?.stats;
+  if (stats && Number(stats.durationMs) > 0)
+    return `用时 ${formatTurnDuration(stats.durationMs)}`;
+  const startAt = Date.parse(turn?.startedAt || turn?.createdAt || "") || 0;
+  const endAt = Date.parse(turn?.updatedAt || "") || 0;
+  if (startAt > 0 && endAt > startAt)
+    return `用时 ${formatTurnDuration(endAt - startAt)}`;
+  return "";
+}

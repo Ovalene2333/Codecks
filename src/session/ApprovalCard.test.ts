@@ -28,7 +28,6 @@ test("Claude approval cards name Claude Code instead of Codex", () => {
   });
 
   assert.match(html, /Claude Code 请求执行命令/);
-  assert.match(html, /请确认是否允许 Claude Code 继续执行/);
   assert.doesNotMatch(html, /Codex 请求/);
 });
 

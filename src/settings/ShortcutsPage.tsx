@@ -72,7 +72,7 @@ export function ShortcutsPage() {
         items={[
           {
             title: "分层退出",
-            desc: "依次：关闭最上层弹窗 → 输入框失焦 → 回到总览。终端内的 Esc 保留给 shell。",
+            desc: "依次：关闭最上层弹窗 → 输入框失焦 → 回到总览。终端内的 Esc 保留给命令行。",
             keys: [["Esc"]],
           },
           {
@@ -96,7 +96,7 @@ export function ShortcutsPage() {
           { title: "在命令菜单中移动", keys: [["↑"], ["↓"]] },
           {
             title: "补全 / 执行命令",
-            desc: "Tab 只补全；Enter 补全并执行面板类命令",
+            desc: "Tab 只补全；Enter 对面板类命令会补全并直接打开",
             keys: [["Tab"], ["Enter"]],
           },
           {

@@ -124,7 +124,7 @@ export function WakeModal({
   const supervision = (
     <>
       {openLost.length ? (
-        <ul className="wake-list" aria-label="失联的 watcher">
+        <ul className="wake-list" aria-label="失联的监督进程">
           {openLost.map((item) => (
             <li key={item.id} className="wake-item lost">
               <Radar aria-hidden="true" />
@@ -134,7 +134,7 @@ export function WakeModal({
               </span>
               <button
                 type="button"
-                title="通知会话：发一条唤醒说明 watcher 已失联"
+                title="通知会话：发一条唤醒说明监督进程已失联"
                 aria-label={`通知会话 ${item.label} 已失联`}
                 disabled={busy}
                 onClick={() => notifyLost(item)}
@@ -155,22 +155,22 @@ export function WakeModal({
         </ul>
       ) : null}
       {liveWatchers.length ? (
-        <ul className="wake-list" aria-label="监督中的 watcher">
+        <ul className="wake-list" aria-label="正在监督的进程">
           {liveWatchers.map((item) => (
             <li key={item.pid} className="wake-item on" title={`$ ${item.command}`}>
               <Radar aria-hidden="true" />
               <span className="wake-item-text">
                 <b>监督中：{item.label}</b>
                 <small>
-                  pid {item.pid}
+                  进程号 {item.pid}
                   {item.state ? ` · ${item.state}` : ""}
                   {item.failures ? ` · 连接失败 ${item.failures}/10` : ""}
                 </small>
               </span>
               <button
                 type="button"
-                title="停止这个 watcher（不会再唤醒会话）"
-                aria-label={`停止 watcher ${item.label}`}
+                title="停止这个监督进程（不会再唤醒会话）"
+                aria-label={`停止监督进程 ${item.label}`}
                 disabled={busy}
                 onClick={() => stopWatcher(item)}
               >
@@ -182,7 +182,7 @@ export function WakeModal({
       ) : (
         <div className="wake-watching" role="status">
           <Radar aria-hidden="true" />
-          本机暂无 watcher 监督此会话
+          本机暂无监督进程盯着此会话
         </div>
       )}
     </>
@@ -205,7 +205,7 @@ export function WakeModal({
               </div>
               {supervision}
               <p className="form-hint">
-                agent 用 deck-wake 挂 watcher 时会自动用上这个代号；外部脚本
+                agent 用 deck-wake 挂监督进程时会自动用上这个代号；外部脚本
                 POST 以下端点也能向本会话注入一条消息。
               </p>
               <div className="wake-endpoint">
@@ -234,7 +234,7 @@ export function WakeModal({
             <>
               {supervision}
               <p className="form-hint">
-                无需手动开启：agent 用 deck-wake 挂 watcher 时，Deck 会识别发起命令的会话并自动分配代号。
+                无需手动开启：agent 用 deck-wake 挂监督进程时，Deck 会识别发起命令的会话并自动分配代号。
                 只有想自定义代号、或让外部脚本调用
                 <code> POST /api/wake/&lt;代号&gt; </code>
                 时才需要在这里开启。
