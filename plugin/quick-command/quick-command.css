@@ -8,7 +8,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: 0 12px 32px var(--shadow);
+  box-shadow: none;
 }
 .qc-directory-bar {
   display: flex;
@@ -60,8 +60,7 @@
   background: var(--surface-2);
 }
 .qc-group.current {
-  border-color: var(--accent-soft);
-  border-left: 3px solid var(--accent);
+  border-color: var(--line-strong);
 }
 .qc-group-head {
   display: flex;
@@ -75,8 +74,8 @@
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
   text-align: left;
 }
 .qc-group-head:not(:disabled):hover {
@@ -88,7 +87,7 @@
   color: var(--text-faint);
 }
 .qc-group.current .qc-group-head svg {
-  color: var(--accent);
+  color: var(--text-dim);
 }
 .qc-group-head span {
   min-width: 0;
@@ -99,10 +98,10 @@
 }
 .qc-group-head em {
   flex: none;
-  color: var(--accent);
-  font-size: 9px;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
   font-style: normal;
-  font-weight: 700;
+  font-weight: var(--fw-medium);
 }
 .qc-shortcuts {
   display: flex;
@@ -119,8 +118,9 @@
   background: var(--bg);
 }
 .qc-chip.on {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--text-dim);
+  background: var(--surface-selected);
+  box-shadow: none;
 }
 .qc-chip button {
   display: inline-flex;
@@ -131,7 +131,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
 }
 .qc-chip button:disabled {
   opacity: 0.5;
@@ -143,12 +143,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+  font-weight: var(--fw-medium);
 }
 .qc-chip-run svg {
   width: 13px;
   flex: none;
-  color: var(--accent);
+  color: var(--text-dim);
 }
 .qc-chip-run:hover:not(:disabled) {
   background: var(--surface-2);
@@ -159,7 +159,7 @@
   color: var(--text-faint);
 }
 .qc-chip-del:hover:not(:disabled) {
-  color: var(--danger, #e5484d);
+  color: var(--danger);
   background: var(--surface-2);
 }
 .qc-chip-del svg {
@@ -178,7 +178,7 @@
 .qc-command-line > svg {
   width: 16px;
   flex: none;
-  color: var(--accent);
+  color: var(--text-faint);
 }
 .qc-command-line input,
 .qc-params input,
@@ -196,7 +196,7 @@
 .qc-command-line input {
   flex: 1;
   font-family: var(--font-mono);
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
 }
 .qc-command-line input:focus,
 .qc-params input:focus,
@@ -231,7 +231,7 @@
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
-  font-weight: 600;
+  font-weight: var(--fw-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -305,7 +305,7 @@
   border-left: 3px solid var(--ok);
 }
 .qc-result.fail {
-  border-left: 3px solid var(--danger, #e5484d);
+  border-left: 3px solid var(--danger);
 }
 .qc-result header {
   display: flex;
@@ -329,8 +329,8 @@
 .qc-result-meta {
   flex: none;
   color: var(--text-dim);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
 }
 .qc-result .icon-btn {
   width: 30px;
@@ -356,7 +356,7 @@
 }
 .qc-result .qc-stderr {
   border-top: 1px solid var(--line);
-  color: var(--danger, #e5484d);
+  color: var(--danger);
 }
 .qc-result .qc-hint {
   padding: 12px;

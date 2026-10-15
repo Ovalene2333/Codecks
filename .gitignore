@@ -57,4 +57,10 @@ skills/
 .claude/
 .codex/
 .cursor/
+
+# Local-only helper scripts (not committed)
+restart-deck.sh
+start-deck.sh
+# Personal OpenCode CLI config (machine paths, not shared)
+opencode.json
 )

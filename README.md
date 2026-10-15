@@ -92,6 +92,16 @@ CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。C
 
 <p align="center"><sub>截图里的项目、会话和供应商都是演示数据。</sub></p>
 
+### 界面语言
+
+整套界面按 [docs/ui-baseline.md](docs/ui-baseline.md) 的标准做，可概括为「安静的单色工具风」：
+
+- **内容优先**：去掉渐变、光晕与卡片高光，颜色只用来区分层级和表达状态；深浅主题都是中性石墨，不偏蓝紫
+- **一处强调**：一屏只有一个主操作（反相实心按钮）；状态色只出现在需要人处理的地方，一切正常时保持安静
+- **设计 token 单一真源**：全部尺寸、颜色、字体来自 `src/tokens.css`——字号 8 个语义槽、字重 3 档、圆角 6 档、行高 4 档、4px 间距栅格，组件只写语义 token 不写裸值，深浅主题只在 token 文件里分支
+- **同类同形**：状态点、计数、元信息、区块标题、空态在任何页面都只有一种写法；通用控件（按钮/开关/分段/表单行）收敛在 `src/kit` 组件原语里复用
+- **桌面与触屏都是正式场景**：触屏下控件命中区自动放大，关键操作不低于 44px
+
 Codecks 不依赖 CC Switch 或中转服务，有 OpenAI Official 登录就能直接用。要用多家连接的话，它会只读同步 CC Switch 里的连接定义，让多个会话同时走不同的供应商。本机、局域网、Cloudflare、自建反代或者任意隧道命令，都可以用来访问它。
 
 名字是 **Codex** 加 **deck** 拼出来的：一边是 Codex CLI 的真实会话，一边是用来远程盯着它们的控制台。
@@ -119,6 +129,7 @@ Codecks 不依赖 CC Switch 或中转服务，有 OpenAI Official 登录就能�
 - **运行健康**：各 Agent 的状态（没装或被停用的折叠在一行里）、供应商报错、本机 CPU 和内存、Deck 自己和各 Agent 后端进程的内存占用
 
 「调整布局」可以拖动面板顺序，主栏和右栏各排各的，只保存在当前设备上。一个会话都没有时显示欢迎页。
+桌面端拖侧栏右边缘可以调宽（双击回到自动宽度），宽度也只保存在当前设备上。
 
 ### 手机上用
 
@@ -154,19 +165,23 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 
 - 消息发出去马上就显示。没发的文字和图片草稿按会话分开存，切换会话不会串
 - 任务运行中发的新消息默认「追加」排队，等当前任务完成后处理；已发出的待发送气泡上可以改成「即时反馈」立即介入（各后端按能力实现为 steer 或先打断再发），空闲时都开新 Turn。持久队列重启不丢，各后端行为见 [消息输送文档](docs/message-transport.md)
-- 历史里的用户消息可以带回输入框修改，也可以从那条消息之前开分支重试
+- 历史里的用户消息可以带回输入框修改，也可以从那条消息之前开分支重试。分支自动继承原会话的权限、沙箱和模型档位，不用重新设置
 - 输入框支持 Codex 的常用指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，还有 `!command` 无沙箱执行。完整语法和后续计划见 [Slash 指令文档](docs/slash-commands.md)
 - 助手回复里的 Markdown 图片，以及 Codex 或兼容 Agent 生成的图片，先显示成「点击加载」，点了才请求，并且懒加载。用手机流量时能省不少
 - 每个 Turn 会汇总本轮读过的文件。命令、文件改动、MCP 和动态工具调用跟着实时事件马上出现，不用等历史落盘
 - 一次改了多个文件的 `update`，或者连续几次 `update`，会合并成一个可展开的文件改动组。读取和检索显示成可展开的中文动作，点开能看命令、参数和返回内容
 - OpenCode 连续的文件编辑收成一行「编辑 N 次 · 文件名」，`Edit applied successfully.` 这种没信息量的回执默认藏起来，点开只看有实际内容的输出
+- 每个 Turn 表头会显示本轮用时和生成速度（`用时 32 秒 · 47.6 tok/s`）：OpenCode 取自消息自带的时间与 token，Codex 取自 Deck 见证的起止事件与用量差（Codex 的统计会存下来，重启还在；没见证过的历史回合不显示）。工具行也会标出各自用时
+- 「思考过程」行和每段文字回复的行尾会显示各自的生成速度（`用时 3.4 秒 · 59.5 tok/s`）：OpenCode 按 part 时间窗认领当条消息的 reasoning/output token，Codex 按 item 起止窗口内用量差算。没见证到起止或 token 对不上的就不显示，历史回合不回填
+- 任务运行时底部有个小状态块：生成内容（思考/输出回复）或等待确认时显示秒表和实时 TPS，替代原来的转圈「正在等待响应」；工具执行阶段信息和时间线重复，会自动收起。回合结束后终值留在上面的表头里
+- 已完成回合里超过 2KB 的工具输出（命令输出、文件 diff、大参数）默认只传摘要（开头 240 字预览），点「加载完整输出」才按回合拉全文：长会话打开更快、占内存更小。搜索索引吃的是全量，不受影响；要在地址栏级别一次拿全量可以在会话接口后加 `?full=1`
 
 ### 任务与用量
 
 - 侧栏的「任务」汇总所有受管的 Codex / Claude 会话：活动中的 Turn、在跑的命令、待确认状态，可以跳到来源，也能停掉整个任务。较新的 Codex Runtime 还会显示后台终端的 PID、CPU 和内存，可以单独停；旧 Runtime 自动退化成 Turn 级中断
 - 用量面板汇总各会话累计的 token，可以按项目或会话看未缓存输入、缓存输入和输出；Codex 额度（Official 账号）单独一个页签。运行时用量缓存在 `.data/codex-usage.json`，重启 Server 后还在；「修复」历史索引时也会从 rollout 里回填缺的记录
 - 项目设置可以覆盖该目录默认供应商的请求重试、流重试和流空闲超时。这些会写进共享 Runtime：有会话在跑就先记着，空闲后再生效
-- 「设置 → Agent → Codex → 上下文」可以分别设 `model_context_window` 和 `model_auto_compact_token_limit`，留空就用模型或 Runtime 的默认值。设置存在 `.data/runtime-config.json`，不会改 `~/.codex/config.toml`。保存会重启共享的 Codex Runtime，有任务在跑或在等审批时会拒绝保存
+- 「设置 → Agent → Codex → 上下文」可以分别设 `model_context_window` 和 `model_auto_compact_token_limit`，留空就用模型或 Runtime 的默认值。设置存在 `.data/runtime-config.json`，不会改 `~/.codex/config.toml`。保存会重启共享的 Codex Runtime，有任务在跑或在等审批时会拒绝保存。已保存的值和正在运行的不一致时设置页会标「待重启生效」。会话的权限/沙箱设置在 Runtime 重启后会自动恢复成你设的值，不会悄悄变回默认
 - Codex Runtime 进程被外部结束（比如在后台按了 Ctrl+C）时，在跑或在等审批的会话会标成「运行时中断」并解除占用，可以继续分支、重试或改配置。刷新页面不会把它们又当成「正在运行」
 
 ### 工具
@@ -182,18 +197,22 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 
 ### 设置
 
-桌面端点侧栏底部的「设置」，手机上点底栏的「设置」。
+桌面端点侧栏底部的「设置」，手机上点底栏的「设置」。导航按「通用 / 模型与 Agent / 系统」分组（对标 Linear、Vercel 与 shadcn Settings Page 的 SidebarGroup 做法）。
 
 | 页面 | 里面有什么 |
 | --- | --- |
 | 界面 | 主题（跟随系统 / 浅色 / 深色）、动画、界面效果、消息排版与模板，只存在当前设备 |
 | 会话 | 发送键（Enter 发送，或 Ctrl/⌘+Enter 发送）、系统提醒、新会话的默认值 |
-| Agent | 启用、停用、重载每个 Agent，不用重启 Deck；Codex 和 OpenCode 有各自的详情页 |
+| Agent | 启用、停用、重载每个 Agent，不用重启 Deck；Codex、Claude、OpenCode 有各自的详情页 |
+| 供应商 | 只管 Codex / Claude 自定义供应商与 CC Switch 只读同步；OpenCode 的供应商收进 Agent 详情 |
 | 工具 | 工具菜单显示哪些、桌面端怎么打开 |
 | 快捷键 | 桌面端快捷键一览 |
-| 数据 | 设置备份（导出 / 导入 JSON，不含令牌和 API Key）、本地缓存、最近目录、恢复默认、在本设备退出 |
+| 数据 | 设置备份（导出 / 导入 JSON，不含令牌和 API Key）、本地缓存、最近目录、恢复默认、在本设备退出、紧急停止 |
 | 关于 | 版本、运行状态，一键复制诊断信息（只含版本、状态和错误首行，不含令牌、API Key 和会话内容） |
-| 供应商 | 同步 CC Switch、添加自定义供应商。放在最下面，平时用得少 |
+
+OpenCode 的代理与权限在「设置 → Agent → OpenCode」里，自定义供应商在「设置 → 供应商 → OpenCode」里：新增与编辑走弹窗（底部操作常驻，列表不再被顶下去），顶部有搜索框按供应商、模型、地址过滤，每个模型的接口、图片输入、推理强度档位收进「高级」折叠区；密钥状态直接标在卡片上（有密钥 / 无密钥）；全局 / 本项目作用域统一用分段控件切换。
+
+「数据」页底部的「紧急停止」是给卡死会话准备的兜底：完成事件在断流或后端异常中丢失时，会话会永远显示「运行中 / 待确认」，常规停止、删除、归档都会被占用检查挡住。这里列出所有占用中的会话，逐个或全部强制停止：先尽力打断后端任务，再不经校验把状态归位空闲并撤掉挂起的审批，会话本身保留可以继续用。
 
 桌面端的快捷键：`Esc` 一层层往外退（先关最上面的弹窗，再让输入框失焦，最后回总览，终端里的 `Esc` 留给 Shell）；`/` 或 `Ctrl/⌘+K` 聚焦侧栏搜索；总览里有多个审批时用 `←` `→` 切换；文本编辑器里 `Ctrl/⌘+S` 保存、`Ctrl/⌘+F` 查找。
 
@@ -281,15 +300,25 @@ POST /api/agents/claude/approvals/:approvalId
 
 新建会话至少传入 `cwd`；`providerId` 可省略以使用当前配置档，`model` 和 `permissionMode` 可选。首次发送前可通过 `PATCH /api/agents/claude/threads/:threadId` 修改供应商；连接建立后，可调整模型与权限，但更换供应商需要新建或分支会话。Default 模型跟随 Claude Code 当前配置，界面另行显示实际运行的模型。没有独立凭据的 CC Switch Official 配置会显示为不可用；官方 OAuth 登录请选「本机 Claude」。Claude 支持从历史消息创建文件级分支和重试；`/skills` 面板可列出并引用可用 Skill（活跃连接经 SDK `reload_skills` 枚举，未连接时扫描 `.claude/skills` 目录）；归档、压缩、review、独立 shell 和 MCP 列表尚未开放。
 
+「设置 → Agent → Claude」的「本机 CLI」可重新探测 PATH、用户标准安装目录、原生安装器保留的各版本及之前保存的 Claude CLI，按版本和路径选择；点「应用并重启」只会重启 Claude 后端，不会重启 Deck、Codex 或 OpenCode。正在运行或等待审批的 Claude 会话会阻止切换。`CLAUDE_BIN` 已指定时以环境变量为准，设置页只读；Windows 的 `--wsl` 模式下，该选择作用于本机 Claude，WSL Claude 仍由 `CLAUDE_WSL_BIN` 指定。
+
 ### OpenCode 后端适配
 
 OpenCode 审批中的「本会话允许」对应 OpenCode 原生 `always`，只在当前会话内有效。对于项目外目录的审批，还可在「更多授权选项」选择「此项目始终允许」：Deck 会把该目录的授权模式写进当前项目的 `opencode.json(c)`，之后该项目的新会话与原生 OpenCode TUI 共用此规则；其它项目不会自动获得授权。该文件属于项目配置，可在 OpenCode 配置里撤销对应 `permission.external_directory` 规则；请留意项目配置文件可能被版本控制跟踪。
 
 OpenCode 会话摘要会持久化到 Deck 缓存，重启后可恢复；刷新时会按已知项目目录补拉会话，并保留 OpenCode 暂时返回的局部列表中未出现的历史会话。打开会话只会补充首条消息标题，不会因此刷新会话时间。
 
+「设置 → Agent → OpenCode」的「本机 CLI」可探测并选择不同路径上的 OpenCode CLI；选择后仅重启 OpenCode serve，忙碌会话会阻止切换，启动失败会尝试恢复旧版本。未修改选择时无需重复应用；配置更改仍可使用详情页的「重载 OpenCode」。`OPENCODE_BIN` 已指定时以环境变量为准，设置页只读。能探测出版本不表示所有大版本都兼容，协议要求见下文。
+
+「设置 → 供应商 → OpenCode」：解析全局与当前项目 `opencode.json(c)` 的 `provider`（V1）/`providers`（V2）段，列出自定义 provider 的 Base URL、模型与 Key 状态（明文 Key 只显示“有 Key”，`{env:KEY}` 模板可回显；文件里没写 Key 时以 OpenCode 运行时为准，`opencode auth login` 登录或环境变量提供的凭据同样显示“有 Key”，OpenCode 未运行时显示“未探测”，Deck 不读取 auth.json），可新增、编辑、删除；每个模型可单独设显示名、增删推理强度档位（`variants`，如 low / medium / high；未配置档位的模型发推理强度会被 OpenCode 拒绝）与声明是否支持图片输入（`modalities`，中转的未知模型默认只有纯文本、发图会被拦，打开开关声明后重载生效），SDK 包默认随供应商、也可按模型覆盖（`models.<id>.provider.npm`，如 grok 走 Responses、其余走 Anthropic），卡片上显示模型名（ID 与状态收进 hover 提示），绿点加「N 档」标注推理档位，图片标记标注视觉支持，只给覆盖了 SDK 的模型加接口标记；写入沿用文件已有格式、其余配置不动，保存后点「重载 OpenCode」生效。「设置 → Agent → OpenCode」详情页另有跳转链接到该分区，以及「工具免审」小节：读写 `permission` 段（bash/edit/write 常用项加手输补充，`所有工具`设为直接允许即全站免审，问答类不受影响），保存后重载生效。待处理审批（总览与全局浮窗）支持“全部允许”：本会话内始终允许权限类请求，问答与需选档的一律跳过、留给逐条处理。
+
+OpenCode Serve 意外退出后，Deck 会以 1、2、4 秒间隔最多尝试重连三次。服务恢复并重新载入原会话后，离线状态会解除，离线期间排队的消息可在原会话启动新回合，无需 fork。退出前已经投递的指令不会自动重发；没有排队消息时，需自行发送继续指令。已执行的文件修改仍然保留，继续前应让 Agent 核对现场，避免重复操作。重连仍失败时，可在设置中手动重载 OpenCode。
+
+**「重载」和「重启服务」是两个动作。** 重载只失效 `opencode serve` 进程内的实例缓存并重读配置与供应商目录，进程不动；正常改配置、加供应商用重载即可。重启服务额外杀掉 serve 进程重建，用于重载救不回的进程级缓存问题——典型场景是 serve 启动时网络不通、拉取 models.dev 模型目录超时，`opencode-go` 这类只存在于目录里的供应商会从注册表里消失，模型卡可以选但发送报 "Model not found"；重载遇到这种空目录会自检并自动升级为重启，无需手动干预。两个操作的唯一入口是「设置 → Agent → OpenCode」页「运行时」Section 的服务状态行；Agent 列表行的重载图标与其它 Agent 一致，只做重载。供应商、权限或代理的改动落盘后，设置各页顶部会出现「OpenCode 有配置等待生效」提示条，一键跳去重载。OpenCode 的代理配置（主 Agent / 子 Agent / 工具审批）合在同一个水平切换里。
+
 > **版本要求：面向 OpenCode V1（1.x）**。适配器走 `opencode serve` 的 V1 REST 接口（`/session`、`/global/event`、`/config` 等），对 V2 的 `/api/*` 新契约不兼容；OpenCode 2 尚未发布 stable（npm `latest` 仍为 1.x），且 V2 安装会替换 V1 二进制，升级前请先完成迁移。配置文件侧 V2 仍读取 `opencode.json(c)` 原位置并兼容 V1 字段，迁移要点与待办见 [docs/opencode-v2-todo.md](docs/opencode-v2-todo.md)。
 
-> **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态；OpenCode 进程异常退出时只会让 Deck 内的 OpenCode 离线，不会按已退出的 PID 清理或影响电脑上其它 OpenCode 实例。`opencode serve` 会把每个目录的配置与供应商目录缓存在内存里，外部编辑 `opencode.json` 或 `opencode auth login` 之后，在「设置 → Agent」里点 OpenCode 的「重载」即可让新供应商和模型生效，不用重启 Deck，也不会中断或改写现有会话（运行中的会话会先排队，重载等它空闲或加 force）。serve 进程直接继承 Deck 的环境，按 opencode 的标准规则读配置与登录态（`$XDG_CONFIG_HOME/opencode` 或 `~/.config/opencode`、数据目录下的 `auth.json`），Deck 的全局配置编辑写的就是 serve 读的同一个目录；想让两者用另一份目录时，给 Deck 设置 `OPENCODE_CONFIG_DIR`（opencode 原生支持的全局配置目录）与 `XDG_DATA_HOME`（auth.json 所在目录）再启动即可，Deck 不会自动猜测其它用户目录。模型选择器默认只列已连接的供应商（对齐 opencode 自己的模型栏），搜索行上的「已连接」开关可以切回全部目录。
+> **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态；OpenCode 进程异常退出时只会让 Deck 内的 OpenCode 离线，不会按已退出的 PID 清理或影响电脑上其它 OpenCode 实例。`opencode serve` 会把每个目录的配置与供应商目录缓存在内存里，外部编辑 `opencode.json` 或 `opencode auth login` 之后，在「设置 → Agent」里点 OpenCode 的「重载」即可让新供应商和模型生效，不用重启 Deck，也不会中断或改写现有会话（运行中的会话会先排队，重载等它空闲或加 force）。serve 进程直接继承 Deck 的环境，按 opencode 的标准规则读配置与登录态（`$XDG_CONFIG_HOME/opencode` 或 `~/.config/opencode`、数据目录下的 `auth.json`），Deck 的全局配置编辑写的就是 serve 读的同一个目录；想让两者用另一份目录时，给 Deck 设置 `OPENCODE_CONFIG_DIR`（opencode 原生支持的全局配置目录）与 `XDG_DATA_HOME`（auth.json 所在目录）再启动即可，Deck 不会自动猜测其它用户目录。`opencode serve` 是 Bun 进程，长时间运行内存只增不减；没有忙碌会话和待审批、且空闲超过 30 分钟时，Deck 会自动把它杀掉重建一次（会话从 `/session` 重新拉回，主机内存可回收数百 MB），设 `OPENCODE_IDLE_RESTART_MS=0` 可关闭。模型选择器默认只列已连接的供应商（对齐 opencode 自己的模型栏），搜索行上的「已连接」开关可以切回全部目录。
 
 新建会话选择 OpenCode 后可使用其已配置的 provider 和模型，支持新建、续聊、流式文本与工具事件、图片输入、权限审批、取消、重命名、删除和模型调整。模型选择器与 OpenCode 自身一致：因为模型 ID 就是 `providerID/modelID`，选模型即选供应商，所有入口（新建会话、会话设置、命令面板）都只用一个按 provider 分组的可搜索选择器，不再先挑供应商再挑模型；关键字会同时匹配供应商名、模型名和模型 ID，「跟随 OpenCode 默认」表示不覆盖模型，由 OpenCode 配置决定，OpenCode 通过 `/config` 暴露的默认模型会在目录中标记「默认」。OpenCode 的 `/provider` 里已连接（connected）的供应商会排在目录最前面并在分组标题上标记「已连接」，未登录的供应商仍然可以浏览和搜索，只是排在后面。OpenCode 的供应商与模型目录可能长达数百项，这类长列表不再用原生下拉框呈现：打开后先输入关键字筛选，支持键盘上下键与回车确认，手机与桌面均可使用；在窄屏（≤760px）上该选择器会以底部弹出层的形式打开，可直接点选、滚动、点空白处或关闭按钮收起，不会被弹窗裁掉。每个模型同时返回图片输入能力（来自 OpenCode 的 `attachment` / `modalities` 元数据），对明确不支持视觉的模型，附加图片时输入框会出现提示，服务端也会在发送前直接拒绝并说明原因，不再等到任务报错才发现。会话历史直接从 OpenCode server 读取；`/skills` 面板经 `GET /skill` 列出项目与全局 Skill，选中后以 `/name` 命令调用。供应商切换、压缩、review、独立 shell 与 MCP 面板尚未开放，界面会根据能力矩阵隐藏或禁用对应操作。新建会话时选择的模型会写入会话设置并在刷新、重连和 Deck 重启后保留，不会被 OpenCode 的 `session.created` / `session.updated` 事件改回「跟随 OpenCode 默认」；只有 OpenCode 自身的标题、目录和时间戳会覆盖 Deck 的显示。会话命名与 Codex 对齐：OpenCode 原生的随机 `slug`（如 `curious-comet`）只在没有任何标题和消息时作为兜底展示，新建空会话显示「新 OpenCode 会话」，一旦有首条用户消息就用它（前 42 字）做标题；新建时填写的名称或手动重命名会写入 OpenCode 的 `title` 并始终优先，不会被首条消息覆盖。归档/恢复是 Deck 侧软归档：OpenCode serve 没有原生归档接口，归档后会话移入归档箱、服务端会话原样保留，归档态持久化后重启不丢失；运行中的会话不能归档，归档会话需要恢复后才能继续发送。分支（fork）走 OpenCode 原生 `POST /session/:id/fork`：每轮下的「从此处分支」完整复制历史到新分支，原分支保留；消息旁的「从此重试」先把原文带回输入框，改完再发送才真正分支重发（直接发送即用原文重试），首轮重试则新建空分支，不改动原会话历史与文件。fork 出来的分支带「分支」后缀与来源 chip，侧栏同样标记；fork 用的全是 OpenCode 官方接口，不动服务端原有会话存储结构。会话元信息与 `/status` 显示 OpenCode 实际使用的模型 ID：即使设置是「跟随 OpenCode 默认」，也会解析成最后一条回复里的 `providerID/modelID`，头部供应商名同样按这个解析结果走。上下文用量来自最后一条 assistant 回复的 tokens（input + output + reasoning + cache），上限取模型目录里的 `limit.context`，填进 `tokenUsage` 后头部上下文条、`/status` 与用量统计都会生效；该数值在打开会话或重新读取历史时刷新，不会在每一轮结束后实时回读。Agent 在任务中派生的 subagent 子会话（带 `parentID`）不再出现在会话列表中，其工作以父会话里的「子代理」卡片呈现：task 工具调用显示为专属卡片，运行中会在卡片下方实时滚动显示子代理的最新活动（当前执行的工具或回复文本尾部），结束后展开卡片可查看子代理的最终结果；子代理的过程性输出不会作为独立会话污染会话列表。输入框支持 OpenCode 原生 `/` 命令：`/compact`（别名 `/summarize`）压缩上下文，`/undo`、`/redo` 撤回/恢复最近一轮（含文件恢复，均需二次确认，也可在时间线每条用户消息旁按条撤回），`/init` 与 `.opencode/commands/*.md` 自定义命令透传执行，`/models` 打开模型选择器，`/new`、`/sessions` 指引到 Deck 的新建与列表切换，`/details`、`/thinking` 对应时间线里的可展开细节，完整行为见 [Slash 指令文档](docs/slash-commands.md)；`/share` 等分享类命令尚未接入，仍请用原生 TUI 执行。
 
@@ -502,7 +531,15 @@ codex --remote ws://127.0.0.1:<runtime-port>
 
 页面也可按当前项目生成带 `-C` 的命令。TUI 和网页连接同一个 runtime，因此网页能看到实时运行、审批和错误，并继续发送指令。
 
+对话框中的「会话设置」在任务运行或等待审批时仍可修改模型、推理和执行权限。修改会自动保存，但不改变当前任务；它会在下一轮真正开始执行前应用，包括已排队但尚未执行的消息。连续修改以最后一次为准；如果应用失败，待生效设置会保留，下一次启动任务时重试。空闲会话的模型/推理强度修改即时写回会话摘要，输入框底部与 `/status` 里的信息跟设置保存同步更新，不用等下一轮；各处显示的模型名优先用目录里的展示名（如 `GLM-5.3-Flash`），没有目录数据时退回模型 ID。
+
 当前 Codex 版本里，provider 是 thread 创建属性，不能对同一个 thread 热切换。
+
+### 版本选择与下拉控件
+
+在「设置 → Agent → Codex / Claude Code / OpenCode → 本机 CLI」扫描并选择 Deck 所在设备上安装的 CLI。版本列表支持搜索，显示版本、安装来源和路径；安装路径可复制。选择版本后点击「应用并重启」，仅切换对应 Agent；有会话运行或等待审批时不能切换。环境变量指定的 CLI 会锁定选择，需要修改环境变量后重启 Deck。
+
+设置、新建会话、项目默认值、聊天工具栏和 Git 分支使用统一样式的下拉选择。模型列表保留供应商分组、连接状态筛选与手动输入，支持键盘导航和大目录滚动；搜索时可查找未连接供应商的模型。手机上的搜索选择以底部面板展开，点选后返回原页面。
 
 ## 配置
 
@@ -521,6 +558,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CLAUDE_CONFIG_DIR`             | `~/.claude`                | Claude 配置与历史目录（也认 `CLAUDE_HOME`）；WSL 可指向 `/mnt/c/Users/<用户>/.claude`  |
 | `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
 | `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
+| `OPENCODE_IDLE_RESTART_MS`      | `1800000`                  | OpenCode serve 空闲多久后自动重启一次回收进程内存（无忙碌会话/待审批才执行）；`0` 关闭   |
 | `OPENCODE_CONFIG_DIR`           | `~/.config/opencode`       | OpenCode 全局配置目录（opencode 原生变量）；`auth.json`/会话库随 `XDG_DATA_HOME` 走    |
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
 | `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
@@ -546,9 +584,9 @@ codex --remote ws://127.0.0.1:<runtime-port>
 
 ### 不安装 CC Switch / 无头环境
 
-没有 CC Switch 数据库时，Codecks 正常启动，供应商页面显示「未检测到 · 不影响使用」。本机 Codex 入口始终保留，即使 Codex 主目录尚未创建；使用前仍需安装 CLI 并完成有效登录或配置 API 凭据。「本机 Claude」沿用 Claude CLI 当前登录、`settings.json` 和环境变量，不依赖 CC Switch。
+没有 CC Switch 数据库时，Codecks 正常启动，供应商页面显示「未检测到 · 不影响使用」。「设置 → 供应商」只列出自定义供应商与 CC Switch 导入项，不再把本机登录单独列成一行；本机登录（Codex 的 `~/.codex` 登录态、Claude CLI 当前登录、`settings.json` 和环境变量）始终保留，即使 Codex 主目录尚未创建——新建或分支会话时选择「本机」即可使用，使用前仍需安装 CLI 并完成有效登录或配置 API 凭据。
 
-在「设置 → 供应商 → 自定义供应商」点击「添加」，选择 Agent：
+在「设置 → 供应商」的 Codex / Claude 标签页点击「添加」，新增走弹窗（底部操作常驻，列表不再被顶下去）：
 
 - **Codex**：填写 OpenAI 兼容 Base URL、模型、API Key，并选择 Responses / Chat Completions。配置保存在 `DATA_DIR/providers.json`。
 - **Claude Code**：填写 Anthropic 兼容 Base URL，选择 API Key（`ANTHROPIC_API_KEY`）或 Auth Token（`ANTHROPIC_AUTH_TOKEN`）；默认模型可选。配置保存在 `DATA_DIR/claude-providers.json`。新增后可在新建会话或分支会话中选择，不必安装或启动 CC Switch。
@@ -629,7 +667,7 @@ npm run build
 Agent runtime 的目录边界、能力契约和新 adapter 接入步骤见
 [Agent Adapter 开发约定](docs/agent-adapters.md)。界面的尺寸、组件和主题约定见 [UI 基线](docs/ui-baseline.md)。
 
-`settings-harness.html`、`monitor-harness.html` 这类 `*-harness.html` 是不接后端的预览页（自带假数据），`npm run dev` 起来后在 Vite 里直接打开就行，改界面时用来点按验证。
+`settings-harness.html`、`monitor-harness.html` 这类 `*-harness.html` 是不接后端的预览页（自带假数据），`npm run dev` 起来后在 Vite 里直接打开就行，改界面时用来点按验证。`demo-harness.html` 用假数据渲染整个应用（侧栏、总览、会话页、设置、工具页），上面的截图就是从它拍的；加 `?theme=light` 看浅色，`?empty=1` 看没有会话时的欢迎页。
 
 ## 故障排除
 
@@ -637,7 +675,7 @@ Agent runtime 的目录边界、能力契约和新 adapter 接入步骤见
 
 重新执行 `npm run build`，彻底退出旧进程后再启动。npm 全局安装的 Codex 在 Windows 上同时带有无扩展名脚本和 `codex.cmd`；Codecks 会优先通过 `node` 启动官方入口（或直接启动 `codex.exe`），避免把供应商参数拼进 `cmd.exe`。
 
-如果 Codex 不在 `PATH`，用 `CODEX_BIN` 指向实际可执行文件。
+如果 Codex 不在 `PATH`，用 `CODEX_BIN` 指向实际可执行文件。也可以在「设置 → Agent → Codex → 本机 CLI」里从探测到的版本下拉选择（npm 全局、`~/.codex/packages` 等标准位置，不写死机器路径），保存后在任务空闲时重启 Runtime 生效；`CODEX_BIN` 环境变量一旦设置会固定选择，设置页会禁用切换并说明原因。运行中的版本和选中的版本不一致、或发现上个 Deck 进程留下的旧后端时，设置页只做提示，不会自动杀进程，由你手动处理。
 
 ### 现有 Session 列表为空
 

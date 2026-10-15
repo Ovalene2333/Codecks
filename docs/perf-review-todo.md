@@ -51,6 +51,52 @@
       canvas 压缩 1600px/0.8。
 - [ ] P3 `index.html` 启动脚本同步 parse 大快照：只读 meta 行，延后到 idle。
 
+## 第三轮内存专项（2026-10-13 晚，glibc malloc 碎片实证）
+
+现象：deck 主进程空载 ~370-400MB，活跃使用 1 小时后 RSS ~590-700MB；换成二进制 `opencode serve`
+(Bun) 子进程踱到 ~900MB；`devin acp` ~230MB、`codex app-server` ~250-300MB——全家桶 ~2.2GB。
+
+实证（临时 DATA_DIR + 禁用全部 agent 二进制的空载实例 + 1500 次 `GET /api/snapshot`）：
+
+| 阶段 | RSS | glibc [heap]（Private_Dirty） | V8 JS 堆（自算 self_size） |
+| --- | --- | --- | --- |
+| 启动 30s | 372-384MB | 78-92MB | ~121MB |
+| 压 1500 snapshot 后 | 494-525MB | 177-212MB | 基本不变 |
+| 闲置 5 分钟 | 513-527MB | **194-214MB 一毫不还** | 基本不变 |
+| WS connect/close ×300 | 545MB | +3MB | — |
+
+`malloc_info(0, stderr)` 直采（自编 mimalloc 风格 LD_PRELOAD 观察器）：
+deck node 在压测后 `system current ≈ 201MB`，其中 **~223MB 是 free chunk**（fastbin=0、非堆顶）。
+结论：流失在 glibc 的「大块暂时性分配（全量快照/大 JSON 序列化、deflate 暂存）穿插小对象常驻导致的
+内部碎片」，非真正的内存泄漏；`MALLOC_TRIM_THRESHOLD_/TOP_PAD_` 实测无效（trim 只还堆顶）。
+`heapstat`:V8 侧确认无 JS 泄露（两轮堆快照 self 100.7 vs 121.2MB，反而下降）。
+
+已落地：
+- [x] `GET /api/snapshot` 加 150ms 纯读 memo（`server/index.ts` snapshotGet）——页面加载与关弹层
+      动作簇只构建一次；每个动作的后置 `fullSnapshot()` 与 WS 快照合并窗口保持原语义。
+- [x] `OPENCODE_IDLE_RESTART_MS`（同日提交）：serve 空闲 30min 且无忙碌/待审批时重建，回收
+      opencode serve 的数百 MB。
+- [x] 模型目录 / 技能列表 / 任务快照缓存（同日提交，见 docs/caching-inventory.md）。
+
+量化为无效（晚上实测，勿再做）：
+- 懒加载 `@anthropic-ai/claude-agent-sdk`（动态 import）——空载 RSS 无可见收益，SDK 图谱远比
+  源码字符串小；且把回合工厂变异步会新开 abort 竞态面。
+- `MALLOC_TRIM_THRESHOLD_` / `MALLOC_TOP_PAD_`——对已滞留的 Y 形空闲块无效。
+
+后续排期（按收益排序）：
+- [ ] P1 换分配器：`apt install libjemalloc2`（需 root）或自编 mimalloc，LD_PRELOAD 到 deck 主
+      进程与 opencode serve；decay 可以归还碎片。验证口径同本轮。
+- [ ] P1 `/api/snapshot` 增量协议：revision + `If-None-Match`/304 或 `?since=`，把每客户端
+      3s/5s 轮询的全量 JSON 打成小 delta（需协议变更，与「后续排期」第一项联动）。
+- [ ] P2 `.data` 下 `message-deliveries.json` 804KB 常驻内存 + 高频全文替换由 DebouncedAtomicJsonStore
+      承接（并入上面第三项）。
+
+## 验证（第三轮）
+
+- `npm test`：815 例，813 通过，2 跳过。
+- `npm run build` 全绿；`server/index.ts` memo 与 WS/广播语义 README 无感知（纯服务端行为）。
+- 压测产物：`/tmp/luomemstat/mallocstat.so`（LD_PRELOAD 观察器，源码留档 tmp）、堆快照已删。
+
 ## 验证（第二轮）
 
 - `npm test`：407 例，406 通过，1 跳过（Windows 无 POSIX shell 预设跳过）。

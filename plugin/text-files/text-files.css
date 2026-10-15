@@ -8,7 +8,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: 0 12px 32px var(--shadow);
+  box-shadow: none;
 }
 .files-browser {
   display: flex;
@@ -94,8 +94,9 @@
   opacity: 0.42;
 }
 .files-subbar button.active {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--line-strong);
+  background: var(--surface-selected);
+  color: var(--text);
 }
 .files-subbar-filter > span {
   margin-left: auto;
@@ -135,7 +136,7 @@
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
 }
 .files-create button {
   display: inline-flex;
@@ -216,12 +217,12 @@
 .files-row-name b {
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .files-row-name small {
   margin-top: 2px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-micro);
 }
 .files-row-btn {
   width: 32px;
@@ -274,18 +275,18 @@
 }
 .files-doc-title b {
   font-family: var(--font-mono);
-  font-size: var(--fs-caption);
-  font-weight: 600;
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
 }
 .files-doc-title b em {
-  color: var(--warn);
+  color: var(--wait);
   font-style: normal;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .files-doc-title small {
   margin-top: 1px;
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--fs-micro);
 }
 .files-save:not(:disabled) {
   color: var(--accent);
@@ -386,7 +387,7 @@ p.files-note {
 .files-md h5,
 .files-md h6 {
   margin: 0.95em 0 0.35em;
-  font-weight: 650;
+  font-weight: var(--fw-strong);
   line-height: 1.35;
 }
 .files-md h1 {
@@ -427,7 +428,7 @@ p.files-note {
   background: transparent;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: var(--fs-caption);
+  font-size: var(--fs-meta);
   line-height: 1.55;
   white-space: pre-wrap;
 }

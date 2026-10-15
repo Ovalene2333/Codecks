@@ -426,6 +426,21 @@ Claude 的 `reload()` 是软重载：刷新 profiles/历史而不断开已有会
 
 - 服务端：历史归一化时不要丢弃原生数据（OpenCode 的 todo/choice part、
   Claude 的 `TodoWrite` 等），能转成 `extension` 就保留原始 payload。
+- 回合统计：`turn.stats = { startedAt?, endedAt?, durationMs?,
+  outputTokens?, tps? }`（输出 = 生成 token output+reasoning，除以秒），
+  前端表头据此显示「用时 · tok/s」；缺失即不显示，不编造。OpenCode 从
+  message `time/tokens` 直接算；Codex 在 turn 起止事件里记基线、结束时
+  结算并经 `thread-settings.json` 的 `turnStats` 持久化，`readThread`
+  用 `stampTurnStats` 回填。
+- 直播进度：活跃回合内按约 1Hz 发 `turn/progress`
+  `{ threadId, turnId, outputTokens, elapsedMs }`（`codex.event` /
+  `agent.event` 通道），前端只替换同回合旧包、不触发全文重拉。
+- 工具输出折叠：`server/agents/turn-fold.ts` 的 `foldTurns` 在 HTTP
+  传输层把非活跃回合超 2KB 的工具输出换成摘要（`folded +
+  outputChars + outputPreview`），详情走
+  `GET /api/agents/:agentId/threads/:threadId/turns/:turnId`
+ （`registry.readThread` + 按 turnId 切片，无需 adapter 新增接口）。
+  搜索索引在折叠前 capture 全量；`?full=1` 可 bypass。
 - 前端：`src/session/adapters/` 按 `agentId` 提供 `AgentUiAdapter`，
   `TurnItem` 渲染前先问适配器，未认领的条目回落到通用渲染与
   `UnknownItem` 兜底；`streaming.ts` 负责把 OpenCode 的

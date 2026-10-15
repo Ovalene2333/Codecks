@@ -1,0 +1,247 @@
+/* ── 会话二级设置 ────────────────────────────────────────── */
+.modal.session-settings-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, 100%);
+  max-height: calc(100dvh - var(--space-6) * 2);
+  padding: 0;
+  overflow: hidden;
+}
+
+.session-settings-modal > header {
+  flex: none;
+  margin: 0;
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--line);
+}
+
+.session-settings-modal > header h2 {
+  font-size: var(--fs-dialog);
+}
+
+.session-settings-body {
+  min-height: 0;
+  padding: var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.session-toolbar--panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.session-settings-section + .session-settings-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--line);
+}
+
+.session-settings-section > h3 {
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-ui);
+}
+
+.session-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.session-settings-section:first-child
+  .session-settings-grid
+  > .toolbar-select:first-child {
+  grid-column: 1 / -1;
+}
+
+.session-settings-grid .toolbar-select {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-settings-grid .toolbar-select:hover,
+.session-settings-grid .toolbar-select:focus-within {
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-settings-grid .toolbar-field-label {
+  display: block;
+  grid-column: 1 / -1;
+  align-self: auto;
+  padding: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-tight);
+}
+
+.session-settings-grid .toolbar-select > :is(select, .ui-select-trigger),
+.session-settings-grid .toolbar-select > input {
+  grid-column: 1 / -1;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-regular);
+}
+
+.session-settings-grid .toolbar-select:has(.model-manual-toggle) > input {
+  grid-column: 1;
+}
+
+.session-settings-grid .search-picker {
+  width: 100%;
+  max-width: none;
+}
+
+.session-settings-grid .search-picker-trigger {
+  width: 100%;
+  max-width: none;
+  min-height: 40px;
+  padding: 0 30px 0 11px;
+  border-color: var(--control-border);
+  background: var(--control);
+  font-family: var(--font-sans);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-regular);
+}
+
+.session-settings-grid .toolbar-select .icon-btn.model-manual-toggle {
+  align-self: end;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  border: 1px solid var(--control-border);
+  background: var(--control);
+}
+
+.session-settings-grid :is(select, .ui-select-trigger):hover:not(:disabled),
+.session-settings-grid input:hover:not(:disabled),
+.session-settings-grid .search-picker-trigger:hover:not(:disabled),
+.session-settings-grid .model-manual-toggle:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+}
+
+.session-settings-grid :is(select, .ui-select-trigger):focus-visible,
+.session-settings-grid input:focus-visible,
+.session-settings-grid .search-picker-trigger:focus-visible,
+.session-settings-grid .model-manual-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.session-toolbar--panel .toolbar-hint {
+  margin: var(--space-4) 0 0;
+  color: var(--wait);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+.session-settings-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.session-settings-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.session-settings-saved i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.session-settings-footer .primary {
+  min-width: 72px;
+}
+
+@media (max-width: 640px) {
+  .modal-backdrop:has(> .session-settings-modal) {
+    align-items: end;
+    padding: 0;
+  }
+
+  .modal.session-settings-modal {
+    width: 100%;
+    max-height: calc(100dvh - var(--space-6));
+    border-bottom: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+
+  .session-settings-modal > header,
+  .session-settings-body {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+
+  .session-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+
+  .session-settings-section:first-child
+    .session-settings-grid
+    > .toolbar-select:first-child {
+    grid-column: auto;
+  }
+
+  .session-settings-grid .toolbar-select > :is(select, .ui-select-trigger),
+  .session-settings-grid .toolbar-select > input,
+  .session-settings-grid .search-picker-trigger {
+    height: var(--touch-h);
+    min-height: var(--touch-h);
+    font-size: var(--fs-body);
+  }
+
+  .session-settings-grid .toolbar-select .icon-btn.model-manual-toggle {
+    width: var(--touch-h);
+    height: var(--touch-h);
+    min-width: var(--touch-h);
+  }
+
+  .session-settings-footer {
+    padding: var(--space-3) var(--space-4)
+      calc(var(--space-3) + env(safe-area-inset-bottom));
+  }
+
+  .session-settings-footer .primary {
+    min-width: 84px;
+    min-height: var(--touch-h);
+  }
+}

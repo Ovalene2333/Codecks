@@ -7,7 +7,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
   background: var(--terminal-bg);
-  box-shadow: 0 12px 32px var(--shadow);
+  box-shadow: none;
 }
 .terminal-toolbar {
   display: flex;
@@ -15,8 +15,8 @@
   gap: 8px;
   min-width: 0;
   padding: 0 9px 0 12px;
-  border-bottom: 1px solid #2a3237;
-  background: #151a1e;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 .terminal-toolbar label {
   display: flex;
@@ -28,18 +28,18 @@
 .terminal-toolbar label > svg {
   width: 14px;
   flex: none;
-  color: #7f8b92;
+  color: var(--text-faint);
 }
 .terminal-toolbar input {
   width: 100%;
   min-width: 0;
   height: 32px;
   padding: 0 9px;
-  border: 1px solid #313a40;
+  border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   outline: 0;
-  background: #0e1316;
-  color: #d9e0e3;
+  background: var(--control);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
 }
@@ -50,19 +50,19 @@
   width: 32px;
   height: 32px;
   flex: none;
-  color: #aeb8bd;
+  color: var(--text-soft);
 }
 .terminal-toolbar .terminal-power:not(:disabled) {
-  color: #f28b94;
+  color: var(--danger-text);
 }
 .terminal-connection {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
-  color: #849198;
+  color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-micro);
 }
 .terminal-connection i {
   width: 7px;
@@ -71,7 +71,7 @@
   background: currentColor;
 }
 .terminal-connection.online {
-  color: #59d98e;
+  color: var(--ok);
 }
 .terminal-screen {
   min-width: 0;
@@ -83,7 +83,7 @@
   height: 100%;
 }
 .terminal-screen .xterm-viewport {
-  scrollbar-color: #3a454b transparent;
+  scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
 }
 .terminal-mobile-keys {
@@ -112,17 +112,17 @@
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 1px;
     padding-bottom: env(safe-area-inset-bottom);
-    border-top: 1px solid #2a3237;
-    background: #2a3237;
+    border-top: 1px solid var(--line);
+    background: var(--line);
   }
   .terminal-mobile-keys button {
     min-width: 0;
     border: 0;
     border-radius: 0;
-    background: #171d21;
-    color: #c4cdd1;
+    background: var(--surface-2);
+    color: var(--text-soft);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--fs-micro);
   }
   .terminal-mobile-keys svg {
     width: 16px;
