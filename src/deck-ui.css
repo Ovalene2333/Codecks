@@ -91,13 +91,17 @@
 
 .session-search {
   height: var(--control-h);
+  min-width: 0;
   padding: 0 8px;
   border-radius: var(--radius-sm);
 }
 
 .session-search input {
-  min-height: calc(var(--control-h) - 2px);
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
   padding: 0;
+  line-height: 20px;
   border-radius: 0;
   background: transparent;
 }
@@ -123,14 +127,66 @@
 }
 
 .library-segment {
+  min-width: 0;
+  height: var(--control-h);
   min-height: var(--control-h);
+  gap: 2px;
+  padding: 2px;
+  border-color: var(--line);
   background: var(--surface-muted);
   box-shadow: none;
 }
 
+.library-segment > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
 .library-segment > button.on {
+  border-color: transparent;
   background: var(--surface-selected);
+  color: var(--text);
   box-shadow: none;
+}
+
+.library-segment em {
+  margin: 0;
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+}
+
+.library-segment > button.on em {
+  color: var(--text-dim);
+}
+
+.library-bar > .icon-btn {
+  flex: none;
+  width: var(--control-h);
+  height: var(--control-h);
+  padding: 0;
+  color: var(--text-dim);
+}
+
+:is(.session-search, .library-bar > .icon-btn, .new-session-btn) > svg {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.library-segment > button:focus-visible,
+.library-bar > .icon-btn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .sidebar-meta {
@@ -637,6 +693,7 @@
 
 .chat-header-actions {
   gap: 5px;
+  line-height: 20px;
 }
 
 .chat-header-actions .icon-btn,
@@ -646,6 +703,21 @@
   min-height: 32px;
   border: 1px solid transparent;
   background: transparent;
+}
+
+.chat-header-actions .icon-btn {
+  padding: 0;
+}
+
+.chat-header-actions :is(.desktop-context-label, .context-bar > span, .provider-switch > span) {
+  line-height: 20px;
+}
+
+.chat-header-actions :is(.icon-btn, .provider-switch) > svg {
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
 }
 
 .provider-switch.secondary {
@@ -703,10 +775,10 @@
 .desktop-context .compact-btn {
   display: grid;
   place-items: center;
-  width: 26px;
-  min-width: 26px;
-  height: 26px;
-  min-height: 26px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -714,8 +786,9 @@
 }
 
 .desktop-context .compact-btn svg {
-  width: 14px;
-  height: 14px;
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .timeline-turns {
@@ -924,8 +997,22 @@
     padding-inline: 12px;
   }
 
+  .session-search {
+    height: 44px;
+  }
+
   .library-segment {
-    min-height: 42px;
+    height: 50px;
+    min-height: 50px;
+  }
+
+  .library-segment > button {
+    min-height: 44px;
+  }
+
+  .library-bar > .icon-btn {
+    width: 44px;
+    height: 44px;
   }
 
   .sidebar-meta .watch-strip button {

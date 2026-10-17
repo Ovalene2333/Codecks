@@ -134,3 +134,33 @@ test("windows without usage data never get ranked", () => {
   );
   assert.equal(rankedQuotaWindows(null).length, 0);
 });
+
+test("quota estimates extrapolate a matched period sample and prefer 7d", async () => {
+  const { estimateAccountQuota } = await import("./format.ts");
+  const resetsAt = Date.now() + 3600_000;
+  const sample = {
+    stageTokens: 10000,
+    stageCost: 0.5,
+    usedPercent: 10,
+    windowDurationMins: 300,
+    resetsAt,
+  };
+  const result = estimateAccountQuota([
+    sample,
+    { ...sample, windowDurationMins: 10080 },
+  ])!;
+  assert.equal(result.windowLabel, "7d");
+  assert.equal(result.windowQuota, 100000);
+  assert.equal(result.windowCost, 5);
+  assert.equal(result.monthlyCost, (5 * 30) / 7);
+  assert.equal(estimateAccountQuota([sample])?.windowLabel, "5h");
+  assert.equal(
+    estimateAccountQuota([{ ...sample, resetsAt: Date.now() - 1 }]),
+    undefined,
+  );
+  assert.equal(
+    estimateAccountQuota([{ ...sample, usedPercent: 0 }]),
+    undefined,
+  );
+  assert.equal(estimateAccountQuota(undefined), undefined);
+});

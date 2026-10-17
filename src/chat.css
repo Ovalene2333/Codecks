@@ -1385,10 +1385,9 @@
   min-width: 0;
 }
 .composer-box {
-  /* 高度收紧到内容自然值（8 + textarea 48 + 格子带 32），
-     保证格子带贴满底边；多余空间只出现在 textarea 区。 */
-  min-height: 88px;
-  padding: var(--space-2) var(--space-2) 0;
+  /* 文字区独立承担四边留白，底部以按钮栏上沿为界。 */
+  --composer-text-inset: var(--space-4);
+  padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -1410,9 +1409,9 @@
   resize: none;
   display: block;
   width: 100%;
-  min-height: 48px;
+  min-height: calc(1lh + 2 * var(--composer-text-inset));
   max-height: 160px;
-  padding: var(--space-2) 10px var(--space-2);
+  padding: var(--composer-text-inset);
   border: 0;
   outline: 0;
   background: transparent;
@@ -1428,7 +1427,7 @@
   outline-offset: 0;
 }
 /* 底行是一条 hairline 格子带：只在 textarea 下画一条上边线，
-   左右贴满输入框、底部顶到底边（composer-box 余呴已收零），
+   左右贴满输入框、底部顶到底边，
    格子间用发丝线分隔，全部格子同高。 */
 .prompt-input__footer {
   display: flex;
@@ -1436,10 +1435,10 @@
   justify-content: space-between;
   gap: 0;
   min-width: 0;
-  /* box 被外部拉高时（min-height/弹窗等）把余量顶到 textarea 区，
-     格子带始终吸底。 */
+  flex: none;
+  box-sizing: content-box;
   height: var(--control-h);
-  margin: auto calc(-1 * var(--space-2)) 0;
+  margin: 0;
   border-top: 1px solid var(--line);
 }
 .prompt-input__tools {
@@ -1458,7 +1457,7 @@
   height: auto;
   min-height: 0;
   padding: 0 var(--space-2);
-  border: 1px solid transparent;
+  border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--text-dim);
@@ -1584,8 +1583,8 @@ button.composer-context-seg:focus-visible {
 .composer-model-ghost {
   display: none;
   position: absolute;
-  top: var(--space-2);
-  inset-inline-end: 10px;
+  top: var(--composer-text-inset);
+  inset-inline-end: var(--composer-text-inset);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1702,6 +1701,9 @@ button.composer-context-seg:focus-visible {
   background: var(--surface-muted);
 }
 .composer-images button {
+  display: grid;
+  place-items: center;
+  padding: 0;
   position: absolute;
   top: -6px;
   right: -6px;
@@ -2417,22 +2419,17 @@ button.composer-context-seg:focus-visible {
     font-size: 16px;
   }
   .composer-box {
-    min-height: 92px;
     border-radius: var(--radius-md);
   }
   /* 配置信息进格子带与输入行：ghost 模型 ID + 中部 meta 段。 */
   .prompt-input__textarea {
-    /* 行高显式 24px（16px 字的例外）：padding 8 + 行框 24 = min-height 40，
-       上下余量严格相等，不依赖 UA 对 -webkit字体的半行距分配。 */
-    min-height: 40px;
-    padding: var(--space-2) var(--space-2) var(--space-2);
+    /* 与桌面共用四边留白，保留移动端 24px 行高。 */
     line-height: 24px;
   }
   .composer-model-ghost {
     display: block;
-    inset-inline-end: var(--space-2);
     /* 定宽右对齐，超长截断；字号与输入行一致（16px 例外规则）。 */
-    width: 8em;
+    width: min(8em, 40%);
     text-align: right;
     font-size: 16px;
     line-height: 24px;
@@ -2478,15 +2475,16 @@ button.composer-context-seg:focus-visible {
   .composer-model-label {
     max-width: 92px;
     padding: 0 var(--space-1);
-    /* 定高 40px 的垂直居中 hack，与 height 锁死，例外保留。 */
-    line-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    line-height: var(--lh-ui);
   }
   .composer-actions {
-    gap: var(--space-1);
+    gap: 0;
   }
   .send {
     width: var(--touch-h);
-    height: var(--touch-h);
+    height: auto;
     min-width: var(--touch-h);
   }
   .composer-session-controls {

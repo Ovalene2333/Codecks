@@ -440,8 +440,16 @@ export interface RuntimeSnapshot {
   account?: AccountInfo;
   rateLimits?: RateLimits | null;
   rateLimitsError?: string;
-  /** 官方帐号每天消耗的 token（`YYYY-MM-DD` -> tokens），用于按窗口额度反推月度额度。 */
+  /** 官方帐号每天消耗的 token（`YYYY-MM-DD` -> tokens），不用于周期额度估算。 */
   accountUsageDaily?: Record<string, number>;
+  /** 同一重置周期内配对观测的用量与百分比增量。 */
+  accountQuotaSamples?: {
+    stageTokens: number;
+    stageCost: number;
+    usedPercent: number;
+    windowDurationMins: number;
+    resetsAt: number;
+  }[];
   archiveError?: string;
   runtimeWsl?: boolean;
   modelConfig?: RuntimeModelConfig;

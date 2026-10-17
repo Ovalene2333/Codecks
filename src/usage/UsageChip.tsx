@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Folder, Gauge, MessageSquare } from "lucide-react";
+import { Clock3, Folder, Gauge, MessageSquare, RefreshCw } from "lucide-react";
 import type { ProjectRecord, RuntimeSnapshot, ThreadSummary } from "../types";
 import {
   CODEX_QUOTA_TITLE,
@@ -37,8 +37,7 @@ export function UsageChip({
       ? undefined
       : remainingPercent(window.usedPercent);
   // 只有算出未来时间的倒计时才进提示；过期快照的“即将重置”不再打扰收起态。
-  const reset =
-    pct != null && window ? formatResetLabel(window) : undefined;
+  const reset = pct != null && window ? formatResetLabel(window) : undefined;
   const resetText = reset && reset !== RESET_IMMINENT ? `（${reset}）` : "";
   const tipText =
     pct != null
@@ -187,9 +186,7 @@ function UsageStats({
       <section className="usage-summary usage-cost" aria-label="估算费用">
         <span>估算费用</span>
         <strong>{formatCost(cost)}</strong>
-        <p className="usage-note">
-          按公开 API 目录价折算，仅供参考。
-        </p>
+        <p className="usage-note">按公开 API 目录价折算，仅供参考。</p>
       </section>
       <div className="usage-level" role="tablist" aria-label="统计层级">
         <button
@@ -312,23 +309,40 @@ function OfficialLimits({
 }) {
   const limits = runtime?.rateLimits;
   const extra = limits?.byLimitId ? Object.entries(limits.byLimitId) : [];
-  const primaryLength = formatWindowLength(limits?.primary?.windowDurationMins);
   const plan = limits?.planName || runtime?.account?.planType;
-  const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "Codex";
+  const planName = plan
+    ? plan.charAt(0).toUpperCase() + plan.slice(1)
+    : "Codex";
   const price = planPrice(plan);
-  const quota = estimateAccountQuota(limits, runtime?.accountUsageDaily);
+  const quota = estimateAccountQuota(runtime?.accountQuotaSamples);
   return (
     <div className="usage-limits">
-      <p className="usage-plan">
-        {planName}
-        {price != null ? ` · $${price}/月` : ""}
-        {runtime?.account?.email ? ` · ${runtime.account.email}` : ""}
-      </p>
-      {quota ? (
-        <p className="usage-plan" title="阶段用量 ÷ 窗口已用百分比，按窗口长度放大到一个月">
-          {`估算本期额度 ≈ ${formatTokens(quota.monthlyQuota)} Token/月（${quota.windowLabel}窗口实测 ${formatTokens(quota.stageTokens)} Token ≈ ${Math.round(quota.usedPercent)}%）`}
-        </p>
-      ) : null}
+      <div className="quota-account">
+        <div className="quota-account-icon">
+          <Gauge aria-hidden="true" />
+        </div>
+        <div className="quota-account-info">
+          <div className="quota-plan-name">
+            {planName}
+            <span>{price != null ? `$${price}/月` : "官方账号"}</span>
+          </div>
+          <p>{runtime?.account?.email || "ChatGPT 账号额度"}</p>
+        </div>
+        <button
+          type="button"
+          className="quota-refresh"
+          onClick={() => onRefresh(true)}
+          disabled={refreshing}
+          aria-label="刷新额度"
+        >
+          <RefreshCw className={refreshing ? "spin" : ""} aria-hidden="true" />
+          <span>{refreshing ? "刷新中" : "刷新"}</span>
+        </button>
+      </div>
+      <div className="quota-section-heading">
+        <h3>可用额度</h3>
+        <span>按窗口独立重置</span>
+      </div>
       {runtime?.rateLimitsError || !limits ? (
         <div className="usage-unavailable" aria-live="polite">
           <p>
@@ -346,10 +360,7 @@ function OfficialLimits({
         </div>
       ) : (
         <div className="usage-windows">
-          <UsageWindow
-            label={primaryLength ? `主窗口 · ${primaryLength}` : "主窗口"}
-            window={limits.primary}
-          />
+          <UsageWindow label="主窗口" window={limits.primary} />
           <UsageWindow label="次窗口" window={limits.secondary} />
           <UsageWindow label="月度额度" window={limits.monthly} />
           {extra.map(([id, window]) => (
@@ -363,8 +374,33 @@ function OfficialLimits({
           ) : null}
         </div>
       )}
-      <p className="usage-note">
-        额度按官方 ChatGPT 登录计算，与当前会话使用的供应商无关。
+      {quota && !runtime?.rateLimitsError ? (
+        <details className="quota-estimate">
+          <summary>
+            <span>账号额度估算</span>
+            <strong>
+              ≈ {formatCost(quota.windowCost)}{" "}
+              <small>/{quota.windowLabel}</small>
+            </strong>
+          </summary>
+          <p>
+            本次观测在当前 {quota.windowLabel} 周期内消耗{" "}
+            {formatTokens(quota.stageTokens)} Token，折算{" "}
+            {formatCost(quota.stageCost)}，额度增加{" "}
+            {quota.usedPercent.toFixed(1)} 个百分点。 据此估算本周期总额约{" "}
+            {formatCost(quota.windowCost)}，约 {formatTokens(quota.windowQuota)}{" "}
+            Token；按 30 天折算约 {formatCost(quota.monthlyCost)}/月。
+            按模型目录价折算，仅供参考，并非订阅实际扣费。
+          </p>
+        </details>
+      ) : null}
+      {!quota && limits && !runtime?.rateLimitsError ? (
+        <p className="usage-note">
+          正在积累本周期的用量样本，额度百分比变化后显示估算。重置或重启后重新观测。
+        </p>
+      ) : null}
+      <p className="usage-note quota-note">
+        额度来自官方 ChatGPT 账号，与当前会话供应商无关。
       </p>
     </div>
   );
@@ -380,6 +416,7 @@ function UsageWindow({
     reached?: boolean;
     resetAfterSeconds?: number;
     resetsAt?: number;
+    windowDurationMins?: number;
   };
 }) {
   if (!window) return null;
@@ -387,17 +424,42 @@ function UsageWindow({
     window.usedPercent != null ? Math.round(window.usedPercent) : null;
   const remainingPct = remainingPercent(window.usedPercent);
   const reset = formatResetLabel(window);
+  const duration = formatWindowLength(window.windowDurationMins);
+  const tone =
+    window.reached || remainingPct === 0
+      ? "danger"
+      : (usedPct ?? 0) >= 85
+        ? "hot"
+        : "";
   return (
-    <div
-      className={`usage-window ${window.reached || (usedPct ?? 0) >= 85 ? "hot" : ""}`}
-    >
-      <div>
+    <div className={`usage-window quota-window ${tone}`}>
+      <div className="quota-window-heading">
         <b>{label}</b>
-        <small>{reset || "重置时间未知"}</small>
+        {duration ? <span>{duration}窗口</span> : null}
       </div>
-      <strong>{remainingPct == null ? "—" : `剩余 ${remainingPct}%`}</strong>
-      <div className="context-track">
-        <i style={{ width: `${remainingPct || 0}%` }} />
+      <div className="quota-window-value">
+        <strong>
+          {remainingPct == null ? "—" : remainingPct}
+          <small>{remainingPct == null ? "" : "%"}</small>
+        </strong>
+        <span>{window.reached ? "已达上限" : "剩余额度"}</span>
+      </div>
+      <div
+        className="quota-track"
+        role="meter"
+        aria-label={`${label}剩余额度`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={remainingPct ?? undefined}
+        aria-valuetext={
+          remainingPct == null ? "额度未知" : `剩余 ${remainingPct}%`
+        }
+      >
+        <i style={{ width: `${remainingPct ?? 0}%` }} />
+      </div>
+      <div className="quota-window-reset">
+        <Clock3 aria-hidden="true" />
+        <span>{reset || "重置时间未知"}</span>
       </div>
     </div>
   );

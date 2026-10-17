@@ -1261,16 +1261,17 @@ function TurnMetaLine({
         ? "输出回复"
         : "正在运行";
   const startedAt = activity?.turnStartedAt ?? started ?? now;
-  // 运行秒表沿用「用时 x.x s」口径，与思考/回复段的统计同一套样式；
+  // 回合时长使用简洁的「x.x s」文案；
   // 结束回合用 turn.stats 的终值，共用同一列宽与运行态跨行对齐。
   const usageText = active
-    ? `用时 ${formatTurnDuration(Math.max(0, now - startedAt))}`
+    ? formatTurnDuration(Math.max(0, now - startedAt))
     : usageOf(turn);
-  const tpsText = active
+  const speedText = active
     ? waiting
       ? ""
       : progressTps(freshProgress)
     : formatTps(turn?.stats?.tps);
+  const tpsText = speedText ? `本轮均速 ${speedText}` : "";
   const forkable = completed && turn.id && onForkFrom ? onForkFrom : undefined;
   if (active) {
     return (
@@ -1331,10 +1332,10 @@ function shortModel(model?: string) {
 function usageOf(turn: any) {
   const stats = turn?.stats;
   if (stats && Number(stats.durationMs) > 0)
-    return `用时 ${formatTurnDuration(stats.durationMs)}`;
+    return formatTurnDuration(stats.durationMs);
   const startAt = Date.parse(turn?.startedAt || turn?.createdAt || "") || 0;
   const endAt = Date.parse(turn?.updatedAt || "") || 0;
   if (startAt > 0 && endAt > startAt)
-    return `用时 ${formatTurnDuration(endAt - startAt)}`;
+    return formatTurnDuration(endAt - startAt);
   return "";
 }

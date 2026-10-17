@@ -78,6 +78,10 @@
   text-align: left;
   cursor: pointer;
 }
+.project-toggle > svg {
+  display: block;
+  flex: none;
+}
 .project-toggle > svg:first-child {
   width: 13px;
   height: 13px;
@@ -90,13 +94,14 @@
   color: var(--text-faint);
   flex: none;
 }
-/* 项目名是分组标签：比会话标题小一号、颜色更浅。 */
+/* 项目名略大于辅助信息，文字行框与两侧图标共用中心线。 */
 .project-toggle .project-name {
   min-width: 0;
   overflow: hidden;
   color: var(--text-dim);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-ui);
   font-weight: var(--fw-medium);
+  line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -105,6 +110,7 @@
   color: var(--text-faint);
   font-size: var(--fs-micro);
   font-weight: var(--fw-regular);
+  line-height: 20px;
   white-space: nowrap;
 }
 .project-heading b {
@@ -140,6 +146,7 @@
   color: var(--text);
 }
 .project-add svg {
+  display: block;
   width: 14px;
   height: 14px;
 }

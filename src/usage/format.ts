@@ -50,7 +50,9 @@ export interface QuotaWindowRow {
  * 有剩余数据的额度窗口按「更容易触顶」排序：剩余百分比最低在前，
  * 并列时短窗口优先。首页只取前两个展示（通常就是 5h 和 7d）。
  */
-export function rankedQuotaWindows(limits?: RateLimits | null): QuotaWindowRow[] {
+export function rankedQuotaWindows(
+  limits?: RateLimits | null,
+): QuotaWindowRow[] {
   const rows: QuotaWindowRow[] = [];
   const push = (id: string, name: string, window?: RateLimitWindow) => {
     const remaining = remainingPercent(window?.usedPercent);
@@ -116,61 +118,51 @@ export function usageTone(limits?: RateLimits | null) {
   return "ok";
 }
 
-const DAY_MS = 86_400_000;
 const MONTH_MINS = 30 * 24 * 60;
 
-export interface AccountQuotaEstimate {
-  /** 命中窗口（月度 > 周度 > 主窗口）内实测消耗的 token。 */
+export interface AccountQuotaSample {
   stageTokens: number;
-  /** 阶段用量 / 已用百分比反推出的该窗口总额度。 */
+  stageCost: number;
+  usedPercent: number;
+  windowDurationMins: number;
+  resetsAt: number;
+}
+
+export interface AccountQuotaEstimate {
+  stageTokens: number;
+  stageCost: number;
   windowQuota: number;
-  /** 按窗口长度放大到一个月（30 天）的估算额度。 */
+  windowCost: number;
   monthlyQuota: number;
+  monthlyCost: number;
   usedPercent: number;
   windowLabel: string;
 }
 
-/**
- * 用「窗口内实测阶段用量 ÷ 官方已用百分比」反推帐号额度。
- * rateLimits 只给百分比不给绝对量，分子来自按天累计的 token 消耗，
- * 阶段覆盖不到一天粒度时按 UTC 日桶与窗口时间重叠计入。
- */
+/** 只用同一周期内配对采样的 token / 费用与额度百分比增量。 */
 export function estimateAccountQuota(
-  limits?: RateLimits | null,
-  daily?: Record<string, number>,
+  samples?: AccountQuotaSample[],
 ): AccountQuotaEstimate | undefined {
-  const window = limits?.monthly || limits?.secondary || limits?.primary;
-  const usedPercent = window?.usedPercent;
-  const windowMins = window?.windowDurationMins;
-  if (
-    !window ||
-    usedPercent == null ||
-    usedPercent <= 0 ||
-    !windowMins ||
-    windowMins <= 0 ||
-    !daily
-  )
-    return undefined;
-  const end =
-    window.resetsAt ??
-    (window.resetAfterSeconds != null
-      ? Date.now() + window.resetAfterSeconds * 1000
-      : undefined);
-  const start = end != null ? end - windowMins * 60_000 : Date.now() - windowMins * 60_000;
-  let stageTokens = 0;
-  for (const [day, tokens] of Object.entries(daily)) {
-    const dayStart = Date.parse(`${day}T00:00:00Z`);
-    if (!Number.isFinite(dayStart) || !tokens) continue;
-    if (dayStart + DAY_MS > start && dayStart < (end ?? Date.now()))
-      stageTokens += tokens;
-  }
-  if (!stageTokens) return undefined;
-  const windowQuota = stageTokens / (usedPercent / 100);
+  const sample = samples
+    ?.filter(
+      (s) =>
+        s.resetsAt > Date.now() &&
+        s.usedPercent > 0 &&
+        s.usedPercent <= 100 &&
+        s.stageTokens > 0 &&
+        s.stageCost >= 0 &&
+        s.windowDurationMins > 0,
+    )
+    .sort((a, b) => b.windowDurationMins - a.windowDurationMins)[0];
+  if (!sample) return undefined;
+  const windowQuota = sample.stageTokens / (sample.usedPercent / 100);
+  const windowCost = sample.stageCost / (sample.usedPercent / 100);
   return {
-    stageTokens,
+    ...sample,
     windowQuota,
-    monthlyQuota: windowQuota * (MONTH_MINS / windowMins),
-    usedPercent,
-    windowLabel: formatWindowLength(windowMins) || "窗口",
+    windowCost,
+    monthlyQuota: (windowQuota * MONTH_MINS) / sample.windowDurationMins,
+    monthlyCost: (windowCost * MONTH_MINS) / sample.windowDurationMins,
+    windowLabel: formatWindowLength(sample.windowDurationMins) || "窗口",
   };
 }

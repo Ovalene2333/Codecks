@@ -4,6 +4,7 @@ import type { ProviderStore } from "../store.js";
 import type { ProjectStore } from "../projects.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
 import { CodexClient } from "../codex-client.js";
+import { AccountQuotaTracker } from "../account-quota.js";
 import { CodexUsageStore, loadCodexRolloutUsages } from "../codex-usage.js";
 import {
   compileRuntimeProvider,
@@ -151,6 +152,7 @@ export class CodexAdapter extends EventEmitter {
   private pendingFileChanges = new Map<string, FileChange[]>();
   private compactionTimers = new Map<string, NodeJS.Timeout>();
   private usageStore: CodexUsageStore;
+  private quotaTracker = new AccountQuotaTracker();
   private rolloutUsageLoaded = false;
   /**
    * 进行中回合的产出基线（turn/progress 与 turn.stats 用）：turn/started
@@ -788,6 +790,7 @@ export class CodexAdapter extends EventEmitter {
       rateLimits: this.rateLimits,
       rateLimitsError: this.rateLimitsError,
       accountUsageDaily: this.usageStore.dailyUsage(this.officialProviderIds()),
+      accountQuotaSamples: this.rateLimitsError ? [] : this.quotaTracker.samples(),
       archiveError: this.archiveError,
       runtimeWsl: this.useWsl,
       ...(modelConfig.modelContextWindow ||
@@ -2135,6 +2138,14 @@ export class CodexAdapter extends EventEmitter {
     });
   }
 
+  private observeQuota() {
+    this.quotaTracker.observe(
+      this.account?.email || "",
+      this.rateLimits,
+      this.officialProviderIds(),
+    );
+  }
+
   private async fetchOfficialUsage(client: CodexClient) {
     try {
       const accountRaw = await client.request("account/read", {});
@@ -2149,6 +2160,7 @@ export class CodexAdapter extends EventEmitter {
       try {
         const limitsRaw = await client.request("account/rateLimits/read", {});
         this.rateLimits = parseRateLimits(limitsRaw);
+        this.observeQuota();
         this.rateLimitsError = this.rateLimits
           ? undefined
           : "官方账号额度暂不可用";
@@ -2320,6 +2332,7 @@ export class CodexAdapter extends EventEmitter {
     if (message.method === "account/rateLimits/updated") {
       const parsed = parseRateLimits(params.rateLimits || params);
       this.rateLimits = parsed;
+      this.observeQuota();
       this.rateLimitsError = parsed ? undefined : this.rateLimitsError;
       this.broadcast("runtime.status", this.runtimeStatus());
     }
@@ -2451,6 +2464,12 @@ export class CodexAdapter extends EventEmitter {
           existing.tokenUsage;
         existing.tokenUsage = usage;
         if (usage) {
+          this.quotaTracker.record(
+            existing.providerId,
+            this.usageStore.get(existing.id),
+            usage,
+            existing.resolvedModel || existing.model,
+          );
           this.rememberUsage(existing.id, usage, {
             providerId: existing.providerId,
           });

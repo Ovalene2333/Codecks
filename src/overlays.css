@@ -813,3 +813,228 @@
     min-height: 44px;
   }
 }
+
+/* Official quota: account, remaining windows, then optional estimates. */
+.quota-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+.quota-account-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+.quota-account-icon svg {
+  width: 21px;
+  height: 21px;
+}
+.quota-account-info {
+  min-width: 0;
+  flex: 1;
+}
+.quota-plan-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-dialog);
+  font-weight: 600;
+}
+.quota-plan-name span {
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.quota-account-info p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.quota-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.quota-refresh:hover {
+  background: var(--surface-muted);
+}
+.quota-refresh:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.quota-refresh svg {
+  width: 14px;
+  height: 14px;
+}
+.quota-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 22px 0 12px;
+}
+.quota-section-heading h3 {
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.quota-section-heading > span {
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+.usage-windows:has(.quota-window) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.usage-window.quota-window {
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+}
+.quota-window > div {
+  display: block;
+  margin: 0;
+}
+.quota-window .quota-window-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.quota-window-heading b {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+}
+.quota-window-heading > span {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.quota-window .quota-window-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 18px 0 14px;
+}
+.quota-window-value strong {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.quota-window-value strong small {
+  margin-left: 2px;
+  font-size: var(--fs-dialog);
+  letter-spacing: 0;
+}
+.quota-window-value > span {
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+}
+.quota-window .quota-track {
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--surface-muted);
+}
+.quota-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.quota-window.hot .quota-track i {
+  background: var(--wait);
+}
+.quota-window.danger .quota-track i {
+  background: var(--danger);
+}
+.quota-window.hot .quota-window-value strong {
+  color: var(--wait);
+}
+.quota-window.danger .quota-window-value strong {
+  color: var(--danger);
+}
+.quota-window.danger {
+  border-color: var(--danger);
+}
+.quota-window .quota-window-reset {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 12px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+.quota-window-reset svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.usage-windows > p {
+  grid-column: 1 / -1;
+}
+.quota-estimate {
+  margin-top: 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-meta);
+}
+.quota-estimate summary {
+  cursor: pointer;
+  line-height: 1.8;
+}
+.quota-estimate summary > span {
+  margin-right: 12px;
+  color: var(--text-dim);
+}
+.quota-estimate strong {
+  white-space: nowrap;
+  font-weight: 500;
+}
+.quota-estimate small {
+  font-size: var(--fs-micro);
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.quota-estimate p {
+  margin: 10px 0 0;
+  color: var(--text-dim);
+  line-height: 1.8;
+}
+.quota-note {
+  margin: 16px 0 0;
+}
+@media (max-width: 360px) {
+  .usage-windows:has(.quota-window) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .quota-refresh > span {
+    display: none;
+  }
+}
