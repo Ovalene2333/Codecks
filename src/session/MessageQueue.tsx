@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { RotateCcw, X, Zap } from "lucide-react";
+import { RotateCcw, UserRound, X, Zap } from "lucide-react";
 import type { MessageDelivery } from "../types";
 import { Button } from "../kit";
 
@@ -36,14 +36,21 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     : item.status === "failed" ? "失败"
     : item.mode === "queue" ? "已追加" : "反馈";
   return (
-    <div className={`user-message-wrap session-message-queue-item ${item.status}`} data-message-id={item.id}>
-      <div className="message user">
-        {item.text ?? item.preview}
-        {Boolean(item.imageCount) && item.text !== undefined && <span className="session-message-queue-images">
-          {item.imageCount} 张图片
-        </span>}
+    <div className={`message-block message-block--user user-message-wrap session-message-queue-item ${item.status}`} data-message-id={item.id}>
+      <div className="rail-row message-block__head">
+        <UserRound aria-hidden="true" />
+        <span className="message-block__who">你</span>
+        <span className="rail-row__meta" role="status" aria-label={status} title={status}>{label}</span>
+      </div>
+      <div className="message-block__body">
+        <div className="message user">
+          {item.text ?? item.preview}
+          {Boolean(item.imageCount) && item.text !== undefined && <span className="session-message-queue-images">
+            {item.imageCount} 张图片
+          </span>}
+          {item.error && <span className="session-message-queue-error" role="alert">{item.error}</span>}
+        </div>
         <span className="session-message-queue-controls">
-          <span role="status" aria-label={status} title={status}>{label}</span>
           {canFeedback && <Button variant="ghost" iconOnly size="sm" busy={acting} aria-label="即时反馈"
             title={feedbackInterrupts ? "即时反馈：先停止当前任务，再发送这条消息" : "即时反馈：直接反馈给当前任务，无需停止"}
             onClick={() => void act(onFeedback)}><Zap aria-hidden="true" /></Button>}
@@ -54,7 +61,6 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
             title={item.status === "failed" ? "移除记录" : "取消追加"}
             onClick={() => void act(onCancel)}><X aria-hidden="true" /></Button>}
         </span>
-        {item.error && <span className="session-message-queue-error" role="alert">{item.error}</span>}
       </div>
     </div>
   );

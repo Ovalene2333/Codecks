@@ -145,7 +145,9 @@ export function MessageTypographySection() {
               desc={
                 key === "contentWidth"
                   ? "0 表示铺满；窄屏始终适应屏幕宽度。"
-                  : undefined
+                  : key === "sessionWidth"
+                    ? "整条会话轨道与工具行的最大宽度；窄屏始终适应屏幕宽度。"
+                    : undefined
               }
               side={
                 <div className="message-range">

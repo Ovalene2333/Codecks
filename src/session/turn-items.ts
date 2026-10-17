@@ -325,6 +325,31 @@ export function turnReadTargets(items: any[], cwd?: string) {
   return unique(targets);
 }
 
+const READ_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|avif)(?:[?#].*)?$/i;
+
+/**
+ * 读取类工具行的目标是图片时，返回可直接交给图片接口的原始路径
+ * （不是展示用的裁剪路径），让「读取」行展开后能加载图片预览。
+ * 非读取行、非图片目标都返回空串。OpenCode read 与 Codex read 动作都覆盖。
+ */
+export function readImagePath(item: any): string {
+  if (item?.type !== "commandExecution") return "";
+  const actions = Array.isArray(item.commandActions)
+    ? item.commandActions.filter(Boolean)
+    : [];
+  if (actions.length > 0) {
+    if (!actions.every((action: any) => action?.type === "read")) return "";
+    for (const action of actions) {
+      const value = String(action?.path || action?.name || "").trim();
+      if (value && READ_IMAGE_EXT_RE.test(value)) return value;
+    }
+    return "";
+  }
+  if (openCodeToolName(item) !== "read") return "";
+  const value = openCodeInputPath(item?.input ?? item?.arguments).trim();
+  return value && READ_IMAGE_EXT_RE.test(value) ? value : "";
+}
+
 export function fileChangeGroupLabel(changes: any[]) {
   const labels = unique(changes.map((change) => changeKindLabel(change?.kind)));
   return labels.length === 1 ? labels[0] : "changes";

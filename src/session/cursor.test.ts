@@ -337,3 +337,35 @@ test("search targets mark the exact message instead of the whole turn", () => {
   assert.doesNotMatch(html, /turn-block[^\"]*search-target/);
   assert.equal(html.split('class="search-item-target"').length - 1, 1);
 });
+
+test("user and assistant messages use a solid rail row for their first line", () => {
+  const thread: ThreadSummary = {
+    id: "thread-rail",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "idle",
+    updatedAt: Date.now(),
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-rail",
+        status: "completed",
+        items: [
+          { id: "user-rail", type: "userMessage", text: "问题" },
+          { id: "agent-rail", type: "agentMessage", text: "回答" },
+        ],
+      },
+      index: 1,
+      thread,
+    }),
+  );
+  assert.match(html, /class="message-block message-block--user"/);
+  assert.match(html, /class="message-block message-block--agent"/);
+  assert.match(html, /class="rail-row message-block__head"/);
+  assert.match(html, /class="message-block__body"/);
+  assert.doesNotMatch(html, /rail-row--message/);
+});

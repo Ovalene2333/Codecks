@@ -267,7 +267,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 26px max(30px, calc((100% - 760px) / 2)) 28px;
+  padding: 26px max(30px, calc((100% - var(--session-width, 980px)) / 2)) 28px;
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
@@ -383,7 +383,7 @@
   width: 13px;
 }
 .turn-block {
-  margin: 0 0 16px;
+  margin: 0 0 6px;
 }
 .turn-block.search-target {
   animation: search-target-flash 1.8s ease-out;
@@ -393,7 +393,8 @@
   border-radius: var(--radius-sm);
 }
 .search-item-target > .message,
-.search-item-target > .user-message-wrap .message {
+.search-item-target > .user-message-wrap .message,
+.search-item-target > .message-block .message {
   animation: search-target-flash 1.8s ease-out;
 }
 @keyframes search-target-flash {
@@ -406,10 +407,6 @@
     background: transparent;
     box-shadow: 0 0 0 8px transparent;
   }
-}
-.optimistic-turn .rail-row--meta {
-  /* 「正在发送」占位行：乐观回合同款收针行，但未定型，颜色收敛。 */
-  color: var(--text-dim);
 }
 /* 工具行用时芯片：summary 末尾弱显示，不抢命令。 */
 .timeline .tool-row summary .tool-time {
@@ -428,23 +425,6 @@
   font-size: var(--fs-meta);
   line-height: var(--lh-ui);
   font-variant-numeric: tabular-nums;
-}
-/* 回复行自己的生成统计：默认藏起来，hover 该行才靠左现身；移动端常驻。 */
-.message.agent .message-stats {
-  margin: 2px 0 0;
-  color: var(--text-faint);
-  font-size: var(--fs-meta);
-  font-variant-numeric: tabular-nums;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.message.agent:hover .message-stats {
-  opacity: 1;
-}
-@media (hover: none) {
-  .message.agent .message-stats {
-    opacity: 0.55;
-  }
 }
 /* 被折叠的工具输出：预览 + 按回合懒加载按钮。 */
 .timeline .folded-load {
@@ -737,6 +717,36 @@
 .timeline .image-message .deferred-image:focus-visible {
   color: var(--text);
 }
+/* 「读取」行展开的图片预览：与独立图片项同一语言——
+   占位按钮不带边框卡片，图片本体沿用 .markdown-image 的边框。 */
+.timeline .tool-row .tool-row-images {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+.timeline .tool-row .tool-row-images .deferred-image {
+  gap: 8px;
+  min-height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+.timeline .tool-row .tool-row-images .deferred-image svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+}
+.timeline .tool-row .tool-row-images .deferred-image:hover,
+.timeline .tool-row .tool-row-images .deferred-image:focus-visible {
+  color: var(--text);
+}
+.timeline .tool-row .tool-row-images .markdown-image {
+  margin: 0;
+}
 .timeline .image-message .deferred-image:focus-visible {
   outline: 1px solid var(--focus-ring);
   outline-offset: -1px;
@@ -880,6 +890,10 @@
   font-size: var(--fs-meta);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.timeline .subagent-row details > .subagent-activity {
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
 }
 /* 子代理卡片的输出嵌在 details 里，命中不了 `.tool-row > pre` 的直接子选择器，
    在此补齐同样的溢出约束，否则长行会撑出边界。 */
@@ -2071,7 +2085,7 @@ button.composer-context-seg:focus-visible {
    列宽对齐规则只看令牌，不散落魔法数。 */
 .rail-row,
 .timeline .tool-row {
-  margin: 2px 0;
+  margin: 1px 0;
   border: 0;
   border-left: 2px solid var(--line-strong);
   border-radius: 0;
@@ -2079,7 +2093,109 @@ button.composer-context-seg:focus-visible {
   color: var(--text-dim);
   font-size: var(--fs-meta);
 }
+.process-group > .process-group__body {
+  padding-left: var(--space-3);
+}
+/* 消息：只有第一行走实线 rail-row，正文在轨道外自然展开。
+   同一会话里工具行、消息首行都保持一格一格的轨道节奏，
+   又不会让整段长文占一条超宽虚线。 */
+.rail-row.todo-row {
+  border-left-style: dashed;
+}
+.message-block {
+  margin: 1px 0;
+}
+.message-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 0 0 8px;
+  line-height: var(--lh-ui);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.message-block__head > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--text-faint);
+  transform: translateY(-0.5px);
+}
+.message-block--user .message-block__who {
+  color: var(--text-soft);
+}
+.message-block--agent .message-block__who {
+  color: var(--text-dim);
+}
+.rail-row__head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+}
+.rail-row__head-right .rail-row__meta {
+  margin-left: 0;
+}
+.rail-row__head-right .message-actions {
+  flex: none;
+  min-height: 0;
+}
+.rail-row__head-right .message-actions button {
+  min-height: 26px;
+}
+.rail-row__meta {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+.message-block__body {
+  min-width: 0;
+  padding: 1px 0 1px 31px;
+}
+.message-block__body .message {
+  max-width: min(100%, var(--message-width, 100%));
+  margin: 0;
+  padding: 0;
+}
+.message-block--user .message-block__body .message.user {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-soft);
+}
+/* 待发消息复用首行轨道，但保留队列自己的操作按钮布局。 */
+.message-block.user-message-wrap {
+  align-items: stretch;
+}
+.session-message-queue-item .session-message-queue-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+.message-block--user:hover .message-actions,
+.message-block--user:focus-within .message-actions {
+  opacity: 1;
+}
+@media (max-width: 760px) {
+  .message-block__head {
+    min-height: 38px;
+  }
+  .message-block__head .message-actions button {
+    min-height: 38px;
+  }
+  .turn-block {
+    margin-bottom: 4px;
+  }
+}
 .rail-row--meta {
+  margin: 2px 0 1px;
   /* --tm-*：收针行的局部令牌；
      栅距与工具行 summary（8px padding + 8px gap）同锚点对齐，
      让同一轨道上 icon/文字起始线完全一致。 */
@@ -2252,12 +2368,25 @@ button.composer-context-seg:focus-visible {
   .rail-row--meta:not(.rail-row--running) .rail-row__tps {
     order: 6;
   }
+  /* 窄屏第二行由 usage / tps / model 分享；不要再放一个 flex:1 的
+     中缝，否则它会吃满整行，把长模型名挤到第三行。 */
   .rail-row--meta:not(.rail-row--running) .rail-row__spacer {
-    order: 7;
+    display: none;
   }
+  /* 模型列吃掉第二行剩余宽度：短名右对齐，长名在列内省略，
+     不会因为 flex-basis 是内容宽而把整行挤到第三行。 */
   .rail-row--meta:not(.rail-row--running) .rail-row__model {
     order: 8;
-    flex: 0 1 auto;
+    display: flex;
+    flex: 1 1 0;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .rail-row--meta:not(.rail-row--running) .rail-row__model > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .timeline .tool-item summary,
   .timeline .tool-row summary,

@@ -8,6 +8,7 @@ export interface MessageTypography {
   headingGap: number;
   codeScale: number;
   contentWidth: number;
+  sessionWidth: number;
   emphasisWeight: number;
   tablePadding: number;
   codeStyle: "subtle" | "plain";
@@ -30,6 +31,7 @@ export const DEFAULT_MESSAGE_TYPOGRAPHY: MessageTypography = {
   headingGap: 0.95,
   codeScale: 0.86,
   contentWidth: 0,
+  sessionWidth: 980,
   emphasisWeight: 700,
   tablePadding: 6,
   codeStyle: "subtle",
@@ -51,6 +53,7 @@ export const MESSAGE_PRESETS: readonly MessageTemplate[] = [
       headingGap: 1.3,
       codeScale: 0.93,
       contentWidth: 760,
+      sessionWidth: 1120,
       emphasisWeight: 600,
       tablePadding: 9,
       tableStyle: "minimal",
@@ -69,6 +72,7 @@ export const MESSAGE_PRESETS: readonly MessageTemplate[] = [
       headingGap: 0.85,
       codeScale: 0.92,
       contentWidth: 900,
+      sessionWidth: 1120,
       tablePadding: 5,
     },
   },
@@ -93,6 +97,13 @@ export const TYPOGRAPHY_RANGES = {
     label: "正文最大宽度",
     min: 0,
     max: 1200,
+    step: 20,
+    unit: "px",
+  },
+  sessionWidth: {
+    label: "会话行宽",
+    min: 640,
+    max: 1400,
     step: 20,
     unit: "px",
   },
@@ -186,6 +197,7 @@ export function messageTypographyVariables(
     "--message-heading-gap": `${value.headingGap}em`,
     "--message-code-scale": `${value.codeScale}em`,
     "--message-width": value.contentWidth ? `${value.contentWidth}px` : "100%",
+    "--session-width": `${value.sessionWidth}px`,
     "--message-emphasis-weight": String(value.emphasisWeight),
     "--message-table-padding": `${value.tablePadding}px`,
     "--message-code-bg":

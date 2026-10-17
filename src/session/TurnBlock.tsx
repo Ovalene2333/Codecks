@@ -1,4 +1,10 @@
-import { Fragment, memo } from "react";
+import {
+  Fragment,
+  memo,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Activity,
   BookOpenText,
@@ -7,11 +13,14 @@ import {
   Files,
   FolderSearch,
   GitFork,
+  ListTree,
   Pencil,
   Puzzle,
   RotateCcw,
   ScanSearch,
+  Sparkles,
   Undo2,
+  UserRound,
   Wrench,
 } from "lucide-react";
 import { changeKindText, displayCommand, displayText, fmtTime } from "../format";
@@ -51,6 +60,7 @@ import {
   groupTurnItems,
   isTrivialToolOutput,
   openCodeFileTarget,
+  readImagePath,
   reasoningText,
   subAgentActivityName,
   subAgentKindLabel,
@@ -104,6 +114,9 @@ function SubAgentCard({
   output,
   activity,
   time,
+  folded,
+  turnId,
+  onExpandTurn,
 }: {
   state: "running" | "failed" | "interrupted" | "ok";
   action: string;
@@ -112,10 +125,20 @@ function SubAgentCard({
   output?: string;
   activity?: string;
   time?: string;
+  folded?: any;
+  turnId?: string;
+  onExpandTurn?: (turnId: string) => void;
 }) {
+  const [open, setOpen] = useState(state === "running");
+  useEffect(() => {
+    setOpen(state === "running");
+  }, [state]);
   return (
     <div className={`rail-row tool-row subagent-row ${state}`}>
-      <details>
+      <details
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
         <summary>
           <Bot />
           <span className="tool-action">{action}</span>
@@ -132,12 +155,17 @@ function SubAgentCard({
           {time ? <span className="tool-time">{time}</span> : null}
         </summary>
         {output ? <pre>{output}</pre> : null}
+        {state === "running" && activity ? (
+          <div className="subagent-activity" title={activity}>
+            {activity}
+          </div>
+        ) : null}
+        <FoldedLoad
+          item={folded}
+          turnId={turnId}
+          onExpandTurn={onExpandTurn}
+        />
       </details>
-      {state === "running" && activity ? (
-        <div className="subagent-activity" title={activity}>
-          {activity}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -217,7 +245,50 @@ function TurnItemInner({
     // 整条都是注入上下文/控制回显的消息剥净后为空，不渲染空气泡。
     if (!text && !images.length) return null;
     return (
-      <div className="user-message-wrap">
+      <MessageRow
+        role="user"
+        actions={
+          onEditUserMessage || onRetryUserMessage || onRevertUserMessage ? (
+            <div className="message-actions" aria-label="消息操作">
+              {onEditUserMessage && (
+                <button
+                  type="button"
+                  title={(thread.agentId || "codex") === "codex"
+                    ? "回退此条及之后的对话，工作区文件不变"
+                    : "撤回此条及之后，在当前会话编辑"}
+                  disabled={messageActionsDisabled}
+                  onClick={() => onEditUserMessage(item)}
+                >
+                  <Pencil />
+                  编辑
+                </button>
+              )}
+              {onRetryUserMessage && (
+                <button
+                  type="button"
+                  title="从此处分支，可先在输入框编辑再发送；直接发送即用原文重试"
+                  disabled={messageActionsDisabled}
+                  onClick={() => onRetryUserMessage(item)}
+                >
+                  <RotateCcw />
+                  从此重试
+                </button>
+              )}
+              {onRevertUserMessage && (
+                <button
+                  type="button"
+                  title="撤回该消息及之后全部（需确认）"
+                  disabled={messageActionsDisabled}
+                  onClick={() => onRevertUserMessage(item)}
+                >
+                  <Undo2 />
+                  撤回
+                </button>
+              )}
+            </div>
+          ) : undefined
+        }
+      >
         <div className="message user">
           {images.length > 0 && (
             <div className="message-images">
@@ -240,46 +311,7 @@ function TurnItemInner({
           )}
           {text}
         </div>
-        {(onEditUserMessage || onRetryUserMessage || onRevertUserMessage) && (
-          <div className="message-actions" aria-label="消息操作">
-            {onEditUserMessage && (
-              <button
-                type="button"
-                title={(thread.agentId || "codex") === "codex"
-                  ? "回退此条及之后的对话，工作区文件不变"
-                  : "撤回此条及之后，在当前会话编辑"}
-                disabled={messageActionsDisabled}
-                onClick={() => onEditUserMessage(item)}
-              >
-                <Pencil />
-                编辑
-              </button>
-            )}
-            {onRetryUserMessage && (
-              <button
-                type="button"
-                title="从此处分支，可先在输入框编辑再发送；直接发送即用原文重试"
-                disabled={messageActionsDisabled}
-                onClick={() => onRetryUserMessage(item)}
-              >
-                <RotateCcw />
-                从此重试
-              </button>
-            )}
-            {onRevertUserMessage && (
-              <button
-                type="button"
-                title="撤回该消息及之后全部（需确认）"
-                disabled={messageActionsDisabled}
-                onClick={() => onRevertUserMessage(item)}
-              >
-                <Undo2 />
-                撤回
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      </MessageRow>
     );
   }
   if (item.type === "enteredReviewMode")
@@ -301,27 +333,28 @@ function TurnItemInner({
     // 该条回复自己的生成统计（用时/TPS，服务端在 item 上盖章）。
     const itemStats = statsLine(item.stats);
     return (
-      <div className={`message agent ${streaming ? "streaming" : ""}`}>
-        <AssistantMarkdown
-          text={streamed !== undefined ? streamed : displayText(item.text)}
-          onCopy={onCopy}
-          thread={thread}
-        />
-        {images.length > 0 && (
-          <div className="message-images assistant-images">
-            {images.map((image, index) => (
-              <DeferredImage
-                key={`${image.url}-${index}`}
-                src={image.url}
-                alt={image.alt || "生成或引用的图片"}
-                thread={thread}
-              />
-            ))}
-          </div>
-        )}
-        {itemStats ? <div className="message-stats">{itemStats}</div> : null}
-        {streaming && <i />}
-      </div>
+      <MessageRow role="agent" meta={itemStats || undefined}>
+        <div className={`message agent ${streaming ? "streaming" : ""}`}>
+          <AssistantMarkdown
+            text={streamed !== undefined ? streamed : displayText(item.text)}
+            onCopy={onCopy}
+            thread={thread}
+          />
+          {images.length > 0 && (
+            <div className="message-images assistant-images">
+              {images.map((image, index) => (
+                <DeferredImage
+                  key={`${image.url}-${index}`}
+                  src={image.url}
+                  alt={image.alt || "生成或引用的图片"}
+                  thread={thread}
+                />
+              ))}
+            </div>
+          )}
+          {streaming && <i />}
+        </div>
+      </MessageRow>
     );
   }
   if (item.type === "reasoning")
@@ -345,24 +378,24 @@ function TurnItemInner({
           ? "failed"
           : "ok";
     return (
-      <Fragment>
-        <SubAgentCard
-          state={state}
-          action={
-            state === "running"
-              ? "子代理执行中"
-              : state === "failed"
-                ? "子代理失败"
-                : "子代理"
-          }
-          title={displayText(item.title) || "子代理"}
-          tag={displayText(item.agent)}
-          output={displayText(item.aggregatedOutput)}
-          activity={displayText(item.activity)}
-          time={formatToolDuration(item.startedAt, item.endedAt)}
-        />
-        <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
-      </Fragment>
+      <SubAgentCard
+        state={state}
+        action={
+          state === "running"
+            ? "子代理执行中"
+            : state === "failed"
+              ? "子代理失败"
+              : "子代理"
+        }
+        title={displayText(item.title) || "子代理"}
+        tag={displayText(item.agent)}
+        output={displayText(item.aggregatedOutput)}
+        activity={displayText(item.activity)}
+        time={formatToolDuration(item.startedAt, item.endedAt)}
+        folded={item}
+        turnId={turnId}
+        onExpandTurn={onExpandTurn}
+      />
     );
   }
   // Codex 多代理：subAgentActivity 是子代理生命周期的 tick
@@ -459,6 +492,9 @@ function TurnItemInner({
     const description = displayText(
       item.description ?? item?.input?.description,
     ).trim();
+    // 读取的是图片时展开显示图片预览；工具输出可能是占位文本或长码，
+    // 不再往 <pre> 里堆。
+    const imagePath = presentation.kind === "read" ? readImagePath(item) : "";
     const detail =
       presentation.kind === "edit"
         ? trivialOutput
@@ -473,7 +509,11 @@ function TurnItemInner({
                 ? `$ ${command}`
                 : "",
             description && description !== fullCommand ? description : "",
-            output && !(trivialOutput && semantic) ? output : "",
+            imagePath
+              ? ""
+              : output && !(trivialOutput && semantic)
+                ? output
+                : "",
             !output && item.status === "inProgress"
               ? "运行中，输出完成后显示…"
               : "",
@@ -503,6 +543,11 @@ function TurnItemInner({
           </code>
         </summary>
         <ToolTime item={item} />
+        {imagePath ? (
+          <div className="tool-row-images">
+            <DeferredImage src={imagePath} alt="读取的图片" thread={thread} />
+          </div>
+        ) : null}
         {detail ? <pre>{detail}</pre> : null}
         <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
       </details>
@@ -566,8 +611,48 @@ function TurnItemInner({
 }
 
 // 历史 item 对象引用稳定时可跳过重渲染；streamed/streaming/cwd 变化仍正常更新。
-// 回调多为父级内联箭头但语义稳定，默认浅比较已能过滤大部分无关重渲染。
+// 回调多为父级内联箭头但语义稳定，默认浅比较已过滤大部分无关重渲染。
 const TurnItem = memo(TurnItemInner);
+
+/**
+ * 消息行：与工具行共用左轨语法，但正文是宽行。
+ * 头行只放身份与生成统计，正文沿同一锚点展开；工具行保持紧凑的单行刻度。
+ */
+function MessageRow({
+  role,
+  meta,
+  actions,
+  className = "",
+  children,
+}: {
+  role: "user" | "agent";
+  meta?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+  children: ReactNode;
+}) {
+  const Icon = role === "user" ? UserRound : Sparkles;
+  return (
+    <div
+      className={`message-block message-block--${role} ${className}`.trim()}
+    >
+      <div className="rail-row message-block__head">
+        <Icon aria-hidden="true" />
+        <span className="message-block__who">
+          {role === "user" ? "你" : "助手"}
+        </span>
+        {meta || actions ? (
+          <div className="rail-row__head-right">
+            {meta ? <span className="rail-row__meta">{meta}</span> : null}
+            {actions}
+          </div>
+        ) : null}
+      </div>
+      <div className="message-block__body">{children}</div>
+    </div>
+  );
+}
+
 
 function FileChangeGroup({
   items,
@@ -814,9 +899,13 @@ function ReadSummary({ targets }: { targets: string[] }) {
   );
 }
 
-function OptimisticUserMessage({ message }: { message: PendingUserMessage }) {
+export function OptimisticUserMessage({
+  message,
+}: {
+  message: PendingUserMessage;
+}) {
   return (
-    <div className="user-message-wrap optimistic-user-message">
+    <MessageRow role="user" meta="正在发送" className="optimistic-user-message">
       <div className="message user">
         {message.images.length > 0 && (
           <div className="message-images">
@@ -827,7 +916,87 @@ function OptimisticUserMessage({ message }: { message: PendingUserMessage }) {
         )}
         {message.text}
       </div>
-    </div>
+    </MessageRow>
+  );
+}
+
+type LiveUnit =
+  | TurnRenderEntry
+  | { kind: "message"; message: StreamedAgentMessage };
+
+type RenderChunk =
+  | { kind: "entry"; entry: LiveUnit; index: number }
+  | { kind: "process"; entries: { entry: LiveUnit; index: number }[] };
+
+function isProcessEntry(entry: LiveUnit): boolean {
+  if (entry.kind === "message") return false;
+  if (entry.kind !== "item") return true;
+  const type = String(entry.item?.type || "");
+  if (type === "userMessage" || type === "agentMessage") return false;
+  if (assistantImageParts(entry.item).length > 0) return false;
+  return true;
+}
+
+function buildRenderChunks(entries: LiveUnit[], fold: boolean): RenderChunk[] {
+  if (!fold)
+    return entries.map((entry, index) => ({ kind: "entry", entry, index }));
+  const chunks: RenderChunk[] = [];
+  let run: { entry: LiveUnit; index: number }[] = [];
+  const flush = () => {
+    if (run.length > 1) chunks.push({ kind: "process", entries: run });
+    else if (run.length)
+      chunks.push({ kind: "entry", entry: run[0].entry, index: run[0].index });
+    run = [];
+  };
+  entries.forEach((entry, index) => {
+    if (isProcessEntry(entry)) run.push({ entry, index });
+    else {
+      flush();
+      chunks.push({ kind: "entry", entry, index });
+    }
+  });
+  flush();
+  return chunks;
+}
+
+function entryHasTarget(entry: LiveUnit, targetItemId?: string): boolean {
+  if (!targetItemId) return false;
+  if (entry.kind === "message") return false;
+  if (entry.kind === "item")
+    return String(entry.item?.id || "") === targetItemId;
+  return entry.items.some(
+    (item: any) => String(item?.id || "") === targetItemId,
+  );
+}
+
+function ProcessGroup({
+  count,
+  target,
+  targetRequest,
+  children,
+}: {
+  count: number;
+  target: boolean;
+  targetRequest?: number;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(target);
+  useEffect(() => {
+    if (target) setOpen(true);
+  }, [target, targetRequest]);
+  return (
+    <details
+      className="rail-row tool-row process-group"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <ListTree />
+        <span className="tool-action">本回合过程</span>
+        <span className="file-change-count">{count} 项</span>
+      </summary>
+      <div className="process-group__body">{children}</div>
+    </details>
   );
 }
 
@@ -856,6 +1025,7 @@ interface TurnBlockProps {
   /** 展开被折叠的回合工具输出（回合粒度懒加载，回调引用需保持稳定）。 */
   onExpandTurn?: (turnId: string) => void;
   messageActionsDisabled?: boolean;
+  autoFoldProcess?: boolean;
 }
 
 // Timeline 把全量 streamed/streamedItems 传给每一个 TurnBlock，而 ChatWorkspace
@@ -910,7 +1080,8 @@ function turnBlockEqual(prev: TurnBlockProps, next: TurnBlockProps) {
     prev.onEditUserMessage !== next.onEditUserMessage ||
     prev.onRetryUserMessage !== next.onRetryUserMessage ||
     prev.onRevertUserMessage !== next.onRevertUserMessage ||
-    prev.onExpandTurn !== next.onExpandTurn
+    prev.onExpandTurn !== next.onExpandTurn ||
+    prev.autoFoldProcess !== next.autoFoldProcess
   )
     return false;
   if (prev.turnProgress !== next.turnProgress) {
@@ -952,6 +1123,7 @@ function TurnBlockInner({
   onRevertUserMessage,
   onExpandTurn,
   messageActionsDisabled,
+  autoFoldProcess,
 }: TurnBlockProps) {
   const active =
     turn.id === thread.activeTurnId ||
@@ -973,9 +1145,6 @@ function TurnBlockInner({
   // mergeTurnItems 把未进历史的 live item 追加在末尾；它们应与「同样未进
   // 历史」的 live 文本按 streamedEntries 的事件序交错渲染，否则运行中的
   // 时间线会变成「先全部事件、再全部文本」两段式错序。
-  type LiveUnit =
-    | TurnRenderEntry
-    | { kind: "message"; message: StreamedAgentMessage };
   const liveUnits: LiveUnit[] = [];
   if (active) {
     // 老调用方（测试）不传 streamedEntries：退回「item 在前、文本在后」的旧序。
@@ -1063,132 +1232,159 @@ function TurnBlockInner({
   const model = turn.model || thread.resolvedModel || thread.model;
   const effort = turn.model ? turn.reasoningEffort : thread.reasoningEffort;
   const stats = statsLine(turn.stats);
+
+  const renderUnit = (entry: LiveUnit, itemIndex: number) => {
+    const pendingMarkup = (pendingBefore.get(itemIndex) || []).map(
+      (message) => (
+        <OptimisticUserMessage key={message.id} message={message} />
+      ),
+    );
+    if (entry.kind === "message") {
+      const message = entry.message;
+      return (
+        <Fragment key={`live-msg-${message.itemId}`}>
+          {pendingMarkup}
+          <MessageRow role="agent" className="streaming-message-row">
+            <div
+              className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
+            >
+              <AssistantMarkdown text={message.text} onCopy={onCopy} thread={thread} />
+              {message.itemId === streamingItemId && <i />}
+            </div>
+          </MessageRow>
+        </Fragment>
+      );
+    }
+    if (entry.kind === "fileChangeGroup")
+      return (
+        <Fragment key={`file-group-${entry.items[0]?.id || itemIndex}`}>
+          {pendingMarkup}
+          <FileChangeGroup
+            items={entry.items}
+            changes={entry.changes as FileChange[]}
+            cwd={thread.cwd}
+            turnId={turn?.id ? String(turn.id) : undefined}
+            onExpandTurn={onExpandTurn}
+          />
+        </Fragment>
+      );
+    if (entry.kind === "toolGroup")
+      return (
+        <Fragment key={`tool-group-${entry.items[0]?.id || itemIndex}`}>
+          {pendingMarkup}
+          <ToolGroup
+            items={entry.items}
+            label={entry.label}
+            files={entry.files}
+            cwd={thread.cwd}
+            turnId={turn?.id ? String(turn.id) : undefined}
+            onExpandTurn={onExpandTurn}
+          />
+        </Fragment>
+      );
+    if (entry.kind === "fileTouchGroup")
+      return (
+        <Fragment key={`file-touch-${entry.items[0]?.id || itemIndex}`}>
+          {pendingMarkup}
+          <FileTouchGroup
+            file={entry.file}
+            actions={entry.actions}
+            items={entry.items}
+            turnId={turn?.id ? String(turn.id) : undefined}
+            onExpandTurn={onExpandTurn}
+          />
+        </Fragment>
+      );
+    if (entry.kind === "subAgentGroup")
+      return (
+        <Fragment key={`subagent-group-${entry.items[0]?.id || itemIndex}`}>
+          {pendingMarkup}
+          <SubAgentTickGroup items={entry.items} />
+        </Fragment>
+      );
+    const item = entry.item;
+    const liveText =
+      item.type === "agentMessage" && item.id
+        ? streamedByItem.get(String(item.id))
+        : undefined;
+    if (liveText !== undefined) renderedStreamIds.add(String(item.id));
+    const itemKey = item.id || `${item.type}-${item.command || itemIndex}`;
+    const targeted = Boolean(
+      targetItemId && String(item.id) === targetItemId,
+    );
+    const content = (
+      <TurnItem
+        item={item}
+        streamed={liveText}
+        streaming={String(item.id) === streamingItemId}
+        cwd={thread.cwd}
+        onCopy={onCopy}
+        onEditUserMessage={
+          onEditUserMessage
+            ? (item) => onEditUserMessage(String(turn.id), item)
+            : undefined
+        }
+        onRetryUserMessage={
+          onRetryUserMessage
+            ? (item) => onRetryUserMessage(String(turn.id), item)
+            : undefined
+        }
+        onRevertUserMessage={
+          onRevertUserMessage
+            ? (item) => onRevertUserMessage(String(turn.id), item)
+            : undefined
+        }
+        messageActionsDisabled={messageActionsDisabled}
+        thread={thread}
+        turnId={turn?.id ? String(turn.id) : undefined}
+        onExpandTurn={onExpandTurn}
+      />
+    );
+    return targeted ? (
+      <div
+        key={`${itemKey}:search:${targetRequest}`}
+        className="search-item-target"
+        data-item-id={item.id ? String(item.id) : undefined}
+      >
+        {pendingMarkup}
+        {content}
+      </div>
+    ) : (
+      <Fragment key={itemKey}>
+        {pendingMarkup}
+        {content}
+      </Fragment>
+    );
+  };
+
+  const renderChunks = buildRenderChunks(
+    renderEntries,
+    Boolean(autoFoldProcess) && completed && pendingBefore.size === 0,
+  );
+
   return (
     <section
       className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
       data-turn-id={turn?.id ? String(turn.id) : undefined}
     >
       <ReadSummary targets={readTargets} />
-      {renderEntries.map((entry, itemIndex) => {
-        const pendingMarkup = (pendingBefore.get(itemIndex) || []).map(
-          (message) => (
-            <OptimisticUserMessage key={message.id} message={message} />
-          ),
-        );
-        if (entry.kind === "message") {
-          const message = entry.message;
+      {renderChunks.map((chunk) => {
+        if (chunk.kind === "process")
           return (
-            <Fragment key={`live-msg-${message.itemId}`}>
-              {pendingMarkup}
-              <div
-                className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
-              >
-                <AssistantMarkdown text={message.text} onCopy={onCopy} thread={thread} />
-                {message.itemId === streamingItemId && <i />}
-              </div>
-            </Fragment>
+            <ProcessGroup
+              key={`process-${chunk.entries[0].index}`}
+              count={chunk.entries.length}
+              target={chunk.entries.some(({ entry }) =>
+                entryHasTarget(entry, targetItemId),
+              )}
+              targetRequest={targetRequest}
+            >
+              {chunk.entries.map(({ entry, index }) =>
+                renderUnit(entry, index),
+              )}
+            </ProcessGroup>
           );
-        }
-        if (entry.kind === "fileChangeGroup")
-          return (
-            <Fragment key={`file-group-${entry.items[0]?.id || itemIndex}`}>
-              {pendingMarkup}
-              <FileChangeGroup
-                items={entry.items}
-                changes={entry.changes as FileChange[]}
-                cwd={thread.cwd}
-                turnId={turn?.id ? String(turn.id) : undefined}
-                onExpandTurn={onExpandTurn}
-              />
-            </Fragment>
-          );
-        if (entry.kind === "toolGroup")
-          return (
-            <Fragment key={`tool-group-${entry.items[0]?.id || itemIndex}`}>
-              {pendingMarkup}
-              <ToolGroup
-                items={entry.items}
-                label={entry.label}
-                files={entry.files}
-                cwd={thread.cwd}
-                turnId={turn?.id ? String(turn.id) : undefined}
-                onExpandTurn={onExpandTurn}
-              />
-            </Fragment>
-          );
-        if (entry.kind === "fileTouchGroup")
-          return (
-            <Fragment key={`file-touch-${entry.items[0]?.id || itemIndex}`}>
-              {pendingMarkup}
-              <FileTouchGroup
-                file={entry.file}
-                actions={entry.actions}
-                items={entry.items}
-                turnId={turn?.id ? String(turn.id) : undefined}
-                onExpandTurn={onExpandTurn}
-              />
-            </Fragment>
-          );
-        if (entry.kind === "subAgentGroup")
-          return (
-            <Fragment key={`subagent-group-${entry.items[0]?.id || itemIndex}`}>
-              {pendingMarkup}
-              <SubAgentTickGroup items={entry.items} />
-            </Fragment>
-          );
-        const item = entry.item;
-        const liveText =
-          item.type === "agentMessage" && item.id
-            ? streamedByItem.get(String(item.id))
-            : undefined;
-        if (liveText !== undefined) renderedStreamIds.add(String(item.id));
-        const itemKey = item.id || `${item.type}-${item.command || itemIndex}`;
-        const targeted = Boolean(
-          targetItemId && String(item.id) === targetItemId,
-        );
-        const content = (
-          <TurnItem
-            item={item}
-            streamed={liveText}
-            streaming={String(item.id) === streamingItemId}
-            cwd={thread.cwd}
-            onCopy={onCopy}
-            onEditUserMessage={
-              onEditUserMessage
-                ? (item) => onEditUserMessage(String(turn.id), item)
-                : undefined
-            }
-            onRetryUserMessage={
-              onRetryUserMessage
-                ? (item) => onRetryUserMessage(String(turn.id), item)
-                : undefined
-            }
-            onRevertUserMessage={
-              onRevertUserMessage
-                ? (item) => onRevertUserMessage(String(turn.id), item)
-                : undefined
-            }
-            messageActionsDisabled={messageActionsDisabled}
-            thread={thread}
-            turnId={turn?.id ? String(turn.id) : undefined}
-            onExpandTurn={onExpandTurn}
-          />
-        );
-        return targeted ? (
-          <div
-            key={`${itemKey}:search:${targetRequest}`}
-            className="search-item-target"
-            data-item-id={item.id ? String(item.id) : undefined}
-          >
-            {pendingMarkup}
-            {content}
-          </div>
-        ) : (
-          <Fragment key={itemKey}>
-            {pendingMarkup}
-            {content}
-          </Fragment>
-        );
+        return renderUnit(chunk.entry, chunk.index);
       })}
       {pendingAtEnd.map((message) => (
         <OptimisticUserMessage key={message.id} message={message} />
@@ -1328,7 +1524,7 @@ function TurnMetaLine({
           className="rail-row__model"
           title={model !== shortModel(model) ? model : undefined}
         >
-          {effort ? `${shortModel(model)}-${effort}` : shortModel(model)}
+          <span>{effort ? `${shortModel(model)}-${effort}` : shortModel(model)}</span>
         </span>
       ) : effort ? (
         <span className="rail-row__effort">{effort}</span>

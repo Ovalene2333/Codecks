@@ -4,7 +4,7 @@ import type { ThreadSummary, MessageDelivery } from "../types";
 import { Empty } from "../kit";
 import { RenderErrorBoundary } from "../ui";
 import { OperationStatus } from "./OperationStatus";
-import { TurnBlock } from "./TurnBlock";
+import { OptimisticUserMessage, TurnBlock } from "./TurnBlock";
 import { MessageQueue } from "./MessageQueue";
 import { basename } from "../format";
 import type { PendingUserMessage } from "./optimistic";
@@ -371,6 +371,7 @@ export function Timeline({
               onRevertUserMessage={onRevertUserMessage}
               onExpandTurn={onExpandTurn}
               messageActionsDisabled={messageActionsDisabled}
+              autoFoldProcess={index < turns.length - 1}
             />
           </RenderErrorBoundary>
           );
@@ -390,17 +391,7 @@ export function Timeline({
           )
           .map((message) => (
             <section className="turn-block optimistic-turn" key={message.id}>
-              <div className="rail-row rail-row--meta">正在发送</div>
-              <div className="message user">
-                {message.images.length > 0 && (
-                  <div className="message-images">
-                    {message.images.map((image) => (
-                      <img key={image.id} src={image.url} alt={image.name} />
-                    ))}
-                  </div>
-                )}
-                {message.text}
-              </div>
+              <OptimisticUserMessage message={message} />
             </section>
           ))}
         {!hasActiveTurn &&

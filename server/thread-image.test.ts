@@ -56,6 +56,43 @@ test("external thread images require an exact structured image reference", async
   );
 });
 
+test("images read by read tools count as thread references", async (t) => {
+  const { cwd, outside } = await fixture(t);
+  const full = {
+    turns: [
+      {
+        items: [
+          {
+            type: "commandExecution",
+            tool: "read",
+            input: { filePath: outside },
+          },
+          {
+            type: "commandExecution",
+            command: "cat poster.jpg",
+            commandActions: [{ type: "read", path: "/tmp/missing-poster.jpg" }],
+          },
+          {
+            type: "commandExecution",
+            tool: "read",
+            input: { filePath: "/tmp/notes.txt" },
+          },
+        ],
+      },
+    ],
+  };
+  const references = referencedThreadImages(full);
+  assert.deepEqual(references, [outside, "/tmp/missing-poster.jpg"]);
+  assert.equal(
+    await resolveThreadImage(cwd, outside, async () => references),
+    await realpath(outside),
+  );
+  await assert.rejects(
+    resolveThreadImage(cwd, outside, async () => ["/tmp/notes.txt"]),
+    /引用/,
+  );
+});
+
 test("image authorization follows real paths and rejects unsupported files", async (t) => {
   const { cwd, outside } = await fixture(t);
   const link = path.join(cwd, "link.png");

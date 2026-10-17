@@ -10,6 +10,7 @@ import {
   groupTurnItems,
   isTrivialToolOutput,
   openCodeFileTarget,
+  readImagePath,
   reasoningText,
   toolCallPresentation,
   turnReadTargets,
@@ -255,6 +256,49 @@ test("includes OpenCode reads in the per-turn read summary", () => {
   );
 });
 
+test("detects image targets on read rows for inline previews", () => {
+  assert.equal(
+    readImagePath({
+      type: "commandExecution",
+      tool: "read",
+      input: { filePath: "/work/assets/logo.png" },
+    }),
+    "/work/assets/logo.png",
+  );
+  assert.equal(
+    readImagePath({
+      type: "commandExecution",
+      command: "cat poster.jpg",
+      commandActions: [{ type: "read", path: "/work/poster.jpg" }],
+    }),
+    "/work/poster.jpg",
+  );
+  assert.equal(
+    readImagePath({
+      type: "commandExecution",
+      tool: "read",
+      input: { filePath: "/work/src/main.ts" },
+    }),
+    "",
+  );
+  assert.equal(
+    readImagePath({
+      type: "commandExecution",
+      tool: "edit",
+      input: { filePath: "/work/assets/logo.png" },
+    }),
+    "",
+  );
+  assert.equal(
+    readImagePath({
+      type: "commandExecution",
+      command: "rg tool src",
+      commandActions: [{ type: "search", query: "tool", path: "/work/src" }],
+    }),
+    "",
+  );
+});
+
 test("extracts dynamic and MCP tool input and output", () => {
   assert.deepEqual(
     toolCallPresentation({
@@ -344,6 +388,48 @@ test("TurnBlock renders read overview, collapsed updates, and expandable tools",
   assert.match(html, /const a = 1;/);
   assert.match(html, />检索</);
   assert.match(html, /src\/a\.ts:1:tool/);
+});
+
+test("TurnBlock renders image reads as expandable deferred previews", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      index: 1,
+      thread,
+      streamed: [],
+      turn: {
+        id: "turn",
+        status: "completed",
+        items: [
+          {
+            id: "read-image",
+            type: "commandExecution",
+            tool: "read",
+            status: "completed",
+            command: "Read assets/logo.png",
+            input: { filePath: "/work/assets/logo.png" },
+            aggregatedOutput: "iVBORw0KGgoAAAANSUhEUg",
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /class="rail-row tool-row command-row read-row ok"/);
+  assert.match(html, /tool-row-images/);
+  assert.match(html, /deferred-image/);
+  assert.match(html, /点击加载图片/);
+  assert.match(html, /assets\/logo\.png/);
+  // 图片读取的输出不进详情文本，避免占位符或长码刷屏。
+  assert.doesNotMatch(html, /iVBORw0KGgoAAAANSUhEUg/);
 });
 
 test("TurnBlock renders subagent cards with status and expandable output", () => {

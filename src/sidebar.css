@@ -594,9 +594,3 @@
 .skeleton-recent {
   height: 40px;
 }
-
-@media (max-width: 760px) {
-  .library-segment .ui-seg__item {
-    min-height: 36px;
-  }
-}

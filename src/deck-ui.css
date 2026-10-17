@@ -102,6 +102,10 @@
   min-width: 0;
   padding: 0;
   line-height: var(--lh-ui);
+  /* 中文字面在行框里天然偏高约 1px（浏览器对 input 只做几何居中），
+     下移 1px 与左侧放大镜、右侧「新建」的文字在同一视觉中线。 */
+  position: relative;
+  top: 1px;
   border-radius: 0;
   background: transparent;
 }
@@ -126,7 +130,7 @@
   padding: 0 10px 8px;
 }
 
-.library-segment {
+.ui-seg.library-segment {
   min-width: 0;
   height: var(--control-h);
   min-height: var(--control-h);
@@ -143,10 +147,12 @@
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  min-height: 0;
+  min-height: 26px;
   padding: 0 8px;
   border: 1px solid transparent;
   line-height: var(--lh-ui);
+  /* 400 与搜索框等周边控件一致；500 的中文在侧栏里显得过重。 */
+  font-weight: var(--fw-regular);
   white-space: nowrap;
 }
 
@@ -796,7 +802,7 @@
 }
 
 .turn-block {
-  margin-bottom: 22px;
+  margin-bottom: 6px;
 }
 
 
@@ -902,13 +908,14 @@
     height: 44px;
   }
 
-  .library-segment {
-    height: 50px;
-    min-height: 50px;
+  .ui-seg.library-segment {
+    height: 44px;
+    min-height: 44px;
   }
 
   .library-segment > button {
-    min-height: 44px;
+    /* 44 − 上下 2px 内边距 − 上下 1px 边框，正好填满。 */
+    min-height: 38px;
   }
 
   .library-bar > .icon-btn {
@@ -965,7 +972,7 @@
   }
 
   .turn-block {
-    margin-bottom: 18px;
+    margin-bottom: 4px;
   }
 
   .message.agent {

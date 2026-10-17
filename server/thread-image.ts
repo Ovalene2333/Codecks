@@ -11,7 +11,12 @@ function imagePath(value: string, cwd: string) {
     : path.resolve(cwd, value);
 }
 
-/** 仅提取结构化图片项；普通消息、命令输出里的任意路径不作为授权依据。 */
+/**
+ * 提取会话引用过的图片路径：结构化图片项，加上读取类工具真实读过的图片
+ * （opencode read / codex read 动作，只取输入参数，不碰输出文本）——
+ * 时间线里的「读取」行要能展开加载图片。普通消息、命令输出里的任意路径
+ * 不作为授权依据。
+ */
 export function referencedThreadImages(thread: any): string[] {
   const result: string[] = [];
   const imageTypes = new Set([
@@ -22,6 +27,13 @@ export function referencedThreadImages(thread: any): string[] {
     "inputimage",
     "outputimage",
   ]);
+  const readInputImage = (input: any) => {
+    if (!input || typeof input !== "object") return "";
+    const value = String(
+      input.filePath || input.file_path || input.file || input.path || "",
+    ).trim();
+    return value && IMAGE_FILE.test(value) ? value : "";
+  };
   const visit = (item: any) => {
     if (!item || typeof item !== "object") return;
     if (
@@ -44,6 +56,21 @@ export function referencedThreadImages(thread: any): string[] {
           !/^(?:data|https?|blob):/i.test(item[key])
         )
           result.push(item[key]);
+    }
+    if (String(item.type || "").toLowerCase() === "commandexecution") {
+      const actions = Array.isArray(item.commandActions)
+        ? item.commandActions
+        : [];
+      if (actions.length > 0) {
+        for (const action of actions) {
+          const value = String(action?.path || action?.name || "").trim();
+          if (action?.type === "read" && value && IMAGE_FILE.test(value))
+            result.push(value);
+        }
+      } else if (String(item.tool || "").toLowerCase() === "read") {
+        const value = readInputImage(item.input ?? item.arguments);
+        if (value) result.push(value);
+      }
     }
     for (const key of ["content", "images"])
       if (Array.isArray(item[key])) item[key].forEach(visit);

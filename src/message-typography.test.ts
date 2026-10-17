@@ -20,6 +20,7 @@ test("imported typography rejects invalid fields and bounds numeric values", () 
     lineHeight: Number.NaN,
     paragraphGap: -5,
     contentWidth: "760",
+    sessionWidth: 9999,
     codeStyle: "oops",
   });
   assert.equal(result.font, "sans");
@@ -27,6 +28,7 @@ test("imported typography rejects invalid fields and bounds numeric values", () 
   assert.equal(result.lineHeight, 1.55);
   assert.equal(result.paragraphGap, 0);
   assert.equal(result.contentWidth, 0);
+  assert.equal(result.sessionWidth, 1400);
   assert.equal(result.codeStyle, "subtle");
   assert.deepEqual(
     normalizeMessageTypography(null),
@@ -68,6 +70,8 @@ test("message variables restore full width and original styles after switching p
   const comfortable = messageTypographyVariables(MESSAGE_PRESETS[1].typography);
   assert.equal(original["--message-width"], "100%");
   assert.equal(comfortable["--message-width"], "760px");
+  assert.equal(original["--session-width"], "980px");
+  assert.equal(comfortable["--session-width"], "1120px");
   assert.equal(comfortable["--message-table-border"], "transparent");
   assert.equal(original["--message-table-border"], "var(--line)");
   assert.deepEqual(Object.keys(original), Object.keys(comfortable));

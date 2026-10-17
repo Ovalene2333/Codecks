@@ -26,6 +26,13 @@
   overscroll-behavior: contain;
 }
 
+.session-toolbar--panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
 .session-settings-section + .session-settings-section {
   margin-top: var(--space-5);
   padding-top: var(--space-5);
@@ -89,8 +96,8 @@
   width: 100%;
   max-width: none;
   min-width: 0;
-  height: var(--control-h);
-  min-height: var(--control-h);
+  height: 40px;
+  min-height: 40px;
   padding: 0 11px;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
@@ -113,7 +120,7 @@
 .session-settings-grid .search-picker-trigger {
   width: 100%;
   max-width: none;
-  min-height: var(--control-h);
+  min-height: 40px;
   padding: 0 30px 0 11px;
   border-color: var(--control-border);
   background: var(--control);
@@ -124,9 +131,9 @@
 
 .session-settings-grid .toolbar-select .icon-btn.model-manual-toggle {
   align-self: end;
-  width: var(--control-h);
-  height: var(--control-h);
-  min-width: var(--control-h);
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
   border: 1px solid var(--control-border);
   background: var(--control);
 }

@@ -115,7 +115,6 @@
 
   --line: #232427;
   --line-strong: #303236;
-  --edge-hi: transparent;
   --text: #ececee;
   --text-soft: #c6c8cd;
   --text-dim: #9b9ea6;
@@ -243,7 +242,6 @@ html[data-theme="light"] {
   --control-border: #dcdde1;
   --line: #e8e8eb;
   --line-strong: #d7d8dc;
-  --edge-hi: transparent;
   --text: #17181b;
   --text-soft: #3a3c41;
   --text-dim: #62656d;
