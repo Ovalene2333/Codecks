@@ -1,0 +1,14 @@
+# 换行策略：入库统一 LF，检出按平台原生（Windows CRLF，其余 LF）。
+# Windows 侧配合 core.autocrlf=true；Linux/macOS 保持 false 即可。
+* text=auto
+
+# 二进制文件：禁止文本换行转换。
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff2 binary
+*.pdf   binary
+*.zip   binary
