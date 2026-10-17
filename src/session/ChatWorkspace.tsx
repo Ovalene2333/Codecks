@@ -8,6 +8,7 @@ import { loadModelCatalog, modelCatalogCache } from "../ModelPicker";
 import { SwrCache } from "../swr-cache";
 import { displayText, sessionKey } from "../format";
 import { ChatHeader } from "../layout/ChatHeader";
+import { AskNotice } from "./AskNotice";
 import type {
   AgentCapabilities,
   Approval,
@@ -1197,6 +1198,7 @@ export function ChatWorkspace({
         onCompact={capabilities.sessionSettings ? compact : undefined}
         onWake={onWake}
       />
+      <AskNotice thread={thread} />
       <SessionOperationList />
       <RenderErrorBoundary
         resetKey={thread.id}

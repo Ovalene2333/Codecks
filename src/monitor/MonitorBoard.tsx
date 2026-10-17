@@ -652,7 +652,7 @@ function watchDetail(watcher: WakeWatcher) {
   );
 }
 
-/** 本机 deck-wake watcher：远端任务结束时会唤醒对应会话。 */
+/** 本机 deck-api watcher：远端任务结束时会唤醒对应会话。 */
 function WatchPanel({
   watchers,
   threadOf,
@@ -670,11 +670,11 @@ function WatchPanel({
     (a, b) => Number(Boolean(b.failures)) - Number(Boolean(a.failures)),
   );
   return (
-    <Panel id="home-watch" tone="watch" Icon={Radar} title="deck-wake 监督中" count={watchers.length}>
+    <Panel id="home-watch" tone="watch" Icon={Radar} title="deck-api 监督中" count={watchers.length}>
       {sorted.length ? null : (
         <li className="home-empty">
           <b>没有正在监督的远端任务</b>
-          <span>让 agent 用 deck-wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
+          <span>让 agent 用 deck-api wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
         </li>
       )}
       {sorted.map((watcher) => {
@@ -728,7 +728,7 @@ function WatchPanel({
 
 /**
  * 首页主栏：默认按“球在谁手里”排——需要你处理的、agent 交回来的新回复、
- * 还在跑的、其余最近会话，最后是 deck-wake 盯着的远端任务；用户可在「调整布局」里改顺序。
+ * 还在跑的、其余最近会话，最后是 deck-api 盯着的远端任务；用户可在「调整布局」里改顺序。
  * 审批卡片由外层放在最上方。「监督中」常驻，其余面板没内容时不显示。
  */
 export function MonitorBoard({

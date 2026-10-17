@@ -41,13 +41,25 @@ const runtimePids = [
 ];
 const context = { threads, runtimePids };
 
-test("agent-provided session variables win", () => {
-  const byDeck = resolveWakeSession({ session: "claude:k1", ancestors: [9, 8] }, context);
-  assert.equal(byDeck.ok && byDeck.threadId, "k1");
-  // Codex 的 CODEX_THREAD_ID 指向一个不在跑的会话也认：变量是确定性的。
+test("explicit --session wins and corroborated environment identity is honored", () => {
+  // 显式 --session 是 agent 的主动行为，不要求进程树佐证。
+  const byFlag = resolveWakeSession({ session: "claude:k1", ancestors: [9, 8], sessionExplicit: true }, context);
+  assert.equal(byFlag.ok && byFlag.threadId, "k1");
+  // 进程树能找到 codex 后端时，CODEX_THREAD_ID 佐证成立。
   const byCodex = resolveWakeSession({ codexThread: "c2", ancestors: [9, 100] }, context);
   assert.equal(byCodex.ok && byCodex.threadId, "c2");
   assert.equal(byCodex.ok && byCodex.via, "CODEX_THREAD_ID");
+});
+
+test("environment identity without a deck process tree is rejected", () => {
+  // 祖先里没有 Deck 托管 agent：环境变量可能是残留/继承的旧值，不可信。
+  const byEnv = resolveWakeSession({ session: "claude:k1", ancestors: [9, 8] }, context);
+  assert.equal(byEnv.ok, false);
+  const byCodexThread = resolveWakeSession({ codexThread: "c1", ancestors: [] }, context);
+  assert.equal(byCodexThread.ok, false);
+  // 同样的环境变量配上对应的后端进程就成立。
+  const corroborated = resolveWakeSession({ codexThread: "c1", ancestors: [9, 100] }, context);
+  assert.equal(corroborated.ok && corroborated.threadId, "c1");
 });
 
 test("inherited variables are ignored when the process tree says otherwise", () => {
@@ -92,9 +104,9 @@ test("explicit codes belonging to another session are flagged", () => {
   const ambiguous = resolveWakeSession({ ancestors: [9, 300] }, context);
   assert.deepEqual(bindingConflict({ agentId: "codex", threadId: "c2" }, ambiguous), ["opencode"]);
   assert.equal(bindingConflict({ agentId: "opencode", threadId: "o2" }, ambiguous), undefined);
-  // 毫无线索时不拦（脚本由用户在终端手动运行）。
+  // 毫无线索时也视为冲突：需要用户确认后 -f，防止把 watcher 挂到任意代号。
   const none = resolveWakeSession({ ancestors: [] }, context);
-  assert.equal(bindingConflict({ agentId: "codex", threadId: "c2" }, none), undefined);
+  assert.deepEqual(bindingConflict({ agentId: "codex", threadId: "c2" }, none), []);
 });
 
 test("within compares path segments, not string prefixes", () => {

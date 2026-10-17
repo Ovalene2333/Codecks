@@ -132,3 +132,11 @@ test("watcher cache keeps serving the old list when a scan fails", async () => {
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(await cache.ready(), [watcher(1)]);
 });
+
+
+test("deck-send watchers and already-running legacy watchers share discovery", () => {
+  for (const script of ["deck-api", "deck-send", "deck-wake"]) {
+    assert.deepEqual(parseWatcherArgv(["bash", script, "_watch", "demo-code", "demo", "40", "--", "echo", "done"]),
+      { code: "demo-code", mode: "watch", label: "demo", command: "echo done" });
+  }
+});

@@ -7,6 +7,8 @@ import { AgentMessageError, messageBusy, type AgentMessageInput, type MessageDel
 interface StoredMessage extends MessageDelivery {
   input: AgentMessageInput;
   originTurnId?: string;
+  forceInterrupt?: boolean;
+  external?: boolean;
 }
 
 interface Options {
@@ -81,7 +83,16 @@ export class MessageDeliveryQueue {
     }));
   }
 
-  async enqueue(agentId: string, threadId: string, mode: MessageDeliveryMode, input: AgentMessageInput) {
+  async enqueue(agentId: string, threadId: string, mode: MessageDeliveryMode, input: AgentMessageInput,
+    options?: { id: string; forceInterrupt?: boolean }) {
+    const existing = options && this.items.find((item) => item.id === options.id);
+    if (existing) {
+      await this.writes;
+      if (!this.persisted.has(existing.id)) throw new Error("消息尚未持久化");
+      if (existing.agentId !== agentId || existing.threadId !== threadId || existing.input.text !== input.text)
+        throw new Error("消息标识冲突");
+      return this.list().find((entry) => entry.id === existing.id)!;
+    }
     const state = this.options.agents.messageState(agentId, threadId);
     if (!state.capabilities.messages?.deliveryModes?.includes(mode))
       throw new AgentMessageError("unsupported", "该 Agent 不支持此发送模式", 422);
@@ -92,7 +103,8 @@ export class MessageDeliveryQueue {
       throw new AgentMessageError("turn_mismatch", "当前回合已变化，请刷新会话状态");
     const now = Date.now();
     const item: StoredMessage = {
-      id: randomUUID(), agentId, threadId, mode, status: "queued",
+      id: options?.id ?? randomUUID(), agentId, threadId, mode, status: "queued",
+      external: Boolean(options), forceInterrupt: options?.forceInterrupt,
       preview: input.text.trim().slice(0, 300) || `[${input.images?.length ?? 0} 张图片]`,
       input: { text: input.text, images: input.images },
       originTurnId: mode === "feedback" ? state.thread.activeTurnId : undefined,
@@ -206,7 +218,7 @@ export class MessageDeliveryQueue {
         if (!target) throw new AgentMessageError("no_active_turn", "无法确定当前回合，消息未发送");
         if (item.originTurnId && target !== item.originTurnId)
           throw new AgentMessageError("turn_mismatch", "当前回合已变化，未打断新的任务");
-        if (state.capabilities.messages?.busyBehavior === "steer") {
+        if (state.capabilities.messages?.busyBehavior === "steer" && !item.forceInterrupt) {
           input = { ...item.input, mode: "append", expectedTurnId: target };
         } else {
           release = this.options.agents.holdMessageQueue(item.agentId, item.threadId);
@@ -293,7 +305,7 @@ export class MessageDeliveryQueue {
 
   private async changed(changedItem?: StoredMessage) {
     if (changedItem) changedItem.updatedAt = Date.now();
-    const completed = this.items.filter((item) => item.status === "delivered");
+    const completed = this.items.filter((item) => item.status === "delivered" && !item.external);
     for (const item of completed.slice(0, Math.max(0, completed.length - 50))) {
       this.items.splice(this.items.indexOf(item), 1);
       this.persisted.delete(item.id);

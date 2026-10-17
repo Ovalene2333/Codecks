@@ -700,3 +700,17 @@
     min-height: 36px;
   }
 }
+
+.thread-meta .ask-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent-hover);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  line-height: 16px;
+}

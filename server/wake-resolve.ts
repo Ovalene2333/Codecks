@@ -9,7 +9,9 @@ import type { AgentId, ThreadSummary } from "./types.js";
  *
  * 只用只读、确定性的线索，不往会话里注入任何内容：
  * 1. agent 自己给 shell 设的会话标识（Codex 的 CODEX_THREAD_ID；Deck 拉起
- *    Claude 会话进程时附带的 CODEX_DECK_SESSION）。
+ *    Claude 会话进程时附带的 CODEX_DECK_SESSION）。环境变量会被子进程
+ *    继承、也能被任意导出：只有进程树里能找到对应 agent 后端进程佐证时
+ *    才可信；CLI 里显式传的 --session 不受此限。
  * 2. 进程树：watcher 脚本的祖先里有哪个 Deck 托管的 agent 后端进程，
  *    就是哪个 agent；再在该 agent 正在跑回合的会话里按工作目录收窄。
  *
@@ -20,6 +22,8 @@ import type { AgentId, ThreadSummary } from "./types.js";
 export interface WakeResolveInput {
   /** `CODEX_DECK_SESSION`：`<agentId>:<threadId>`。 */
   session?: string;
+  /** session 来自 CLI 的 --session 显式参数（而非脚本读取的环境变量）。 */
+  sessionExplicit?: boolean;
   /** Codex 给 shell 设的 `CODEX_THREAD_ID`。 */
   codexThread?: string;
   /** 脚本进程自身及其祖先 pid（由近到远）。 */
@@ -89,8 +93,9 @@ export function resolveWakeSession(
     );
   // 环境变量会被子进程继承：Deck 本身若是从某个 agent 会话里启动的，
   // 它拉起的其它 agent 也会带着那个会话的变量。进程树明确指向别的
-  // agent 时，这类变量不可信。
-  const trusted = (agentId: AgentId) => !agents.length || agents.includes(agentId);
+  // agent 时，这类变量不可信；进程树里完全找不到托管 agent 时同样
+  // 不可信（可能是用户 shell 里残留的旧值），只有显式 --session 例外。
+  const envTrusted = (agentId: AgentId) => agents.includes(agentId);
   const failure = (error: string, candidates: ThreadSummary[] = []): WakeResolution => ({
     ok: false,
     error,
@@ -103,17 +108,24 @@ export function resolveWakeSession(
     if (at > 0) {
       const agentId = input.session.slice(0, at) as AgentId;
       const thread = find(agentId, input.session.slice(at + 1));
-      if (thread && trusted(agentId))
-        return { ok: true, agentId, threadId: thread.id, thread, via: "CODEX_DECK_SESSION", agents };
+      if (thread && (input.sessionExplicit || envTrusted(agentId)))
+        return {
+          ok: true, agentId, threadId: thread.id, thread, agents,
+          via: input.sessionExplicit ? "显式 --session" : "CODEX_DECK_SESSION",
+        };
     }
   }
   if (input.codexThread) {
     const thread = find("codex", input.codexThread);
-    if (thread && trusted("codex"))
+    if (thread && envTrusted("codex"))
       return { ok: true, agentId: "codex", threadId: thread.id, thread, via: "CODEX_THREAD_ID", agents };
   }
   if (!agents.length)
-    return failure("无法判断命令来自哪个会话：进程树里没有 Deck 托管的 agent，也没有会话标识环境变量");
+    return failure(
+      input.session || input.codexThread
+        ? "进程树里没有 Deck 托管的 agent，会话标识环境变量不可信；请用已知身份显式指定（create/send 用 --session，wake 用代号加 -f）"
+        : "无法判断命令来自哪个会话：进程树里没有 Deck 托管的 agent，也没有会话标识环境变量",
+    );
 
   const running = context.threads.filter(
     (thread) => agents.includes(agentOf(thread)) && !thread.archived && busy(thread),
@@ -143,7 +155,8 @@ export function resolveWakeSession(
 /**
  * 显式代号是否与判定出的会话冲突：判定成功且是另一个会话，或进程树
  * 明确指向别的 agent。冲突时返回实际发起的会话（或进程树里的 agent 列表）；
- * 无冲突（含无从判断）返回 undefined。
+ * 完全无线索时返回空数组（同样视为冲突，需显式确认）；
+ * 无冲突返回 undefined。
  */
 export function bindingConflict(
   target: { agentId: AgentId; threadId: string },
@@ -155,7 +168,7 @@ export function bindingConflict(
       : resolution.thread;
   if (resolution.agents.length && !resolution.agents.includes(target.agentId))
     return resolution.agents;
-  return undefined;
+  return resolution.agents.length ? undefined : [];
 }
 
 const execFileAsync = promisify(execFile);

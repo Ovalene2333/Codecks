@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Compatibility alias; watcher argv and callback URLs remain supported by Deck.
+set -euo pipefail
+DECK_HOME="${CODEX_DECK_HOME:-$HOME/.codex-deck}"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+SEND="$DECK_HOME/bin/deck-send"
+[ -f "$SEND" ] || SEND="$(dirname "$SELF")/../../deck-send/scripts/deck-send"
+[ -f "$SEND" ] || { echo 'deck-wake: 找不到 deck-send，请更新并重启 Deck' >&2; exit 1; }
+exec bash "$SEND" "$@"

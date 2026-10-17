@@ -12,7 +12,7 @@ import type { AgentId, WakeDelivery } from "./types.js";
  * （inflight），崩溃重启后自然落回 pending，不需要 crash recovery 状态。
  */
 
-/** 同代号+同内容的去重窗口：沿用旧 WakeDeduper 的 5 分钟。 */
+/** 携带 dedupeKey 的条目（ask 回传重试）：同 key 已投递未过窗口视为同一条。 */
 const DEDUPE_TTL_MS = 5 * 60_000;
 /** 暂态错误的最长重试期，超过即判 dead 交给人处理。 */
 const MAX_AGE_MS = 24 * 3_600_000;
@@ -42,13 +42,15 @@ export interface WakeTarget {
 interface StoredDelivery extends WakeDelivery {
   /** 投递给会话的完整 prompt；Snapshot 只下发 preview。 */
   prompt: string;
+  /** 幂等键（如 ask 消息 id）：同 key 的重复入队视为同一条投递。 */
+  dedupeKey?: string;
 }
 
 interface Options {
   file: string;
   /** 每次尝试时按代号重新解析目标：代号被解绑即视为取消投递。 */
   resolve: (code: string) => WakeTarget | undefined;
-  send: (agentId: AgentId, threadId: string, prompt: string) => Promise<unknown>;
+  send: (agentId: AgentId, threadId: string, prompt: string, delivery: WakeDelivery) => Promise<unknown>;
   /** 队列有任何变化时调用（接 snapshot 广播）。 */
   onChanged?: () => void;
   now?: () => number;
@@ -122,20 +124,26 @@ export class WakeOutbox {
 
   /**
    * 入队即持久化（先落盘再应答是可靠性的根基，调用方必须 await）。
-   * 同代号+同内容的重复 POST 命中去重，返回既有条目：
-   * - pending / 投递中 → 同一条，不会双发；
-   * - delivered 未过 TTL → 同一条；
-   * - dead → 复活为 pending，立即重投；
-   * - delivered 已过期 → 丢弃旧记录，建新条目。
+   * 去重只作用于「同一条投递的重复提交」，绝不吞掉新事件：
+   * - 带 dedupeKey（ask 回传）：同 key 的 pending/在途返回同一条；
+   *   已投递未过 TTL 返回同一条；dead 复活重投；
+   * - 不带 key（外部 wake 事件）：仅同内容的 pending/在途返回同一条
+   *   （挡 HTTP 超时后的重发）；已投递/已 dead 后再次 POST 按新事件入队。
    */
-  async enqueue(input: WakeTarget & { code: string; prompt: string }) {
+  async enqueue(input: WakeTarget & { code: string; prompt: string; mode?: "queue" | "interrupt"; dedupeKey?: string }) {
     const now = this.now();
-    const existing = this.items.find(
-      (item) => item.code === input.code && item.prompt === input.prompt,
-    );
-    if (existing) {
-      if (existing.status === "pending" || this.inflight.has(existing.id))
-        return this.view(existing);
+    const existing = input.dedupeKey
+      ? this.items.find(
+          (item) => item.dedupeKey === input.dedupeKey &&
+            item.agentId === input.agentId && item.threadId === input.threadId,
+        )
+      : this.items.find(
+          (item) => !item.dedupeKey && item.code === input.code && item.prompt === input.prompt &&
+            item.mode === input.mode && item.agentId === input.agentId && item.threadId === input.threadId,
+        );
+    if (existing && (existing.status === "pending" || this.inflight.has(existing.id)))
+      return this.view(existing);
+    if (existing && input.dedupeKey) {
       if (
         existing.status === "delivered" &&
         now - (existing.deliveredAt ?? 0) <= DEDUPE_TTL_MS
@@ -155,14 +163,16 @@ export class WakeOutbox {
         this.schedule();
         return this.view(existing);
       }
-      // delivered 已过期：旧记录只剩占地方，删掉再按新条目走。
+      // keyed 已投递过了 TTL：旧记录只剩占地方，删掉再按新条目走。
       this.items.splice(this.items.indexOf(existing), 1);
     }
     const item: StoredDelivery = {
       id: randomBytes(6).toString("hex"),
+      mode: input.mode,
       code: input.code,
       prompt: input.prompt,
       preview: previewOf(input.prompt),
+      ...(input.dedupeKey ? { dedupeKey: input.dedupeKey } : {}),
       status: "pending",
       agentId: input.agentId,
       threadId: input.threadId,
@@ -227,12 +237,12 @@ export class WakeOutbox {
     this.inflight.add(item.id);
     try {
       const target = this.options.resolve(item.code);
-      if (!target) {
+      if (!target || target.agentId !== item.agentId || target.threadId !== item.threadId) {
         // 代号被解绑视为取消：不是错误，但人需要知道这次唤醒不会到了。
         await this.fail(item, "唤醒代号已解绑", true);
         return;
       }
-      await this.options.send(target.agentId, target.threadId, item.prompt);
+      await this.options.send(target.agentId, target.threadId, item.prompt, this.view(item));
       // 在途期间条目可能已被 dismiss：不再回写状态。
       if (!this.items.includes(item)) return;
       const now = this.now();

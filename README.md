@@ -144,7 +144,7 @@ Codecks 不依赖 CC Switch 或中转服务，有 OpenAI Official 登录就能�
 - **新回复**：跑完了、你还没点开的会话，带回复开头的预览，可以一键全部标为已读
 - **运行中**：正在跑的会话，显示当前在干什么（执行哪条命令、编辑哪个文件）和这一轮已经跑了多久
 - **最近会话**
-- **deck-wake 监督中**：本机上正在盯远端任务的 watcher，见[远程唤醒](#远程唤醒)
+- **deck-api 监督中**：本机上正在盯远端任务的 watcher，见[远程唤醒](#远程唤醒)
 
 顶上一排计数（待处理、异常、新回复、运行中、疑似卡住），点一下滚到对应的列表。「疑似卡住」指运行中但很久没有新事件：等模型超过 3 分钟，或者一条命令超过 10 分钟没动静。
 
@@ -250,17 +250,65 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 - 「切换供应商」会 `thread/fork`：把历史完整复制到新分支，原分支留着，想回退随时可以
 - 用普通 `codex` 创建的旧 Session 还是会出现在历史里，但不会假装成实时受管的状态
 
+### deck-api：创建会话、主动消息与任务监督
+
+`deck-api` 是统一调用入口：`create` 建立独立 Agent 会话及来源关系，`send` 传递消息，`wake` 连接外部任务。脚本在 Deck 启动时安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`；项目也可通过 `skills/deck-api` 使用，无需在命令中写服务地址或令牌。
+
+```bash
+DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"
+bash "$DA" help
+bash "$DA" create <agentId> --name '方案复核' -- '请根据以下代码提供第二意见：…'
+bash "$DA" create <agentId> --mode interrupt --file ./question.txt
+
+# 被创建的会话：默认给来源发消息，无需查来源 ID 或代号
+bash "$DA" send -- '建议采用方案 B，依据是……。实现位置：src/example.ts。'
+bash "$DA" send --file ./result.txt
+
+# 向已知已有会话补充信息
+bash "$DA" send --to <agentId:threadId> -- '补充约束：……'
+# 监督外部任务，结束后通知当前会话
+bash "$DA" wake -- ssh demo-box 'wait-for-job'
+bash "$DA" wake poll -i 120 -- ssh demo-box 'query-job-state'
+```
+
+**会话与主动回传**
+
+创建或提交时已同步返回的错误不再重复回传；受理后才发生的启动失败、运行异常仍会通知来源。主动停用目标 Agent 只记录询问失败状态，不再唤醒来源会话。
+
+- `create` 每次新建独立会话，正常保存在目标 Agent 原生历史中。目标看不到来源聊天历史，问题需提供必要上下文；来源自动识别（进程树找不到 Deck 托管 agent 时环境变量身份不再自动采信，需显式 `--session`），有歧义时拒绝猜测，已知来源可用 `--session <agentId:threadId>`。
+- **最终回复不再自动转发。** 目标 Agent 自己决定何时用 `send` 发送结论、进度或澄清问题，可多次发送。完整分析、工具日志与讨论留在目标会话，发送内容自动附完整会话链接；不额外调用模型生成摘要，也不要求固定摘要格式。
+- `send` 不结束会话。**正常结束不产生任何自动通知**：来源只会收到目标主动 `send` 的内容，目标没有 send 就不会有任何提示（可自行打开目标会话查看）。启动失败、执行失败、被中断或目标被停用时仍自动通知，即使此前发送过进度；没有原生回合历史的启动错误也能通知。
+- 不传目标的 `send` 仅适用于有 create 来源绑定的会话；否则需 `--to <agentId:threadId>` 或 `--code <已知代号>`。两者互斥，`--session` 是发送方而非收件人。来源可用 create 回执的目标 ID 向同一会话补充问题；目标会话不能再次 create，避免递归。
+- 默认来源消息可用 `--request-id <唯一ID>` 重试同一次发送，内容与 mode 须一致；不同消息使用不同 ID。显式目标不支持该参数。单条消息上限 80000 字符，超限拒绝，避免静默截断结果。
+- `create` 的 `--mode queue|interrupt` 设置回传默认方式；目标 `send` 可按次覆盖。queue 等来源空闲，interrupt 停止来源当前回合再发送。显式收件人的 send 和 wake 默认 queue。2xx 表示持久受理，不表示消息已读；提交后结束当前回合，无需自行轮询。
+
+**用户控制配置**
+
+默认使用 Deck 中为目标 Agent 保存的询问配置，未配置项走目标原生默认，不继承发起会话的供应商。雷达面板可选「使用默认」或手调供应商、模型、effort，手调仅本次生效，也可保存为目标 Agent 的默认。切换模型清空 effort，不支持的值不会自动补齐。CLI 保留 `--provider <id>`、`--model <id>`、`--effort <值>` 供用户或脚本显式使用；skill 要求 Agent 默认只提供问题，不获取或选择模型配置。
+
+**界面与持久化**
+
+雷达按钮的「deck-api · 任务回传」面板可以创建会话、设置回传方式与配置。会话正常归入工作目录所在项目，侧栏显示询问标记；会话页显示来源链接、执行状态、累计提交回传条数、模型与 effort，未知配置显示「原生默认」。正常结束的询问不占用总览的「新回复／最近会话」，审批和异常仍正常显示。
+
+会话关联、待发送消息与唤醒投递队列持久化，服务重启后继续处理；失败投递出现在「需要处理」。发送期间重启导致受理结果不确定时应先检查会话再重试。`agents` 查看可用 Agent，`sessions` 查看创建记录和初始投递 ID；向绑定来源 send 的回执包含消息 ID、投递 ID、目标和 mode。
+
+**兼容与升级**
+
+重启升级后的 Deck 才会安装新版脚本并加载新服务逻辑。`deck-send` 和 `deck-wake` 保留兼容入口，`ask` → `create`，`watch/poll` → `wake watch/poll`，旧 `send <code> <消息>` 由兼容入口转换。旧 HTTP `/api/send/*`、`/api/wake/*` 保留；新入口使用 `/api/deck/create`、`/api/deck/send` 等路由。旧命令新建的会话同样改为主动发送；已落盘的旧回传继续投递，升级后尚在执行且未生成回传的会话同样不再发结束通知。已运行的旧 watcher 无需重挂。
+
+项目使用整个目录的相对软链接同步 `deck-api` skill，`.claude/skills/deck-api` 可链接 `.agents/skills/deck-api`；兼容 skill 也需与新版 `deck-api` 相邻。不要只复制脚本或维护多份正文。
+
 ### 远程唤醒
 
 Agent 在远端（SSH、GPU 机器、Slurm 之类）启动了一个要跑几小时的任务，不用让它干等，你也不用自己反复去看。在本机挂一个后台 watcher，任务一结束，Deck 就往对应会话里注入一条 `[wake:<代号>] ...` 消息，Agent 从这里接着干。
 
-- 会话头部的雷达图标打开「远程唤醒」：可以开启或关闭、自定义代号，能看到这个会话正被哪些 watcher 盯着，也能复制调用示例
-- 总览首页的「deck-wake 监督中」列出本机上正在跑的 deck-wake watcher；watcher 没发出唤醒就消失了（被 kill、机器重启），会作为「失联」出现在「需要处理」里，由你决定要不要通知会话
+- 会话头部的雷达图标打开「deck-api · 任务回传」：可以开启或关闭、自定义代号，能看到这个会话正被哪些 watcher 盯着，也能复制调用示例
+- 总览首页的「deck-api 监督中」列出本机上正在跑的 deck-api watcher；watcher 没发出唤醒就消失了（被 kill、机器重启），会作为「失联」出现在「需要处理」里，由你决定要不要通知会话
 - 唤醒请求 Deck 一收到就先落盘再返回 202，之后在后台重试到送达，所以 Agent 闪断、会话正忙或者 Deck 重启都不会丢。实在送不到的会出现在「需要处理」里
 - 外部脚本也可以直接调接口，不必用 watcher：
 
 ```bash
-curl -X POST "$(cat ~/.codex-deck/url)/api/wake/<代号>" \
+curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
   -H "Authorization: Bearer $(cat ~/.codex-deck/token)" \
   -H "Content-Type: application/json" -d '{"text":"任务已完成"}'
 ```

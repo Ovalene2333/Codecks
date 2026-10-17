@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# deck-api — 通过 Codex Deck 唤醒 agent 会话。用法见 `deck-api help`。
+set -uo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+DECK_HOME="${CODEX_DECK_HOME:-$HOME/.codex-deck}"
+INSTALLED="$DECK_HOME/bin/deck-api"
+
+# 各项目里的 skill 拷贝只是入口：Deck 启动时会把与自身版本配套的脚本装到
+# ~/.codex-deck/bin/，这里优先转发过去，旧拷贝不会和服务端接口脱节。
+# _watch/_poll 是已经 spawn 出来的 watcher 本体，不转发。
+if [ -z "${DECK_API_NO_FORWARD-}" ] && [ -f "$INSTALLED" ] && [ "$SELF" != "$INSTALLED" ]; then
+  case "${1-}" in
+    _watch|_poll) ;;
+    *) DECK_API_NO_FORWARD=1 exec bash "$INSTALLED" "$@" ;;
+  esac
+fi
+
+URL="${DECK_API_URL:-${DECK_SEND_URL:-${DECK_WAKE_URL:-$(cat "$DECK_HOME/url" 2>/dev/null || true)}}}"
+TOKEN="${DECK_TOKEN-$(cat "$DECK_HOME/token" 2>/dev/null || true)}"
+LOG_DIR="${DECK_API_LOG_DIR:-${DECK_SEND_LOG_DIR:-${DECK_WAKE_LOG_DIR:-$DECK_HOME/watch}}}"
+DONE_RE_DEFAULT='^(COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE|DONE|EXITED|ERROR|GONE)'
+CODE_RE='^[a-z0-9][a-z0-9-]{1,30}$'
+
+usage() { # [create|send|wake] —— 不带参数打印总览，带主题打印对应段落
+  case "${1-}" in
+    create)
+      cat <<'EOF'
+deck-api create <agentId> [--mode queue|interrupt] [--name title] [--file path|-] -- <问题>
+    创建独立会话并绑定来源；目标自行用 send 回传，不自动转发最终回复。
+    正常结束没有自动通知：目标不主动 send，来源就不会收到任何消息。
+    --mode 是目标消息回传到来源时的默认投递方式，默认 queue。
+    --session agent:thread 显式指定创建来源；默认由 Deck 识别（无法佐证时必须显式给出）。
+    仅用户明确要求时使用 --provider id / --model id / --effort value；否则使用 Deck 默认。
+EOF
+      ;;
+    send)
+      cat <<'EOF'
+deck-api send [--mode queue|interrupt] [--to agent:thread | --code code] [--file path|-] -- <消息>
+    不指定目标时发给 create 绑定的来源；默认沿用创建时的 mode。
+    消息必须放在 -- 之后；旧式 `send <代号> <消息>` 不接受。
+    --to/--code 显式指定其他目标时默认 queue，不需要查询目标配置。
+    --session agent:thread 指定当前发送会话（不是收件人）。
+    --request-id id 可用于绑定来源消息的幂等重试；同一 id 不得换内容或 mode。
+    一次可发送进度、澄清问题或结果，可多次发送；2xx 表示持久受理，不表示已读。
+EOF
+      ;;
+    wake|watch|poll)
+      cat <<'EOF'
+deck-api wake [watch|poll] [code] [--mode queue|interrupt] [--session agent:thread] [-l label] [-f] -- <command...>
+    默认 watch：后台运行阻塞命令，结束后带退出码和末尾输出通知。
+    watch 可用 -n lines（默认 40）。
+    poll 可用 -i sec（默认 60，最小 5）、-d regex（自定义结束态）、-a（也通知中间状态变化）。
+    poll 连续 10 次 SSH 连接失败也会通知；空状态视为 GONE。
+    省略 code 自动绑定当前会话；无法确认来源或代号属于其他会话时，请用户确认后加 -f。
+    watcher 自行后台运行；提交后结束回合，不自行 sleep/轮询。
+EOF
+      ;;
+    *)
+      cat <<'EOF'
+deck-api help [create|send|wake]              查看用法
+
+deck-api create …                             创建独立会话并绑定来源（help create 看详情）
+deck-api send …                               向来源或指定会话发消息（help send 看详情）
+deck-api wake …                               监督外部任务（help wake 看详情）
+
+deck-api agents / sessions                    查看可用 Agent / 创建记录（不是消息正文）
+deck-api whoami / list                        确认当前会话 / 查看唤醒代号
+deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
+
+queue 等目标空闲；interrupt 停止目标当前回合再发送。
+create 会话正常结束没有自动通知：目标不 send，来源就收不到消息；启动/执行失败仍自动通知。
+地址与令牌读取 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/{url,token}，
+可用 DECK_API_URL / DECK_TOKEN 覆盖；兼容 DECK_SEND_URL / DECK_WAKE_URL。
+旧 ask/watch/poll/asks/ps/stop 命令继续兼容。
+EOF
+      ;;
+  esac
+}
+
+die() { echo "deck-api: $*" >&2; exit 1; }
+
+json_str() {
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$'\t'/\\t}
+  s=$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
+  printf '"%s"' "$s"
+}
+
+# json_field JSON KEY —— 取顶层字符串字段（够用即可，不依赖 jq）。
+json_field() {
+  printf '%s' "$1" | grep -oE "\"$2\":\"([^\"\\\\]|\\\\.)*\"" | head -n1 |
+    sed -E -e "s/^\"$2\":\"//" -e 's/"$//' -e 's/\\n/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+}
+
+# api METHOD PATH [BODY] —— 成功打印响应体；失败打印原因到 stderr 并返回非 0
+# （接口不存在返回 4，便于对旧版 Deck 回退）。
+api() {
+  [ -n "$URL" ] || { echo "deck-api: 找不到 Deck 地址（Deck 未启动过？可设置 DECK_SEND_URL）" >&2; return 2; }
+  local args=(-sS --connect-timeout 10 --max-time 120 -X "$1" "$URL$2" -H "Content-Type: application/json" -w $'\n%{http_code}')
+  [ -n "$TOKEN" ] && args+=(-H "Authorization: Bearer $TOKEN")
+  [ $# -ge 3 ] && args+=(--data-binary "$3")
+  local out code err
+  out=$(curl "${args[@]}") || { echo "deck-api: 无法连接 Deck（$URL）" >&2; return 1; }
+  code=${out##*$'\n'}; out=${out%$'\n'*}
+  [ "$code" = 404 ] && return 4
+  if [ "${code:0:1}" != 2 ]; then
+    err=$(json_field "$out" error)
+    echo "deck-api: ${err:-Deck 返回 $code：$out}" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+check_code() {
+  [[ ${1-} =~ $CODE_RE ]] || die "无效代号：${1-}"
+}
+
+# prepare CODE COMMAND FORCE DRY —— 让 Deck 确认/识别目标会话。
+# 附带本进程 pid（Deck 据此沿进程树找到发起命令的 agent）、工作目录，
+# 以及 agent 自己提供的会话标识（$session 为空则不传；$session_explicit
+# 标记它来自 --session 显式参数而非环境变量——后者需进程树佐证）。
+prepare() {
+  local code_json=null
+  [ -n "$1" ] && code_json=$(json_str "$1")
+  api POST /api/deck/prepare "$(printf '{"code":%s,"pid":%s,"cwd":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"command":%s,"force":%s,"dryRun":%s}' \
+    "$code_json" "$$" "$(json_str "$PWD")" "$(json_str "${session-}")" "${session_explicit:-false}" \
+    "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")"
+}
+
+send() { # code text [mode]
+  local mode_json=""
+  local delivery_mode=${3-${DECK_SEND_MODE-${DECK_WAKE_MODE-}}}
+  [ -z "$delivery_mode" ] || mode_json=",\"mode\":$(json_str "$delivery_mode")"
+  api POST "/api/deck/events/$1" "{\"text\":$(json_str "$2")$mode_json}" >/dev/null
+}
+
+# 当前前台等待的子进程；收到信号时一并结束。
+CHILD=""
+
+# 可被信号打断的 sleep（前台 sleep 会让 trap 推迟到它结束）。
+nap() {
+  sleep "$1" &
+  CHILD=$!
+  wait "$CHILD"
+  CHILD=""
+}
+
+# 唤醒必须送达：Deck 重启中也要等它回来。
+send_retry() {
+  local i
+  for i in $(seq 1 20); do
+    send "$1" "$2" && { echo "$(date '+%F %T') 已唤醒 $1"; return 0; }
+    nap 30
+  done
+  echo "$(date '+%F %T') 唤醒失败，放弃" >&2
+  return 1
+}
+
+# USR1 = 主动停止（deck-api stop / Deck 界面）；TERM 等 = 被外部终止，
+# Deck 会把后者报为失联。这一行是 Deck 判断 watcher 结局的依据。
+on_signal() {
+  [ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null
+  if [ "$1" = USR1 ]; then
+    echo "$(date '+%F %T') 已停止（手动），不再唤醒"
+    exit 0
+  fi
+  echo "$(date '+%F %T') 收到 $1，watcher 退出（未唤醒）"
+  exit 143
+}
+
+human() {
+  local s=$1
+  if [ "$s" -ge 3600 ]; then printf '%dh%02dm' $((s / 3600)) $((s % 3600 / 60))
+  elif [ "$s" -ge 60 ]; then printf '%dm%02ds' $((s / 60)) $((s % 60))
+  else printf '%ds' "$s"; fi
+}
+
+spawn() { # code subcommand args...
+  local code=$1
+  mkdir -p "$LOG_DIR"
+  local log
+  log="$LOG_DIR/$code-$(date +%Y%m%d-%H%M%S).log"
+  # 同代号同一秒内挂两个 watcher 时日志名会撞车（后者会截断前者）：
+  # 等到下一秒再取名，保持 `<代号>-时间.log` 的命名约定不变。
+  while [ -e "$log" ]; do
+    sleep 1
+    log="$LOG_DIR/$code-$(date +%Y%m%d-%H%M%S).log"
+  done
+  shift
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup bash "$SELF" "$@" >"$log" 2>&1 </dev/null &
+  else
+    nohup bash "$SELF" "$@" >"$log" 2>&1 </dev/null &
+  fi
+  echo "watcher 已在后台启动：pid $!，代号 $code，日志 $log"
+}
+
+WATCH_TMP=""
+
+run_watch() { # code label lines -- cmd...
+  local code=$1 label=$2 lines=$3; shift 4
+  local start rc elapsed
+  WATCH_TMP=$(mktemp)
+  trap 'rm -f "$WATCH_TMP"' EXIT
+  start=$(date +%s)
+  echo "$(date '+%F %T') 开始：$*"
+  "$@" </dev/null >"$WATCH_TMP" 2>&1 &
+  CHILD=$!
+  wait "$CHILD"; rc=$?
+  CHILD=""
+  elapsed=$(( $(date +%s) - start ))
+  echo "$(date '+%F %T') 结束：exit=$rc，用时 $(human "$elapsed")"
+  send_retry "$code" "$(printf '[%s] 命令结束 exit=%s，用时 %s\n$ %s\n--- 输出末 %s 行 ---\n%s' \
+    "$label" "$rc" "$(human "$elapsed")" "$*" "$lines" "$(tail -n "$lines" "$WATCH_TMP")")"
+}
+
+run_poll() { # code label interval done_re all -- cmd...
+  local code=$1 label=$2 interval=$3 done_re=$4 all=$5; shift 6
+  local prev="" state out rc fails=0
+  shopt -s nocasematch
+  echo "$(date '+%F %T') 开始轮询（${interval}s）：$*"
+  while :; do
+    out=$("$@" </dev/null 2>/dev/null); rc=$?
+    if [ "$rc" -eq 255 ]; then
+      fails=$((fails + 1))
+      echo "$(date '+%F %T') 连接失败（$fails/10）"
+      if [ "$fails" -ge 10 ]; then
+        send_retry "$code" "[$label] watcher 连续 10 次无法连接远端，已退出。最后状态：${prev:-未知}。命令：$*"
+        exit 1
+      fi
+      nap "$interval"; continue
+    fi
+    fails=0
+    state=$(printf '%s\n' "$out" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -m1 . || true)
+    state=${state:-GONE}
+    if [ "$state" != "$prev" ]; then
+      echo "$(date '+%F %T') 状态：${prev:-（初始）} -> $state"
+      if [[ $state =~ $done_re ]]; then
+        send_retry "$code" "[$label] 任务结束：${prev:-（初始）} -> $state"
+        exit 0
+      fi
+      [ "$all" = 1 ] && [ -n "$prev" ] && send_retry "$code" "[$label] 状态变化：$prev -> $state"
+      prev=$state
+    fi
+    nap "$interval"
+  done
+}
+
+cmd=${1:-help}; shift || true
+if [ "$cmd" = wake ]; then
+  case "${1-}" in watch|poll|ps|stop) cmd=$1; shift ;; *) cmd=watch ;; esac
+fi
+if [ "${1-}" = --help ]; then usage "${cmd-}"; exit 0; fi
+case "$cmd" in
+  agents|asks|sessions)
+    if [ "$cmd" = agents ]; then api GET /api/deck/agents; else api GET /api/deck/sessions; fi
+    ;;
+  ask|create)
+    if [ "${1-}" = --help ]; then usage create; exit 0; fi
+    target=${1:?缺少目标 agentId}; shift
+    mode=queue; provider=''; model=''; effort=''; name=''; file=''
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --mode) mode=${2:?缺少 mode}; shift 2 ;;
+        --provider) provider=${2:?缺少 provider}; shift 2 ;;
+        --model) model=${2:?缺少 model}; shift 2 ;;
+        --effort) effort=${2:?缺少 effort}; shift 2 ;;
+        --session) session=${2:?缺少 session}; session_explicit=true; shift 2 ;;
+        --name) name=${2:?缺少 name}; shift 2 ;;
+        --file) file=${2:?缺少 file}; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "deck-api: 未知参数 $1" >&2; exit 1 ;;
+        *) break ;;
+      esac
+    done
+    question=$*
+    if [ -n "$file" ]; then
+      [ -z "$question" ] || { echo 'deck-api: --file 与问题参数不能同时使用' >&2; exit 1; }
+      if [ "$file" = - ]; then question=$(cat); else question=$(cat -- "$file"); fi
+    fi
+    [ -n "$question" ] || { echo 'deck-api: 缺少问题' >&2; exit 1; }
+    case "$mode" in queue|interrupt) ;; *) echo 'deck-api: mode 应为 queue 或 interrupt' >&2; exit 1 ;; esac
+    body=$(printf '{"targetAgentId":%s,"returnMode":%s,"providerId":%s,"model":%s,"reasoningEffort":%s,"name":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s,"question":%s}' \
+      "$(json_str "$target")" "$(json_str "$mode")" "$(json_str "$provider")" "$(json_str "$model")" \
+      "$(json_str "$effort")" "$(json_str "$name")" "$(json_str "$session")" "$session_explicit" \
+      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$$" "$(json_str "$question")")
+    api POST /api/deck/create "$body" || exit 1
+    echo '会话已创建；目标将通过 deck-api send 主动回传（不主动 send 就没有通知），失败会自动通知。现在结束回合，无需等待。'
+    ;;
+  whoami)
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    out=$(prepare "" "" false true) || exit 1
+    json_field "$out" summary
+    ;;
+  list)
+    out=$(api GET /api/deck/targets) || exit 1
+    if command -v jq >/dev/null 2>&1; then
+      printf '%s' "$out" | jq -r '.items[] | [.code, .agentId, (.status // "-"), (.name // "-"), (.cwd // "-")] | @tsv'
+    else
+      printf '%s\n' "$out"
+    fi
+    ;;
+  send)
+    mode=''; to=''; code=''; file=''; request_id=''
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    # Legacy deck-send send <code> <text> syntax is intentionally handled by the compatibility entry.
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --mode) mode=${2:?缺少 mode}; shift 2 ;;
+        --to) to=${2:?缺少目标会话}; shift 2 ;;
+        --code) code=${2:?缺少代号}; check_code "$code"; shift 2 ;;
+        --session) session=${2:?缺少当前会话}; session_explicit=true; shift 2 ;;
+        --request-id) request_id=${2:?缺少 request-id}; shift 2 ;;
+        --file) file=${2:?缺少 file}; shift 2 ;;
+        --help) usage send; exit 0 ;;
+        --) shift; break ;;
+        -*) die "未知参数 $1" ;;
+        *) die "send 不接受位置参数：$1（消息要放在 -- 之后；发给指定代号用 --code <代号>）" ;;
+      esac
+    done
+    [ -z "$mode" ] || case "$mode" in queue|interrupt) ;; *) die "mode 应为 queue 或 interrupt" ;; esac
+    [ -z "$to" ] || [ -z "$code" ] || die "--to 与 --code 不能同时使用"
+    text=$*
+    if [ -n "$file" ]; then
+      [ -z "$text" ] || die "--file 与消息参数不能同时使用"
+      if [ "$file" = - ]; then text=$(cat); else text=$(cat -- "$file") || exit 1; fi
+    fi
+    [ -n "$text" ] || die "缺少消息内容"
+    body=$(printf '{"text":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s' \
+      "$(json_str "$text")" "$(json_str "$session")" "$session_explicit" \
+      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$$")
+    [ -z "$mode" ] || body+=",\"mode\":$(json_str "$mode")"
+    [ -z "$to" ] || body+=",\"to\":$(json_str "$to")"
+    [ -z "$code" ] || body+=",\"code\":$(json_str "$code")"
+    [ -z "$request_id" ] || body+=",\"requestId\":$(json_str "$request_id")"
+    body+="}"
+    api POST /api/deck/send "$body" || exit 1
+    echo '消息已持久受理，将按投递方式发送。'
+    ;;
+  watch|poll)
+    code=""
+    if [ $# -gt 0 ] && [ "${1:0:1}" != "-" ]; then
+      check_code "$1"; code=$1; shift
+    fi
+    label=""; lines=40; interval=60; done_re=$DONE_RE_DEFAULT; all=0; force=false; delivery_mode=queue
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+      case "$1" in
+        --mode) delivery_mode=${2:?缺少 mode}; shift 2
+          case "$delivery_mode" in queue|interrupt) ;; *) die "mode 应为 queue 或 interrupt" ;; esac ;;
+        --session) session=${2:?缺少 session}; session_explicit=true; shift 2 ;;
+        -l) label=${2:?缺少 label}; shift 2 ;;
+        -n) lines=${2:?缺少行数}; shift 2 ;;
+        -i) interval=${2:?缺少间隔秒数}; shift 2 ;;
+        -d) done_re=${2:?缺少结束态正则}; shift 2 ;;
+        -a) all=1; shift ;;
+        -f) force=true; shift ;;
+        *) die "未知参数：$1（命令前需要 --）" ;;
+      esac
+    done
+    case "$lines" in ''|*[!0-9]*) die "行数应为非负整数：$lines" ;; esac
+    case "$interval" in ''|*[!0-9]*) die "轮询间隔应为正整数秒：$interval" ;; esac
+    [ "$interval" -ge 5 ] || die "轮询间隔至少 5 秒（当前 $interval）"
+    [ "${1-}" = "--" ] || die "缺少 -- <command...>"
+    shift
+    [ $# -gt 0 ] || die "缺少要运行的命令"
+    resp=$(prepare "$code" "$*" "$force" false); rc=$?
+    if [ "$rc" -eq 4 ]; then
+      # 旧版 Deck 没有 prepare 接口：只能按显式代号挂载。
+      [ -n "$code" ] || die "当前 Deck 版本不能自动识别会话，请提供代号"
+      api GET "/api/deck/events/$code" >/dev/null || exit 1
+    elif [ "$rc" -ne 0 ]; then
+      exit 1
+    else
+      code=$(json_field "$resp" code)
+      [[ $code =~ $CODE_RE ]] || die "Deck 未返回有效代号：$resp"
+      summary=$(json_field "$resp" summary)
+      warning=$(json_field "$resp" warning)
+      [ -n "$summary" ] && echo "$summary"
+      [ -n "$warning" ] && echo "注意：$warning" >&2
+    fi
+    label=${label:-$code}
+    export DECK_SEND_MODE="$delivery_mode"
+    if [ "$cmd" = watch ]; then
+      spawn "$code" _watch "$code" "$label" "$lines" -- "$@"
+    else
+      spawn "$code" _poll "$code" "$label" "$interval" "$done_re" "$all" -- "$@"
+    fi
+    ;;
+  _watch|_poll)
+    trap 'on_signal USR1' USR1
+    trap 'on_signal TERM' TERM
+    trap 'on_signal INT' INT
+    if [ "$cmd" = _watch ]; then run_watch "$@"; else run_poll "$@"; fi
+    ;;
+  ps)
+    ps -eo pid,etime,args | grep -E '[d]eck-(api|send|wake) _(watch|poll)' || echo "没有运行中的 watcher"
+    ;;
+  stop)
+    pid=${1-}
+    [[ $pid =~ ^[0-9]+$ ]] || die "用法：deck-api stop <pid>"
+    # 优先经 Deck 停止：Deck 会记为主动停止，不报失联。
+    if api POST "/api/monitor/watchers/$pid/stop" '{}' >/dev/null 2>&1; then
+      echo "已停止 watcher $pid"
+      exit 0
+    fi
+    args=$(ps -o args= -p "$pid" 2>/dev/null) || die "进程 $pid 不存在"
+    [[ $args =~ deck-(api|send|wake)\ _(watch|poll) ]] || die "pid $pid 不是 deck-api watcher"
+    kill -USR1 -- "-$pid" 2>/dev/null || kill -USR1 "$pid" || die "无法停止 $pid"
+    echo "已停止 watcher $pid"
+    ;;
+  help|-h|--help) usage "$@" ;;
+  *) usage; exit 1 ;;
+esac

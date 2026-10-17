@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Legacy CLI alias. Keep positional `send <code> <text>` compatible.
+set -euo pipefail
+DECK_HOME="${CODEX_DECK_HOME:-$HOME/.codex-deck}"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+API="$DECK_HOME/bin/deck-api"
+[ -f "$API" ] || API="$(dirname "$SELF")/../../deck-api/scripts/deck-api"
+[ -f "$API" ] || { echo 'deck-send: 找不到 deck-api，请更新并重启 Deck' >&2; exit 1; }
+if [ -n "${DECK_SEND_NO_FORWARD-}" ]; then export DECK_API_NO_FORWARD=1; fi
+if [ "${1-}" = send ]; then
+  shift
+  mode=queue
+  if [ "${1-}" = --mode ]; then mode=${2:?缺少 mode}; shift 2; fi
+  if [ $# -ge 2 ] && [ "${1:0:1}" != - ]; then
+    code=$1; shift
+    exec bash "$API" send --mode "$mode" --code "$code" -- "$@"
+  fi
+  exec bash "$API" send --mode "$mode" "$@"
+fi
+exec bash "$API" "$@"

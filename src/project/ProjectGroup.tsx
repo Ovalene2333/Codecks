@@ -9,6 +9,7 @@ import {
   Plus,
   Radar,
 } from "lucide-react";
+import { ASK_STATUS } from "../session/AskNotice";
 import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
@@ -57,7 +58,7 @@ export function ProjectGroupView({
   library: "active" | "archived";
   selected?: string;
   unseenSessions: ReadonlySet<string>;
-  /** 会话的 deck-wake 标记（键为 sessionKey）。 */
+  /** 会话的 deck-api 标记（键为 sessionKey）。 */
   wakeStates?: ReadonlyMap<string, SessionWakeState>;
   collapsed: boolean;
   searchQuery: string;
@@ -240,6 +241,11 @@ export function ProjectGroupView({
                   >
                     {agentLabel}
                   </small>
+                  {thread.ask && (
+                    <small className="ask-badge" title={`Agent 询问 · ${ASK_STATUS[thread.ask.status]}`}>
+                      询问
+                    </small>
+                  )}
                   {statusText ? (
                     <small
                       className={`session-status-text is-${statusTone}`}
@@ -292,8 +298,8 @@ export function ProjectGroupView({
                       className={`wake-badge ${wake}`}
                       title={
                         wake === "lost"
-                          ? "deck-wake 监督进程已失联，远端任务没人盯了"
-                          : "deck-wake 正在监督远端任务"
+                          ? "deck-api 监督进程已失联，远端任务没人盯了"
+                          : "deck-api 正在监督远端任务"
                       }
                     >
                       <Radar aria-hidden="true" />

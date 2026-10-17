@@ -189,7 +189,19 @@ export interface ModelInfo {
   defaultServiceTier?: string | null;
 }
 
+export interface AskSession {
+  sentCount?: number;
+  id: string;
+  sourceAgentId: AgentId;
+  sourceThreadId: string;
+  sourceProviderId?: string;
+  returnMode: "queue" | "interrupt";
+  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  error?: string;
+}
+
 export interface ThreadSummary {
+  ask?: AskSession;
   agentId?: AgentId;
   id: string;
   providerId: string;
@@ -361,6 +373,7 @@ export type SessionWakeState = "watching" | "lost";
  * dead 投递无望、在首页「需要处理」里等人重试或移除。
  */
 export interface WakeDelivery {
+  mode?: "queue" | "interrupt";
   id: string;
   code: string;
   status: "pending" | "delivered" | "dead";

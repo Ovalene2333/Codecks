@@ -190,7 +190,19 @@ export interface TurnExtensionItem {
   payload?: unknown;
 }
 
+export interface AskSession {
+  sentCount?: number;
+  id: string;
+  sourceAgentId: AgentId;
+  sourceThreadId: string;
+  sourceProviderId?: string;
+  returnMode: "queue" | "interrupt";
+  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  error?: string;
+}
+
 export interface ThreadSummary {
+  ask?: AskSession;
   agentId?: AgentId;
   id: string;
   providerId: string;
@@ -370,6 +382,7 @@ export interface LostWakeWatcher extends WakeWatcher {
  * 等人在首页处理（重试或移除）。preview 是 prompt 详情的截断摘要。
  */
 export interface WakeDelivery {
+  mode?: "queue" | "interrupt";
   id: string;
   code: string;
   status: "pending" | "delivered" | "dead";

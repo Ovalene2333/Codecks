@@ -73,6 +73,7 @@ export function buildHomeBoard({
         startedAt: turnStartedAt(thread, activity) ?? thread.updatedAt,
         stalled: stalledFor(thread, activity, now),
       });
+    else if (thread.ask) continue;
     else if (unseenSessions.has(key)) board.unseen.push(item);
     else if (!supervised?.has(agentKey)) board.recent.push(item);
   }

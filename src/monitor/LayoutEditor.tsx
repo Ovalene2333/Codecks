@@ -28,7 +28,7 @@ export const MAIN_PANEL_META: Record<MainPanelId, PanelMeta> = {
   unseen: { title: "新回复", Icon: Inbox, tone: "unseen", hideWhenEmpty: true },
   running: { title: "运行中", Icon: Play, tone: "running", hideWhenEmpty: true },
   recent: { title: "最近会话", Icon: Clock3, tone: "recent", hideWhenEmpty: true },
-  watch: { title: "deck-wake 监督中", Icon: Radar, tone: "watch" },
+  watch: { title: "deck-api 监督中", Icon: Radar, tone: "watch" },
 };
 
 export const ASIDE_PANEL_META: Record<AsidePanelId, PanelMeta> = {

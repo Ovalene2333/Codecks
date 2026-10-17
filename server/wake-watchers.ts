@@ -37,7 +37,7 @@ export function parseWatcherArgv(argv: string[]): WatcherArgs | undefined {
     (arg, index) =>
       (arg === "_watch" || arg === "_poll") &&
       index > 0 &&
-      path.posix.basename(argv[index - 1]) === "deck-wake",
+      ["deck-api", "deck-send", "deck-wake"].includes(path.posix.basename(argv[index - 1])),
   );
   if (at < 0) return undefined;
   const rest = argv.slice(at + 1);
@@ -139,7 +139,7 @@ async function linuxProcesses(): Promise<ProcessInfo[]> {
       .map(async (entry) => {
         try {
           const raw = await fs.readFile(`/proc/${entry}/cmdline`, "utf8");
-          if (!raw.includes("deck-wake")) return;
+          if (!raw.includes("deck-api") && !raw.includes("deck-wake") && !raw.includes("deck-send")) return;
           const argv = raw.split("\0");
           if (argv.at(-1) === "") argv.pop();
           const line = await fs.readFile(`/proc/${entry}/stat`, "utf8");
@@ -161,7 +161,7 @@ async function psProcesses(now: number): Promise<ProcessInfo[]> {
   });
   const found: ProcessInfo[] = [];
   for (const line of stdout.split("\n")) {
-    if (!line.includes("deck-wake")) continue;
+    if (!line.includes("deck-api") && !line.includes("deck-wake") && !line.includes("deck-send")) continue;
     const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
     const elapsed = match ? parseEtime(match[2]) : undefined;
     if (!match || elapsed == null) continue;
@@ -253,6 +253,31 @@ export class WakeWatcherCache {
  * 不能返回空表，否则台账会把所有 watcher 误判为已退出；日志等其余信息
  * 读取失败只是少一些字段。
  */
+/**
+ * 确认 pid 当前仍是一个 deck-api watcher 本体（`_watch`/`_poll`）。
+ * 发停止信号前调用：缓存扫描与 kill 之间进程可能退出、pid 可能被复用，
+ * 误发 SIGUSR1 的默认动作是终止进程。
+ */
+export async function verifyWatcherProcess(pid: number): Promise<boolean> {
+  if (process.platform === "linux") {
+    try {
+      const raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8");
+      const argv = raw.split("\0");
+      if (argv.at(-1) === "") argv.pop();
+      return parseWatcherArgv(argv) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+  if (process.platform === "win32") return false;
+  try {
+    const { stdout } = await execFileAsync("ps", ["-o", "args=", "-p", String(pid)]);
+    return parseWatcherArgv(stdout.trim().split(/\s+/)) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 export async function listWakeWatchers(logDir: string, now = Date.now()): Promise<WakeWatcher[]> {
   if (process.platform === "win32") return [];
   const processes =

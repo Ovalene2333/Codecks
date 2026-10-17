@@ -1179,3 +1179,15 @@
     border-radius: var(--radius-sm);
   }
 }
+
+.ask-form { margin-bottom: 16px; }
+.ask-form > summary { cursor: pointer; min-height: 44px; padding: 12px; font-weight: 600; }
+.ask-form .form { padding-top: 12px; }
+.ask-form textarea, .ask-form select { width: 100%; min-width: 0; box-sizing: border-box; }
+.ask-notice { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 16px; font-size: 12px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.ask-notice a { color: inherit; text-decoration: underline; }
+.ask-notice .error-text { flex-basis: 100%; }
+
+.ask-form textarea { resize: vertical; min-height: 120px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--control); color: var(--text); padding: 10px 11px; font: inherit; }
+.ask-form textarea:focus { outline: 0; border-color: var(--focus-ring); box-shadow: var(--focus-halo); }
+.ask-notice a { min-height: 24px; display: inline-flex; align-items: center; }

@@ -62,9 +62,12 @@ import { AgentSettingsStore } from "./agent-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { WakeOutbox } from "./wake-outbox.js";
+import { AskSettingsStore, askConfigurationSchema, resolveAskConfiguration } from "./ask-settings.js";
+import { AskService } from "./ask-service.js";
 import {
   listWakeWatchers,
   readTail,
+  verifyWatcherProcess,
   WakeWatcherCache,
 } from "./wake-watchers.js";
 import { WakeWatcherLedger } from "./wake-ledger.js";
@@ -155,7 +158,7 @@ const token = cli.noToken
 const pairing =
   remote && !cli.noToken && !cli.token ? new Pairing(token) : undefined;
 const pairLimiter = pairing ? new PairRateLimiter() : undefined;
-/** 本机发现目录：url/token 供 deck-wake 读取，watch/ 下是 watcher 日志。 */
+/** 本机发现目录：url/token 供 deck-api 读取，watch/ 下是 watcher 日志。 */
 const deckHome = path.resolve(
   process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
 );
@@ -272,23 +275,40 @@ const activity = new ActivityTracker();
 const cpuSampler = new CpuSampler();
 // 唤醒发件箱：POST /api/wake/:code 落盘即 202，送达由它在后台重试到成；
 // 持久化在 .data/wake-outbox.json，Deck 重启不丢。
-const wakeOutbox = new WakeOutbox({
-  file: path.join(dataDir, "wake-outbox.json"),
-  resolve: (code) => threadSettings.findByWakeCode(code),
-  send: (agentId, threadId, prompt) =>
-    agents.sendTurn(agentId, threadId, prompt),
-  onChanged: () => broadcastSnapshotSoon(),
-});
-await wakeOutbox.load();
+let routingReady = false;
+const routingChanged = () => { if (routingReady) broadcastSnapshotSoon(); };
 const messageDeliveries = new MessageDeliveryQueue({
   file: path.join(dataDir, "message-deliveries.json"),
   agents,
-  onChanged: () => broadcastSnapshotSoon(),
+  onChanged: routingChanged,
 });
 await messageDeliveries.load();
+const wakeOutbox = new WakeOutbox({
+  file: path.join(dataDir, "wake-outbox.json"),
+  resolve: (code) => threadSettings.findByWakeCode(code),
+  send: async (agentId, threadId, prompt, delivery) => {
+    if (!delivery.mode) return agents.sendTurn(agentId, threadId, prompt);
+    const receipt = await messageDeliveries.enqueue(agentId, threadId,
+      delivery.mode === "interrupt" ? "feedback" : "queue", { text: prompt },
+      { id: `wake:${delivery.id}`, forceInterrupt: delivery.mode === "interrupt" });
+    if (receipt.status === "failed") throw new Error(receipt.error || "唤醒消息投递失败");
+    // Delivered here means durably accepted by Deck's message queue, just as a native send receipt.
+    return receipt;
+  },
+  onChanged: routingChanged,
+});
+await wakeOutbox.load();
+const askService = new AskService({
+  file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries, wake: wakeOutbox,
+  onChanged: routingChanged,
+});
+await askService.load();
+const askSettings = new AskSettingsStore(path.join(dataDir, "ask-settings.json"));
+await askSettings.load();
+
 // watcher 列表走 TTL 缓存：/proc 全量扫描不进每次快照构建，接口轮询、
 // 快照与启动预热共用同一份结果；内容变化时补发快照，让首页和会话页
-// 的 deck-wake 状态即时更新。
+// 的 deck-api 状态即时更新。
 // 台账记住见过的 watcher：进程消失却没留下「已唤醒/已停止」的记为失联，
 // 进首页「需要处理」。Deck 停机期间消失的也能在重启后发现。
 const watcherLedger = new WakeWatcherLedger({
@@ -336,7 +356,7 @@ const snapshotWithDeferredSettings = () => {
   const display = (thread: ThreadSummary) => {
     const agentId = thread.agentId || "codex";
     const pending = threadSettings.deferred(agentId, thread.id);
-    return pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread;
+    return askService.decorate(pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread);
   };
   return {
     ...snapshot,
@@ -544,33 +564,126 @@ const wakePrepareSchema = z.object({
   pid: z.number().int().positive().optional(),
   cwd: z.string().max(4096).optional(),
   session: z.string().max(300).optional(),
+  /** session 来自 CLI 的 --session 显式参数；环境变量身份必须经进程树佐证。 */
+  sessionExplicit: z.boolean().optional(),
   codexThread: z.string().max(200).optional(),
   command: z.string().max(100_000).optional(),
   force: z.boolean().optional(),
   dryRun: z.boolean().optional(),
 });
+const resolveWakeCaller = async (input: z.infer<typeof wakePrepareSchema>) => resolveWakeSession({
+  session: input.session || undefined, sessionExplicit: input.sessionExplicit,
+  codexThread: input.codexThread || undefined,
+  ancestors: input.pid ? await ancestorPids(input.pid) : [], cwd: input.cwd,
+}, { threads: agents.snapshot().threads, runtimePids: agents.runtimePids() });
 const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
   const thread = tryThreadSummary(target.agentId, target.threadId);
   return `「${thread?.name || target.threadId}」（${target.agentId}）`;
 };
+app.get(["/api/deck/sessions", "/api/send/asks"], route(async () => ({ items: askService.list() })));
+app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
+  items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
+    id: agent.id, name: agent.name, online: agent.online,
+    configuration: askSettings.get(agent.id),
+    profiles: agents.profiles(agent.id).map((profile) => ({ id: profile.id, name: profile.name, current: profile.current })),
+  })),
+})));
+app.post(["/api/deck/agents/:agentId/configuration", "/api/send/agents/:agentId/configuration"], route(async (req) => {
+  const id = agentId(req.params.agentId);
+  return { configuration: await askSettings.set(id, askConfigurationSchema.parse(req.body)) };
+}));
+app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
+  const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
+    targetAgentId: agentIdSchema,
+    question: z.string().trim().min(1).max(80_000),
+    returnMode: z.enum(["queue", "interrupt"]).default("queue"),
+    providerId: z.string().max(200).optional(),
+    model: z.string().max(300).optional(),
+    reasoningEffort: z.string().max(100).optional(),
+    configuration: askConfigurationSchema.optional(),
+    name: z.string().max(200).optional(),
+  }).parse(req.body);
+  const resolution = await resolveWakeCaller(input);
+  if (!resolution.ok) throw new Error(`${resolution.error}；请用 --session <agentId:threadId> 显式指定发起会话`);
+  const descriptor = agents.list().find((agent) => agent.id === input.targetAgentId);
+  if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
+  if (resolution.thread.archived) throw new Error("发起会话已归档");
+  const sourceCapabilities = agents.messageState(resolution.agentId, resolution.threadId).capabilities;
+  if (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "interrupt" ? "feedback" : "queue") ||
+    (input.returnMode === "interrupt" && !sourceCapabilities.interrupt)) throw new Error("发起 agent 不支持所选回传方式");
+  if (!descriptor.capabilities.messages?.deliveryModes?.includes("queue")) throw new Error("目标 agent 不支持询问消息投递");
+  if (askService.decorate(resolution.thread).ask) throw new Error("询问会话不能再次发起询问，请由原会话发起，避免循环调用");
+  const profiles = agents.profiles(input.targetAgentId);
+  const explicit = input.providerId || input.model || input.reasoningEffort
+    ? { providerId: input.providerId, model: input.model, reasoningEffort: input.reasoningEffort } : undefined;
+  const configuration = resolveAskConfiguration(askSettings.get(input.targetAgentId), input.configuration ?? explicit);
+  const providerId = configuration.providerId || profiles.find((profile) => profile.current)?.id ||
+    (profiles.length === 1 ? profiles[0].id : undefined);
+  if (configuration.providerId && !profiles.some((profile) => profile.id === configuration.providerId))
+    throw new Error("目标供应商已不可用，请在 Deck 询问面板中重新设置");
+  if (input.targetAgentId === "codex" && !providerId)
+    throw new Error("目标没有默认供应商，请在 Deck 询问面板中手动设置默认配置");
+  if (configuration.reasoningEffort) {
+    const models = await agents.models(input.targetAgentId, providerId, resolution.thread.cwd);
+    const model = models.find((model) => configuration.model ? model.id === configuration.model || model.model === configuration.model : model.isDefault);
+    if (!model?.supportedReasoningEfforts?.some((effort) => effort.reasoningEffort === configuration.reasoningEffort))
+      throw new Error("所选模型不支持该 effort，请在 Deck 询问面板中重新选择");
+  }
+  const wakeCode = await threadSettings.ensureWakeCode(resolution.agentId, resolution.threadId);
+  const result = await askService.create({
+    sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
+    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, wakeCode,
+    settings: { ...configuration, cwd: resolution.thread.cwd, providerId, name: input.name },
+  });
+  broadcastSnapshotSoon();
+  res.status(202).json(result);
+}));
+/** send uses the bound source unless a destination is explicitly supplied. */
+app.post("/api/deck/send", route(async (req, res) => {
+  const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
+    text: z.string().trim().min(1).max(80_000),
+    mode: z.enum(["queue", "interrupt"]).optional(),
+    to: z.string().trim().min(1).max(500).optional(),
+    code: z.string().regex(/^[a-z0-9][a-z0-9-]{1,30}$/).optional(),
+    requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
+  }).parse(req.body);
+  if (input.to && input.code) throw new Error("--to 与 --code 不能同时使用");
+  if (!input.to && !input.code) {
+    const caller = await resolveWakeCaller(input);
+    if (!caller.ok) throw new Error(`${caller.error}；请用 --session 显式指定当前发送会话，不要猜测`);
+    const result = await askService.sendFrom(caller.agentId, caller.threadId, input.text, input.mode, input.requestId);
+    res.status(202).json(result);
+    return;
+  }
+  if (input.requestId) throw new Error("--request-id 仅用于默认向绑定来源发送消息");
+  let target: { agentId: AgentId; threadId: string };
+  let code = input.code;
+  if (code) {
+    const found = threadSettings.findByWakeCode(code);
+    if (!found) throw new Error(`wake code ${code} 不存在`);
+    target = found;
+  } else {
+    const separator = input.to!.indexOf(":");
+    if (separator < 1 || separator === input.to!.length - 1) throw new Error("--to 格式应为 agentId:threadId");
+    target = { agentId: agentIdSchema.parse(input.to!.slice(0, separator)), threadId: input.to!.slice(separator + 1) };
+    const state = agents.messageState(target.agentId, target.threadId);
+    if (state.thread.archived) throw new Error("目标会话已归档");
+    code = await threadSettings.ensureWakeCode(target.agentId, target.threadId);
+  }
+  const mode = input.mode || "queue";
+  const delivery = await wakeOutbox.enqueue({ ...target, code, mode, prompt: `[wake:${code}] ${input.text}` });
+  res.status(202).json({ target, code, mode, delivery });
+}));
 /**
- * deck-wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
+ * deck-api wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
  * 代号（不往会话里发任何消息）；给了代号则核对它确实属于发起命令的会话；
  * 同代号同命令的 watcher 已在跑时拒绝重复挂载。dryRun 只查不改（whoami）。
  */
 app.post(
-  "/api/monitor/watchers/prepare",
+  ["/api/deck/prepare", "/api/monitor/send/prepare", "/api/monitor/watchers/prepare"],
   route(async (req) => {
     const input = wakePrepareSchema.parse(req.body || {});
-    const resolution = resolveWakeSession(
-      {
-        session: input.session || undefined,
-        codexThread: input.codexThread || undefined,
-        ancestors: input.pid ? await ancestorPids(input.pid) : [],
-        cwd: input.cwd,
-      },
-      { threads: agents.snapshot().threads, runtimePids: agents.runtimePids() },
-    );
+    const resolution = await resolveWakeCaller(input);
     let target: { agentId: AgentId; threadId: string };
     let code: string | null;
     let via: string;
@@ -584,10 +697,12 @@ app.post(
       const conflict = bindingConflict(bound, resolution);
       if (conflict && !input.force) {
         const actual = Array.isArray(conflict)
-          ? `来自 ${conflict.join("/")} 的会话`
+          ? conflict.length
+            ? `来自 ${conflict.join("/")} 的会话`
+            : "无法确认来源（进程树里没有 Deck 托管的 agent，环境变量也不可信）"
           : `来自会话${sessionLabel({ agentId: (conflict.agentId || "codex") as AgentId, threadId: conflict.id })}`;
         throw new Error(
-          `代号 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略代号即可挂到当前会话；确实要唤醒别的会话请加 -f`,
+          `代号 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略代号即可挂到当前会话；向用户确认后加 -f 再挂到该代号`,
         );
       }
       target = bound;
@@ -599,7 +714,7 @@ app.post(
           .map((thread) => describeThread(thread))
           .join("；");
         throw new Error(
-          `${resolution.error}。请向用户确认唤醒代号后用 deck-wake watch <代号> … 重试${candidates ? `。候选：${candidates}` : ""}`,
+          `${resolution.error}。请向用户确认唤醒代号后用 deck-api wake <代号> … 重试${candidates ? `。候选：${candidates}` : ""}`,
         );
       }
       target = { agentId: resolution.agentId, threadId: resolution.threadId };
@@ -636,7 +751,7 @@ app.post(
     return { code, summary, warning, ...target, via, created };
   }),
 );
-// 只停经扫描确认的 deck-wake 进程；先记账为「主动停止」，消失时不报失联。
+// 只停经扫描确认的 deck-api 进程；先记账为「主动停止」，消失时不报失联。
 app.post(
   "/api/monitor/watchers/:pid/stop",
   route(async (req) => {
@@ -646,7 +761,11 @@ app.post(
     const watcher = (await watcherCache.ready()).find(
       (item) => item.pid === pid,
     );
-    if (!watcher) throw new Error(`进程号 ${pid} 不是正在运行的 deck-wake 监督进程`);
+    if (!watcher) throw new Error(`进程号 ${pid} 不是正在运行的 deck-api 监督进程`);
+    // kill 前按 argv 复核一次：缓存扫描到 kill 之间进程可能退出、pid 可能
+    // 被复用，SIGUSR1 的默认动作是终止，不能发给无关进程组。
+    if (!(await verifyWatcherProcess(pid)))
+      throw new Error(`进程 ${pid} 刚刚退出或已不是 deck-api watcher，取消停止`);
     watcherLedger.markStopping(watcher);
     // watcher 由 setsid 拉起，是进程组组长：连同它等待的 ssh 一起停。
     try {
@@ -1473,7 +1592,7 @@ app.get(
         agentId(req.params.agentId),
         param(req.params.threadId),
       )?.wakeCode ?? null;
-    return { code, localUrl: code ? `${localBase}/api/wake/${code}` : null };
+    return { code, localUrl: code ? `${localBase}/api/deck/events/${code}` : null };
   }),
 );
 app.post(
@@ -1490,7 +1609,7 @@ app.post(
       .parse(req.body || {});
     const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code);
     broadcastSnapshotSoon();
-    const wakePath = `/api/wake/${wakeCode}`;
+    const wakePath = `/api/deck/events/${wakeCode}`;
     const localUrl = `${localBase}${wakePath}`;
     const result: {
       code: string;
@@ -1507,7 +1626,7 @@ app.post(
           threadId,
           [
             `[deck] 本会话已开启远程唤醒，代号 ${wakeCode}。`,
-            `在远端启动长任务后，用 deck-wake skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
+            `在远端启动长任务后，用 deck-api skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
             `没有该 skill 时可直接调用：curl -X POST "$(cat ${deckHome}/url)${wakePath}" -H "Authorization: Bearer $(cat ${deckHome}/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
             "本条仅需确认收到，无需其它操作。",
           ].join("\n"),
@@ -1533,7 +1652,7 @@ app.delete(
   }),
 );
 app.get(
-  "/api/wake",
+  ["/api/deck/targets", "/api/send/targets", "/api/wake"],
   route(async () => ({
     items: threadSettings.listWakeCodes().map((target) => {
       const thread = tryThreadSummary(target.agentId, target.threadId);
@@ -1547,7 +1666,7 @@ app.get(
   })),
 );
 app.get(
-  "/api/wake/:code",
+  ["/api/deck/events/:code", "/api/send/events/:code", "/api/wake/:code"],
   route(async (req) => {
     const code = param(req.params.code);
     const target = threadSettings.findByWakeCode(code);
@@ -1557,7 +1676,7 @@ app.get(
   }),
 );
 app.post(
-  "/api/wake/:code",
+  ["/api/deck/events/:code", "/api/send/events/:code", "/api/wake/:code"],
   route(async (req, res) => {
     const code = param(req.params.code);
     const target = threadSettings.findByWakeCode(code);
@@ -1565,7 +1684,8 @@ app.post(
     const body = (
       req.body && typeof req.body === "object" ? req.body : {}
     ) as Record<string, unknown>;
-    const { text, ...rest } = body;
+    const { text, mode: rawMode, ...rest } = body;
+    const mode = rawMode === undefined ? undefined : z.enum(["queue", "interrupt"]).parse(rawMode);
     const trimmed = typeof text === "string" ? text.trim() : "";
     const detail =
       trimmed || (Object.keys(rest).length ? JSON.stringify(rest) : "");
@@ -1575,7 +1695,7 @@ app.post(
     if (prompt.length > 100_000) throw new Error("wake 载荷过大");
     // 先落盘再应答：脚本只认 2xx，投递由 wakeOutbox 在后台重试到送达。
     // 此刻进程崩了，重启后队列也会接着投。
-    const delivery = await wakeOutbox.enqueue({ code, prompt, ...target });
+    const delivery = await wakeOutbox.enqueue({ code, prompt, mode, ...target });
     res.status(202).json({ code, ...target, delivery });
   }),
 );
@@ -2430,6 +2550,7 @@ const SNAPSHOT_WINDOW_MS = 50;
 const SLOW_CLIENT_BYTES = 1_000_000;
 let snapshotTimer: NodeJS.Timeout | undefined;
 let snapshotPending = false;
+routingReady = true;
 function broadcast(payload: string) {
   for (const client of wss.clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
@@ -2500,7 +2621,7 @@ agents.on("event", (event) => {
     broadcastSnapshotSoon();
     return;
   }
-  broadcast(JSON.stringify(event));
+  broadcast(JSON.stringify(event.type === "thread.updated" ? { ...event, data: askService.decorate(event.data) } : event));
 });
 
 let lock = acquireRuntimeLock(dataDir, {
@@ -2542,7 +2663,7 @@ try {
 console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
 // 启动先暖一轮 watcher 缓存：首个快照与首个接口调用直接命中，不用等扫描。
 void watcherCache.ready();
-// 本机发现文件：deck-wake 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
+// 本机发现文件：deck-api 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
 try {
   mkdirSync(deckHome, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(deckHome, "url"), `${localBase}\n`, { mode: 0o600 });
@@ -2550,25 +2671,27 @@ try {
 } catch (error: any) {
   console.error("写入唤醒发现文件失败:", error?.message || error);
 }
-// 与本版服务端配套的 deck-wake 脚本装到 ~/.codex-deck/bin/：各项目里的
+// 与本版服务端配套的 deck-api 脚本装到 ~/.codex-deck/bin/：各项目里的
 // skill 拷贝会转发到这里，不再因为拷贝过期而与接口脱节。内容相同不重写，
 // 先写临时文件再改名，正在运行的 watcher 读到的始终是完整文件。
 try {
-  const source = readFileSync(
-    path.join(projectRoot, "skills/deck-wake/scripts/deck-wake"),
-    "utf8",
-  );
-  const installed = path.join(deckHome, "bin", "deck-wake");
-  const current = existsSync(installed) ? readFileSync(installed, "utf8") : "";
-  if (current !== source) {
-    mkdirSync(path.dirname(installed), { recursive: true, mode: 0o700 });
-    const temporary = `${installed}.${process.pid}.tmp`;
-    writeFileSync(temporary, source, { mode: 0o755 });
-    chmodSync(temporary, 0o755);
-    renameSync(temporary, installed);
+  for (const script of ["deck-api", "deck-send", "deck-wake"]) {
+    const source = readFileSync(
+      path.join(projectRoot, `skills/${script}/scripts/${script}`),
+      "utf8",
+    );
+    const installed = path.join(deckHome, "bin", script);
+    const current = existsSync(installed) ? readFileSync(installed, "utf8") : "";
+    if (current !== source) {
+      mkdirSync(path.dirname(installed), { recursive: true, mode: 0o700 });
+      const temporary = `${installed}.${process.pid}.tmp`;
+      writeFileSync(temporary, source, { mode: 0o755 });
+      chmodSync(temporary, 0o755);
+      renameSync(temporary, installed);
+    }
   }
 } catch (error: any) {
-  console.error("安装 deck-wake 脚本失败:", error?.message || error);
+  console.error("安装 Deck 调用脚本失败:", error?.message || error);
 }
 if (lanListener) {
   const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");
@@ -2652,6 +2775,7 @@ const shutdown = (signal: string) => {
   agents.stopAll();
   tools.close();
   sessionSearch.close();
+  askService.close();
   wakeOutbox.close();
   // 硬退出兜底：5 秒后无论如何结束进程。
   const hardExit = setTimeout(() => process.exit(0), 5_000);

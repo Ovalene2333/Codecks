@@ -5,10 +5,11 @@ import { copyText } from "../clipboard";
 import { threadPath } from "../agents";
 import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Modal } from "../ui";
+import { AskForm } from "./AskForm";
 
 /**
  * 远程唤醒：查看本会话的 watcher（可停止）与失联记录（可通知/忽略），
- * 管理唤醒代号。agent 用 deck-wake 挂 watcher 时 Deck 会识别会话并自动
+ * 管理唤醒代号。agent 用 deck-api wake 挂 watcher 时 Deck 会识别会话并自动
  * 分配代号，这里手动开启只在需要自定义代号或外部脚本调用时才用得上。
  */
 export function WakeModal({
@@ -16,6 +17,7 @@ export function WakeModal({
   watchers,
   lost,
   onClose,
+  onCreated,
 }: {
   thread: ThreadSummary;
   /** 本机正绑定此会话代号的 watcher（来自快照缓存，可能滞后几秒）。 */
@@ -23,6 +25,7 @@ export function WakeModal({
   /** 此会话失联待处理的 watcher。 */
   lost: LostWakeWatcher[];
   onClose: () => void;
+  onCreated: () => void;
 }) {
   const [code, setCode] = useState<string | null>(null);
   const [localUrl, setLocalUrl] = useState("");
@@ -106,7 +109,7 @@ export function WakeModal({
       markHandled(`lost:${item.id}`);
     });
 
-  const url = localUrl || (code ? `${window.location.origin}/api/wake/${code}` : "");
+  const url = localUrl || (code ? `${window.location.origin}/api/deck/events/${code}` : "");
   const curl = code
     ? `curl -X POST "${url}"${getToken() ? ` -H "Authorization: Bearer ${getToken()}"` : ""} -H "Content-Type: application/json" -d '{"text":"任务已完成"}'`
     : "";
@@ -189,7 +192,8 @@ export function WakeModal({
   );
 
   return (
-    <Modal title="远程唤醒" onClose={onClose}>
+    <Modal title="deck-api · 任务回传" onClose={onClose}>
+      <AskForm thread={thread} onCreated={onCreated} />
       {!loaded ? (
         <p className="form-hint">正在读取唤醒状态…</p>
       ) : (
@@ -205,7 +209,7 @@ export function WakeModal({
               </div>
               {supervision}
               <p className="form-hint">
-                agent 用 deck-wake 挂监督进程时会自动用上这个代号；外部脚本
+                agent 用 deck-api wake 挂监督进程时会自动用上这个代号；外部脚本
                 POST 以下端点也能向本会话注入一条消息。
               </p>
               <div className="wake-endpoint">
@@ -234,9 +238,9 @@ export function WakeModal({
             <>
               {supervision}
               <p className="form-hint">
-                无需手动开启：agent 用 deck-wake 挂监督进程时，Deck 会识别发起命令的会话并自动分配代号。
+                无需手动开启：agent 用 deck-api wake 挂监督进程时，Deck 会识别发起命令的会话并自动分配代号。
                 只有想自定义代号、或让外部脚本调用
-                <code> POST /api/wake/&lt;代号&gt; </code>
+                <code> POST /api/deck/events/&lt;代号&gt; </code>
                 时才需要在这里开启。
               </p>
               <label>

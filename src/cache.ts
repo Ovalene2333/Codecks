@@ -179,6 +179,7 @@ export function isPartialThread(data: unknown) {
 
 function compactThread(thread: ThreadSummary): ThreadSummary {
   return {
+    ask: thread.ask,
     agentId: thread.agentId,
     id: thread.id,
     providerId: thread.providerId,

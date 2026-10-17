@@ -43,7 +43,7 @@ export function ChatHeader({
   agentName: string;
   pendingCount: number;
   locked?: boolean;
-  /** deck-wake 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
+  /** deck-api 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
   wake?: { code?: string; watcher?: WakeWatcher; lost?: LostWakeWatcher[] };
   onBack: () => void;
   onMenu: () => void;
@@ -173,14 +173,14 @@ export function ChatHeader({
               onClick={onWake}
               title={
                 wake?.lost?.length
-                  ? `deck-wake 监督进程失联：${wake.lost[0].label}（点开处理）`
+                  ? `deck-api 监督进程失联：${wake.lost[0].label}（点开处理）`
                   : wake?.watcher
-                  ? `deck-wake 监督中：${wake.watcher.label} · 代号 ${wake.watcher.code}`
+                  ? `deck-api 监督中：${wake.watcher.label} · 代号 ${wake.watcher.code}`
                   : wake?.code
                     ? `远程唤醒已开启 · 代号 ${wake.code}（本机暂无监督进程）`
-                    : "远程唤醒未开启"
+                    : "deck-api · 任务回传与 Agent 询问"
               }
-              aria-label="远程唤醒"
+              aria-label="deck-api · 任务回传与 Agent 询问"
             >
               <Radar />
             </button>

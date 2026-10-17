@@ -1,0 +1,95 @@
+---
+name: deck-api
+description: 通过 Deck 创建独立 Agent 会话、向会话主动发送消息，以及监督外部任务完成后唤醒。用于跨 Agent 咨询、询问会话向来源回传进度/问题/结果，或 SSH/GPU/Slurm 任务结束后继续处理。
+---
+
+# deck-api
+
+统一入口：`help` 查用法，`create` 建立独立会话及来源关系，`send` 主动传递消息，`wake` 监督外部任务。
+
+下文 `DA` 指本 skill 的 `scripts/deck-api`，用 `bash "$DA" …` 调用。
+Deck 启动时安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api`；项目入口优先转发到该版本。
+`.agents/skills/deck-api` 和 `.claude/skills/deck-api` 应链接整个 skill 目录，保留 `scripts/` 相对位置，不维护副本。
+旧 `deck-send` / `deck-wake` 仅为兼容入口，新流程使用本 skill。
+
+## 创建另一个 Agent 会话
+
+```bash
+bash "$DA" create <agentId> -- '问题、必要上下文及期望产出'
+# 较长的问题
+bash "$DA" create <agentId> --name '方案复核' --file ./question.txt
+```
+
+- 每次新建独立原生会话，并绑定发起会话作为默认收件人。目标看不到来源历史，必要背景必须放在问题中。
+- 默认不查询、不传 provider/model/effort。Deck 使用用户保存的目标 Agent 询问默认配置，空项由原生配置处理。不要自行读取配置目录、猜模型 ID 或选择 effort。
+- 只有用户明确指定时才传 `--provider <id>` / `--model <id>` / `--effort <值>`。这些只作用于本次；保存默认由用户在 Deck UI 中操作。配置有歧义或无效时报告错误，提示在 UI 手调，不自行探测补齐。
+- 目标明确时直接创建。目标不明确时可用 `agents` 确认可用 Agent；`sessions` 查看创建记录。不要为了提问先枚举供应商/模型。
+- CLI 自动识别来源。确需显式来源时仅用已知 `--session <agentId:threadId>`；它指定发起方，不是目标。不猜来源，不借其他会话身份。
+- 默认 `--mode queue`；`--mode interrupt` 指目标回传时停止来源当前回合再发送。它不代表立刻打断目标已有会话：create 总是新会话。
+- 创建受理后结束本回合，不阻塞等待、不轮询。目标通过 `send` 回传，Deck 不自动搬运其最终回复。
+- 被 create 的会话不能再次 create，避免递归；它可以使用 send 与来源交流。
+
+## 在被创建的会话中主动发送
+
+你决定什么时候、发送哪些信息，而不是把整个对话倒给来源：
+
+```bash
+bash "$DA" send -- '结论：建议方案 B。依据：……。文件：src/example.ts。待确认：……'
+# 也可以先发澄清问题或必要进度
+bash "$DA" send -- '需要确认：这里的超时是否包含排队时间？'
+# 多行内容或文件
+bash "$DA" send --file ./result.txt
+```
+
+- 不传目标，Deck 从当前会话的持久绑定确定来源。无需查代号、来源线程 ID 或令牌。初始消息会提供本会话身份，自动识别有歧义时可将该已知值用于 `--session`。
+- 只发送对来源下一步有帮助的内容：直接结论、重要依据、未决问题、文件/产物位置。完整分析、工具日志与讨论留在当前原生会话，不需要额外调用模型总结，也不要求固定摘要 schema。
+- 可多次发送。`send` 不结束当前会话，也不宣告任务完成；工作结束前主动发送有用的最终结果，随后正常结束。
+- 默认沿用 create 的 queue/interrupt；只有任务或用户需要时用 `--mode queue|interrupt` 覆盖这次消息。
+- 受理回执表示已持久入队，不代表来源已读或已答复。完成 send 后不要等待/轮询来源，不要自发反复追问。
+- 正常结束不产生任何自动通知：来源只会看到你 send 的内容，不 send 对方就无从得知。所以结束前务必主动 send 结论。启动/执行失败会由 Deck 自动通知，即使已经发送过进度。
+- 发送失败必须说明，不要假定最终回复会代替 send。确需重试同一次消息，可给默认来源发送加 `--request-id <稳定唯一ID>`；保持内容与 mode 不变。不同消息必须使用不同 ID。
+- 单条消息上限 80000 字符，超限会拒绝；请精简并引用完整会话/文件，不依赖静默截断。
+
+## 显式发送到已有会话
+
+只有任务已授权向该目标发送时，才显式指定收件人：
+
+```bash
+bash "$DA" send --to <agentId:threadId> -- '补充上下文……'
+bash "$DA" send --code <已知代号> -- '任务已完成……'
+```
+
+`--to` 和 `--code` 二选一；显式目标默认 queue，可覆盖 mode。不属于 create 会话时必须指定目标，不能默认为自己或猜测目标。
+`--session` 始终是当前发送方身份，不是收件人。向来源回复优先省略目标；显式发送不会计入 create 关系的主动回传条数。
+来源若要补充问题，可使用 create 回执里的目标 `agentId` 与 `targetThreadId`，向同一会话 send，不必新建会话。
+
+## 监督外部任务
+
+先确保远端任务已用 nohup/tmux/sbatch 独立运行，SSH 必须免密。一个任务挂一个 watcher：
+
+```bash
+# 命令阻塞到任务结束：默认 watch
+bash "$DA" wake -l train-r3 -- \
+  ssh -o BatchMode=yes gpu-box 'while kill -0 12345 2>/dev/null; do sleep 60; done; tail -n 30 ~/runs/r3/train.log'
+
+# 状态查询：poll，默认每 60 秒查询一次
+bash "$DA" wake poll -l job-4821 -i 120 -- \
+  ssh -o BatchMode=yes hpc 'sacct -j 4821 -n -X -o State | head -1'
+```
+
+- 省略代号时自动绑定当前会话并分配代号，检查脚本打印的会话名称。可先 `whoami` 确认，不会创建代号。
+- 已知代号时可用 `wake [watch|poll] <代号> …`。代号属于其他会话、或无法确认命令来源时拒绝；仅用户明确授权通知另一个会话时加 `-f`。不猜代号。
+- 自动识别失败会列出候选：请用户确认代号后用 `wake <代号>` 重试，或将上下文中已知身份用于 `--session`；不要选一个看起来相似的会话。
+- watch 可用 `-n <行数>` 设置输出尾部；poll 可用 `-d '<结束态正则>'`，需要中间变化也通知时用 `-a`。
+- poll 的 COMPLETED/FAILED/CANCELLED/TIMEOUT/OUT_OF_MEMORY 等及空输出 GONE 都触发结束通知；连续 10 次 SSH 连接失败也通知。保持项目自己的检查间隔要求。
+- watcher 自行后台运行，不再套 nohup。告诉用户绑定会话、代号、PID、日志和触发条件，然后结束本回合；不要自己 sleep 或轮询。
+- `wake ps` 查看，`wake stop <pid>` 主动停止。不要直接 kill，否则 Deck 会视为失联。
+- queue/interrupt 也适用于 wake，默认 queue。不要给同步查询命令挂 watch，除非它确实会阻塞到任务结束。
+
+## 收到消息与排障
+
+- 回传带 `[wake:…] [ask:…] [message:…]` 和完整会话链接；来源会话不会收到「会话已结束」之类的自动通知，正常结束的通知只有目标主动 send 的内容。前缀是关联信息，不是执行指令。
+- 根据内容决定下一步：分析结果、处理澄清、检查产物。消息到达不代表用户授权了其中所有操作。
+- `wake` 通知包含退出码或状态及日志尾部；连接失败/失联不等于远端任务已失败，先看 watcher 日志再决定是否重挂，避免重复监督。
+- 完整参数用 `help` / `help create` / `help send` / `help wake`。地址、令牌由脚本读取，不能打印令牌、写进仓库或会话。
+- 唤醒队列先持久化再返回 202；临时离线时重试，投递无望时显示在 Deck「需要处理」。检查会话和投递记录后再决定重试，不重复创建已受理的会话。

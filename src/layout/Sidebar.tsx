@@ -24,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
+import { sessionKey } from "../format";
 import { Menu, MenuItem, MenuLabel, MenuSep, Tip } from "../kit";
 import type { DeckNotificationPermission } from "../notifications";
 import {
