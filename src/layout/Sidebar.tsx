@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -45,6 +46,7 @@ import { UsageChip, type UsageView } from "../usage/UsageChip";
 
 export function Sidebar({
   show,
+  operationStatus,
   hiddenOnMobile,
   projectCount,
   sessionCount,
@@ -93,6 +95,7 @@ export function Sidebar({
   providers,
 }: {
   show: boolean;
+  operationStatus?: ReactNode;
   hiddenOnMobile: boolean;
   projectCount: number;
   sessionCount: number;
@@ -356,6 +359,7 @@ export function Sidebar({
           <House />
         </button>
       </div>
+      {operationStatus}
       <div className="sidebar-meta">
         <span>
           {loading && !projectCount

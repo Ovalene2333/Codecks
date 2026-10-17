@@ -1195,6 +1195,7 @@ function TurnBlockInner({
         index={index}
         turnProgress={turnProgress}
         onForkFrom={onForkFrom}
+        actionsDisabled={messageActionsDisabled}
         active={active}
         completed={completed}
         started={started}
@@ -1220,6 +1221,7 @@ function TurnMetaLine({
   index,
   turnProgress,
   onForkFrom,
+  actionsDisabled,
   active,
   completed,
   started,
@@ -1235,6 +1237,7 @@ function TurnMetaLine({
     elapsedMs?: number;
   };
   onForkFrom?: (turnId: string) => void;
+  actionsDisabled?: boolean;
   active: boolean;
   completed: boolean;
   started: number;
@@ -1294,6 +1297,7 @@ function TurnMetaLine({
         <button
           type="button"
           className="rail-row__fork"
+          disabled={actionsDisabled}
           onClick={() => forkable(turn.id)}
           title="从此处分支，可先在输入框编辑再发送；直接发送即用原文重试"
           aria-label="从此处分支"

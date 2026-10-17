@@ -3,11 +3,13 @@ import {
   useEffect,
   useId,
   useRef,
+  useState,
   type ErrorInfo,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { OperationStatus } from "./session/OperationStatus";
 import type { ThreadSummary } from "./types";
 import { overlayMarkOf } from "./deck-history";
 
@@ -231,22 +233,41 @@ export function ConfirmDialog({
   body: React.ReactNode;
   confirmLabel?: string;
   danger?: boolean;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   onClose: () => void;
 }) {
+  const pending = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const confirm = async () => {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true);
+    setError("");
+    try { await onConfirm(); }
+    catch (error: any) { setError(error?.message || "操作失败，请重试"); }
+    finally { pending.current = false; setBusy(false); }
+  };
   return (
     <Modal title={title} onClose={onClose}>
       <div className="confirm-body">{body}</div>
+      {error && <p className="error-banner" role="alert">{error}</p>}
+      {busy && <OperationStatus className="confirm-progress"
+        title={title.includes("删除") ? "正在删除会话" : "正在处理"}
+        detail="操作进行中，关闭窗口后会在后台继续。"
+        slowDetail="仍在处理，关闭窗口后会在后台继续。" />}
       <div className="confirm-actions">
         <button type="button" onClick={onClose}>
-          取消
+          {busy ? "后台继续" : "取消"}
         </button>
         <button
           type="button"
           className={danger ? "danger-btn" : "primary"}
-          onClick={onConfirm}
+          onClick={confirm}
+          disabled={busy}
+          aria-busy={busy}
         >
-          {confirmLabel}
+          {busy ? (title.includes("删除") ? "正在删除…" : "正在处理…") : confirmLabel}
         </button>
       </div>
     </Modal>

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Folder, GitBranch } from "lucide-react";
 import type { ThreadSummary, MessageDelivery } from "../types";
 import { RenderErrorBoundary } from "../ui";
+import { OperationStatus } from "./OperationStatus";
 import { TurnBlock } from "./TurnBlock";
 import { MessageQueue } from "./MessageQueue";
 import { basename } from "../format";
@@ -25,6 +26,7 @@ export function Timeline({
   thread,
   turns,
   olderTurns,
+  loading,
   streamed,
   streamedItems,
   streamedEntries,
@@ -53,9 +55,10 @@ export function Timeline({
 }: {
   thread: ThreadSummary;
   turns: any[];
+  loading?: boolean;
   /** 长会话分页：还有更早的轮没加载时展示顶部按钮，点击追加。 */
   olderTurns?: {
-    remaining: number;
+    remaining?: number;
     loading: boolean;
     onLoadMore: () => void;
   };
@@ -264,16 +267,22 @@ export function Timeline({
   const showEmpty = isEmpty && targetFallbackReady === true;
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
-      {olderTurns && olderTurns.remaining > 0 && (
+      {loading && <div className="timeline-loading">
+        <OperationStatus title="正在加载会话" detail="正在读取历史记录，请稍候。"
+          slowDetail="历史记录较多，仍在加载。你可以先浏览其他会话。" />
+        <div className="timeline-loading-skeleton" aria-hidden="true"><span /><span /><span /><span /></div>
+      </div>}
+      {olderTurns && (
         <button
           type="button"
           className="timeline-load-more"
           onClick={olderTurns.onLoadMore}
           disabled={olderTurns.loading}
+          aria-busy={olderTurns.loading}
         >
           {olderTurns.loading
             ? "正在加载更早消息…"
-            : `加载更早的 ${olderTurns.remaining} 轮`}
+            : olderTurns.remaining ? `加载更早的 ${olderTurns.remaining} 轮` : "加载更早消息"}
         </button>
       )}
       {showEmpty ? (

@@ -1241,18 +1241,23 @@ app.get(
   "/api/agents/:agentId/threads/:threadId",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    const threadId = param(req.params.threadId);    const full = await agents.readThread(id, threadId);
+    const threadId = param(req.params.threadId);
+    const limit = Number(req.query.turnLimit);
+    const full = await agents.readThread(id, threadId, {
+      turnLimit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined,
+      beforeTurn: typeof req.query.beforeTurn === "string" ? req.query.beforeTurn : undefined,
+    });
     const snapshot = agents.get(id).snapshot();
     const thread = [
       ...snapshot.threads,
       ...(snapshot.archivedThreads || []),
     ].find((item) => item.id === threadId);
-    if (thread) sessionSearch.capture(thread, full);
+    if (thread && !(full as any)?.[TURN_SLICE_PARTIAL_KEY]) sessionSearch.capture(thread, full);
     // 搜索索引吃全量；下发前折叠已完成回合的工具输出（?full=1 取全量）。
     const body: any = full;
     if (req.query.full !== "1" && Array.isArray(body?.turns))
       body.turns = foldTurns(body.turns, thread?.activeTurnId);
-    pageThreadTurns(body, req.query);
+    if (!body?.[TURN_SLICE_PARTIAL_KEY]) pageThreadTurns(body, req.query);
     return full;
   }),
 );
@@ -1357,6 +1362,7 @@ app.delete(
       .parse(req.body || {});
     await agents.deleteThread(id, threadId, options);
     await threadSettings.remove(id, threadId);
+    if (req.query.ack === "1") return { ok: true, agentId: id, threadId };
     return fullSnapshot();
   }),
 );

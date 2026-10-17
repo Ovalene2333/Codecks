@@ -46,12 +46,16 @@ export class SessionSearchIndexer {
   }
 
   capture(thread: ThreadSummary, full: unknown) {
-    if (this.closed || this.agents.busyThreads().length > 0) return;
+    if (this.closed || this.agents.busyThreads().length > 0 ||
+        (full as any)?.__cachedTailOmitted) return;
+    // HTTP folding/paging replaces the outer turns reference after capture.
+    // Keep the full reference without copying large tool outputs.
+    const transcript = full && typeof full === "object" ? { ...full } : full;
     const timer = setTimeout(() => {
       this.auxiliaryTimers.delete(timer);
       if (this.closed) return;
       try {
-        this.store.upsert(thread, full);
+        this.store.upsert(thread, transcript);
         this.queue = this.queue.filter((item) => key(item) !== key(thread));
       } catch (error) {
         this.store.markFailure(thread, error);
@@ -83,7 +87,7 @@ export class SessionSearchIndexer {
   }
 
   private async processOne() {
-    if (this.agents.busyThreads().length > 0) {
+    if (this.agents.busyThreads().length > 0 || this.agents.historyInteractionActive?.()) {
       this.schedule(2_000);
       return;
     }
@@ -94,6 +98,7 @@ export class SessionSearchIndexer {
       const full = await this.agents.readThread(
         thread.agentId || "codex",
         thread.id,
+        { background: true },
       );
       if (this.closed) return;
       this.store.upsert(thread, full);

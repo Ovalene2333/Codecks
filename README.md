@@ -342,6 +342,12 @@ OpenCode Serve 意外退出后，Deck 会以 1、2、4 秒间隔最多尝试重�
 
 **「重载」和「重启服务」是两个动作。** 重载只失效 `opencode serve` 进程内的实例缓存并重读配置与供应商目录，进程不动；正常改配置、加供应商用重载即可。重启服务额外杀掉 serve 进程重建，用于重载救不回的进程级缓存问题——典型场景是 serve 启动时网络不通、拉取 models.dev 模型目录超时，`opencode-go` 这类只存在于目录里的供应商会从注册表里消失，模型卡可以选但发送报 "Model not found"；重载遇到这种空目录会自检并自动升级为重启，无需手动干预。两个操作的唯一入口是「设置 → Agent → OpenCode」页「运行时」Section 的服务状态行；Agent 列表行的重载图标与其它 Agent 一致，只做重载。供应商、权限或代理的改动落盘后，设置各页顶部会出现「OpenCode 有配置等待生效」提示条，一键跳去重载。OpenCode 的代理配置（主 Agent / 子 Agent / 工具审批）合在同一个水平切换里。
 
+OpenCode 会话优先通过原生消息分页读取最近几轮，工具步骤很多的回合会继续补读到完整回合边界；点击「加载更早消息」再扩大历史范围。旧版服务不支持分页时自动回退到全文。模型目录在后台补齐，不阻塞正文；后台预取一次只读取一个会话的尾部，搜索索引也会在浏览、删除或分支操作期间暂缓新任务。
+
+会话菜单与每轮下方都支持 OpenCode 分支。加载会话时显示等待状态和历史占位；删除和分支会在会话页、会话列表显示持续的进度提示，包含会话名和已等待时长，并防止重复提交；可以继续浏览其他会话，分支完成后不会把你强行切回。删除只有在服务端确认成功后才移除，失败时确认框保留错误说明并允许重试；处理中关闭窗口会在后台继续执行。分支会核对原生历史版本，尽量复用刚读过的消息边界；辅助改名最多等待 1.5 秒，失败不影响已创建的分支。复制中的旧消息事件会合并为轻量历史刷新通知，避免重复推送整段旧回复。大型历史的复制仍由 OpenCode 原生接口完成，时间随历史体量增长。 已确认的开销、隔离测量与剩余限制见 [V1 性能记录](docs/opencode-v1-performance.md)。
+
+正文读取也受请求超时保护。排查加载、删除或分支耗时时，可在启动 Deck 前设置 `OPENCODE_TRACE_REQUESTS=1`，服务端日志会记录接口类型、状态码、响应头耗时和单次请求总耗时（不记录会话 ID、目录或正文）；关闭该变量即可停止记录。
+
 > **版本要求：面向 OpenCode V1（1.x）**。适配器走 `opencode serve` 的 V1 REST 接口（`/session`、`/global/event`、`/config` 等），对 V2 的 `/api/*` 新契约不兼容；OpenCode 2 尚未发布 stable（npm `latest` 仍为 1.x），且 V2 安装会替换 V1 二进制，升级前请先完成迁移。配置文件侧 V2 仍读取 `opencode.json(c)` 原位置并兼容 V1 字段，迁移要点与待办见 [docs/opencode-v2-todo.md](docs/opencode-v2-todo.md)。
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态；OpenCode 进程异常退出时只会让 Deck 内的 OpenCode 离线，不会按已退出的 PID 清理或影响电脑上其它 OpenCode 实例。`opencode serve` 会把每个目录的配置与供应商目录缓存在内存里，外部编辑 `opencode.json` 或 `opencode auth login` 之后，在「设置 → Agent」里点 OpenCode 的「重载」即可让新供应商和模型生效，不用重启 Deck，也不会中断或改写现有会话（运行中的会话会先排队，重载等它空闲或加 force）。serve 进程直接继承 Deck 的环境，按 opencode 的标准规则读配置与登录态（`$XDG_CONFIG_HOME/opencode` 或 `~/.config/opencode`、数据目录下的 `auth.json`），Deck 的全局配置编辑写的就是 serve 读的同一个目录；想让两者用另一份目录时，给 Deck 设置 `OPENCODE_CONFIG_DIR`（opencode 原生支持的全局配置目录）与 `XDG_DATA_HOME`（auth.json 所在目录）再启动即可，Deck 不会自动猜测其它用户目录。`opencode serve` 是 Bun 进程，长时间运行内存只增不减；没有忙碌会话和待审批、且空闲超过 30 分钟时，Deck 会自动把它杀掉重建一次（会话从 `/session` 重新拉回，主机内存可回收数百 MB），设 `OPENCODE_IDLE_RESTART_MS=0` 可关闭。模型选择器默认只列已连接的供应商（对齐 opencode 自己的模型栏），搜索行上的「已连接」开关可以切回全部目录。
@@ -584,6 +590,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CLAUDE_CONFIG_DIR`             | `~/.claude`                | Claude 配置与历史目录（也认 `CLAUDE_HOME`）；WSL 可指向 `/mnt/c/Users/<用户>/.claude`  |
 | `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
 | `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
+| `OPENCODE_TRACE_REQUESTS`       | `0`                        | 设为 `1` 输出 OpenCode 请求耗时日志，帮助定位加载、删除和分支等待                       |
 | `OPENCODE_IDLE_RESTART_MS`      | `1800000`                  | OpenCode serve 空闲多久后自动重启一次回收进程内存（无忙碌会话/待审批才执行）；`0` 关闭   |
 | `OPENCODE_CONFIG_DIR`           | `~/.config/opencode`       | OpenCode 全局配置目录（opencode 原生变量）；`auth.json`/会话库随 `XDG_DATA_HOME` 走    |
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |

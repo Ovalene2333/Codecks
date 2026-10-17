@@ -124,6 +124,22 @@ function hiddenFallbackThreads(
 }
 
 export class AgentRegistry extends EventEmitter {
+  private foregroundHistory = 0;
+  private historyQuietUntil = 0;
+
+  historyInteractionActive() {
+    return this.foregroundHistory > 0 || Date.now() < this.historyQuietUntil;
+  }
+
+  private async interact<T>(action: () => Promise<T>) {
+    this.foregroundHistory++;
+    try { return await action(); }
+    finally {
+      this.foregroundHistory--;
+      this.historyQuietUntil = Date.now() + 1_500;
+    }
+  }
+
   private adapters = new Map<AgentId, AgentAdapter>();
   private states = new Map<AgentId, AgentState>();
   private forwarders = new Map<AgentId, (event: any) => void>();
@@ -524,10 +540,15 @@ export class AgentRegistry extends EventEmitter {
     return adapter.createThread!(input.providerId || "", input);
   }
 
-  async readThread(id: AgentId, threadId: string) {
+  async readThread(id: AgentId, threadId: string, options?: {
+    turnLimit?: number;
+    beforeTurn?: string;
+    background?: boolean;
+  }) {
     const adapter = this.operation(id, "readThread");
     const thread = this.thread(id, threadId);
-    return adapter.readThread!(thread.providerId, threadId);
+    const read = () => adapter.readThread!(thread.providerId, threadId, options);
+    return options?.background ? read() : this.interact(read);
   }
 
   /**
@@ -536,6 +557,12 @@ export class AgentRegistry extends EventEmitter {
    * 传输层，本接口恒返回未折叠原文。
    */
   async readTurn(id: AgentId, threadId: string, turnId: string) {
+    const adapter = this.operation(id, "readThread");
+    const thread = this.thread(id, threadId);
+    if (adapter.readTurn) {
+      const turn: any = await this.interact(() => adapter.readTurn!(thread.providerId, threadId, turnId));
+      return { ...turn, agentId: id, threadId };
+    }
     const full: any = await this.readThread(id, threadId);
     const turn = Array.isArray(full?.turns)
       ? full.turns.find((item: any) => String(item?.id || "") === String(turnId))
@@ -579,7 +606,7 @@ export class AgentRegistry extends EventEmitter {
   ) {
     const adapter = this.operation(id, "deleteThread");
     const thread = this.thread(id, threadId);
-    return adapter.deleteThread!(thread.providerId, threadId, options);
+    return this.interact(() => adapter.deleteThread!(thread.providerId, threadId, options));
   }
 
   async sendTurn(
@@ -757,7 +784,7 @@ export class AgentRegistry extends EventEmitter {
   ) {
     const adapter = this.operation(id, "forkThread");
     const thread = this.thread(id, threadId);
-    return adapter.forkThread!(thread.providerId, threadId, options);
+    return this.interact(() => adapter.forkThread!(thread.providerId, threadId, options));
   }
 
   async retryFromTurn(

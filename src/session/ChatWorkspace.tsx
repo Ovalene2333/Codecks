@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Lock, ShieldAlert, X } from "lucide-react";
 import { api, post, remove } from "../api";
+import { forkSession, useSessionOperation } from "./operations";
+import { SessionOperationList } from "./OperationStatus";
 import { dedupeThreadLoad, readThreadCache, writeThreadCache } from "../cache";
 import { loadModelCatalog, modelCatalogCache } from "../ModelPicker";
 import { SwrCache } from "../swr-cache";
@@ -179,6 +181,7 @@ export function ChatWorkspace({
   onSwitchProvider,
   onMenu,
   onSelectThread,
+  onCreatedThread,
   onToast,
   onUsage,
   onTasks,
@@ -208,6 +211,7 @@ export function ChatWorkspace({
   onSwitchProvider: () => void;
   onMenu: () => void;
   onSelectThread: (providerId: string, threadId: string) => void;
+  onCreatedThread?: (thread: ThreadSummary) => void;
   onToast: (message: string) => void;
   onUsage: () => void;
   onTasks: () => void;
@@ -240,6 +244,12 @@ export function ChatWorkspace({
   }, [messageDeliveries]);
   const [error, setError] = useState("");
   const [threadLoadSettled, setThreadLoadSettled] = useState(false);
+  const sessionOperation = useSessionOperation(thread);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [dismissedTaskError, setDismissedTaskError] = useState("");
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
@@ -1050,21 +1060,19 @@ export function ChatWorkspace({
     }
   };
   const forkFrom = async (lastTurnId?: string) => {
+    if (sessionOperation) return;
+    setError("");
     try {
-      const agentId = thread.agentId || "codex";
-      const created = await post(
-        agentId === "codex"
-          ? `/threads/${thread.providerId}/${thread.id}/fork`
-          : `${threadPath(thread)}/fork`,
-        // 所有 Agent 传保留到的轮次；OpenCode adapter 负责换算原生排除边界。
-        lastTurnId
-          ? { lastTurnId }
-          : {},
-      );
+      const created = await forkSession(thread, lastTurnId);
+      // Make the branch discoverable before navigating; no snapshot round trip.
+      onCreatedThread?.(created);
+      if (!mounted.current) { onToast("分支已创建，可在会话列表打开"); return; }
+      onToast("分支已创建");
       onSelectThread(thread.providerId, created.id);
       onSnapshot();
     } catch (err: any) {
-      setError(err.message);
+      if (mounted.current) setError(err.message);
+      else onToast(err.message || "创建分支失败");
     }
   };
   // events 全扫从每 render 两遍降为一遍；非 running/waiting 直接给空数组，
@@ -1189,6 +1197,7 @@ export function ChatWorkspace({
         onCompact={capabilities.sessionSettings ? compact : undefined}
         onWake={onWake}
       />
+      <SessionOperationList />
       <RenderErrorBoundary
         resetKey={thread.id}
         fallback={
@@ -1202,10 +1211,11 @@ export function ChatWorkspace({
         <Timeline
           thread={thread}
           turns={loadedTurns}
+          loading={!threadLoadSettled && !full}
           olderTurns={
-            remainingTurns > 0
+            remainingTurns > 0 || full?.hasMoreTurns
               ? {
-                  remaining: remainingTurns,
+                  remaining: remainingTurns || undefined,
                   loading: loadingMoreTurns,
                   onLoadMore: () => {
                     if (loadingMoreTurns) return;
@@ -1242,7 +1252,7 @@ export function ChatWorkspace({
           targetTurnId={searchTarget?.turnId}
           targetItemId={searchTarget?.itemId}
           targetRequest={searchTarget?.request}
-          targetFallbackReady={threadLoadSettled}
+          targetFallbackReady={threadLoadSettled && Boolean(full)}
           onCopy={() => onToast("已复制")}
           onForkFrom={
             capabilities.fork && ["codex", "claude", "opencode"].includes(thread.agentId || "codex")
@@ -1266,7 +1276,7 @@ export function ChatWorkspace({
               : undefined
           }
           messageActionsDisabled={
-            locked || sending || reverting || Boolean(thread.compacting)
+            locked || sending || reverting || Boolean(thread.compacting) || Boolean(sessionOperation)
           }
         />
       </RenderErrorBoundary>
@@ -1295,7 +1305,12 @@ export function ChatWorkspace({
           </div>
         </div>
       )}
-      {error && <p className="error-banner">{error}</p>}
+      {error && <div className="error-banner thread-load-retry" role="alert">
+        <span>{error}</span>
+        {!full && threadLoadSettled && <button type="button" onClick={() => {
+          setError(""); setThreadLoadSettled(false); void load(true);
+        }}>重新加载</button>}
+      </div>}
       {full?.historyMissing && (
         <p className="error-banner" role="alert">
           会话历史不可用：Codex 记录文件缺失或已被移动

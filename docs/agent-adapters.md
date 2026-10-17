@@ -6,7 +6,7 @@ Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 必须各自实现 adapter；Deck 不把不同 CLI 的私有协议混进同一个 manager。
 
 Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入生产后端、
-通用 Agent API 和网页核心会话流程；OpenCode 尚未实现。
+通用 Agent API 和网页核心会话流程；OpenCode V1 通过原生 HTTP API 接入。
 
 ## 目录与职责
 
@@ -58,6 +58,14 @@ server/index.ts
 
 `startAll()` 和 `refreshAll()` 会被多个 adapter 并行调用。实现不能依赖注册
 顺序，也不能修改其它 adapter 的环境或状态。
+
+## 历史读取与分页
+
+`readThread(providerId, threadId, { turnLimit?, beforeTurn? })` 的选项是可选优化；不支持的 adapter 仍可返回全文，由 HTTP 层切片。无选项的读取必须返回全文，供搜索索引使用。原生分页返回的尾部必须从完整用户回合开始；存在更早历史时携带 `__cachedTailOmitted > 0` 和 `hasMoreTurns: true`，不知道总轮数时省略 `totalTurns`，不要伪造计数。HTTP 层不能把尾部写入全文搜索索引或再次覆盖其分页标记。
+
+可选的 `readTurn(providerId, threadId, turnId)` 用于工具输出展开，避免为了一个回合下载全部历史；没有实现时 registry 回退到全文读取后查找。OpenCode V1 使用原生 `limit` 和不透明 `before` 游标，旧版只支持 `limit` 时逐步扩大尾部，不支持分页时回退全文；暂存撤回的历史仍按原生撤回边界过滤。V1 适配器保留维护；未来 V2 使用独立 adapter，实现相同的 Deck 契约，V1 路由和事件不应混入 V2 传输层。
+
+后台搜索通过 `readThread(..., { background: true })` 进入 registry，完整历史仍交给 adapter 读取；registry 在交互期间以及结束后的短暂窗口内让索引排队，避免后台工作抢占用户操作。
 
 ## 快照与身份
 

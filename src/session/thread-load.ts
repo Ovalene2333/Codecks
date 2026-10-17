@@ -66,7 +66,7 @@ export async function fetchThreadFull(
         etag = null;
         continue;
       }
-      const data = await response.json().catch(() => ({}));
+      const data = response.ok ? await response.json() : await response.json().catch(() => ({}));
       if (!response.ok)
         throw new Error(data.error || `请求失败 (${response.status})`);
       const next = response.headers.get("ETag");

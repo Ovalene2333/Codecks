@@ -1,0 +1,44 @@
+.operation-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+.operation-status-spinner {
+  display: inline-flex;
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+  animation: operation-status-spin 1.2s linear infinite;
+}
+.operation-status-spinner svg { width: 18px; height: 18px; }
+.operation-status-content { flex: 1; min-width: 0; }
+.operation-status-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
+.operation-status-heading strong { font-weight: var(--fw-medium); }
+.operation-status-elapsed { margin-left: auto; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.operation-status-name { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.operation-status p { margin: 4px 0 0; color: var(--text-dim); overflow-wrap: anywhere; }
+.session-operation-list { flex: none; display: grid; gap: 8px; max-height: 28dvh; overflow-y: auto; margin: 10px 16px; }
+.sidebar .session-operation-list { margin: 8px 12px; }
+.timeline-loading { width: min(100%, 640px); margin: 12px auto; }
+.timeline-loading-skeleton { display: grid; gap: 12px; padding: 24px 4px; }
+.timeline-loading-skeleton span { display: block; width: 85%; height: 10px; border-radius: 4px; background: var(--line); }
+.timeline-loading-skeleton span:first-child { width: 44%; margin: 0 0 16px auto; height: 28px; }
+.timeline-loading-skeleton span:last-child { width: 55%; }
+.confirm-progress { margin-top: 14px; }
+.thread-load-retry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.thread-load-retry button { min-height: 36px; padding: 4px 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--control); cursor: pointer; }
+@keyframes operation-status-spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) {
+  .session-operation-list { margin: 8px 12px; }
+  .operation-status { padding: 10px 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .operation-status-spinner { animation: none; }
+}

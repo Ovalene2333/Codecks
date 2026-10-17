@@ -121,6 +121,8 @@ import {
 } from "./session/activity";
 import { approvalPreview, threadForApproval } from "./session/approvals";
 import { fetchThreadFull } from "./session/thread-load";
+import { deleteSession, forkSession, hasPendingSessionOperations, useSessionOperation } from "./session/operations";
+import { SessionOperationList } from "./session/OperationStatus";
 import {
   requestSystemNotifications,
   sendSystemNotification,
@@ -210,6 +212,7 @@ export function App() {
   const [projectEdit, setProjectEdit] = useState<ProjectRecord | null>(null);
   const [historyHelp, setHistoryHelp] = useState<ThreadSummary | null>(null);
   const [sheet, setSheet] = useState<ThreadSummary | null>(null);
+  const sheetOperation = useSessionOperation(sheet);
   const [wakeThread, setWakeThread] = useState<ThreadSummary | null>(null);
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
     const [taskScope, setTaskScope] = useState<string | null>();
@@ -476,28 +479,29 @@ export function App() {
     };
   }, []);
 
-  // 后台预取最近会话的全文，暖 localStorage 线程缓存：隧道高延迟下点开即见。
-  // 只补完全没有缓存的会话（快照本身已按 updatedAt 排序）；已缓存的交给
-  // 打开时的条件 GET（If-None-Match/304）刷新，避免反复拉全文。
-  // 只看缓存索引、不解析正文，免得为了判断“有没有”把每个会话都读进内存。
+  const prefetchActive = useRef(false);
+  // Warm one tail at a time, including across snapshot changes.
   useEffect(() => {
+    let cancelled = false;
     const cachedKeys = cachedThreadKeys();
-    const timers = (snapshot.threads || [])
-      .filter(
-        (thread) =>
-          !cachedKeys.has(sessionKey(thread)) &&
-          !isThreadUncacheable(sessionKey(thread)),
-      )
-      .slice(0, 8)
-      .map((thread, index) =>
-        window.setTimeout(() => {
+    const threads = (snapshot.threads || []).filter((thread) =>
+      !cachedKeys.has(sessionKey(thread)) && !isThreadUncacheable(sessionKey(thread)),
+    ).slice(0, 8);
+    const timer = window.setTimeout(async () => {
+      if (prefetchActive.current) return;
+      prefetchActive.current = true;
+      try {
+        for (const thread of threads) {
+          if (cancelled || hasPendingSessionOperations()) break;
           const key = sessionKey(thread);
-          dedupeThreadLoad(key, () => fetchThreadFull(thread, key)).catch(
-            () => {},
-          );
-        }, 500 + index * 300),
-      );
-    return () => timers.forEach((timer) => window.clearTimeout(timer));
+          if (readThreadCache(key)) continue;
+          await dedupeThreadLoad(key, () => fetchThreadFull(thread, key, {
+            turnLimit: getDeckSettings().initialTurns,
+          })).catch(() => {});
+        }
+      } finally { prefetchActive.current = false; }
+    }, 1_500);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [snapshot.threads]);
 
   useEffect(() => {
@@ -1232,6 +1236,10 @@ export function App() {
         }
         onBack={leaveToWorkspace}
         onSnapshot={refresh}
+        onCreatedThread={(created) => setSnapshot((current) => ({
+          ...current,
+          threads: [created, ...current.threads.filter((item) => sessionKey(item) !== sessionKey(created))],
+        }))}
         onSwitchProvider={() => setSwitchThread(current)}
         onMenu={() => setSheet(current)}
         onSelectThread={(providerId, threadId) =>
@@ -1375,6 +1383,7 @@ export function App() {
   return (
     <div className={`app-shell${showTabBar ? " has-tabbar" : ""}`}>
       <Sidebar
+        operationStatus={!current ? <SessionOperationList /> : undefined}
         show={sessionsView}
         hiddenOnMobile={Boolean(current)}
         homeActive={!current}
@@ -1850,24 +1859,25 @@ export function App() {
                 ),
             },
             {
-              label: "复制成独立分支",
+              label: sheetOperation === "fork" ? "正在创建分支…" : "复制成独立分支",
               disabled:
-                !capabilitiesFor(snapshot.agents, sheet).fork ||
-                sheet.status === "running" ||
-                sheet.status === "waiting",
+                Boolean(sheetOperation) || !capabilitiesFor(snapshot.agents, sheet).fork ||
+                sheet.archived || sheet.status === "running" || sheet.status === "waiting",
               onClick: async () => {
-                const created = await post(
-                  `/threads/${sheet.providerId}/${sheet.id}/fork`,
-                  {},
-                );
-                openSessionKey(
-                  sessionKey({
-                    agentId: sheet.agentId,
-                    providerId: sheet.providerId,
-                    id: created.id,
-                  }),
-                );
-                refresh();
+                const source = sheet;
+                const sourcePath = location.pathname;
+                try {
+                  const created = await forkSession(source);
+                  setSnapshot((current) => ({ ...current,
+                    threads: [created, ...current.threads.filter((item) => sessionKey(item) !== sessionKey(created))],
+                  }));
+                  if (location.pathname === sourcePath) {
+                    pushToast("分支已创建");
+                    openSessionKey(sessionKey({ ...created, agentId: created.agentId || source.agentId,
+                      providerId: created.providerId || source.providerId }));
+                  } else pushToast("分支已创建，可在会话列表打开");
+                  void refresh();
+                } catch (error: any) { pushToast(error?.message || "创建分支失败"); }
               },
             },
             {
@@ -1907,8 +1917,8 @@ export function App() {
               label: "永久删除",
               danger: true,
               disabled:
-                !capabilitiesFor(snapshot.agents, sheet).delete ||
-                (sheet.agentId === "claude" &&
+                Boolean(sheetOperation) || !capabilitiesFor(snapshot.agents, sheet).delete ||
+                (["claude", "opencode"].includes(sheet.agentId || "codex") &&
                   (sheet.status === "running" || sheet.status === "waiting")),
               onClick: () =>
                 setConfirm({
@@ -1930,14 +1940,20 @@ export function App() {
                       : "删除",
                   danger: true,
                   run: async () => {
-                    await remove(
-                      threadPath(sheet),
-                      sheet.agentId === "claude" && sheet.claudeConnected
-                        ? { closeConnection: true }
-                        : undefined,
-                    );
-                    if (sessionKey(sheet) === selected) setSelected(undefined);
-                    refresh();
+                    const result = await deleteSession(sheet);
+                    // Apply the successful DELETE response immediately, without
+                    // keeping the dialog open for another full-snapshot request.
+                    if (Array.isArray(result?.threads))
+                      setSnapshot((current) => reconcileSnapshot(current, result));
+                    else {
+                      setSnapshot((current) => ({ ...current,
+                        threads: current.threads.filter((item) => sessionKey(item) !== sessionKey(sheet)),
+                        archivedThreads: current.archivedThreads?.filter((item) => sessionKey(item) !== sessionKey(sheet)),
+                      }));
+                      if (!result?.ok) void refresh();
+                    }
+                    setSelected((current) => current === sessionKey(sheet) ? undefined : current);
+                    pushToast("会话已删除");
                   },
                 }),
             },
@@ -2046,9 +2062,10 @@ export function App() {
           onConfirm={async () => {
             try {
               await confirm.run();
-              setConfirm(null);
+              setConfirm((current) => current === confirm ? null : current);
             } catch (error: any) {
               pushToast(error?.message || "操作失败");
+              throw error;
             }
           }}
         />

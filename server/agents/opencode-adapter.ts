@@ -323,8 +323,6 @@ const REQUEST_POST_TIMEOUT_MS = 60_000;
 /** 重试次数（不含首次）：GET 最多 3 次，非幂等写操作只发 1 次，绝不重发。 */
 const REQUEST_RETRIES = 2;
 const REQUEST_RETRY_DELAYS_MS = [300, 800];
-/** 读会话正文时最多为项目模型目录多等多久；目录本身最长要 5 秒。 */
-const CATALOG_WAIT_MS = 400;
 const PROJECT_CATALOG_TTL_MS = 10 * 60_000;
 /**
  * opencode serve（Bun 进程）长时间运行内存只增不减（数百 MB 级）。
@@ -931,6 +929,13 @@ function permissionQuestions(permission: any): ApprovalQuestion[] | undefined {
 export class OpenCodeAdapter extends EventEmitter {
   readonly id: AgentId = "opencode";
   private threads = new Map<string, ThreadSummary>();
+  private messageReads = new Map<string, Promise<{ records: any[]; next?: string }>>();
+  private forkOperations = new Map<string, { boundary: string; promise: Promise<ThreadSummary> }>();
+  private deleteOperations = new Map<string, Promise<{ ok: boolean }>>();
+  // Only compact message boundaries are retained; tool output never lives here.
+  private historyBoundaries = new Map<string, {
+    cwd: string; updated: number; revert: string; at: number; userIds: string[];
+  }>();
   private profiles: OpenCodeProfile[] = [];
   private connected = new Set<string>();
   /** `/provider` 最近一次成功返回后为 true；失败不清旧数据，但不再冒充新鲜。 */
@@ -943,6 +948,10 @@ export class OpenCodeAdapter extends EventEmitter {
   /** Role of the last seen OpenCode message, used to skip replayed user parts. */
   private messageRoles = new Map<string, string>();
   private partTypes = new Map<string, string>();
+  // Native fork preserves old message timestamps while assigning a new session.
+  private sessionCreatedAt = new Map<string, number>();
+  private copiedMessages = new Map<string, string>();
+  private copiedHistoryTimers = new Map<string, NodeJS.Timeout>();
   /** messageId → 最近一次 message.updated 的 tokens（per-part stats 认领用）。 */
   private messageUsageFields = new Map<
     string,
@@ -1971,6 +1980,9 @@ export class OpenCodeAdapter extends EventEmitter {
     this.recoveryTimer = undefined;
     this.recoveryAttempts = 0;
     this.runningTurns.clear();
+    this.messageReads.clear();
+    this.historyBoundaries.clear();
+    this.clearCopiedHistory();
     if (this.idleRestartTimer) clearInterval(this.idleRestartTimer);
     this.idleRestartTimer = undefined;
     this.eventAbort?.abort();
@@ -2195,30 +2207,137 @@ export class OpenCodeAdapter extends EventEmitter {
     return typeof limit === "number" && limit > 0 ? limit : undefined;
   }
 
-  async readThread(_providerId: string, threadId: string) {
+  private readMessagePage(thread: ThreadSummary, limit?: number, before?: string) {
+    const query = new URLSearchParams();
+    if (limit) query.set("limit", String(limit));
+    if (before) query.set("before", before);
+    const suffix = query.size ? `?${query}` : "";
+    const key = thread.id + suffix;
+    const existing = this.messageReads.get(key);
+    if (existing) return existing;
+    let next: string | undefined;
+    const pending = this.request<any[]>(
+      `/session/${encodeURIComponent(thread.id)}/message${suffix}`,
+      { directory: thread.cwd,
+        onResponse: (response) => { next = response.headers?.get("x-next-cursor") || undefined; },
+      },
+    ).then((records) => ({ records, next })).finally(() => {
+      if (this.messageReads.get(key) === pending) this.messageReads.delete(key);
+    });
+    this.messageReads.set(key, pending);
+    return pending;
+  }
+
+  private readMessages(thread: ThreadSummary): Promise<any[]> {
+    return this.readMessagePage(thread).then((page) => page.records);
+  }
+
+  private invalidateHistory(threadId: string) {
+    this.historyBoundaries.delete(threadId);
+    for (const key of this.messageReads.keys())
+      if (key === threadId || key.startsWith(`${threadId}?`)) this.messageReads.delete(key);
+  }
+
+  private async readTailMessages(thread: ThreadSummary, turns: number, targetTurnId?: string) {
+    // Native limits count messages, not turns. Cursor pages avoid downloading
+    // overlapping tool output when one user turn spans many assistant steps.
+    let limit = Math.max(32, Math.min(256, turns * 2));
+    let before: string | undefined;
+    let records: any[] = [];
+    const cursors = new Set<string>();
+    for (;;) {
+      let page: { records: any[]; next?: string };
+      try {
+        page = await this.readMessagePage(thread, limit, before);
+      } catch (error) {
+        // Older servers may reject the optional pagination query.
+        if (!/OpenCode API (400|422)/.test(String(error))) throw error;
+        return { records: await this.readMessages(thread), partial: false };
+      }
+      records = before ? [...page.records, ...records] : page.records;
+      const userIds = this.userMessageIds(records);
+      const complete = targetTurnId ? userIds.includes(targetTurnId) : userIds.length > turns;
+      if (page.next) {
+        if (cursors.has(page.next))
+          throw new Error("OpenCode 历史分页游标重复，请重试");
+        if (complete) return { records, partial: true };
+        cursors.add(page.next);
+        before = page.next;
+        continue;
+      }
+      if (before || page.records.length !== limit) return { records, partial: false };
+      // V1 releases with limit but no cursor support can still fetch a bounded
+      // tail. Only those releases need to enlarge and repeat the tail request.
+      if (complete) return { records, partial: true };
+      limit *= 2;
+    }
+  }
+
+  private userMessageIds(records: any[]) {
+    return records
+      .map((record) => record?.info || record?.message || record)
+      .filter((info) => info?.role === "user" && info?.id)
+      .map((info) => String(info.id));
+  }
+
+  private async forkUserIds(thread: ThreadSummary, selected: string) {
+    const cached = this.historyBoundaries.get(thread.id);
+    if (cached && cached.cwd === thread.cwd && Date.now() - cached.at < 60_000) {
+      // Validate against native metadata, including external TUI edits/reverts.
+      const session = await this.request<any>(`/session/${encodeURIComponent(thread.id)}`, {
+        directory: thread.cwd,
+      });
+      if (Number(session?.time?.updated) === cached.updated &&
+          String(session?.revert?.messageID || "") === cached.revert)
+        return cached.userIds;
+    }
+    return this.userMessageIds((await this.readTailMessages(thread, 1, selected)).records);
+  }
+
+  async readThread(_providerId: string, threadId: string, options?: {
+    turnLimit?: number;
+    beforeTurn?: string;
+  }) {
     const thread = this.requireThread(threadId);
-    // 项目模型目录（/provider + /config，各自最长 5 秒）只用来补上下文上限和
-    // 实际模型名，不能让它卡住正文：最多等 CATALOG_WAIT_MS，晚到的在落地后
-    // 补算一次用量，经 thread.updated 推给前端。
+    // Model labels and context limits enrich the transcript in the background;
+    // they must never add latency to opening the session itself.
     const catalog =
       thread.cwd && !this.projectCatalogs.has(thread.cwd)
         ? this.loadProjectCatalog(thread.cwd).catch(() => undefined)
         : undefined;
-    const [allRecords, session] = await Promise.all([
-      this.request<any[]>(`/session/${encodeURIComponent(threadId)}/message`, {
-        directory: thread.cwd,
-      }),
-      this.request<OpenCodeSession & { revert?: { messageID?: string } }>(
-        `/session/${encodeURIComponent(threadId)}`,
-        { directory: thread.cwd },
-      ),
-      catalog
-        ? Promise.race([
-            catalog,
-            new Promise((resolve) => setTimeout(resolve, CATALOG_WAIT_MS)),
-          ])
-        : undefined,
+    const readStartedAt = Date.now();
+    const sessionRead = this.request<OpenCodeSession & { revert?: { messageID?: string } }>(
+      `/session/${encodeURIComponent(threadId)}`, { directory: thread.cwd },
+    );
+    const turnLimit = Number(options?.turnLimit);
+    const paged = Number.isFinite(turnLimit) && turnLimit > 0 && !options?.beforeTurn;
+    const history = paged
+      ? sessionRead.then((session) => session?.revert?.messageID
+          // A staged revert may hide an arbitrarily large tail. Preserve the
+          // native boundary exactly instead of mistaking hidden history for empty.
+          ? this.readMessages(thread).then((records) => ({ records, partial: false }))
+          : this.readTailMessages(thread, Math.floor(turnLimit)))
+      : this.readMessages(thread).then((records) => ({ records, partial: false }));
+    const [page, session] = await Promise.all([
+      history,
+      sessionRead,
     ]);
+    if (!this.threads.has(threadId)) throw new Error("OpenCode 会话已删除");
+    const allRecords = page.records;
+    const updated = Number(session?.time?.updated);
+    const liveStatus = this.threads.get(threadId)?.status;
+    // Metadata fetched concurrently must predate the message read. Otherwise
+    // it may describe an edit that the message snapshot does not contain yet.
+    if (Number.isFinite(updated) && updated > 0 && updated < readStartedAt &&
+        liveStatus === "idle") {
+      this.historyBoundaries.delete(threadId);
+      this.historyBoundaries.set(threadId, {
+        cwd: thread.cwd, updated, revert: String(session?.revert?.messageID || ""),
+        at: Date.now(), userIds: this.userMessageIds(allRecords),
+      });
+      while (this.historyBoundaries.size > 32)
+        this.historyBoundaries.delete(this.historyBoundaries.keys().next().value!);
+    }
     // OpenCode stages /revert and keeps the old messages in storage for /redo.
     // Its message list still contains them, so hide the boundary and everything
     // after it until /unrevert clears the marker.
@@ -2232,21 +2351,29 @@ export class OpenCodeAdapter extends EventEmitter {
     // await 期间 session.updated 可能已把 threads 里的对象换成新实例，
     // 命名/用量必须基于现行对象合并，否则会把新字段顶回旧值。
     const base = this.threads.get(threadId) || thread;
-    const renamed = this.applyFirstMessageNaming(base, records);
+    const renamed = page.partial ? base : this.applyFirstMessageNaming(base, records);
     const current = this.applyThreadUsage(renamed, records);
+    const usageAt = current.updatedAt;
+    const usageTurn = current.activeTurnId;
     if (catalog && !this.projectCatalogs.has(thread.cwd))
       void catalog.then((loaded) => {
         const latest = this.threads.get(threadId);
-        if (loaded && latest) this.applyThreadUsage(latest, records);
+        if (loaded && latest && latest.updatedAt === usageAt && latest.activeTurnId === usageTurn)
+          this.applyThreadUsage(latest, records);
       });
+    const normalized = normalizeMessages(
+      { id: current.id, directory: current.cwd }, records,
+      current.status === "running" || current.status === "waiting"
+        ? current.activeTurnId : undefined,
+    );
     return {
-      ...normalizeMessages(
-        { id: current.id, directory: current.cwd },
-        records,
-        current.status === "running" || current.status === "waiting"
-          ? current.activeTurnId
-          : undefined,
-      ),
+      ...normalized,
+      ...(page.partial ? {
+        turns: normalized.turns.slice(-Math.floor(turnLimit)),
+        // The exact old-turn count is intentionally unknown without reading it.
+        __cachedTailOmitted: 1,
+        hasMoreTurns: true,
+      } : {}),
       agentId: this.id,
       providerId: current.providerId,
       model: current.model,
@@ -2255,6 +2382,24 @@ export class OpenCodeAdapter extends EventEmitter {
         : {}),
       ...(current.tokenUsage ? { tokenUsage: current.tokenUsage } : {}),
     };
+  }
+
+  async readTurn(_providerId: string, threadId: string, turnId: string) {
+    const thread = this.requireThread(threadId);
+    const session = await this.request<OpenCodeSession & { revert?: { messageID?: string } }>(
+      `/session/${encodeURIComponent(threadId)}`, { directory: thread.cwd },
+    );
+    const reverted = String(session?.revert?.messageID || "");
+    const history = reverted ? { records: await this.readMessages(thread) }
+      : await this.readTailMessages(thread, 1, turnId === thread.activeTurnId ? undefined : turnId);
+    const end = reverted ? history.records.findIndex((record) =>
+      String((record?.info || record?.message || record)?.id) === reverted) : -1;
+    const records = end >= 0 ? history.records.slice(0, end) : history.records;
+    const full = normalizeMessages({ id: threadId, directory: thread.cwd }, records,
+      thread.status === "running" || thread.status === "waiting" ? thread.activeTurnId : undefined);
+    const turn = full.turns.find((item) => String(item.id) === turnId);
+    if (!turn) throw new Error("找不到该回合，可能已被撤回或压缩");
+    return turn;
   }
 
   async renameThread(_providerId: string, threadId: string, name: string) {
@@ -2360,6 +2505,12 @@ export class OpenCodeAdapter extends EventEmitter {
    * subagent 子会话）的挂起审批。调用方负责原生 DELETE 与广播。
    */
   private purgeThread(sessionId: string) {
+    const copiedTimer = this.copiedHistoryTimers.get(sessionId);
+    if (copiedTimer) clearTimeout(copiedTimer);
+    this.copiedHistoryTimers.delete(sessionId);
+    this.sessionCreatedAt.delete(sessionId);
+    for (const [id, owner] of this.copiedMessages)
+      if (owner === sessionId) this.copiedMessages.delete(id);
     this.clearIdleTimer(sessionId);
     this.endRunningTurn(sessionId);
     // 先收集要撤审批的会话：自己 + 挂在它名下的 subagent 子会话。
@@ -2367,6 +2518,7 @@ export class OpenCodeAdapter extends EventEmitter {
     for (const [child, parent] of this.childParents)
       if (parent === sessionId) approvalSessions.add(child);
     this.threads.delete(sessionId);
+    this.invalidateHistory(sessionId);
     this.sessionTitles.delete(sessionId);
     this.forkChildren.delete(sessionId);
     for (const child of approvalSessions) {
@@ -2383,7 +2535,18 @@ export class OpenCodeAdapter extends EventEmitter {
         this.clearApproval(approvalId);
   }
 
-  async deleteThread(_providerId: string, threadId: string) {
+  deleteThread(_providerId: string, threadId: string) {
+    const existing = this.deleteOperations.get(threadId);
+    if (existing) return existing;
+    const pending = this.performDelete(threadId).finally(() => {
+      if (this.deleteOperations.get(threadId) === pending) this.deleteOperations.delete(threadId);
+    });
+    this.deleteOperations.set(threadId, pending);
+    return pending;
+  }
+
+  private async performDelete(threadId: string) {
+    if (this.forkOperations.has(threadId)) throw new Error("此会话正在创建分支，暂时不能删除");
     const thread = this.requireThread(threadId);
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("运行中的 OpenCode 会话不能删除");
@@ -2403,11 +2566,27 @@ export class OpenCodeAdapter extends EventEmitter {
    * 直接传 messageID 时保留原生的排除语义，供历史消息重试使用。
    * 这是 tree/分支的主入口；destructive 的 revert 仍保留为 undo。
    */
-  async forkThread(
+  forkThread(
     _providerId: string,
     threadId: string,
     options: { messageID?: string; lastTurnId?: string } = {},
   ) {
+    const boundary = JSON.stringify([options.messageID || "", options.lastTurnId || ""]);
+    const existing = this.forkOperations.get(threadId);
+    if (existing) return existing.boundary === boundary ? existing.promise
+      : Promise.reject(new Error("此会话正在创建分支，请等待完成后再选择其他轮次"));
+    const pending = this.performFork(threadId, options).finally(() => {
+      if (this.forkOperations.get(threadId)?.promise === pending) this.forkOperations.delete(threadId);
+    });
+    this.forkOperations.set(threadId, { boundary, promise: pending });
+    return pending;
+  }
+
+  private async performFork(
+    threadId: string,
+    options: { messageID?: string; lastTurnId?: string },
+  ) {
+    if (this.deleteOperations.has(threadId)) throw new Error("此会话正在删除，暂时不能创建分支");
     const source = this.requireThread(threadId);
     if (source.archived) throw new Error("会话已归档，请先恢复再分支");
     if (source.status === "running" || source.status === "waiting")
@@ -2415,14 +2594,8 @@ export class OpenCodeAdapter extends EventEmitter {
     let boundary = String(options.messageID || "").trim();
     if (options.lastTurnId) {
       const selected = String(options.lastTurnId).trim();
-      const records = await this.request<any[]>(
-        `/session/${encodeURIComponent(threadId)}/message`,
-        { directory: source.cwd },
-      );
-      const userIds = records
-        .map((record) => record?.info || record?.message || record)
-        .filter((info) => info?.role === "user" && info?.id)
-        .map((info) => String(info.id));
+      let userIds = await this.forkUserIds(source, selected);
+      if (!userIds.includes(selected)) userIds = this.userMessageIds(await this.readMessages(source));
       const index = userIds.indexOf(selected);
       if (index < 0) throw new Error("找不到分支所选的消息");
       boundary = userIds[index + 1] || "";
@@ -2454,6 +2627,8 @@ export class OpenCodeAdapter extends EventEmitter {
         method: "PATCH",
         directory: forked.directory || source.cwd,
         body: { title: branchName },
+        // Naming is auxiliary; do not hold a successful fork for a minute.
+        timeoutMs: 1_500,
       });
       this.sessionTitles.set(forked.id, branchName);
     } catch {
@@ -2524,10 +2699,7 @@ export class OpenCodeAdapter extends EventEmitter {
       throw new Error("会话正在运行或等待确认，无法从历史消息重试");
     const value = String(text || "").trim();
     if (!value && !images?.length) throw new Error("请输入重试内容");
-    const records = await this.request<any[]>(
-      `/session/${encodeURIComponent(threadId)}/message`,
-      { directory: source.cwd },
-    );
+    const records = await this.readMessages(source);
     const userIds: string[] = [];
     for (const record of records || []) {
       const info = record?.info || record?.message || record;
@@ -2815,10 +2987,7 @@ export class OpenCodeAdapter extends EventEmitter {
       throw new Error("任务运行中不能撤回，请先停止任务");
     let target = String(messageID || "").trim();
     if (!target) {
-      const records = await this.request<any[]>(
-        `/session/${encodeURIComponent(threadId)}/message`,
-        { directory: thread.cwd },
-      );
+      const records = await this.readMessages(thread);
       for (let index = (records || []).length - 1; index >= 0; index -= 1) {
         const info =
           records[index]?.info || records[index]?.message || records[index];
@@ -3438,6 +3607,10 @@ export class OpenCodeAdapter extends EventEmitter {
       body.info?.id ||
       body.part?.sessionID ||
       body.session?.id;
+    if (sessionId) {
+      // A read started before an event cannot satisfy a subsequent fresh read.
+      this.invalidateHistory(sessionId);
+    }
     const thread = sessionId ? this.threads.get(sessionId) : undefined;
     // 看门狗心跳：该会话的在途回合记一次事件时间，静默 running 才会被对账。
     if (sessionId) {
@@ -3465,6 +3638,9 @@ export class OpenCodeAdapter extends EventEmitter {
     ) {
       const session = body.info as OpenCodeSession | undefined;
       if (!session?.id) return;
+      const created = Number(session.time?.created);
+      if (Number.isFinite(created) && created > 0)
+        this.boundedPut(this.sessionCreatedAt, session.id, created);
       if (session.parentID && !this.isForkChild(session)) {
         this.boundedPut(this.childParents, session.id, session.parentID);
         return;
@@ -3594,6 +3770,15 @@ export class OpenCodeAdapter extends EventEmitter {
     if (payload?.type === "message.updated") {
       const info = body.info;
       if (info?.id && info?.role) this.rememberRole(info.id, info.role);
+      const created = Number(info?.time?.created);
+      const sessionCreated = this.sessionCreatedAt.get(sessionId);
+      if (thread && info?.id && sessionCreated && Number.isFinite(created) &&
+          created > 0 && created < sessionCreated && thread.status === "idle" && !thread.activeTurnId) {
+        this.boundedPut(this.copiedMessages, String(info.id), sessionId);
+        this.scheduleCopiedHistory(sessionId);
+        return;
+      }
+      if (info?.id) this.copiedMessages.delete(String(info.id));
       // per-part TPS 记忆：part 转发时的 info.tokens 以 message 为键留底
       // （含 0 值，part 完成时 tokens 已定型即可认领）。
       const tokens = info?.tokens || {};
@@ -3612,6 +3797,8 @@ export class OpenCodeAdapter extends EventEmitter {
         !thread ||
         body.field !== "text" ||
         !body.partID ||
+        (thread.status === "idle" && !thread.activeTurnId &&
+          this.copiedMessages.get(String(body.messageID || "")) === sessionId) ||
         this.messageRoles.get(String(body.messageID)) === "user" ||
         (this.partTypes.has(String(body.partID)) &&
           this.partTypes.get(String(body.partID)) !== "text")
@@ -3635,6 +3822,11 @@ export class OpenCodeAdapter extends EventEmitter {
         return;
       }
       if (!thread) return;
+      if (thread.status === "idle" && !thread.activeTurnId &&
+          this.copiedMessages.get(String(body.part?.messageID || "")) === sessionId) {
+        this.scheduleCopiedHistory(sessionId);
+        return;
+      }
       let part = body.part;
       if (part?.id && part?.type)
         this.boundedPut(this.partTypes, String(part.id), String(part.type));
@@ -3686,6 +3878,25 @@ export class OpenCodeAdapter extends EventEmitter {
         });
       }
     }
+  }
+
+  private scheduleCopiedHistory(sessionId: string) {
+    const previous = this.copiedHistoryTimers.get(sessionId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.copiedHistoryTimers.delete(sessionId);
+      const thread = this.threads.get(sessionId);
+      if (thread) this.emitAgentEvent(thread, "thread/historyUpdated", { threadId: sessionId });
+    }, 250);
+    timer.unref?.();
+    this.copiedHistoryTimers.set(sessionId, timer);
+  }
+
+  private clearCopiedHistory() {
+    for (const timer of this.copiedHistoryTimers.values()) clearTimeout(timer);
+    this.copiedHistoryTimers.clear();
+    this.copiedMessages.clear();
+    this.sessionCreatedAt.clear();
   }
 
   private rememberRole(messageId: unknown, role: unknown) {
@@ -3805,6 +4016,7 @@ export class OpenCodeAdapter extends EventEmitter {
       retry?: boolean;
       /** 0 disables the deadline for endpoints that run an entire agent turn. */
       timeoutMs?: number;
+      onResponse?: (response: Response) => void;
     } = {},
   ): Promise<T> {
     if (!this.baseUrl) throw new Error("OpenCode server 尚未启动");
@@ -3828,6 +4040,9 @@ export class OpenCodeAdapter extends EventEmitter {
       // AbortSignal.timeout 的定时器是 unref 的：进程空闲时它不会触发，
       // 「挂起连接超时」的 deadline 保证就失效了（事件循环先排空，请求
       // 永不结算）。ref 定时器 + AbortController 才能确保超时一定到达。
+      const started = Date.now();
+      let headersMs: number | undefined;
+      let status: number | undefined;
       const abort = new AbortController();
       const timer = timeoutMs > 0
         ? setTimeout(() => abort.abort(), timeoutMs)
@@ -3844,6 +4059,9 @@ export class OpenCodeAdapter extends EventEmitter {
             signal: abort.signal,
           },
         );
+        headersMs = Date.now() - started;
+        status = response.status;
+        if (response.ok) options.onResponse?.(response);
         if (!response.ok) {
           if (
             idempotent &&
@@ -3859,7 +4077,8 @@ export class OpenCodeAdapter extends EventEmitter {
         }
         this.lastServeActivityAt = Date.now();
         if (response.status === 204) return undefined as T;
-        return response.json() as Promise<T>;
+        // Keep the deadline and retry handler alive through body consumption.
+        return await response.json() as T;
       } catch (error: any) {
         // HTTP 状态错误直接抛（fork 的 404 兜底依赖原文案），不重试。
         if (String(error?.message || "").startsWith("OpenCode API "))
@@ -3869,6 +4088,13 @@ export class OpenCodeAdapter extends EventEmitter {
           throw this.requestError(error);
       } finally {
         if (timer) clearTimeout(timer);
+        if (process.env.OPENCODE_TRACE_REQUESTS === "1")
+          console.info("[OpenCode request]", JSON.stringify({
+            method: options.method || "GET",
+            endpoint: pathname.split("?")[0].replace(/(\/session\/)[^/]+/, "$1:id"),
+            attempt: attempt + 1, status, headersMs, totalMs: Date.now() - started,
+            timedOut: abort.signal.aborted,
+          }));
       }
     }
     throw this.requestError(lastError);
@@ -3893,6 +4119,9 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   private offline(error: unknown) {
+    this.messageReads.clear();
+    this.historyBoundaries.clear();
+    this.clearCopiedHistory();
     this.online = false;
     this.error = error instanceof Error ? error.message : String(error);
     this.clearAllIdleTimers();

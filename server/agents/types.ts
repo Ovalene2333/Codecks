@@ -166,7 +166,12 @@ export interface AgentAdapter extends Pick<EventEmitter, "on" | "off"> {
     providerId: string,
     input: AgentCreateThreadInput,
   ): Promise<unknown>;
-  readThread?(providerId: string, threadId: string): Promise<unknown>;
+  readThread?(providerId: string, threadId: string, options?: {
+    turnLimit?: number;
+    beforeTurn?: string;
+  }): Promise<unknown>;
+  /** Read one turn without loading the entire transcript when supported. */
+  readTurn?(providerId: string, threadId: string, turnId: string): Promise<unknown>;
   renameThread?(
     providerId: string,
     threadId: string,

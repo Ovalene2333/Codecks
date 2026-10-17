@@ -3501,3 +3501,392 @@ test("OpenCode fork rolls back the native branch when persistence fails", async 
     "落盘失败必须删除原生分支，否则重试越堆越多",
   );
 });
+test("OpenCode body consumption stays within the request deadline", async () => {
+  let attempts = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (_url, init) => {
+      attempts++;
+      return {
+        ok: true, status: 200,
+        json: () => new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")), { once: true });
+        }),
+      } as Response;
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await assert.rejects(
+    (adapter as any).request("/session/demo/message", { retry: false, timeoutMs: 20 }),
+    /连接闪断/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("OpenCode retries interrupted bodies, not just connection failures", async () => {
+  let attempts = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async () => {
+      attempts++;
+      if (attempts === 1) return {
+        ok: true, status: 200,
+        json: async () => { throw new TypeError("terminated"); },
+      } as unknown as Response;
+      return Response.json({ ok: true });
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  assert.deepEqual(await (adapter as any).request("/session/demo/message"), { ok: true });
+  assert.equal(attempts, 2);
+});
+
+test("OpenCode shares concurrent message reads and releases them after success or failure", async () => {
+  let resolve!: (response: Response) => void;
+  let calls = 0;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (() => {
+      calls++;
+      return new Promise<Response>((done) => { resolve = done; });
+    }) as typeof fetch,
+  });
+  const internal = adapter as any;
+  internal.baseUrl = "http://127.0.0.1:4096";
+  const thread = { id: "demo", cwd: "/work" };
+  const first = internal.readMessages(thread);
+  const second = internal.readMessages(thread);
+  assert.equal(calls, 1);
+  resolve(Response.json([]));
+  assert.deepEqual(await first, await second);
+  const third = internal.readMessages(thread);
+  assert.equal(calls, 2);
+  resolve(new Response("unavailable", { status: 400 }));
+  await assert.rejects(third, /400/);
+  const fourth = internal.readMessages(thread);
+  assert.equal(calls, 3);
+  resolve(Response.json([]));
+  await fourth;
+});
+
+test("OpenCode fork reuses validated boundaries and refetches changed native history", async () => {
+  let updated = 10;
+  let messageReads = 0;
+  let boundary = "";
+  const records = ["u1", "u2"].map((id) => ({ info: { id, role: "user" }, parts: [] }));
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const pathname = new URL(String(url)).pathname;
+      if (pathname.endsWith("/message")) {
+        messageReads++;
+        return Response.json(records);
+      }
+      if (pathname.endsWith("/fork")) {
+        boundary = JSON.parse(String(init?.body)).messageID;
+        return Response.json({ id: "branch", directory: "/work" });
+      }
+      return Response.json({ id: "demo", directory: "/work", time: { updated } });
+    }) as typeof fetch,
+  });
+  const internal = adapter as any;
+  internal.baseUrl = "http://127.0.0.1:4096";
+  internal.threads.set("demo", {
+    id: "demo", agentId: "opencode", cwd: "/work", name: "demo",
+    providerId: "acme", model: "default", status: "idle", updatedAt: 1,
+  });
+  internal.projectCatalogs.set("/work", { profiles: [], connected: new Set() });
+  await adapter.readThread("acme", "demo");
+  await adapter.forkThread("acme", "demo", { lastTurnId: "u1" });
+  assert.equal(messageReads, 1, "unchanged history must not be downloaded again");
+  assert.equal(boundary, "u2");
+  updated++;
+  records.splice(1, 0, { info: { id: "inserted", role: "user" }, parts: [] });
+  await adapter.forkThread("acme", "demo", { lastTurnId: "u1" });
+  assert.equal(messageReads, 2);
+  assert.equal(boundary, "inserted", "changed native history must define the boundary");
+});
+
+test("OpenCode events invalidate in-flight reads and cached fork boundaries", async () => {
+  const resolvers: Array<(response: Response) => void> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (() => new Promise<Response>((resolve) => resolvers.push(resolve))) as typeof fetch,
+  });
+  const internal = adapter as any;
+  internal.baseUrl = "http://127.0.0.1:4096";
+  const thread = { id: "demo", cwd: "/work" };
+  internal.historyBoundaries.set("demo", { userIds: ["old"] });
+  const old = internal.readMessages(thread);
+  internal.onEvent({ type: "message.removed", properties: { sessionID: "demo" } });
+  assert.equal(internal.historyBoundaries.size, 0);
+  const fresh = internal.readMessages(thread);
+  assert.equal(resolvers.length, 2);
+  resolvers[0](Response.json(["old"]));
+  await old;
+  assert.equal(internal.messageReads.size, 1, "old completion must not clear the fresh read");
+  resolvers[1](Response.json(["fresh"]));
+  assert.deepEqual(await fresh, ["fresh"]);
+  assert.equal(internal.messageReads.size, 0);
+});
+
+test("OpenCode successful fork survives a stalled auxiliary title update", async () => {
+  let renameAborted = false;
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      if (init?.method === "PATCH")
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            renameAborted = true;
+            reject(new DOMException("aborted", "AbortError"));
+          }, { once: true });
+        });
+      return Response.json({ id: "branch", directory: "/work" });
+    }) as typeof fetch,
+  });
+  const internal = adapter as any;
+  internal.baseUrl = "http://127.0.0.1:4096";
+  internal.threads.set("demo", {
+    id: "demo", agentId: "opencode", cwd: "/work", name: "demo",
+    providerId: "acme", model: "default", status: "idle", updatedAt: 1,
+  });
+  const branch = await adapter.forkThread("acme", "demo");
+  assert.equal(renameAborted, true);
+  assert.equal(branch.id, "branch");
+  assert.equal(branch.forkedFromId, "demo");
+  assert.equal(branch.name, "demo · 分支");
+});
+
+function pagedFixture() {
+  const records: any[] = [];
+  for (let turn = 0; turn < 16; turn++) {
+    records.push({ info: { id: `u${turn}`, role: "user" }, parts: [{ type: "text", text: `request ${turn}` }] });
+    const steps = turn === 15 ? 80 : 6;
+    for (let step = 0; step < steps; step++) records.push({
+      info: { id: `a${turn}-${step}`, role: "assistant", providerID: "acme", modelID: "demo" },
+      parts: [{ id: `p${turn}-${step}`, type: "text", text: `reply ${turn}-${step}` }],
+    });
+  }
+  return records;
+}
+
+function pagedAdapter(records: any[], queries: number[], revert?: string) {
+  const adapter = new OpenCodeAdapter({ fetcher: (async (url) => {
+    const request = new URL(String(url));
+    if (request.pathname.endsWith("/message")) {
+      const limit = Number(request.searchParams.get("limit"));
+      queries.push(limit);
+      return Response.json(limit ? records.slice(-limit) : records);
+    }
+    return Response.json({ id: "demo", directory: "/work", time: { updated: 10 },
+      ...(revert ? { revert: { messageID: revert } } : {}),
+    });
+  }) as typeof fetch });
+  const internal = adapter as any;
+  internal.baseUrl = "http://127.0.0.1:4096";
+  internal.threads.set("demo", {
+    id: "demo", agentId: "opencode", cwd: "/work", name: "original name",
+    providerId: "acme", model: "default", status: "idle", updatedAt: 1,
+  });
+  internal.projectCatalogs.set("/work", { profiles: [], connected: new Set() });
+  return adapter;
+}
+
+test("OpenCode native tail pagination retains complete turns with many assistant steps", async () => {
+  const queries: number[] = [];
+  const adapter = pagedAdapter(pagedFixture(), queries);
+  const full: any = await adapter.readThread("acme", "demo", { turnLimit: 2 });
+  assert.deepEqual(queries, [32, 64, 128]);
+  assert.deepEqual(full.turns.map((turn: any) => turn.id), ["u14", "u15"]);
+  assert.equal(full.turns[1].items.length, 81, "the latest turn must include all assistant steps");
+  assert.equal(full.hasMoreTurns, true);
+  assert.equal(full.__cachedTailOmitted, 1);
+  assert.equal(full.totalTurns, undefined, "do not invent the number of unseen turns");
+  assert.equal((adapter as any).threads.get("demo").name, "original name");
+});
+
+test("OpenCode full reads remain complete for search and reverted histories bypass native tail limits", async () => {
+  const records = pagedFixture();
+  const fullQueries: number[] = [];
+  const full: any = await pagedAdapter(records, fullQueries).readThread("acme", "demo");
+  assert.deepEqual(fullQueries, [0]);
+  assert.equal(full.turns.length, 16);
+  const revertQueries: number[] = [];
+  const reverted: any = await pagedAdapter(records, revertQueries, "u14")
+    .readThread("acme", "demo", { turnLimit: 2 });
+  assert.deepEqual(revertQueries, [0]);
+  assert.equal(reverted.turns.length, 14);
+  assert.equal(reverted.turns.at(-1).id, "u13");
+});
+
+test("OpenCode single-turn detail reads avoid downloading unrelated old history", async () => {
+  const queries: number[] = [];
+  const adapter = pagedAdapter(pagedFixture(), queries);
+  const turn: any = await adapter.readTurn("acme", "demo", "u15");
+  assert.deepEqual(queries, [32, 64, 128]);
+  assert.equal(turn.id, "u15");
+  assert.equal(turn.items.length, 81);
+  await assert.rejects(adapter.readTurn("acme", "demo", "missing"), /找不到/);
+});
+
+test("OpenCode duplicate delete requests share one native mutation", async () => {
+  let resolve!: (response: Response) => void;
+  let calls = 0;
+  const adapter = pagedAdapter([], []);
+  (adapter as any).fetcher = (() => {
+    calls++;
+    return new Promise<Response>((done) => { resolve = done; });
+  }) as typeof fetch;
+  const first = adapter.deleteThread("acme", "demo");
+  const second = adapter.deleteThread("acme", "demo");
+  assert.equal(first, second);
+  assert.equal(calls, 1);
+  await assert.rejects(adapter.forkThread("acme", "demo"), /正在删除/);
+  resolve(Response.json(true));
+  await first;
+  assert.equal((adapter as any).threads.has("demo"), false);
+});
+
+test("OpenCode duplicate forks share one native branch and reject conflicting boundaries", async () => {
+  const adapter = pagedAdapter([], []);
+  let resolve!: (response: Response) => void;
+  let forks = 0;
+  (adapter as any).fetcher = (async (_url: any, init: RequestInit) => {
+    if (init?.method === "POST") {
+      forks++;
+      return new Promise<Response>((done) => { resolve = done; });
+    }
+    return Response.json({ id: "branch", directory: "/work" });
+  }) as typeof fetch;
+  const first = adapter.forkThread("acme", "demo", { messageID: "u2" });
+  const second = adapter.forkThread("acme", "demo", { messageID: "u2" });
+  assert.equal(first, second);
+  await assert.rejects(adapter.forkThread("acme", "demo", { messageID: "u3" }), /正在创建分支/);
+  assert.equal(forks, 1);
+  await assert.rejects(adapter.deleteThread("acme", "demo"), /正在创建分支/);
+  resolve(Response.json({ id: "branch", directory: "/work" }));
+  assert.equal((await first).id, "branch");
+});
+
+test("OpenCode cursor pages do not download overlapping tool history", async () => {
+  const records = pagedFixture();
+  const queries: string[] = [];
+  let transferred = 0;
+  const adapter = pagedAdapter(records, []);
+  (adapter as any).fetcher = (async (url: any) => {
+    const request = new URL(String(url));
+    if (!request.pathname.endsWith("/message")) return Response.json({ id: "demo", time: { updated: 10 } });
+    queries.push(request.search);
+    const end = Number(request.searchParams.get("before")) || records.length;
+    const limit = Number(request.searchParams.get("limit"));
+    const start = Math.max(0, end - limit);
+    const page = records.slice(start, end);
+    transferred += page.length;
+    return Response.json(page, { headers: start ? { "x-next-cursor": String(start) } : {} });
+  }) as typeof fetch;
+  const full: any = await adapter.readThread("acme", "demo", { turnLimit: 2 });
+  assert.equal(queries.length, 3);
+  assert.equal(transferred, 96, "three pages must transfer each message only once");
+  assert.ok(queries[1].includes("before="));
+  assert.deepEqual(full.turns.map((turn: any) => turn.id), ["u14", "u15"]);
+  assert.equal(full.turns[1].items.length, 81);
+});
+
+test("OpenCode cold model catalogs never block the transcript", async () => {
+  const adapter = pagedAdapter(pagedFixture(), []);
+  const internal = adapter as any;
+  internal.projectCatalogs.clear();
+  const fetcher = internal.fetcher;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  internal.fetcher = async (url: any, init: any) => {
+    if (/\/(provider|config)(\?|$)/.test(String(url))) {
+      await gate;
+      return Response.json({});
+    }
+    return fetcher(url, init);
+  };
+  const read = adapter.readThread("acme", "demo", { turnLimit: 2 });
+  try {
+    const settled = await Promise.race([
+      read.then(() => true), new Promise<boolean>((resolve) => setImmediate(() => resolve(false))),
+    ]);
+    assert.equal(settled, true, "catalog resolution must not participate in the read barrier");
+  } finally { release(); await read; }
+});
+
+
+test("OpenCode cold fork boundaries use bounded native history and preserve the next user boundary", async () => {
+  const queries: number[] = [];
+  const records = Array.from({ length: 1000 }, (_, i) => ({
+    info: { id: `u${i}`, role: "user" }, parts: [],
+  }));
+  const adapter = pagedAdapter(records, queries);
+  const internal = adapter as any;
+  const ids = await internal.forkUserIds(internal.threads.get("demo"), "u990");
+  assert.deepEqual(queries, [32]);
+  assert.equal(ids[ids.indexOf("u990") + 1], "u991");
+  assert.equal(ids.at(-1), "u999");
+  assert.equal(ids.length, 32, "do not download the entire cold history for a recent fork");
+});
+
+
+test("OpenCode fork replay coalesces copied history without forwarding old assistant bodies", async () => {
+  const adapter = pagedAdapter([], []);
+  const internal = adapter as any;
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  internal.onEvent({ type: "session.created", properties: { info: {
+    id: "demo", directory: "/work", time: { created: 2000, updated: 2000 },
+  } } });
+  events.length = 0;
+  for (let i = 0; i < 1000; i++) {
+    internal.onEvent({ type: "message.updated", properties: { sessionID: "demo",
+      info: { id: `copied${i}`, role: "assistant", time: { created: 1000 } },
+    } });
+    internal.onEvent({ type: "message.part.updated", properties: { sessionID: "demo",
+      part: { id: `p${i}`, messageID: `copied${i}`, type: "text", text: "x".repeat(8192) },
+    } });
+  }
+  assert.equal(events.length, 0, "copied bodies must not be broadcast as live output");
+  assert.equal(internal.copiedHistoryTimers.size, 1);
+  assert.ok(internal.copiedMessages.size <= 400);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.method, "thread/historyUpdated");
+  assert.deepEqual(events[0].data.params, { threadId: "demo" });
+  assert.ok(JSON.stringify(events).length < 300);
+  // A new assistant message in the same branch is still delivered normally.
+  internal.onEvent({ type: "message.updated", properties: { sessionID: "demo",
+    info: { id: "new", role: "assistant", time: { created: 2001 } },
+  } });
+  internal.onEvent({ type: "message.part.updated", properties: { sessionID: "demo",
+    part: { id: "new-part", messageID: "new", type: "text", text: "new reply" },
+  } });
+  assert.equal(events.at(-1).data.method, "item/updated");
+  assert.equal(events.at(-1).data.params.item.text, "new reply");
+  // A running turn must retain live updates even with an old timestamp.
+  internal.threads.get("demo").activeTurnId = "active";
+  internal.onEvent({ type: "message.updated", properties: { sessionID: "demo",
+    info: { id: "running", role: "assistant", time: { created: 1000 } },
+  } });
+  internal.onEvent({ type: "message.part.updated", properties: { sessionID: "demo",
+    part: { id: "running-part", messageID: "running", type: "text", text: "live reply" },
+  } });
+  assert.equal(events.at(-1).data.params.item.text, "live reply");
+  internal.endRunningTurn("demo");
+});
+
+test("OpenCode deleting a copied branch cancels its deferred history notification", async () => {
+  const adapter = pagedAdapter([], []);
+  const internal = adapter as any;
+  const events: any[] = [];
+  adapter.on("event", (event) => events.push(event));
+  internal.onEvent({ type: "session.created", properties: { info: {
+    id: "demo", directory: "/work", time: { created: 2000 },
+  } } });
+  internal.onEvent({ type: "message.updated", properties: { sessionID: "demo",
+    info: { id: "old", role: "assistant", time: { created: 1000 } },
+  } });
+  internal.onEvent({ type: "session.deleted", properties: { sessionID: "demo" } });
+  assert.equal(internal.copiedHistoryTimers.size, 0);
+  assert.equal(internal.copiedMessages.size, 0);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(events.some((event) => event.data?.method === "thread/historyUpdated"), false);
+});
