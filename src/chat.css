@@ -320,6 +320,30 @@
   min-width: 0;
   max-width: 100%;
 }
+/* 长会话分页：顶部“加载更早”按钮，触控目标够大，窄屏不挤。 */
+.timeline-load-more {
+  align-self: center;
+  margin: 0 auto 16px;
+  min-height: 44px;
+  padding: 10px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.timeline-load-more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+@media (hover: hover) {
+  .timeline-load-more:not(:disabled):hover {
+    color: var(--text);
+    border-color: var(--line-strong);
+  }
+}
 .session-empty {
   flex: 1;
   display: flex;
@@ -1787,57 +1811,7 @@ button.composer-context-seg:focus-visible {
   color: var(--text-dim);
   font-size: var(--fs-meta);
 }
-/* 格子段快捷菜单：点值直接弹该槽位候选，少进一层设置面板；
-   容器语言与 slash-menu 相同，定位由 Composer 依点击段计算。 */
-.composer-context-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 19;
-  background: transparent;
-  border: 0;
-}
-.composer-context-menu {
-  position: absolute;
-  z-index: 20;
-  min-width: 132px;
-  display: grid;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-md);
-  transform: translateX(-50%);
-}
-.composer-context-menu button {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-height: 32px;
-  padding: 4px var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-  font-size: var(--fs-meta);
-  text-align: left;
-  cursor: pointer;
-}
-.composer-context-menu button:hover {
-  background: var(--control-hover);
-  color: var(--text);
-}
-.composer-context-menu button.on {
-  background: var(--surface-selected);
-  color: var(--text);
-}
-.composer-context-menu > .more {
-  margin-top: 2px;
-  border-top: 1px solid var(--line);
-  border-radius: 0 0 var(--radius-xs) var(--radius-xs);
-  color: var(--text-faint);
-}
+/* 格子段快捷菜单已迁到 kit Menu（.ui-menu），样式不再本地负责。 */
 .command-status {
   margin: 0 16px 8px;
   padding: 10px 12px;

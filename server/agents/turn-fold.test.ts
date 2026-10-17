@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   FOLD_OUTPUT_CHARS,
+  TURN_SLICE_PARTIAL_KEY,
   foldItem,
   foldTurns,
+  sliceTurnsPage,
 } from "./turn-fold.js";
 
 const big = "x".repeat(FOLD_OUTPUT_CHARS + 100);
@@ -95,4 +97,31 @@ test("foldTurns only folds non-active completed turns", () => {
   assert.equal(folded[2].items[0].folded, undefined);
   // 输入数组不动。
   assert.equal(turns[0].items[0].aggregatedOutput, big);
+});
+
+test("sliceTurnsPage takes the latest turns and marks the omitted count", () => {
+  const turns = ["t1", "t2", "t3", "t4", "t5"].map((id) => ({ id }));
+  const page = sliceTurnsPage(turns, 2);
+  assert.deepEqual(page.turns.map((turn) => turn.id), ["t4", "t5"]);
+  assert.equal(page.totalTurns, 5);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.omitted, 3);
+  // 输入不动。
+  assert.equal(turns.length, 5);
+  // 全量 key 与前端缓存约定一致。
+  assert.equal(TURN_SLICE_PARTIAL_KEY, "__cachedTailOmitted");
+});
+
+test("sliceTurnsPage pages before a turn and degrades when it is gone", () => {
+  const turns = ["t1", "t2", "t3", "t4"].map((id) => ({ id }));
+  const page = sliceTurnsPage(turns, 2, "t3");
+  assert.deepEqual(page.turns.map((turn) => turn.id), ["t1", "t2"]);
+  assert.equal(page.hasMore, false);
+  // beforeTurn 被 revert/压缩掉：退化为取最新，不吞数据。
+  const gone = sliceTurnsPage(turns, 2, "missing");
+  assert.deepEqual(gone.turns.map((turn) => turn.id), ["t3", "t4"]);
+  // 取完即全文。
+  const all = sliceTurnsPage(turns, 10);
+  assert.equal(all.hasMore, false);
+  assert.equal(all.omitted, 0);
 });

@@ -69,12 +69,12 @@ const fakeResponse = (status: number, body?: any, etag?: string) =>
   }) as any;
 
 async function withFetch(
-  handler: (init?: RequestInit) => Promise<any> | any,
+  handler: (init?: RequestInit, url?: string) => Promise<any> | any,
   run: () => Promise<void>,
 ) {
   const original = globalThis.fetch;
-  globalThis.fetch = (async (_url: any, init: any) =>
-    handler(init)) as typeof fetch;
+  globalThis.fetch = (async (url: any, init: any) =>
+    handler(init, String(url))) as typeof fetch;
   try {
     await run();
   } finally {
@@ -171,6 +171,37 @@ test("fetchThreadFull retries unconditionally if the cache is evicted mid-flight
       assert.equal(sent[0]?.["If-None-Match"], 'W/"stale"');
       assert.equal(sent[1]?.["If-None-Match"], undefined);
       assert.equal(readThreadEtag("k3"), 'W/"fresh"');
+    },
+  );
+});
+
+test("fetchThreadFull pages the tail without conditional headers or ETag writes", async () => {
+  resetCacheForTests();
+  configureCacheStorage(new MemoryStorage());
+  writeThreadCache("k5", { turns: [{ id: "t5" }] });
+  writeThreadEtag("k5", 'W/"full5"');
+  const urls: string[] = [];
+  const sent: Array<Record<string, string>> = [];
+  await withFetch(
+    (init, url) => {
+      urls.push(url || "");
+      sent.push((init?.headers || {}) as Record<string, string>);
+      return fakeResponse(200, {
+        turns: [{ id: "t9" }],
+        totalTurns: 100,
+        hasMoreTurns: true,
+        __cachedTailOmitted: 99,
+      }, 'W/"page"');
+    },
+    async () => {
+      const data: any = await fetchThreadFull({ id: "t5" }, "k5", { turnLimit: 40 });
+      assert.ok(urls[0].includes("turnLimit=40"));
+      // 分页不带条件头（尾部 ETag 不能拿来复用全文）。
+      assert.equal(sent[0]["If-None-Match"], undefined);
+      // 分页响应的 ETag 不落地，否则下次全文请求会带错 ETag。
+      assert.equal(readThreadEtag("k5"), 'W/"full5"');
+      assert.equal(data.hasMoreTurns, true);
+      assert.equal(data.totalTurns, 100);
     },
   );
 });

@@ -27,12 +27,11 @@ import { Modal, useOverlayHistory } from "../ui";
 import { AboutPage } from "./AboutPage";
 import { AgentsPanel, ReloadAllButton } from "./AgentsPanel";
 import { CodexBackendSection, LocalBackendSection } from "./BackendSection";
-import { OpenCodeServiceRow } from "./OpenCodeServiceRow";
 import { CodexPage } from "./CodexPage";
 import { DataPage } from "./DataPage";
 import { DirtyContext } from "./dirty";
 import { InterfacePage, type AppearanceControl } from "./InterfacePage";
-import { ProvidersPage } from "./ProvidersPage";
+import { ProvidersPage, ReloadProvidersButton } from "./ProvidersPage";
 import { SessionPage } from "./SessionPage";
 import { ShortcutsPage } from "./ShortcutsPage";
 import { ToolsPage } from "./ToolsPage";
@@ -282,7 +281,11 @@ export function SettingsModal({
       title: item.label,
       desc: item.desc,
       actions:
-        key === "agents" ? <ReloadAllButton actions={actions} /> : undefined,
+        key === "agents" ? (
+          <ReloadAllButton actions={actions} />
+        ) : key === "providers" ? (
+          <ReloadProvidersButton onSaved={onSaved} onToast={onToast} />
+        ) : undefined,
     };
   };
 
@@ -340,33 +343,14 @@ export function SettingsModal({
               agent="opencode"
               onSaved={onSaved}
               onToast={onToast}
-              serviceRow={
-                <OpenCodeServiceRow
-                  agent={opencode}
-                  enabled={opencode?.enabled !== false}
-                  pending={
-                    actions.pending.opencode === "reload" ||
-                    actions.pending.opencode === "restart"
-                      ? (actions.pending.opencode as "reload" | "restart")
-                      : undefined
-                  }
-                  busyAll={actions.reloadingAll}
-                  onReload={async () => {
-                    await actions.reload({
-                      id: "opencode",
-                      name: opencode?.name || "OpenCode",
-                    });
-                    setNeedsReload(false);
-                  }}
-                  onRestart={async () => {
-                    await actions.restart({
-                      id: "opencode",
-                      name: opencode?.name || "OpenCode",
-                    });
-                    setNeedsReload(false);
-                  }}
-                />
-              }
+              // 未换版本时「应用并重启」退化为重启当前：与换版本重启共用一个按钮。
+              onRestart={async () => {
+                await actions.restart({
+                  id: "opencode",
+                  name: opencode?.name || "OpenCode",
+                });
+                setNeedsReload(false);
+              }}
             />
             <OpenCodeAgentsSection
               enabled={opencode?.enabled !== false}

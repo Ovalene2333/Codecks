@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Copy, RefreshCw } from "lucide-react";
+import { Copy, Search } from "lucide-react";
 import { api, put } from "../api";
 import { copyText } from "../clipboard";
 import { SearchablePicker } from "../SearchablePicker";
@@ -33,6 +33,7 @@ function CliVersionField({
   onChange,
   onToast,
   onScan,
+  action,
 }: {
   name: string;
   command: string;
@@ -45,8 +46,17 @@ function CliVersionField({
   onToast: (message: string) => void;
   /** 重新扫描已安装版本；收进 picker 行尾部的图标（MD3 列表补充动作），不再独立浮行。 */
   onScan?: () => void;
+  /** 路径行行尾的动作（如「应用并重启」），与路径同排；路径行常驻，
+   * 按钮位置不再随是否选中版本来回跳。 */
+  action?: ReactNode;
 }) {
   const chosen = bins.find((item) => item.bin === selected);
+  /** 正在生效的运行时：下拉里用 meta 标出来；自动选择命中它时标自动项。 */
+  const usingBin = !loading && Boolean(effective) && effective !== command;
+  const usingAuto = !loading && (!effective || effective === command);
+  /** 路径行常驻：显式版本显示其路径，自动选择显示当前生效的路径，
+   * 切换选项只改文字不改布局。 */
+  const displayBin = selected || effective || command;
   return (
     <>
       <Field label="运行版本">
@@ -62,36 +72,52 @@ function CliVersionField({
                 selected ? "已保存的版本不可用" : "自动选择（系统 PATH）"
               }
               options={[
-                { value: "", label: "自动选择（系统 PATH）", hint: command },
-                ...bins.map((item) => ({
-                  value: item.bin,
-                  label: item.version ? `v${item.version}` : "版本未知",
-                  hint: item.bin,
-                  meta: SOURCE_LABEL[item.source] || item.source,
-                })),
+                {
+                  value: "",
+                  label: "自动选择（系统 PATH）",
+                  hint: command,
+                  meta: usingAuto ? "使用中" : undefined,
+                },
+                ...bins.map((item) => {
+                  const source = SOURCE_LABEL[item.source] || item.source;
+                  const inUse = usingBin && effective === item.bin;
+                  return item.version
+                    ? {
+                        // 版本与来源并进标签：触发器直接读出「v… · npm 全局」，
+                        // 列表里不再重复显示 meta 徽标（「使用中」除外）。
+                        value: item.bin,
+                        label: `v${item.version} · ${source}`,
+                        hint: item.bin,
+                        meta: inUse ? "使用中" : undefined,
+                      }
+                    : {
+                        value: item.bin,
+                        label: "版本未知",
+                        meta: inUse ? "使用中" : source,
+                        hint: item.bin,
+                      };
+                }),
               ]}
             />
           </div>
           {onScan ? (
             <Button
               size="sm"
-              variant="ghost"
-              iconOnly
-              busy={loading}
               disabled={disabled}
-              title="重新扫描已安装版本"
-              aria-label="扫描已安装版本"
+              title="重新探测已安装版本"
+              aria-label="探测已安装版本"
               onClick={onScan}
             >
-              <RefreshCw className={loading ? "ui-spin" : undefined} />
+              <Search className={loading ? "ui-spin" : undefined} />
+              探测
             </Button>
           ) : null}
         </div>
       </Field>
-      {selected && (
+      <div className="cli-row">
         <div className="cli-path">
-          <span>{chosen ? "安装路径" : "已保存路径"}</span>
-          <code>{selected}</code>
+          <span>{!selected || chosen ? "安装路径" : "已保存路径"}</span>
+          <code title={displayBin}>{displayBin}</code>
           <Button
             size="sm"
             variant="ghost"
@@ -100,7 +126,7 @@ function CliVersionField({
             title="复制安装路径"
             onClick={async () =>
               onToast(
-                (await copyText(selected))
+                (await copyText(displayBin))
                   ? "路径已复制"
                   : "复制失败，请手动复制路径",
               )
@@ -109,12 +135,8 @@ function CliVersionField({
             <Copy />
           </Button>
         </div>
-      )}
-      {effective && effective !== (chosen?.bin || selected || "") ? (
-        <p className="ui-field__hint">
-          生效中：<code>{effective || command}</code>
-        </p>
-      ) : null}
+        {action}
+      </div>
     </>
   );
 }
@@ -135,13 +157,17 @@ export function LocalBackendSection({
   agent,
   onSaved,
   onToast,
-  serviceRow,
+  onRestart,
 }: {
   agent: LocalAgent;
   onSaved: (snapshot: Snapshot) => void;
   onToast: (message: string) => void;
-  /** 嵌进同段顶部的服务状态行（如 OpenCode 的重载/重启行）——合并「服务」与「本机 CLI」两段。 */
-  serviceRow?: ReactNode;
+  /**
+   * 未换版本时「应用并重启」退化成的动作（重启当前运行时）：重启与换版本
+   * 重启共用一个按钮。只在需要它的 Agent 上给；不给则沿用旧行为——
+   * 无改动时按钮禁用。
+   */
+  onRestart?: () => Promise<void> | void;
 }) {
   const cached = binsCache.get(agent);
   const [bins, setBins] = useState<CodexBinInfo[]>(cached?.bins || []);
@@ -183,7 +209,35 @@ export function LocalBackendSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
+  const changed = selected !== saved;
+  /** 按钮文案跟着是否有改动走：没换版本点它就是重启当前。 */
+  const applyDisabled =
+    pinned || blocking || missing || saved === undefined || (!changed && !onRestart);
+  const applyLabel = saving ? "应用中…" : changed ? "应用并重启" : "重启";
+  /** 运行中与已选择的版本对不上时提示（Codex 页同款；只在给了 onRestart
+   * 的合并按钮页显示，从扫描结果本地推导版本号）。 */
+  const versionOf = (bin: string) => {
+    const found = bins.find((item) => item.bin === bin);
+    return found?.version ? `v${found.version}` : bin;
+  };
+  const versionMismatch =
+    Boolean(onRestart) &&
+    !loading &&
+    Boolean(effective) &&
+    Boolean(selected) &&
+    effective !== selected;
+
   const apply = async () => {
+    // 未换版本：退化为重启当前（重启与换版本重启共用一个按钮）。
+    if (!changed && onRestart) {
+      setSaving(true);
+      try {
+        await onRestart();
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     setSaving(true);
     try {
       const response = await put<{
@@ -225,13 +279,13 @@ export function LocalBackendSection({
           已由环境变量指定，无法在此修改；改完环境变量后重启 Deck。
         </Note>
       ) : null}
+      {versionMismatch ? (
+        <Note tone="warn" title="运行版本与选择的版本不一致">
+          当前运行 {versionOf(effective)}，已选择 {versionOf(selected)}
+          ；空闲后点「应用并重启」。
+        </Note>
+      ) : null}
       <Group pad>
-        {serviceRow}
-        {missing && !loading ? (
-          <p className="ui-field__hint" role="note">
-            已保存的 CLI 路径不可用；重新扫描后选择其它版本，或选回「自动选择」。
-          </p>
-        ) : null}
         <CliVersionField
           name={name}
           command={agent}
@@ -243,23 +297,17 @@ export function LocalBackendSection({
           onChange={setSelected}
           onToast={onToast}
           onScan={() => void load()}
+          action={
+            <Button
+              variant="primary"
+              busy={saving}
+              disabled={applyDisabled}
+              onClick={() => void apply()}
+            >
+              {applyLabel}
+            </Button>
+          }
         />
-        <div className="ui-actions">
-          <Button
-            variant="primary"
-            busy={saving}
-            disabled={
-              pinned ||
-              blocking ||
-              missing ||
-              saved === undefined ||
-              selected === saved
-            }
-            onClick={() => void apply()}
-          >
-            {saving ? "应用中…" : "应用并重启"}
-          </Button>
-        </div>
       </Group>
     </Section>
   );
@@ -376,26 +424,23 @@ export function CodexBackendSection({
           onChange={setSelected}
           onToast={onToast}
           onScan={() => void load()}
+          action={
+            <Button
+              variant="primary"
+              busy={saving}
+              disabled={
+                Boolean(runtime?.codexBinPinned) ||
+                blocking ||
+                missing ||
+                saved === undefined ||
+                (selected === saved && !mismatch && !stale)
+              }
+              onClick={() => void save()}
+            >
+              {saving ? "应用中…" : "应用并重启"}
+            </Button>
+          }
         />
-        <div className="ui-actions">
-          <Button
-            variant="primary"
-            busy={saving}
-            disabled={
-              Boolean(runtime?.codexBinPinned) ||
-              blocking ||
-              missing ||
-              saved === undefined ||
-              (selected === saved && !mismatch && !stale)
-            }
-            onClick={() => void save()}
-          >
-            {saving ? "应用中…" : "应用并重启"}
-          </Button>
-        </div>
-        {runtime?.codexVersionRunning ? (
-          <p className="ui-section__desc">运行版本：v{runtime.codexVersionRunning}</p>
-        ) : null}
       </Group>
     </Section>
   );

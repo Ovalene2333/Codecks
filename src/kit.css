@@ -803,6 +803,11 @@
   gap: var(--space-3);
 }
 
+/* display:grid 会压掉 hidden 属性的默认表现，弹窗里 hidden 的表单必须真的消失。 */
+.ui-form[hidden] {
+  display: none;
+}
+
 .ui-form__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -981,9 +986,16 @@
   align-items: start;
 }
 
-/* Agent 签（Seg）与其下内容之间留出呼吸：不靠各页自己加 margin。 */
+/* Agent 签（Seg）与其下内容之间留出呼吸：不靠各页自己加 margin；
+   若 Seg 紧跟在前一块（Section/Note）之后，同样按区块节奏给足上边距——
+   Seg 外层是 display:contents 的 Tabs 包装根，兄弟选择器要跨它取子级。 */
 .ui-seg--page {
   margin-bottom: var(--space-5);
+}
+
+.ui-section + * > .ui-seg--page,
+.ui-note + * > .ui-seg--page {
+  margin-top: var(--space-5);
 }
 
 /* ── Provider 分组 + 卡片（opencode.json 自定义 provider 列表）──────────

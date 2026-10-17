@@ -189,6 +189,9 @@ export class CodexAdapter extends EventEmitter {
   private runningCodexVersion?: string;
   /** 设置页选中的后端版本（后台探测，非阻塞）。 */
   private selectedCodexVersion?: string;
+  /** 选中版本探测的代次：启动期后台探测与切换后探测可能并存，
+   * 只接受最新一次的结果，迟到的旧探测直接丢弃。 */
+  private selectedVersionProbe = 0;
 
   constructor(
     private store: ProviderStore,
@@ -823,6 +826,7 @@ export class CodexAdapter extends EventEmitter {
 
   /** 探测选中后端的版本并缓存，失败时保持旧值（best-effort，不抛错）。 */
   async refreshSelectedCodexVersion() {
+    const probe = ++this.selectedVersionProbe;
     try {
       const selected = resolveEffectiveCodexBin(
         process.env,
@@ -830,6 +834,9 @@ export class CodexAdapter extends EventEmitter {
         this.store.runtimeCodexBin?.() || "",
       );
       const version = await probeCodexVersion(selected || "codex");
+      // 旧探测后完成时直接丢弃：否则启动期查旧二进制的结果会覆盖
+      // 切换后的新值，设置页「已选择」就和下拉框打架了。
+      if (probe !== this.selectedVersionProbe) return undefined;
       if (version) {
         this.selectedCodexVersion = version;
         this.broadcast("runtime.status", this.runtimeStatus());

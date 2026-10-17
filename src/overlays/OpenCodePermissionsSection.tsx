@@ -140,8 +140,8 @@ export function OpenCodePermissionsSection({
             value={scope}
             onChange={setScope}
             items={[
-              { value: "global", label: "全局" },
               { value: "project", label: "本项目" },
+              { value: "global", label: "全局" },
             ]}
           />
         ) : undefined
@@ -191,8 +191,8 @@ export function OpenCodePermissionsSection({
         </Group>
       )}
       {data && (
-        <Field label="补充工具" hint="如 webfetch。">
-          <div className="ui-form__grid">
+        <Field label="补充工具" hint="如 webfetch。" group>
+          <div className="oc-add">
             <input
               className="ui-input"
               value={customTool}
@@ -206,7 +206,7 @@ export function OpenCodePermissionsSection({
               placeholder="工具名"
             />
             <Select
-              className="ui-input"
+              className="ui-input oc-add__rule"
               aria-label="新工具的审批规则"
               value={customRule}
               onValueChange={(nextValue) => setCustomRule(nextValue as Rule)}
@@ -215,9 +215,7 @@ export function OpenCodePermissionsSection({
               <option value="allow">直接允许</option>
               <option value="deny">直接拒绝</option>
             </Select>
-          </div>
-          <div className="ui-actions">
-            <Button size="sm" type="button" disabled={!customTool.trim() || saving !== null} onClick={addCustom}>
+            <Button type="button" disabled={!customTool.trim() || saving !== null} onClick={addCustom}>
               <Plus aria-hidden />
               添加
             </Button>

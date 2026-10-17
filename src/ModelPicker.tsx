@@ -10,6 +10,13 @@ import {
 import { Keyboard, List } from "lucide-react";
 import { api } from "./api";
 import { FALLBACK_EFFORTS, reasoningEffortLabel } from "./codexLabels";
+import {
+  affinityListParams,
+  composeModelOptions,
+  loadModelAffinity,
+  saveModelAffinity,
+  type ModelAffinityData,
+} from "./model-affinity";
 import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
 import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
@@ -123,6 +130,9 @@ export function ModelPicker({
   const [manual, setManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
+  // 「上次选择 / 常用 / 收藏」：服务端按 agent + 供应商/目录作用域存储，
+  // 手机和桌面入口共享同一份（不能放浏览器本地存储）。
+  const [affinity, setAffinity] = useState<ModelAffinityData | null>(null);
   /* OpenCode model ids already carry their provider (`providerID/modelID`), so
      its catalog is agent-scoped and needs no providerId; every adapter still
      renders the same grouped, searchable picker with a manual-entry escape. */
@@ -233,6 +243,45 @@ export function ModelPicker({
   // acme/custom-model-0901 无 variants 元数据）；
   // claude/ACP 在 SDK 目录未加载前同样没有声明，手填透传由后端白名单兜底。
   const showFallbackEffort = efforts.length === 0;
+  const scope = useMemo(
+    () =>
+      affinityListParams(
+        agentId,
+        agentId === "opencode" ? "" : providerId,
+        agentId === "opencode" ? debouncedCwd : undefined,
+      ),
+    [agentId, providerId, debouncedCwd],
+  );
+  useEffect(() => {
+    let cancelled = false;
+    setAffinity(null);
+    void loadModelAffinity(agentId, scope).then((data) => {
+      if (!cancelled && data) setAffinity(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, scope]);
+  // 收藏/常用/上次选择分组：命中项从供应商分组里挪到组前，同一模型不出现两次。
+  const affinityOptions = useMemo(
+    () => composeModelOptions(searchOptions, affinity, model),
+    [searchOptions, affinity, model],
+  );
+  /** 用户选中模型：回写父级的同时记一次「使用」，供常用排序。 */
+  const recordModelUse = (value: string) => {
+    void saveModelAffinity(agentId, scope, { used: value }).then((data) => {
+      if (data) setAffinity(data);
+    });
+  };
+  /** 行尾星标切换：只改收藏，不选中该行。 */
+  const toggleModelStar = (value: string) => {
+    const on = !(affinity?.starred || []).includes(value);
+    void saveModelAffinity(agentId, scope, {
+      star: { model: value, on },
+    }).then((data) => {
+      if (data) setAffinity(data);
+    });
+  };
   return (
     <>
       <label className={compact ? "toolbar-select" : undefined}>
@@ -245,25 +294,30 @@ export function ModelPicker({
             disabled={disabled}
             aria-label="模型"
             title="模型"
-            onCommit={(next) => onChange({ model: next, reasoningEffort })}
+            onCommit={(next) => {
+              onChange({ model: next, reasoningEffort });
+              recordModelUse(next);
+            }}
             placeholder={loading ? "正在读取模型目录…" : "模型 ID（目录不可用时可手填，留空用供应商默认）"}
           />
         ) : (
           <SearchablePicker
             ariaLabel="模型"
             value={model}
-            options={searchOptions}
+            options={affinityOptions}
             disabled={disabled}
             loading={loading}
             placeholder="选择模型"
             emptyText="没有匹配的模型"
             connectedToggle={combinedCatalog}
             fallbackLabel={model || undefined}
+            onStar={toggleModelStar}
             onChange={(next) => {
               const nextModel = models.find(
                 (item) => item.model === next || item.id === next,
               );
               onChange({ model: next, reasoningEffort: effortFor(nextModel) });
+              recordModelUse(next);
             }}
           />
         )}
@@ -326,6 +380,16 @@ export function ModelPicker({
                 {reasoningEffortLabel(item.reasoningEffort)}
               </option>
             ))}
+            {/* 换模型后残留的旧档位不在新模型声明里时补一项，保证设置面板
+                与输入框底栏看到的是同一个当前值，用户可直观切到支持档。 */}
+            {reasoningEffort &&
+              !efforts.some(
+                (item) => item.reasoningEffort === reasoningEffort,
+              ) && (
+                <option value={reasoningEffort}>
+                  {reasoningEffortLabel(reasoningEffort)}
+                </option>
+              )}
           </Select>
         </label>
       ) : (

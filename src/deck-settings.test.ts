@@ -5,6 +5,7 @@ import {
   DEFAULT_DECK_SETTINGS,
   getDeckSettings,
   normalizeDeckSettings,
+  normalizeInitialTurns,
   normalizeSidebarWidth,
   resetDeckSettings,
   updateDeckSettings,
@@ -51,6 +52,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
     hiddenTools: ["git", "terminal"],
     toolOpenTarget: "inline",
     sidebarWidth: 260,
+    initialTurns: 10,
   });
 
   const mixed = normalizeDeckSettings({
@@ -66,6 +68,17 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
   assert.equal(mixed.toolOpenTarget, DEFAULT_DECK_SETTINGS.toolOpenTarget);
   assert.deepEqual(mixed.hiddenTools, DEFAULT_DECK_SETTINGS.hiddenTools);
   assert.equal(mixed.sidebarWidth, 0);
+});
+
+test("normalizeInitialTurns clamps to the usable range", () => {
+  assert.equal(normalizeInitialTurns(undefined), 10);
+  assert.equal(normalizeInitialTurns("20" as never), 10);
+  assert.equal(normalizeInitialTurns(Number.NaN), 10);
+  assert.equal(normalizeInitialTurns(4.4), 5);
+  assert.equal(normalizeInitialTurns(20), 20);
+  assert.equal(normalizeInitialTurns(900), 100);
+  assert.equal(normalizeDeckSettings({ initialTurns: 20 }).initialTurns, 20);
+  assert.equal(normalizeDeckSettings({}).initialTurns, 10);
 });
 
 test("normalizeSidebarWidth clamps to the usable range", () => {

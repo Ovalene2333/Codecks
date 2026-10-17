@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Square, SlidersHorizontal, X } from "lucide-react";
+import { ArrowUp, Check, ImagePlus, Square, SlidersHorizontal, X } from "lucide-react";
 import type {
   AgentCapabilities,
   ApprovalMode,
   ClaudePermissionMode,
+  ModelInfo,
   SandboxMode,
   ThreadSummary,
   MessageDeliveryMode,
@@ -12,7 +13,6 @@ import { messageControls } from "./message-controls";
 import { composerEnterAction, useDeckSettings } from "../deck-settings";
 import {
   APPROVAL_OPTIONS,
-  FALLBACK_EFFORTS,
   SANDBOX_OPTIONS,
   approvalMode,
   approvalModeLabel,
@@ -36,6 +36,7 @@ import {
   PromptInputTextarea,
   PromptInputTools,
 } from "./PromptInput";
+import { Menu, MenuItem, MenuLabel, MenuSep } from "../kit";
 
 export type ComposerContextPatch = {
   reasoningEffort?: string;
@@ -120,14 +121,8 @@ export function Composer({
   const composing = useRef(false);
   const picker = useRef<HTMLInputElement>(null);
   const menu = useRef<HTMLDivElement>(null);
-  const composerRoot = useRef<HTMLElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [activeCmd, setActiveCmd] = useState(0);
-  const [contextMenu, setContextMenu] = useState<{
-    field: ContextField;
-    left: number;
-    bottom: number;
-  } | null>(null);
   const { sendKey } = useDeckSettings();
   const compacting = Boolean(thread.compacting);
   const modes = capabilities?.messages?.deliveryModes;
@@ -138,18 +133,21 @@ export function Composer({
   // 输入框底部中间的当前配置：四个固定槽位（模型/推理强度/沙箱/审批），
   // 渲染成 kit ui-badge 同款语言的 chip，只显示当前值，空槽隐藏占位，
   // 仅桌面端显示。
-  const contextModelRaw = thread.resolvedModel || thread.model || "默认";
+  // 显示优先用会话的 model 设置值；只有空值/`default` 占位时才回退到上轮
+  // 实际跑的 resolvedModel。之前直接 `resolvedModel || model`，设置里换了
+  // 模型但还没跑下一轮时，底栏会一直显示旧模型，和设置面板对不上。
+  const settingModelRaw = thread.model || "";
+  const contextModelRaw =
+    settingModelRaw && settingModelRaw !== "default"
+      ? settingModelRaw
+      : thread.resolvedModel || settingModelRaw || "默认";
   // 展示名优先级：服务端 modelLabel > 本地目录缓存 > 压缩 ID。
   // 缓存在 useState 里同步种下，命中过的供应商首帧就是展示名。
-  const [modelNames, setModelNames] = useState<Record<string, string>>({
-    ...(() => {
-      const entry = modelCatalogCache.peek(catalogPathForComposer(thread))?.value;
-      const names: Record<string, string> = {};
-      if (entry)
-        for (const item of entry)
-          names[item.model] = item.displayName || item.model;
-      return names;
-    })(),
+  // 目录整体留存：quick 菜单的推理强度候选要按当前模型的
+  // supportedReasoningEfforts 出，不能拿全局 fallback 大全充数。
+  const [catalog, setCatalog] = useState<ModelInfo[]>(() => {
+    const entry = modelCatalogCache.peek(catalogPathForComposer(thread))?.value;
+    return entry ? [...entry] : [];
   });
   useEffect(() => {
     if (!composerCatalogEnabled(thread)) return;
@@ -157,17 +155,16 @@ export function Composer({
     let cancelled = false;
     loadModelCatalog(path)
       .then((list) => {
-        if (cancelled) return;
-        const names: Record<string, string> = {};
-        for (const item of list)
-          names[item.model] = item.displayName || item.model;
-        setModelNames(names);
+        if (!cancelled) setCatalog(list);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [composerAgentId, thread.providerId, thread.cwd]);
+  const modelNames: Record<string, string> = {};
+  for (const item of catalog)
+    modelNames[item.model] = item.displayName || item.model;
   const contextModelShort =
     contextModelRaw.split("/").filter(Boolean).pop() || contextModelRaw;
   const contextModel =
@@ -177,6 +174,34 @@ export function Composer({
     modelNames[contextModelRaw] ||
     modelNames[contextModelShort] ||
     contextModelShort;
+  // 目录里当前模型的能力声明：quick 菜单的推理强度候选按模型支持档位出。
+  // 匹配顺序与设置面板（ModelPicker）保持一致：先按会话的 model 设置找，
+  // 找不到再用 resolvedModel（opencode 的 `default` 占位等场景），最后按
+  // 短 ID（`a/b/c` 取尾段）兜底，保证两处看到的是同一模型的档位。
+  const settingModelId = thread.model || "";
+  const resolvedModelId = thread.resolvedModel || "";
+  const findInCatalog = (candidate: string) => {
+    if (!candidate) return undefined;
+    const direct = catalog.find(
+      (item) => item.model === candidate || item.id === candidate,
+    );
+    if (direct) return direct;
+    const short = candidate.split("/").filter(Boolean).pop() || candidate;
+    return catalog.find((item) => {
+      const modelShort =
+        item.model.split("/").filter(Boolean).pop() || item.model;
+      const idShort = item.id.split("/").filter(Boolean).pop() || item.id;
+      return modelShort === short || idShort === short;
+    });
+  };
+  const catalogMatched =
+    findInCatalog(settingModelId) ||
+    findInCatalog(resolvedModelId) ||
+    (!settingModelId && !resolvedModelId
+      ? catalog.find((item) => item.isDefault) || catalog[0]
+      : undefined) ||
+    undefined;
+  const supportedEfforts = catalogMatched?.supportedReasoningEfforts || [];
   const contextEffort = thread.reasoningEffort
     ? reasoningEffortLabel(thread.reasoningEffort)
     : "";
@@ -213,12 +238,31 @@ export function Composer({
   const contextSegClass = (slot: { name: string; value: string }) =>
     `composer-context-seg${slot.name === "模型" ? " is-model" : ""}${slot.value ? "" : " is-empty"}`;
   // 段快捷菜单：点值直接弹该槽位候选，少一次进设置面板；模型段仍走面板。
-  const effortChoices = [
-    { value: "", label: "默认" },
-    ...FALLBACK_EFFORTS.filter(
-      (item) => composerAgentId !== "claude" || item !== "minimal",
-    ).map((item) => ({ value: item, label: reasoningEffortLabel(item) })),
-  ];
+  // 推理强度候选只在模型目录里声明过的档位里选（空值 = 跟随默认）。
+  // 目录未加载 / 未命中 / 模型声明为空时不再展开全局 fallback 大全：
+  // 只给「默认 + 当前值」，避免选出模型实际不支持的档位；自定义手填模型
+  // 请走「更多设置…」里的手填入口。当前值不在声明里时（换模型后的旧值）
+  // 也补一项，保证底栏勾选与设置面板看到的是同一个值。
+  const currentEffort = thread.reasoningEffort || "";
+  const effortChoices = (() => {
+    const choices = [{ value: "", label: "默认" }];
+    for (const item of supportedEfforts) {
+      if (!choices.some((choice) => choice.value === item.reasoningEffort))
+        choices.push({
+          value: item.reasoningEffort,
+          label: reasoningEffortLabel(item.reasoningEffort),
+        });
+    }
+    if (
+      currentEffort &&
+      !choices.some((choice) => choice.value === currentEffort)
+    )
+      choices.push({
+        value: currentEffort,
+        label: reasoningEffortLabel(currentEffort),
+      });
+    return choices;
+  })();
   const CONTEXT_CURRENT: Record<ContextField, string> = {
     effort: thread.reasoningEffort || "",
     sandbox: thread.sandbox || "workspace-write",
@@ -246,38 +290,19 @@ export function Composer({
         }));
     }
   };
-  const openContextSegment = (
-    field: ContextField | null,
-    node: HTMLElement,
-  ) => {
-    if (!onQuickSetting || !field) {
-      onSessionSettings?.();
-      return;
-    }
-    const root = composerRoot.current?.getBoundingClientRect();
-    const rect = node.getBoundingClientRect();
-    if (!root) {
-      setContextMenu({ field, left: rect.left + rect.width / 2, bottom: rect.bottom + 8 });
-      return;
-    }
-    const left = Math.min(
-      Math.max(rect.left + rect.width / 2 - root.left, 72),
-      Math.max(root.width - 72, 72),
-    );
-    setContextMenu((current) =>
-      current?.field === field
-        ? null
-        : {
-            field,
-            left,
-            bottom: root.bottom - rect.top + 8,
-          },
-    );
-  };
-  const chooseContextValue = (value: string) => {
-    if (!contextMenu || !onQuickSetting) return;
-    const { field } = contextMenu;
-    setContextMenu(null);
+  // 槽位 → 快捷菜单字段的映射；null = 不提供快捷菜单（走会话设置）。
+  const contextFieldFor = (slot: { name: string }): ContextField | null =>
+    slot.name === "推理强度"
+      ? "effort"
+      : slot.name === "沙箱" && composerAgentId === "codex"
+        ? "sandbox"
+        : slot.name === "审批" && composerAgentId === "codex"
+          ? "approval"
+          : slot.name === "权限" && composerAgentId === "claude"
+            ? "permission"
+            : null;
+  const chooseContextValue = (field: ContextField, value: string) => {
+    if (!onQuickSetting) return;
     if (field === "effort") onQuickSetting({ reasoningEffort: value });
     else if (field === "sandbox")
       onQuickSetting({ sandbox: value as SandboxMode });
@@ -351,7 +376,6 @@ export function Composer({
 
   return (
     <footer
-      ref={composerRoot}
       className={`composer ${running ? "running" : ""} ${compacting ? "compacting" : ""} ${dragOver ? "drag-over" : ""}`}
       onDragEnter={(event) => {
         if (event.dataTransfer?.types.includes("Files")) setDragOver(true);
@@ -531,39 +555,72 @@ export function Composer({
               </PromptInputButton>
             )}
             {/* 当前配置一条分段式状态条：与输入框本体同一容器语言，
-                显示两字压缩值，空槽留白占位；可点时每段都打开会话设置。 */}
+                显示两字压缩值，空槽留白占位；可点的槽位用 kit Menu
+                弹该槽位候选，少进一层设置面板。 */}
             {onSessionSettings ? (
               <div
                 className="composer-context"
                 aria-label={`当前配置：${contextAria}`}
               >
-                {contextDisplaySlots.map((slot) => (
-                  <button
-                    key={slot.name}
-                    type="button"
-                    className={contextSegClass(slot)}
-                    title={`${slot.name}：${slot.full ?? slot.value}`}
-                    aria-label={`${slot.name}：${slot.full ?? slot.value}`}
-                    onClick={(event) =>
-                      openContextSegment(
-                        slot.name === "推理强度"
-                          ? "effort"
-                          : slot.name === "沙箱" && composerAgentId === "codex"
-                            ? "sandbox"
-                            : slot.name === "审批" && composerAgentId === "codex"
-                              ? "approval"
-                              : slot.name === "权限" && composerAgentId === "claude"
-                                ? "permission"
-                                : null,
-                        event.currentTarget,
-                      )
-                    }
-                  >
-                    <span className="composer-context-seg__value">
-                      {slot.short}
-                    </span>
-                  </button>
-                ))}
+                {contextDisplaySlots.map((slot) => {
+                  const field = contextFieldFor(slot);
+                  if (field && onQuickSetting) {
+                    return (
+                      <Menu
+                        key={slot.name}
+                        trigger={
+                          <button
+                            type="button"
+                            className={contextSegClass(slot)}
+                            title={`${slot.name}：${slot.full ?? slot.value}`}
+                            aria-label={`${slot.name}：${slot.full ?? slot.value}`}
+                          >
+                            <span className="composer-context-seg__value">
+                              {slot.short}
+                            </span>
+                          </button>
+                        }
+                        side="top"
+                        align="center"
+                      >
+                        <MenuLabel>{CONTEXT_FIELD_LABELS[field]}</MenuLabel>
+                        {(contextChoicesFor(field) || []).map((choice) => (
+                          <MenuItem
+                            key={choice.value}
+                            icon={
+                              CONTEXT_CURRENT[field] === choice.value ? (
+                                <Check />
+                              ) : undefined
+                            }
+                            onSelect={() =>
+                              chooseContextValue(field, choice.value)
+                            }
+                          >
+                            {choice.label}
+                          </MenuItem>
+                        ))}
+                        <MenuSep />
+                        <MenuItem onSelect={onSessionSettings}>
+                          更多设置…
+                        </MenuItem>
+                      </Menu>
+                    );
+                  }
+                  return (
+                    <button
+                      key={slot.name}
+                      type="button"
+                      className={contextSegClass(slot)}
+                      title={`${slot.name}：${slot.full ?? slot.value}`}
+                      aria-label={`${slot.name}：${slot.full ?? slot.value}`}
+                      onClick={field ? undefined : onSessionSettings}
+                    >
+                      <span className="composer-context-seg__value">
+                        {slot.short}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <div
@@ -609,44 +666,6 @@ export function Composer({
           </div>
         </PromptInputFooter>
       </PromptInput>
-      {contextMenu && (
-        <>
-          <div
-            className="composer-context-backdrop"
-            onClick={() => setContextMenu(null)}
-          />
-          <div
-            className="composer-context-menu"
-            role="listbox"
-            aria-label={`选择${CONTEXT_FIELD_LABELS[contextMenu.field]}`}
-            style={{ left: contextMenu.left, bottom: contextMenu.bottom }}
-          >
-            {(contextChoicesFor(contextMenu.field) || []).map((choice) => (
-              <button
-                key={choice.value}
-                type="button"
-                className={CONTEXT_CURRENT[contextMenu.field] === choice.value ? "on" : ""}
-                title={choice.label}
-                onClick={() => chooseContextValue(choice.value)}
-              >
-                {choice.label}
-              </button>
-            ))}
-            {onSessionSettings && (
-              <button
-                type="button"
-                className="more"
-                onClick={() => {
-                  setContextMenu(null);
-                  onSessionSettings();
-                }}
-              >
-                更多设置…
-              </button>
-            )}
-          </div>
-        </>
-      )}
       <input
         ref={picker}
         type="file"

@@ -69,6 +69,13 @@ test("OpenCode adapter binds provider models and preserves the completed turn id
   assert.equal(models[1].supportsImages, false);
   assert.equal(models[2].supportsImages, true);
 
+  // 显式 provider 在目录里不存在：只给 default 占位，不回退全量目录。
+  const missed = adapter.listModels("no-such-provider");
+  assert.deepEqual(
+    (missed as any[]).map((model: any) => model.model),
+    ["default"],
+  );
+
   const created: any = await adapter.createThread("openai", {
     cwd: "/work",
     model: "openai/gpt-5",
@@ -1235,16 +1242,30 @@ test("OpenCode sends the picked effort as a variant the model advertises", async
   await adapter.sendTurn("openai", "s1", "继续");
   assert.deepEqual(JSON.parse(String(posts.at(-1)?.body)).variant, "high");
 
-  // An effort the model does not advertise is dropped instead of rejected.
+  // 模型明确不支持的档位：写入时即拒绝，不留到发送时静默按默认档位跑。
   const sent = (adapter as any).threads.get("s1");
   sent.status = "idle";
   sent.activeTurnId = undefined;
-  await adapter.updateThreadSettings("openai", "s1", {
-    reasoningEffort: "ultra",
-  });
+  await assert.rejects(
+    adapter.updateThreadSettings("openai", "s1", { reasoningEffort: "ultra" }),
+    /不支持推理强度 ultra/,
+  );
+  assert.equal((adapter as any).threads.get("s1").reasoningEffort, "high");
   await adapter.sendTurn("openai", "s1", "继续");
-  assert.equal(JSON.parse(String(posts.at(-1)?.body)).variant, undefined);
+  assert.deepEqual(JSON.parse(String(posts.at(-1)?.body)).variant, "high");
   assert.equal(posts.length, 2);
+
+  // 历史脏档位（写入校验之前存下的）：发送时大声失败，一轮也不发。
+  sent.status = "idle";
+  sent.activeTurnId = undefined;
+  sent.reasoningEffort = "ultra";
+  await assert.rejects(adapter.sendTurn("openai", "s1", "继续"), /不支持推理强度 ultra/);
+  assert.equal(posts.length, 2);
+
+  // 清空模型即回到“跟随默认”，不再把旧值写回去。
+  await adapter.updateThreadSettings("openai", "s1", { model: "" });
+  assert.equal((adapter as any).threads.get("s1").model, "default");
+  assert.equal(saved.get("s1")?.model, "default");
 });
 
 test("OpenCode refuses an effort when the model declares no variants", async () => {
@@ -1278,13 +1299,21 @@ test("OpenCode refuses an effort when the model declares no variants", async () 
     cwd: "/work",
     model: "acme/custom-model",
   });
-  await adapter.updateThreadSettings("acme", "s1", {
-    model: "acme/custom-model",
-    reasoningEffort: "medium",
-  });
 
+  // 写入时即拒绝：模型未声明 variants，任何档位都不收。
+  await assert.rejects(
+    adapter.updateThreadSettings("acme", "s1", {
+      model: "acme/custom-model",
+      reasoningEffort: "medium",
+    }),
+    /未配置推理强度档位/,
+  );
+  assert.equal((adapter as any).threads.get("s1").reasoningEffort, undefined);
+
+  // 历史脏档位（写入校验之前存下的）：发送与命令同样大声失败，一次也不发。
   // OpenCode answers such a prompt with "Variant unavailable", so Deck fails
   // fast and points at the missing config instead of sending it.
+  (adapter as any).threads.get("s1").reasoningEffort = "medium";
   await assert.rejects(adapter.sendTurn("acme", "s1", "继续"), /未配置推理强度档位/);
   await assert.rejects(
     adapter.runSessionCommand("acme", "s1", "/init"),
@@ -1295,6 +1324,104 @@ test("OpenCode refuses an effort when the model declares no variants", async () 
     (adapter.listThreads()[0] as any).status !== "running",
     true,
     "被拒绝的发送不应把会话标记为运行中",
+  );
+});
+
+test("OpenCode concurrent sends on one thread are serialized and the displaced turn is closed", async () => {
+  const posts: string[] = [];
+  const events: Array<{ type: string; data: any }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/prompt_async") && init?.method === "POST") {
+        posts.push(value);
+        // 第一轮受理故意慢半拍，放大并发受理的交错窗口。
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return Response.json({ id: "msg" });
+      }
+      if (value.includes("/session") && init?.method === "POST")
+        return Response.json({ id: "s1", directory: "/work" });
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  adapter.on("event", (event: any) => events.push(event));
+  await adapter.refreshAll();
+  await adapter.createThread("openai", { cwd: "/work", model: "default" });
+
+  // 同一会话并发两轮：受理串行，两轮都发出，第二轮接管第一轮。
+  const [first, second] = await Promise.all([
+    adapter.sendTurn("openai", "s1", "第一轮"),
+    adapter.sendTurn("openai", "s1", "第二轮"),
+  ]);
+  assert.equal(posts.length, 2);
+  assert.notEqual(first.turn.id, second.turn.id);
+  assert.equal((adapter as any).threads.get("s1").activeTurnId, second.turn.id);
+
+  // 被顶掉的第一轮必须收到 interrupted 闭环，不能在前端一直转圈。
+  const completed = events.filter((event) => event.type === "agent.event" && event.data?.method === "turn/completed");
+  assert.ok(
+    completed.some((event) => event.data?.params?.turn?.id === first.turn.id &&
+      event.data?.params?.turn?.status === "interrupted"),
+    "被接管的旧轮应补发 turn/completed interrupted",
+  );
+});
+
+test("OpenCode rejects malformed model settings instead of silently running the wrong model", async () => {
+  const posts: Array<{ url: string; body?: string }> = [];
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/prompt_async") && init?.method === "POST") {
+        posts.push({ url: value, body: init.body ? String(init.body) : undefined });
+        return Response.json({ id: "msg" });
+      }
+      if (value.includes("/session") && init?.method === "POST") {
+        posts.push({ url: value });
+        return Response.json({ id: "s1", directory: "/work" });
+      }
+      if (value.includes("/provider"))
+        return Response.json({ all: {}, connected: [] });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+
+  // 写入路径：半截模型直接拒绝，不创建原生会话、不落盘。
+  await assert.rejects(
+    adapter.createThread("openai", { cwd: "/work", model: "openai/" }),
+    /模型格式无效/,
+  );
+  assert.ok(
+    !posts.some((call) => call.url.endsWith("/session")),
+    "脏模型不应创建原生会话",
+  );
+  await adapter.createThread("openai", { cwd: "/work", model: "openai/gpt-5" });
+  // 分段空格归一化入库，多余斜杠直接拒绝。
+  await adapter.createThread("openai", { cwd: "/work", model: "  openai / gpt-5 " });
+  assert.equal((adapter as any).threads.get("s1").model, "openai/gpt-5");
+  await assert.rejects(
+    adapter.updateThreadSettings("openai", "s1", { model: "openai/gpt-5/extra" }),
+    /模型格式无效/,
+  );
+  await assert.rejects(
+    adapter.updateThreadSettings("openai", "s1", { model: "openai/" }),
+    /模型格式无效/,
+  );
+  assert.equal((adapter as any).threads.get("s1").model, "openai/gpt-5");
+
+  // 发送路径：历史脏数据（如已落盘的 `openai/`）大声失败，一次也不发，
+  // 绝不带着空 modelID 让 serve 静默回退到默认模型。
+  (adapter as any).threads.get("s1").model = "openai/";
+  await assert.rejects(adapter.sendTurn("openai", "s1", "继续"), /无效/);
+  assert.ok(
+    !posts.some((call) => call.url.includes("/prompt_async")),
+    "脏模型不应发送任何回合",
   );
 });
 
@@ -3179,4 +3306,198 @@ test("OpenCode forwards per-part stats when a reasoning/text part completes", as
     time: { start: 1_000, end: 2_000 },
   });
   assert.equal(itemUpdates()[2]?.stats, undefined);
+});
+
+test("OpenCode interrupt validates the turn and fails fast with a retryable error", async () => {
+  const calls: string[] = [];
+  let failAbort = false;
+  const adapter = new OpenCodeAdapter({
+    initialThreads: [{
+      id: "t", agentId: "opencode", providerId: "p", name: "test",
+      preview: "", cwd: "/tmp", model: "default",
+      status: "running", activeTurnId: "turn-1", updatedAt: 1,
+    }],
+    fetcher: (async (url) => {
+      calls.push(String(url));
+      if (String(url).includes("/abort") && failAbort)
+        return Response.json({ error: "down" }, { status: 500 });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+
+  // 打错轮：直接拒绝，一次 abort 都不发，避免误杀新轮。
+  await assert.rejects(adapter.interrupt("p", "t", "stale-turn"), /被新轮接管/);
+  assert.equal(calls.length, 0);
+
+  // abort 发不出去：抛可重试的明确错误，本地 running 原样保留等事件纠正。
+  failAbort = true;
+  await assert.rejects(adapter.interrupt("p", "t", "turn-1"), /停止请求发送失败/);
+  assert.equal((adapter as any).threads.get("t").status, "running");
+  assert.equal((adapter as any).threads.get("t").activeTurnId, "turn-1");
+
+  // 正常打断：一次 abort 即返回。
+  failAbort = false;
+  await adapter.interrupt("p", "t", "turn-1");
+  assert.equal(calls.filter((url) => url.includes("/abort")).length, 2);
+});
+
+test("OpenCode watchdog reconciles a silent running thread", async () => {
+  const events: Array<{ type: string; data: any }> = [];
+  const states: Record<string, { type: string }> = {
+    t: { type: "idle" },
+    t2: { type: "busy" },
+  };
+  const thread = (id: string) => ({
+    id, agentId: "opencode", providerId: "p", name: "test",
+    preview: "", cwd: "/tmp", model: "default",
+    status: "running", activeTurnId: "turn-1", updatedAt: 1,
+  });
+  const adapter = new OpenCodeAdapter({
+    initialThreads: [thread("t"), thread("t2")],
+    fetcher: (async (url) => {
+      if (String(url).includes("/session/status")) return Response.json(states);
+      return new Response(null, { status: 204 });
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  adapter.on("event", (event: any) => events.push(event));
+  const stale = () => Date.now() - 61_000;
+  (adapter as any).beginRunningTurn((adapter as any).threads.get("t"), "turn-1");
+  (adapter as any).runningTurns.get("t").lastEventAt = stale();
+  (adapter as any).beginRunningTurn((adapter as any).threads.get("t2"), "turn-1");
+  (adapter as any).runningTurns.get("t2").lastEventAt = stale();
+
+  await (adapter as any).watchRunningTurns();
+
+  // serve 明确 idle：本地归位，旧轮闭环。
+  assert.equal((adapter as any).threads.get("t").status, "idle");
+  assert.ok(events.some((event) => event.type === "agent.event" &&
+    event.data?.method === "turn/completed" &&
+    event.data?.params?.turn?.id === "turn-1"),
+    "看门狗归位必须补发 turn/completed");
+  // serve 还在跑：只续命，不碰状态。
+  assert.equal((adapter as any).threads.get("t2").status, "running");
+  assert.ok((adapter as any).runningTurns.get("t2").lastEventAt > stale());
+});
+
+test("OpenCode session.error clears turn tracking", async () => {
+  const adapter = new OpenCodeAdapter({
+    initialThreads: [{
+      id: "t", agentId: "opencode", providerId: "p", name: "test",
+      preview: "", cwd: "/tmp", model: "default",
+      status: "running", activeTurnId: "turn-1", updatedAt: 1,
+    }],
+    fetcher: (async () => new Response(null, { status: 204 })) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).runningTurns.set("t", { turnId: "turn-1", startedAt: 1, lastEventAt: 1, outputs: new Map(), lastEmitAt: 0 });
+
+  (adapter as any).onEvent({ payload: { type: "session.error", properties: { sessionID: "t", error: { message: "boom" } } } });
+
+  assert.equal((adapter as any).threads.get("t").status, "error");
+  assert.equal((adapter as any).runningTurns.has("t"), false);
+});
+
+test("OpenCode session.deleted purges approvals and turn tracking", async () => {
+  const events: Array<{ type: string; data: any }> = [];
+  const adapter = new OpenCodeAdapter({
+    initialThreads: [{
+      id: "t", agentId: "opencode", providerId: "p", name: "test",
+      preview: "", cwd: "/tmp", model: "default",
+      status: "waiting", activeTurnId: "turn-1", updatedAt: 1,
+    }],
+    fetcher: (async () => new Response(null, { status: 204 })) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  adapter.on("event", (event: any) => events.push(event));
+  // 挂起审批 + 在途 turn 跟踪：删除前故意残留。
+  (adapter as any).approvals.set("a1", { id: "a1", sessionID: "t", requestId: "r1", cwd: "/tmp" });
+  (adapter as any).runningTurns.set("t", { turnId: "turn-1", startedAt: 1, lastEventAt: 1, outputs: new Map(), lastEmitAt: 0 });
+
+  (adapter as any).onEvent({ payload: { type: "session.deleted", properties: { sessionID: "t" } } });
+
+  assert.equal((adapter as any).threads.has("t"), false);
+  assert.equal((adapter as any).approvals.size, 0);
+  assert.equal((adapter as any).runningTurns.has("t"), false);
+  assert.ok(events.some((event) => event.type === "approval.resolved"),
+    "挂起审批必须撤掉并广播 approval.resolved，否则审批卡片永远消不掉");
+  assert.ok(events.some((event) => event.type === "thread.deleted"),
+    "会话删除必须广播 thread.deleted");
+});
+
+function forkFixture(options: { failPersist?: boolean } = {}) {
+  const saved = new Map<string, any>();
+  const calls: Array<{ method: string; url: string }> = [];
+  const sessions = [
+    { id: "s1", directory: "/work", title: "parent" },
+    // 子会话：旧版 serve 不带 fork 字段，只有 parentID。
+    { id: "b1", directory: "/work", title: "parent · 分支", parentID: "s1" },
+  ];
+  const adapter = new OpenCodeAdapter({
+    threadSettings: {
+      get: (agent: string, id: string) => saved.get(`${agent}:${id}`),
+      update: async (agent: string, id: string, next: any) => {
+        if (options.failPersist) throw new Error("disk full");
+        const key = `${agent}:${id}`;
+        const merged = { ...(saved.get(key) || {}), ...next };
+        saved.set(key, merged);
+        return merged;
+      },
+    } as any,
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      const method = init?.method || "GET";
+      calls.push({ method, url: value });
+      if (value.includes("/session/s1/fork") && method === "POST")
+        return Response.json({ id: "b1", directory: "/work" });
+      if (value.includes("/session/b1") && (method === "PATCH" || method === "DELETE"))
+        return Response.json({});
+      if (value.includes("/message")) return Response.json([]);
+      if (value.includes("/session") && method === "GET") return Response.json(sessions);
+      if (value.includes("/provider")) return Response.json({ all: {}, connected: [] });
+      if (value.includes("/config")) return Response.json({});
+      return Response.json([]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  (adapter as any).threads.set("s1", {
+    agentId: "opencode", id: "s1", providerId: "p", name: "parent",
+    preview: "parent", cwd: "/work", model: "openai/gpt-5",
+    reasoningEffort: "high", status: "idle", updatedAt: 1,
+  });
+  return { adapter, saved, calls };
+}
+
+test("OpenCode fork persists the branch relation and survives a restart", async () => {
+  const { adapter, saved } = forkFixture();
+  const branch: any = await adapter.forkThread("p", "s1", {});
+  assert.equal(branch.id, "b1");
+  assert.equal(branch.model, "openai/gpt-5");
+  assert.equal(branch.forkedFromId, "s1");
+  assert.equal(saved.get("opencode:b1")?.forkedFromId, "s1");
+  assert.equal(saved.get("opencode:b1")?.model, "openai/gpt-5");
+
+  // 模拟重启：内存全清，仅凭 serve 列表（无 fork 字段）+ 落盘关系恢复。
+  (adapter as any).threads.clear();
+  (adapter as any).forkChildren.clear();
+  await adapter.refreshAll();
+  const ids = adapter.listThreads().map((thread) => thread.id);
+  assert.ok(ids.includes("s1") && ids.includes("b1"),
+    "重启后分支必须仍可见，不能被当 subagent 隐藏");
+  assert.equal(
+    (adapter.listThreads().find((thread) => thread.id === "b1") as any)?.forkedFromId,
+    "s1",
+  );
+});
+
+test("OpenCode fork rolls back the native branch when persistence fails", async () => {
+  const { adapter, calls } = forkFixture({ failPersist: true });
+  await assert.rejects(adapter.forkThread("p", "s1", {}), /本地保存失败/);
+  assert.equal((adapter as any).threads.has("b1"), false);
+  assert.equal((adapter as any).forkChildren.has("b1"), false);
+  assert.ok(
+    calls.some((call) => call.method === "DELETE" && call.url.includes("/session/b1")),
+    "落盘失败必须删除原生分支，否则重试越堆越多",
+  );
 });

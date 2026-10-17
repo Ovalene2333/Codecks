@@ -1133,6 +1133,9 @@ export function App() {
   };
 
   const enableSystemNotifications = async () => {
+    // 浏览器对已拒绝的站点不再弹窗：requestPermission 直接回 denied。
+    // 记住之前的状态，仍被拒时指引用户去站点设置手动允许，而不是干报失败。
+    const before = notificationPermission;
     const permission = await requestSystemNotifications();
     setNotificationPermission(permission);
     pushToast(
@@ -1140,7 +1143,9 @@ export function App() {
         ? "已开启系统提醒"
         : permission === "unsupported"
           ? "当前浏览器不支持系统提醒"
-          : "系统提醒未获授权",
+          : before === "denied"
+            ? "浏览器仍拒绝：请在地址栏站点设置中允许通知，再点重新请求"
+            : "系统提醒未获授权",
     );
   };
 

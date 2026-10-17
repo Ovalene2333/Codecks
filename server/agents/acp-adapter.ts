@@ -727,6 +727,23 @@ export class AcpAdapter extends EventEmitter {
     return session.models?.currentModelId || "";
   }
 
+  /** 会话已知选项表里的模型展示名：切模型时即时同步 modelLabel 用。 */
+  private modelLabelOf(
+    session: AcpSessionState,
+    model: string,
+  ): string | undefined {
+    const option = (session.configOptions || []).find(
+      (item) => item?.category === "model" && item?.type === "select",
+    );
+    const hit = option
+      ? flattenConfigOptions(option.options).find((item) => item.id === model)
+      : undefined;
+    if (hit?.name) return hit.name;
+    return session.models?.availableModels?.find(
+      (item) => item.modelId === model,
+    )?.name;
+  }
+
   /* ACP 没有标准 effort 字段；agent 若暴露了 effort 类 select
      configOption（如 devin 的 thinking level），就当作推理强度来用。 */
   private effortOptionOf(session: AcpSessionState) {
@@ -974,12 +991,22 @@ export class AcpAdapter extends EventEmitter {
     if (settings.model) {
       await this.applyModel(thread, session, settings.model);
       thread.model = settings.model;
+      // 会话未加载 / 无模型选项时 applyModel 静默跳过：底栏格子读的是
+      // resolvedModel，这里与其他 adapter 一致即时同步，否则设置面板已是
+      // 新模型、底栏还显示旧的，对不上。
+      thread.resolvedModel = settings.model;
+      const label = this.modelLabelOf(session, settings.model);
+      if (label) thread.modelLabel = label;
+      else delete thread.modelLabel;
       await this.options.threadSettings?.update(this.id, threadId, {
         model: settings.model,
       });
     }
     if (settings.reasoningEffort !== undefined) {
       await this.applyEffort(thread, session, settings.reasoningEffort);
+      // 同上：会话未加载时 applyEffort 静默跳过，内存值也要跟上设置，
+      // 否则设置面板与底栏显示的推理强度不一致。
+      thread.reasoningEffort = settings.reasoningEffort;
       await this.options.threadSettings?.update(this.id, threadId, {
         reasoningEffort: settings.reasoningEffort,
       });

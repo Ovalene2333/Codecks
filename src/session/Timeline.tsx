@@ -24,6 +24,7 @@ const EMPTY_DELIVERIES: MessageDelivery[] = [];
 export function Timeline({
   thread,
   turns,
+  olderTurns,
   streamed,
   streamedItems,
   streamedEntries,
@@ -52,6 +53,12 @@ export function Timeline({
 }: {
   thread: ThreadSummary;
   turns: any[];
+  /** 长会话分页：还有更早的轮没加载时展示顶部按钮，点击追加。 */
+  olderTurns?: {
+    remaining: number;
+    loading: boolean;
+    onLoadMore: () => void;
+  };
   streamed: StreamedAgentMessage[];
   streamedItems: StreamedTurnItem[];
   streamedEntries: StreamedEntry[];
@@ -107,7 +114,13 @@ export function Timeline({
   }, [reconciled, deliveryRecords, deliveryHistoryBefore, thread.agentId, thread.id, thread.activeTurnId]);
   const timeline = useRef<HTMLDivElement>(null);
   const followOutput = useRef(true);
-  const scrollTop = useRef(0);
+  /**
+   * 距底距离（scrollHeight - scrollTop - clientHeight），滚动位置的唯一真相。
+   * 不用绝对 scrollTop 恢复：上方内容高度一变（图片加载、折叠展开、流式
+   * 落定、追加更早轮），绝对值恢复必跳；按“离底多远”锚定，底部追加与
+   * 顶部前插都自然稳定。
+   */
+  const bottomGap = useRef(0);
   const viewportHeight = useRef(0);
   const activeThread = useRef(thread.id);
   const appliedTargetRequest = useRef<number | undefined>(undefined);
@@ -128,11 +141,16 @@ export function Timeline({
     const observer = new ResizeObserver(() => {
       if (element.clientHeight === viewportHeight.current) return;
       viewportHeight.current = element.clientHeight;
-      // 输入框换行/收起设置会改变消息区高度。只在原本贴底时继续贴底，
-      // 手动阅读历史时不抢走当前位置。
+      // 输入框换行/虚拟键盘会改变消息区高度。贴底继续贴底；
+      // 阅读历史时按底隙重锚定，不抢位置。
       if (followOutput.current) {
         element.scrollTop = element.scrollHeight;
-        scrollTop.current = element.scrollTop;
+        bottomGap.current = 0;
+      } else {
+        element.scrollTop = Math.max(
+          0,
+          element.scrollHeight - element.clientHeight - bottomGap.current,
+        );
       }
     });
     observer.observe(element);
@@ -168,7 +186,10 @@ export function Timeline({
           const item = target.getBoundingClientRect();
           element.scrollTop +=
             item.top - viewport.top - (element.clientHeight - item.height) / 2;
-          scrollTop.current = element.scrollTop;
+          bottomGap.current = Math.max(
+            0,
+            element.scrollHeight - element.scrollTop - element.clientHeight,
+          );
           return;
         }
       }
@@ -177,13 +198,21 @@ export function Timeline({
         activeThread.current = thread.id;
         followOutput.current = true;
         element.scrollTop = element.scrollHeight;
-        scrollTop.current = element.scrollTop;
+        bottomGap.current = 0;
         return;
       }
 
-      if (followOutput.current) element.scrollTop = element.scrollHeight;
-      else element.scrollTop = scrollTop.current;
-      scrollTop.current = element.scrollTop;
+      if (followOutput.current) {
+        element.scrollTop = element.scrollHeight;
+        bottomGap.current = 0;
+      } else {
+        // 阅读历史：按底隙锚定。底部追加新轮不影响上方位置；
+        // 上方高度变化（图片/展开/前插更早轮）时视图保持离底距离，不跳。
+        element.scrollTop = Math.max(
+          0,
+          element.scrollHeight - element.clientHeight - bottomGap.current,
+        );
+      }
     };
     // 同帧多次 effect 只保留最后一次滚动应用；切会话/跳目标等首帧即生效，
     // rAF 回调在下次绘制前执行，无可感知延迟。无 rAF 环境（单测/SSR）直接执行。
@@ -213,14 +242,15 @@ export function Timeline({
       viewportHeight.current = element.clientHeight;
       if (followOutput.current) {
         element.scrollTop = element.scrollHeight;
-        scrollTop.current = element.scrollTop;
+        bottomGap.current = 0;
         return;
       }
     }
-    scrollTop.current = element.scrollTop;
-    const distanceFromBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
-    followOutput.current = distanceFromBottom < 80;
+    bottomGap.current = Math.max(
+      0,
+      element.scrollHeight - element.scrollTop - element.clientHeight,
+    );
+    followOutput.current = bottomGap.current < 80;
   };
   const activeTurnIndex = turns.findIndex(
     (turn) =>
@@ -234,6 +264,18 @@ export function Timeline({
   const showEmpty = isEmpty && targetFallbackReady === true;
   return (
     <div className="timeline" ref={timeline} onScroll={rememberScrollPosition}>
+      {olderTurns && olderTurns.remaining > 0 && (
+        <button
+          type="button"
+          className="timeline-load-more"
+          onClick={olderTurns.onLoadMore}
+          disabled={olderTurns.loading}
+        >
+          {olderTurns.loading
+            ? "正在加载更早消息…"
+            : `加载更早的 ${olderTurns.remaining} 轮`}
+        </button>
+      )}
       {showEmpty ? (
         <div className="session-empty">
           <h3>在 {basename(thread.cwd) || thread.name} 开始</h3>

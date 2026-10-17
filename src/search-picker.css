@@ -251,9 +251,6 @@
 }
 
 .search-picker-group {
-  position: sticky;
-  top: -4px;
-  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -358,6 +355,40 @@
   width: 14px;
   height: 14px;
   color: var(--accent);
+}
+
+/* 收藏星标：行尾常显（触屏也要能点），未收藏时弱化，点亮用实心。 */
+.search-picker-star {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  outline: none;
+}
+.search-picker-star:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.search-picker-star:focus-visible {
+  outline: 2px solid var(--focus-halo);
+  outline-offset: -1px;
+}
+.search-picker-star svg {
+  width: 15px;
+  height: 15px;
+}
+.search-picker-star.on {
+  color: var(--accent);
+}
+.search-picker-star.on svg {
+  fill: currentColor;
 }
 
 .search-picker-empty {

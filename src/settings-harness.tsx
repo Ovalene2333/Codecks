@@ -344,10 +344,24 @@ window.fetch = async (input, init) => {
         config: { agent: { plan: { disable: true } } },
       },
       agents: [
-        { name: "build", mode: "primary" },
-        { name: "plan", mode: "primary" },
-        { name: "explore", mode: "subagent" },
-        { name: "general", mode: "subagent" },
+        {
+          name: "build",
+          mode: "primary",
+          description:
+            "默认主代理。按配置的权限执行工具；描述较长，专给单行截断与窄屏折行 QA 用。",
+        },
+        {
+          name: "plan",
+          mode: "primary",
+          description: "Plan 模式：禁用一切改写工具，只读探索。",
+        },
+        {
+          name: "explore",
+          mode: "subagent",
+          description:
+            "只读探索子代理：并发检索代码与文档，不做任何写入。",
+        },
+        { name: "general", mode: "subagent", description: "通用子代理。" },
       ],
     });
   if (path === "/api/agents/opencode/models") return json([]);
@@ -442,7 +456,11 @@ window.fetch = async (input, init) => {
   }
   if (path === "/api/agents/opencode/reload" && method === "POST") {
     await sleep(latency);
-    return json({ snapshot: snapshot() });
+    // 与服务端一致的返回形状：result（重载/重启结果）+ snapshot。
+    return json({
+      result: { id: "opencode", reloaded: true, busyCount: 0 },
+      snapshot: snapshot(),
+    });
   }
 
   if (path === "/api/preferences" && method === "PUT") {

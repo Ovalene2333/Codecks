@@ -37,6 +37,54 @@ export const isClaudeProvider = (p: Provider) => {
 };
 
 /**
+ * 重新读取本地与 CC Switch 供应商（顺带重启服务让配置生效）：
+ * 供应商页头右上角与 CC Switch 行内共用，各自独立的进行中状态。
+ */
+export function ReloadProvidersButton({
+  onSaved,
+  onToast,
+}: {
+  onSaved: (snapshot: Snapshot) => void;
+  onToast: (message: string) => void;
+}) {
+  const [reloading, setReloading] = useState(false);
+  const reloadRuntime = async () => {
+    setReloading(true);
+    try {
+      const result = await post<ReloadResult>("/runtime/reload");
+      onSaved(result);
+      if (result.restarted)
+        onToast(
+          result.ccSwitch
+            ? "已重新读取 CC Switch 并重启服务"
+            : "已刷新本地供应商并重启服务（未使用 CC Switch）",
+        );
+      else
+        onToast(
+          result.ccSwitch
+            ? `已重新读取 CC Switch；${result.busyCount} 个会话仍在运行或待确认，空闲后经「应用」重启`
+            : `已刷新本地供应商；${result.busyCount} 个会话仍在运行，未重启服务`,
+        );
+    } catch (err: any) {
+      onToast(err.message);
+    } finally {
+      setReloading(false);
+    }
+  };
+  return (
+    <Button
+      size="sm"
+      busy={reloading}
+      title="重新读取本地与 CC Switch 供应商"
+      onClick={() => void reloadRuntime()}
+    >
+      <RefreshCw className={reloading ? "ui-spin" : undefined} />
+      {reloading ? "读取中…" : "重新读取"}
+    </Button>
+  );
+}
+
+/**
  * 供应商：按 Agent 分签（Codex / Claude / OpenCode）。
  * Codex 与 Claude 是 Deck 代管的自定义供应商增删；OpenCode 是
  * opencode.json 自定义供应商的文件编辑。Runtime 状态只在
@@ -69,7 +117,6 @@ export function ProvidersPage({
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [reloading, setReloading] = useState(false);
   const [applying, setApplying] = useState(false);
   const formDirty =
     adding && JSON.stringify(form) !== JSON.stringify(EMPTY_FORM);
@@ -93,30 +140,6 @@ export function ProvidersPage({
   const claudeCustom = claudeProviders.filter((p) => p.kind === "custom");
   const claudeCc = claudeProviders.filter((p) => p.kind === "cc-switch");
   const isClaudeForm = tab === "claude";
-
-  const reloadRuntime = async () => {
-    setReloading(true);
-    try {
-      const result = await post<ReloadResult>("/runtime/reload");
-      onSaved(result);
-      if (result.restarted)
-        onToast(
-          result.ccSwitch
-            ? "已重新读取 CC Switch 并重启服务"
-            : "已刷新本地供应商并重启服务（未使用 CC Switch）",
-        );
-      else
-        onToast(
-          result.ccSwitch
-            ? `已重新读取 CC Switch；${result.busyCount} 个会话仍在运行或待确认，空闲后经「应用」重启`
-            : `已刷新本地供应商；${result.busyCount} 个会话仍在运行，未重启服务`,
-        );
-    } catch (err: any) {
-      onToast(err.message);
-    } finally {
-      setReloading(false);
-    }
-  };
 
   const applyPending = async () => {
     setApplying(true);
@@ -412,15 +435,7 @@ export function ProvidersPage({
                     : "未安装不影响使用；安装后点「重新读取」同步。"
                 }
                 side={
-                  <Button
-                    size="sm"
-                    busy={reloading}
-                    title="重新读取本地与 CC Switch 供应商"
-                    onClick={reloadRuntime}
-                  >
-                    <RefreshCw className={reloading ? "ui-spin" : undefined} />
-                    {reloading ? "读取中…" : "重新读取"}
-                  </Button>
+                  <ReloadProvidersButton onSaved={onSaved} onToast={onToast} />
                 }
               />
             </Group>

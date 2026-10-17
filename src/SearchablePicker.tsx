@@ -1,7 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Combobox } from "@base-ui/react/combobox";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronDown, Search, X } from "lucide-react";
+import { Check, ChevronDown, Search, Star, X } from "lucide-react";
+import {
+  FREQUENT_MODEL_GROUP,
+  RECENT_MODEL_GROUP,
+  STARRED_MODEL_GROUP,
+} from "./model-affinity";
 
 export interface SearchableOption {
   value: string;
@@ -11,6 +16,8 @@ export interface SearchableOption {
   groupMeta?: string;
   hint?: string;
   meta?: string;
+  /** 模型偏好：行尾星标是否点亮（见 ModelPicker 的收藏逻辑）。 */
+  starred?: boolean;
   /**
    * Marks options backed by a connected provider (OpenCode `/provider`
    * `connected`). Enables the picker's "仅已连接" filter when
@@ -75,6 +82,7 @@ export function SearchablePicker({
   disabled,
   fallbackLabel,
   connectedToggle,
+  onStar,
 }: {
   value: string;
   options: SearchableOption[];
@@ -87,6 +95,8 @@ export function SearchablePicker({
   disabled?: boolean;
   fallbackLabel?: string;
   connectedToggle?: boolean;
+  /** 行尾星标切换（传了才渲染星标按钮；点击不触发选中）。 */
+  onStar?: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -104,9 +114,23 @@ export function SearchablePicker({
   const showConnectedToggle =
     connectedToggle && options.some((option) => option.connected);
   const filtered = useMemo(() => {
+    // 「默认/跟随默认」是功能行（不代表某个可连接的供应商），任何时候都可见。
+    // 收藏 / 上次选择 / 常用是用户显式信号，同样不过“仅已连接”过滤：否则
+    // connected 一抖（opencode 的 /provider 探测本就不稳定），刚藏的就是
+    // 用户收藏的那几行，看起来像收藏掉了。
+    const affinityGroup = (group?: string) =>
+      group === STARRED_MODEL_GROUP ||
+      group === RECENT_MODEL_GROUP ||
+      group === FREQUENT_MODEL_GROUP;
     const base =
       showConnectedToggle && connectedOnly && !query.trim()
-        ? options.filter((option) => option.connected || !option.group)
+        ? options.filter(
+            (option) =>
+              option.connected ||
+              !option.group ||
+              option.value === "default" ||
+              affinityGroup(option.group),
+          )
         : options;
     const segments = groupSearchableOptions(
       filterSearchableOptions(base, query),
@@ -228,6 +252,32 @@ export function SearchablePicker({
         <Combobox.ItemIndicator>
           <Check className="search-picker-check" />
         </Combobox.ItemIndicator>
+        {onStar && (
+          <button
+            type="button"
+            className={`search-picker-star${option.starred ? " on" : ""}`}
+            aria-pressed={option.starred ? true : undefined}
+            aria-label={
+              option.starred
+                ? `取消收藏 ${option.label}`
+                : `收藏 ${option.label}`
+            }
+            title={
+              option.starred
+                ? `取消收藏 ${option.label}`
+                : `收藏 ${option.label}`
+            }
+            // 点击星标只做收藏切换：mousedown 不抢焦点、click 不冒泡，
+            // Base UI Item 的选中逻辑收不到事件，弹窗也不关闭。
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStar(option.value);
+            }}
+          >
+            <Star />
+          </button>
+        )}
       </Combobox.Item>
     </>
   );

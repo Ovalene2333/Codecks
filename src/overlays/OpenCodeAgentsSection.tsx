@@ -71,6 +71,7 @@ function AgentGroupSection({
   data,
   entries,
   datalistId,
+  onToast,
   onNeedsReload,
   onRefreshed,
 }: {
@@ -80,6 +81,7 @@ function AgentGroupSection({
   data: OpenCodeConfigResponse;
   entries: AgentEntry[];
   datalistId: string;
+  onToast?: (message: string) => void;
   /** 保存返回 needsReload（未能在线热应用）时点亮全局提示条。 */
   onNeedsReload?: () => void;
   onRefreshed: (data: OpenCodeConfigResponse) => void;
@@ -87,10 +89,8 @@ function AgentGroupSection({
   const [scope, setScope] = useState<Scope>(cwd ? "project" : "global");
   const [drafts, setDrafts] = useState<Record<string, AgentDraft>>({});
   const [error, setError] = useState("");
-  const [status, setStatus] = useState<{
-    text: string;
-    needsReload: boolean;
-  } | null>(null);
+  /** 结果文本：外壳给了 toast 就把「已写入」的事实放 toast，正文保持安静。 */
+  const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const scopeFile = scope === "project" ? data?.project : data?.global;
@@ -131,9 +131,11 @@ function AgentGroupSection({
         };
       }
       if (!Object.keys(agent).length) {
-        setStatus({ text: "没有改动", needsReload: false });
+        onToast?.("没有改动");
+        setStatus("没有改动");
         return;
       }
+      const scopeText = scope === "project" ? "项目" : "全局";
       const result = await put<{ path: string; applied: boolean }>(
         "/agents/opencode/config",
         {
@@ -142,18 +144,12 @@ function AgentGroupSection({
           agent,
         },
       );
-      setStatus(
-        result.applied
-          ? {
-              text: `已写入${scope === "project" ? "项目" : "全局"}配置并应用到运行中的 OpenCode`,
-              needsReload: false,
-            }
-          : {
-              text: `已写入${scope === "project" ? "项目" : "全局"}配置；页顶提示条可直达重载`,
-              needsReload: true,
-            },
-      );
+      const message = result.applied
+        ? `已写入${scopeText}配置并应用到运行中的 OpenCode`
+        : `已写入${scopeText}配置，重载 OpenCode 后生效`;
       if (!result.applied) onNeedsReload?.();
+      if (onToast) onToast(message);
+      else setStatus(message);
       onRefreshed(
         await api<OpenCodeConfigResponse>(
           `/agents/opencode/config${cwd ? `?directory=${encodeURIComponent(cwd)}` : ""}`,
@@ -181,6 +177,7 @@ function AgentGroupSection({
         dim={!draft.enabled}
         title={entry.name}
         desc={entry.description}
+        descTitle={entry.description}
         side={
           <>
             <input
@@ -210,33 +207,31 @@ function AgentGroupSection({
       desc={
         <>
           写入 <code>{configPath}</code>
-          {cwd ? "（项目覆盖全局）" : ""}。
+          {cwd ? "（项目覆盖全局）" : ""}
+          。
         </>
       }
+      actions={
+        cwd ? (
+          <Seg<Scope>
+            label={`${title}写入位置`}
+            value={scope}
+            onChange={(next) => {
+              setScope(next);
+              setDrafts({});
+            }}
+            items={[
+              { value: "project", label: "本项目" },
+              { value: "global", label: "全局" },
+            ]}
+          />
+        ) : undefined
+      }
     >
-      {cwd && (
-        <Seg<Scope>
-          label={`${title}写入位置`}
-          value={scope}
-          onChange={(next) => {
-            setScope(next);
-            setDrafts({});
-          }}
-          items={[
-            { value: "project", label: "本项目" },
-            { value: "global", label: "全局" },
-          ]}
-        />
-      )}
-      <Group>{entries.map(agentRow)}</Group>
-      {status && (
-        <Note
-          tone={status.needsReload ? "warn" : "ok"}
-          icon={<Info />}
-        >
-          {status.text}
-        </Note>
-      )}
+      <div className="oc-rows">
+        <Group>{entries.map(agentRow)}</Group>
+      </div>
+      {status && <p className="ui-section__desc">{status}</p>}
       {error && <p className="ui-error">{error}</p>}
       <div className="ui-actions">
         {dirty && (
@@ -254,7 +249,7 @@ function AgentGroupSection({
           disabled={!dirty}
           onClick={() => void save()}
         >
-          {saving ? "保存中…" : `保存${title}设置`}
+          {saving ? "保存中…" : `保存${title}`}
         </Button>
       </div>
     </Section>
@@ -267,8 +262,9 @@ function AgentGroupSection({
  * 配置文件里已声明的 agent 名），保存写入所选作用域的 opencode.json——
  * 项目与全局文件同一 schema，项目值覆盖全局值。
  *
- * 生效反馈统一走 SettingsModal 顶部的 needsReload 提示条；重载/重启服务
- * 集中在 Agent→OpenCode 服务状态 Section（OpenCodeServiceSection），
+ * 生效反馈统一走 SettingsModal 顶部的 needsReload 提示条（保存的「已写入」
+ * 结果有 toast 就走 toast，没 toast 的外壳才在正文里留一行状态）；
+ * 服务重载走 Agent 列表，重启与版本切换共用运行时区的「应用并重启」，
  * 这里不再散落生命周期按钮。
  */
 export function OpenCodeAgentsSection({
@@ -344,6 +340,7 @@ export function OpenCodeAgentsSection({
   const groupProps = {
     cwd,
     datalistId,
+    onToast,
     onNeedsReload,
     onRefreshed: setData,
   };
@@ -355,18 +352,27 @@ export function OpenCodeAgentsSection({
           OpenCode 当前未启用：修改仅写入配置文件，在 Agent 列表启用后生效。
         </Note>
       )}
+      {/* 标签页是页面骨架，先于数据渲染；未保存草稿挂在下面的面板里。 */}
+      <Seg<AgentKind>
+        label="选择要配置的组"
+        className="ui-seg--page"
+        value={kind}
+        onChange={setKind}
+        items={[
+          { value: "primary", label: "主 Agent" },
+          { value: "subagent", label: "子 Agent" },
+          { value: "permissions", label: "工具审批" },
+        ]}
+      />
       {onOpenProviders && (
-        <Note
-          icon={<Info />}
-          title="自定义供应商"
-          action={
-            <Button size="sm" onClick={onOpenProviders}>
-              去供应商页管理
-            </Button>
-          }
-        >
-          自定义供应商在「设置 → 供应商 → OpenCode」管理。
-        </Note>
+        <div className="oc-link">
+          <p className="ui-section__desc">
+            自定义供应商在「设置 → 供应商 → OpenCode」管理。
+          </p>
+          <Button size="sm" variant="ghost" onClick={onOpenProviders}>
+            去供应商页管理
+          </Button>
+        </div>
       )}
       {!data && !loadError && (
         <p className="ui-section__desc">正在读取 OpenCode 配置…</p>
@@ -374,16 +380,6 @@ export function OpenCodeAgentsSection({
       {loadError && <p className="ui-error">{loadError}</p>}
       {data && (
         <>
-          <Seg<AgentKind>
-            label="选择要配置的组"
-            value={kind}
-            onChange={setKind}
-            items={[
-              { value: "primary", label: "主 Agent" },
-              { value: "subagent", label: "子 Agent" },
-              { value: "permissions", label: "工具审批" },
-            ]}
-          />
           {/* 三块都保持挂载：切走再切回，未保存的草稿不会丢。 */}
           <div hidden={kind !== "primary"}>
             <AgentGroupSection

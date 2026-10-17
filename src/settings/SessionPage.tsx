@@ -20,10 +20,23 @@ import { SessionDefaultsSection } from "./SessionDefaultsSection";
 
 const PERMISSION_TEXT: Record<DeckNotificationPermission, string> = {
   granted: "浏览器已授权，由下方开关控制。",
-  denied: "已被浏览器拒绝；需在浏览器站点设置中重新允许通知。",
+  denied: "已被浏览器拒绝；点“重新请求”无弹窗时，需在浏览器站点设置中手动允许通知。",
   default: "尚未授权。授权后，审批与新回复将推送系统通知。",
   unsupported: "当前浏览器不支持系统通知。",
 };
+
+/** HTTP 内网地址不是安全上下文：浏览器禁止通知，且无法手动加白。 */
+function isInsecureContext() {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      "Notification" in window &&
+      (window as { isSecureContext?: boolean }).isSecureContext === false
+    );
+  } catch {
+    return false;
+  }
+}
 
 /** 会话：新建默认值（服务端）+ 输入与提醒（本设备）。 */
 export function SessionPage({
@@ -46,6 +59,8 @@ export function SessionPage({
   const settings = useDeckSettings();
   const mod = modKeyLabel();
   const granted = notificationPermission === "granted";
+  // HTTP 内网地址下“开启/重新请求”点了也没用（浏览器直接拒），换成指引。
+  const insecure = !granted && isInsecureContext();
   return (
     <>
       <SessionDefaultsSection
@@ -79,6 +94,29 @@ export function SessionPage({
           />
         </Group>
       </Section>
+      <Section title="阅读" scope="device">
+        <Group>
+          <Row
+            stack
+            title="打开会话时加载"
+            desc={`只加载最新的 ${settings.initialTurns} 轮，更早的点时间线顶部按钮再加载`}
+            side={
+              <Choice
+                label="打开会话时加载的最新轮数"
+                value={String(settings.initialTurns)}
+                onChange={(value) =>
+                  updateDeckSettings({ initialTurns: Number(value) })
+                }
+                items={[
+                  { value: "10", label: "10 轮" },
+                  { value: "20", label: "20 轮" },
+                  { value: "40", label: "40 轮" },
+                ]}
+              />
+            }
+          />
+        </Group>
+      </Section>
       <Section title="系统提醒" scope="device">
         <Group>
           <Row
@@ -90,11 +128,19 @@ export function SessionPage({
                   : "off"
             }
             title="通知权限"
-            desc={PERMISSION_TEXT[notificationPermission]}
+            desc={
+              insecure
+                ? "当前是 HTTP 内网地址，浏览器只允许 HTTPS 或 localhost 发送通知。两条路：用 HTTPS 域名访问；或在 chrome://flags 搜“安全来源”，把本站地址加为受信任来源后重载。"
+                : PERMISSION_TEXT[notificationPermission]
+            }
             side={
-              notificationPermission === "default" ? (
+              insecure ? undefined : notificationPermission === "default" ? (
                 <Button size="sm" onClick={onRequestNotifications}>
                   开启
+                </Button>
+              ) : notificationPermission === "denied" ? (
+                <Button size="sm" onClick={onRequestNotifications}>
+                  重新请求
                 </Button>
               ) : granted ? (
                 <Button

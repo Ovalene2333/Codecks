@@ -441,15 +441,88 @@
 }
 
 
-.cli-path {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 8px;
+/* CLI 路径行：路径在代码块底上（label + 路径省略 + 复制按钮收进块内
+   最右），行尾动作（应用并重启）贴右；窄屏路径收缩，动作键不换行。 */
+.cli-row {
+  display: flex;
   align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cli-path {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-h);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
   color: var(--text-faint);
   font-size: var(--fs-meta);
 }
-.cli-path > span { grid-column: 1 / -1; }
-.cli-path code, .cli-effective { overflow-wrap: anywhere; user-select: text; }
-.cli-path code { color: var(--text-dim); }
+.cli-path span { flex: none; }
+.cli-path code {
+  flex: 1;
+  min-width: 0;
+  /* 标签与路径之间一条发丝竖线：边框挂在代码块左侧，省略号截断不受影响。 */
+  border-left: 1px solid var(--line);
+  padding-left: var(--space-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cli-path .ui-btn { flex: none; }
+.cli-row > .ui-btn { flex: none; }
+.cli-effective { overflow-wrap: anywhere; user-select: text; }
 .ui-group .search-picker { width: 100%; }
+
+/* ── OpenCode 代理设置（Agent → OpenCode，项目默认弹窗共用）─────────
+   对标 GitHub 设置列表：描述压成一行省略（悬停看全文），行距随之收紧，
+   右列「模型 + 开关」保持右对齐，不随长描述换行；窄屏整块下折。
+   oc-rows 是 Section 网格的直接子项：min-width:0 让 nowrap 描述在省略号
+   处收敛，否则最长一行会顺着 min-content 把卡片撑出气泡边缘。 */
+.oc-rows {
+  min-width: 0;
+}
+
+.oc-rows .ui-row__title {
+  flex-wrap: nowrap;
+}
+
+.oc-rows .ui-row__desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+/* 供应商导航：一句元信息 + 行尾幽灵按钮，不再占一整条提示卡。 */
+.oc-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+/* 工具审批的补充工具行：工具名占满剩余宽度，规则下拉定宽，按钮贴行尾。 */
+.oc-add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.oc-add > .ui-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.oc-add > .oc-add__rule {
+  flex: none;
+  width: 140px;
+}

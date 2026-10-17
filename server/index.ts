@@ -35,7 +35,7 @@ import {
 } from "./agents/acp-agents.js";
 import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
-import { foldTurns } from "./agents/turn-fold.js";
+import { foldTurns, sliceTurnsPage, TURN_SLICE_PARTIAL_KEY } from "./agents/turn-fold.js";
 import { registerMessageRoutes } from "./message-api.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentId } from "./agents/types.js";
@@ -57,6 +57,7 @@ import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ActivityTracker } from "./activity.js";
 import { CpuSampler, hostStats } from "./host-stats.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
+import { ModelAffinityStore } from "./model-affinity.js";
 import { AgentSettingsStore } from "./agent-settings.js";
 import { SessionSearchStore } from "./session-search.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
@@ -168,12 +169,14 @@ const claudeProviders = new ClaudeProviderStore(dataDir);
 const projects = new ProjectStore(dataDir);
 const threadSummaries = new ThreadSummaryCache(dataDir);
 const threadSettings = new ThreadSettingsStore(dataDir);
+const modelAffinity = new ModelAffinityStore(dataDir);
 const agentSettings = new AgentSettingsStore(dataDir);
 const [, , cachedThreads] = await Promise.all([
   store.load(),
   projects.load(),
   threadSummaries.load(),
   threadSettings.load(),
+  modelAffinity.load(),
   agentSettings.load(),
   claudeProviders.load(),
 ]);
@@ -803,6 +806,57 @@ app.get(
     ),
   ),
 );
+function affinityParams(req: { query: Record<string, unknown> }) {
+  const pick = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return {
+    ...(pick(req.query.providerId)
+      ? { providerId: pick(req.query.providerId) }
+      : {}),
+    ...(pick(req.query.directory) ? { directory: pick(req.query.directory) } : {}),
+  };
+}
+/**
+ * 模型的「上次选择 / 常用 / 收藏」：agent + 供应商/目录作用域，
+ * 多端入口共享，落服务端（见 model-affinity.ts）。
+ */
+app.get(
+  "/api/agents/:agentId/model-affinity",
+  route(async (req) =>
+    modelAffinity.get(
+      agentId(req.params.agentId),
+      affinityParams(req as never),
+    ),
+  ),
+);
+const modelAffinitySchema = z.object({
+  providerId: z.string().max(256).optional(),
+  directory: z.string().max(1024).optional(),
+  used: z.string().min(1).max(1024).optional(),
+  star: z
+    .object({ model: z.string().min(1).max(1024), on: z.boolean() })
+    .optional(),
+});
+app.put(
+  "/api/agents/:agentId/model-affinity",
+  route(async (req) => {
+    const id = agentId(req.params.agentId);
+    const input = modelAffinitySchema.parse(req.body ?? {});
+    const params = {
+      ...(input.providerId ? { providerId: input.providerId } : {}),
+      ...(input.directory ? { directory: input.directory } : {}),
+    };
+    if (input.star)
+      return modelAffinity.setStarred(
+        id,
+        params,
+        input.star.model,
+        input.star.on,
+      );
+    if (input.used) return modelAffinity.recordUse(id, params, input.used);
+    return modelAffinity.get(id, params);
+  }),
+);
 /**
  * Agent 启停与重载（不重启 Deck 主服务）：
  * - PUT  /agents/:id/enabled  启用/停用；有会话在运行时返回 applied:false，
@@ -1168,12 +1222,26 @@ app.post(
     return thread;
   }),
 );
+/**
+ * 长会话分页：`?turnLimit=N` 只下发最新 N 轮（`?beforeTurn=id` 则取该轮之前
+ * 的 N 轮），省首屏渲染；不传即全文（旧行为）。搜索索引吃的是切片前的全量。
+ * 被截掉的老轮数记在 PARTIAL_KEY 上，前端据此展示“加载更早”。
+ */
+function pageThreadTurns(body: any, query: any) {
+  const limit = Number(query?.turnLimit);
+  if (!Number.isFinite(limit) || limit <= 0 || !Array.isArray(body?.turns)) return;
+  const page = sliceTurnsPage(body.turns, limit, String(query?.beforeTurn || ""));
+  body.turns = page.turns;
+  body.totalTurns = page.totalTurns;
+  body.hasMoreTurns = page.hasMore;
+  if (page.omitted > 0) body[TURN_SLICE_PARTIAL_KEY] = page.omitted;
+}
+
 app.get(
   "/api/agents/:agentId/threads/:threadId",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    const threadId = param(req.params.threadId);
-    const full = await agents.readThread(id, threadId);
+    const threadId = param(req.params.threadId);    const full = await agents.readThread(id, threadId);
     const snapshot = agents.get(id).snapshot();
     const thread = [
       ...snapshot.threads,
@@ -1184,6 +1252,7 @@ app.get(
     const body: any = full;
     if (req.query.full !== "1" && Array.isArray(body?.turns))
       body.turns = foldTurns(body.turns, thread?.activeTurnId);
+    pageThreadTurns(body, req.query);
     return full;
   }),
 );
@@ -1944,6 +2013,7 @@ app.get(
     const legacyBody: any = full;
     if (req.query.full !== "1" && Array.isArray(legacyBody?.turns))
       legacyBody.turns = foldTurns(legacyBody.turns, thread?.activeTurnId);
+    pageThreadTurns(legacyBody, req.query);
     return full;
   }),
 );

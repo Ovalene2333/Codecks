@@ -38,6 +38,8 @@ export interface DeckLocalSettings {
   toolOpenTarget: ToolOpenTarget;
   /** 桌面端侧栏宽度（px）；0 表示跟随界面默认值（可随窗口自适应）。 */
   sidebarWidth: number;
+  /** 打开会话时加载的最新轮数（更早的点按钮再加载），本设备偏好。 */
+  initialTurns: number;
 }
 
 export const DECK_SETTINGS_KEY = "codex-deck:settings:v1";
@@ -53,6 +55,7 @@ export const DEFAULT_DECK_SETTINGS: DeckLocalSettings = {
   hiddenTools: [],
   toolOpenTarget: "tab",
   sidebarWidth: 0,
+  initialTurns: 10,
 };
 
 const oneOf = <T extends string>(value: unknown, options: T[], fallback: T) =>
@@ -63,6 +66,20 @@ const bool = (value: unknown, fallback: boolean) =>
 /** 桌面端侧栏宽度的可用区间（px）。 */
 export const SIDEBAR_WIDTH_MIN = 240;
 export const SIDEBAR_WIDTH_MAX = 480;
+
+/** 打开会话时加载轮数的可用区间：太少没上下文，太多首屏慢。 */
+export const INITIAL_TURNS_MIN = 5;
+export const INITIAL_TURNS_MAX = 100;
+
+/** 初始加载轮数合法化：非法值回默认 10，其余钳到可用区间。 */
+export function normalizeInitialTurns(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    return DEFAULT_DECK_SETTINGS.initialTurns;
+  return Math.min(
+    INITIAL_TURNS_MAX,
+    Math.max(INITIAL_TURNS_MIN, Math.round(value)),
+  );
+}
 
 /** 侧栏宽度合法化：非正数/非法值回到 0（自动），其余钳到可用区间。 */
 export function normalizeSidebarWidth(value: unknown): number {
@@ -112,6 +129,7 @@ export function normalizeDeckSettings(value: unknown): DeckLocalSettings {
       d.toolOpenTarget,
     ),
     sidebarWidth: normalizeSidebarWidth(input.sidebarWidth),
+    initialTurns: normalizeInitialTurns(input.initialTurns),
   };
 }
 

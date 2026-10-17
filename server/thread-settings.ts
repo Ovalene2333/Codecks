@@ -26,6 +26,12 @@ export interface ThreadSettings {
   /** Deck 侧重命名（ACP 会话没有原生 rename 接口）。 */
   name?: string;
   /**
+   * Deck 发起的 fork 子会话指向父会话。重启后内存的 fork 映射清零，
+   * 仅凭 serve 的 `fork` 字段（旧版 serve 没有）认不出分支；
+   * 落盘后 refreshAll/onEvent 仍能保留分支可见，不被当 subagent 隐藏。
+   */
+  forkedFromId?: string;
+  /**
    * Deck 侧软归档标记（OpenCode serve 没有原生归档接口）。
    * 只存 `true`；恢复时用 `null` 清除。
    */

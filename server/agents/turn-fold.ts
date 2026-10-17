@@ -130,3 +130,39 @@ export function foldTurns(turns: any[], activeTurnId?: string) {
     return changed ? { ...turn, items } : turn;
   });
 }
+
+/**
+ * 与前端 `src/cache.ts` 的 PARTIAL_KEY 同名同义：下发 turns 切片时，
+ * 被截掉的老轮数记在这个键上。前端据此判定“非全文”（304 不复用、
+ * 展示“加载更早”按钮）。改名必须两边一起改。
+ */
+export const TURN_SLICE_PARTIAL_KEY = "__cachedTailOmitted";
+
+/**
+ * turns 分页切片：只下发最新的 limit 轮（beforeTurnId 之前再往前数）。
+ * 返回 { turns, totalTurns, hasMore } 并在 omitted>0 时打上 PARTIAL_KEY。
+ * 不 mutate 输入。
+ */
+export function sliceTurnsPage(
+  turns: any[],
+  limit: number,
+  beforeTurnId?: string,
+): { turns: any[]; totalTurns: number; hasMore: boolean; omitted: number } {
+  const list = Array.isArray(turns) ? turns : [];
+  const totalTurns = list.length;
+  let end = list.length;
+  const before = String(beforeTurnId || "").trim();
+  if (before) {
+    const index = list.findIndex((turn) => String(turn?.id || "") === before);
+    // beforeTurn 找不到（被 revert/压缩掉）：退化为取最新，当全文用。
+    if (index >= 0) end = index;
+  }
+  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : totalTurns;
+  const start = Math.max(0, end - safeLimit);
+  return {
+    turns: list.slice(start, end),
+    totalTurns,
+    hasMore: start > 0,
+    omitted: start,
+  };
+}

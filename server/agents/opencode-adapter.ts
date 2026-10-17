@@ -202,16 +202,29 @@ function connectedProviderIds(value: unknown): Set<string> {
   return ids;
 }
 
+/**
+ * `provider/model` 唯一解析器（写入与读取全链路共用）。
+ * 严格语义：整体 trim 后按首个 `/` 切分，两段再各自 trim，都不能为空，
+ * modelID 不得多带 `/`。`"a/"`、`" openai / "`、`"a/b/c"` 一律返回
+ * undefined——调用方写入时大声拒绝、读取时按未知模型走默认，绝不带着
+ * 空格/空段发给 serve 让它静默回退。
+ */
+function parseModelSetting(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  const separator = text.indexOf("/");
+  if (separator <= 0) return undefined;
+  const providerID = text.slice(0, separator).trim();
+  const modelID = text.slice(separator + 1).trim();
+  if (!providerID || !modelID || modelID.includes("/")) return undefined;
+  return { providerID, modelID };
+}
+
 function configDefaultModel(config: unknown) {
   const configured = (config as any)?.model;
   if (typeof configured === "string") {
-    const model = configured.trim();
-    const separator = model.indexOf("/");
-    if (separator > 0 && separator < model.length - 1)
-      return {
-        providerID: model.slice(0, separator),
-        modelID: model.slice(separator + 1),
-      };
+    const parsed = parseModelSetting(configured);
+    if (parsed) return parsed;
   }
   const providerID = String(
     configured?.providerID ?? "",
@@ -378,6 +391,12 @@ function sessionSummary(
 ): ThreadSummary {
   const name = session.title || session.slug || "OpenCode 会话";
   const variant = session.model?.variant;
+  // 原生会话自带的模型（Deck 外建的、或旧落盘丢失时）：有就用，不再一律
+  // 写死 "default"。Deck 显式设置（existing/settings 后 spread）优先。
+  const nativeModel =
+    session.model?.providerID && session.model?.id
+      ? `${session.model.providerID}/${session.model.id}`
+      : undefined;
   return {
     agentId: "opencode",
     id: session.id,
@@ -385,7 +404,7 @@ function sessionSummary(
     name,
     preview: name,
     cwd: session.directory || "",
-    model: "default",
+    model: nativeModel || "default",
     ...(variant && variant !== "default" ? { reasoningEffort: variant } : {}),
     status,
     updatedAt: Number(
@@ -518,15 +537,23 @@ function normalizeMessages(
         .join("\n\n");
       continue;
     }
+    // 同类型 part 计数一次算好：逐 part filter 是 O(P²)，大包下提到循环外。
+    // text 排除 synthetic，其它类型按 type 直接计数，与原 filter 等价。
+    let textCount = 0;
+    const typeCounts = new Map<string, number>();
+    for (const candidate of parts) {
+      const candidateType = candidate?.type;
+      if (typeof candidateType !== "string") continue;
+      if (candidateType === "text") {
+        if (!candidate.synthetic) textCount += 1;
+      } else typeCounts.set(candidateType, (typeCounts.get(candidateType) || 0) + 1);
+    }
     for (const part of parts) {
       const mapped = openCodePartToItem(part);
       if (!mapped) continue;
       if (mapped.type === "agentMessage" || mapped.type === "reasoning") {
-        const sameCount = parts.filter(
-          (candidate: any) =>
-            candidate?.type === part.type &&
-            !(part.type === "text" && candidate.synthetic),
-        ).length;
+        const sameCount =
+          part.type === "text" ? textCount : typeCounts.get(part.type) || 0;
         const stats = partStatsFromMessage(message, part, sameCount);
         if (stats) mapped.stats = stats;
       }
@@ -967,12 +994,39 @@ export class OpenCodeAdapter extends EventEmitter {
     {
       turnId: string;
       startedAt: number;
+      /** 该会话最近一次事件时间：看门狗只查“静默”的 running 线程。 */
+      lastEventAt: number;
       outputs: Map<string, number>;
       lastEmitAt: number;
     }
   >();
+  /** running 看门狗单发定时器：无 running 线程时不常驻。 */
+  private watchdogTimer?: NodeJS.Timeout;
   /** directory → 已排期的配置生效（dispose 实例）任务，避免重复排期。 */
   private pendingConfigRefreshes = new Set<string>();
+  /** threadId → 在途的发送受理：只串行化受理（prompt 受理即释放），不等待整轮结束。 */
+  private sendLocks = new Map<string, Promise<unknown>>();
+
+  /**
+   * 同一会话的 sendTurn/runSessionCommand 串行受理：后到的调用等前一次
+   * 受理完成再进，配合忙时拒绝，避免两轮互相覆盖 activeTurnId、事件串话。
+   * 锁只保受理瞬间（prompt_async/command 发出即释放），不阻塞整轮。
+   */
+  private serializeSend<T>(threadId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.sendLocks.get(threadId) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(task);
+    this.sendLocks.set(threadId, pending);
+    try {
+      return pending as Promise<T>;
+    } finally {
+      void (pending as Promise<unknown>)
+        .catch(() => undefined)
+        .then(() => {
+          if (this.sendLocks.get(threadId) === pending)
+            this.sendLocks.delete(threadId);
+        });
+    }
+  }
 
   constructor(private options: OpenCodeAdapterOptions = {}) {
     super();
@@ -1062,17 +1116,74 @@ export class OpenCodeAdapter extends EventEmitter {
    * 同时只保留一个；调用方在设置 activeTurnId 后调用。
    */
   private beginRunningTurn(thread: ThreadSummary, turnId: string) {
+    const now = Date.now();
     this.runningTurns.set(thread.id, {
       turnId: String(turnId),
-      startedAt: Date.now(),
+      startedAt: now,
+      lastEventAt: now,
       outputs: new Map(),
       lastEmitAt: 0,
     });
+    this.armWatchdog();
   }
 
   /** 回合结束（完成/失败/中断/离线）即停止跟踪，避免累计串到下一轮。 */
   private endRunningTurn(threadId: string) {
     this.runningTurns.delete(String(threadId || ""));
+  }
+
+  /**
+   * running 看门狗：SSE 静默停流（进程活着、事件没了）时，没有任何事件能把
+   * running 翻回 idle，前端永久转圈。看门狗只查“长时间无事件”的 running
+   * 线程，用 GET /session/status 对账：serve 明确 idle 或根本不认该会话才
+   * 本地归位；serve 还在跑或查不到状态时只续命，不碰状态。
+   */
+  private armWatchdog() {
+    if (this.watchdogTimer) return;
+    let hasRunning = false;
+    for (const [threadId] of this.runningTurns) {
+      if (this.threads.get(threadId)?.status === "running") {
+        hasRunning = true;
+        break;
+      }
+    }
+    if (!hasRunning) return;
+    this.watchdogTimer = setTimeout(
+      () => void this.watchRunningTurns(),
+      30_000,
+    );
+    this.watchdogTimer.unref?.();
+  }
+
+  private async watchRunningTurns() {
+    this.watchdogTimer = undefined;
+    const now = Date.now();
+    for (const [threadId, tracked] of this.runningTurns) {
+      const thread = this.threads.get(threadId);
+      // waiting 由审批事件驱动、error 已终态，看门狗只管 running。
+      if (!thread || thread.status !== "running") continue;
+      if (now - tracked.lastEventAt < 60_000) continue;
+      try {
+        const statuses = await this.request<Record<string, { type?: string }>>(
+          "/session/status",
+          { directory: thread.cwd, retry: false, timeoutMs: 10_000 },
+        );
+        const current = this.threads.get(threadId);
+        if (!current || current.status !== "running") continue;
+        const state = statuses?.[threadId]?.type;
+        if (!state || state === "idle") {
+          this.applyIdle(current);
+        } else {
+          const still = this.runningTurns.get(threadId);
+          if (still) still.lastEventAt = Date.now();
+        }
+      } catch {
+        // 对账失败（serve 抖动）：续命等下一轮，绝不凭猜测改状态。
+        const still = this.runningTurns.get(threadId);
+        if (still) still.lastEventAt = Date.now();
+      }
+    }
+    this.armWatchdog();
   }
 
   /**
@@ -1315,7 +1426,10 @@ export class OpenCodeAdapter extends EventEmitter {
     const matched = providerId
       ? profiles.filter((item) => item.id === providerId)
       : ranked;
-    const scope = matched.length ? matched : ranked;
+    // 显式 provider 未命中（目录 catalog 新旧交替、刚改配置时常见）：
+    // 只保留 default 占位，不回退到全量目录——否则前端按“X 的模型”渲染，
+    // 用户却选走了别的供应商的模型，设置与筛选器分叉。
+    const scope = providerId ? matched : ranked;
     const entries: ModelInfo[] = [];
     for (const profile of scope) {
       const groupName = profile.name || profile.id;
@@ -1578,8 +1692,9 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   /**
-   * fork 证据：服务端 `fork` 字段、Deck 发起的 fork 记录、或已可见分支。
-   * 三者任一成立即按分支保留，不按 subagent 隐藏。
+   * fork 证据：服务端 `fork` 字段、Deck 发起的 fork 记录、已可见分支、
+   * 或落盘的分支关系。四者任一成立即按分支保留，不按 subagent 隐藏。
+   * 落盘证据专治重启后内存清零：旧版 serve 的原生会话没有 `fork` 字段。
    */
   private isForkChild(session: OpenCodeSession) {
     if (!session.parentID) return false;
@@ -1587,6 +1702,10 @@ export class OpenCodeAdapter extends EventEmitter {
     if (this.forkChildren.has(session.id)) return true;
     const known = this.threads.get(session.id);
     if (known?.forkedFromId) return true;
+    if (this.options.threadSettings?.get(this.id, session.id)?.forkedFromId) {
+      this.forkChildren.add(session.id);
+      return true;
+    }
     return false;
   }
 
@@ -1910,6 +2029,11 @@ export class OpenCodeAdapter extends EventEmitter {
       reasoningEffort?: string;
     },
   ) {
+    // 模型先校验：脏值直接拒绝，不创建原生会话、不落盘。
+    const model = input.model?.trim()
+      ? this.requireModelSetting(input.model)
+      : "default";
+    const effort = input.reasoningEffort?.trim() || undefined;
     const session = await this.request<OpenCodeSession>("/session", {
       method: "POST",
       directory: input.cwd,
@@ -1917,12 +2041,11 @@ export class OpenCodeAdapter extends EventEmitter {
     });
     const displayName = input.name || session.title || "新 OpenCode 会话";
     this.sessionTitles.set(session.id, String(input.name || session.title || "").trim());
-    const effort = input.reasoningEffort?.trim() || undefined;
     const thread = {
       ...sessionSummary(session),
       providerId: providerId || profileId(session),
       cwd: input.cwd,
-      model: input.model || "default",
+      model,
       ...(effort ? { reasoningEffort: effort } : {}),
       // 新会话没有首条消息前不展示随机 slug，和 Codex 的“新会话”一致。
       name: displayName,
@@ -2012,34 +2135,57 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   /**
+   * 模型支持的推理强度档位：目录 catalog / 全局 profiles 里查到模型才返回
+   * 档位表（无 variants 元数据返回空数组）；模型未知或 catalog 未加载返回
+   * undefined，调用方保持宽容（不带 variant），等 catalog 就绪后再校验。
+   */
+  private supportedEfforts(thread: ThreadSummary, model: string): string[] | undefined {
+    const parsed = this.modelInput(model);
+    if (!parsed) return undefined;
+    const profiles = this.projectCatalogs.get(thread.cwd)?.profiles || this.profiles;
+    const meta = profiles.find((item) => item.id === parsed.providerID)?.models?.[parsed.modelID];
+    if (!meta) return undefined;
+    return modelVariants(meta)?.map((item) => item.reasoningEffort) || [];
+  }
+
+  /**
+   * 档位校验（发送与写入共用）：模型未知/catalog 未加载时返回 undefined，
+   * 调用方不带 variant（宽容，等 catalog 就绪后再校验）；模型已知但档位
+   * 不在允许表时大声失败，绝不静默按默认档位跑。
+   */
+  private checkEffortSupported(thread: ThreadSummary, model: string, effort: string): string | undefined {
+    const supported = this.supportedEfforts(thread, model);
+    if (!supported) return undefined;
+    if (!supported.length)
+      throw new Error(
+        `当前模型 ${model} 未配置推理强度档位，无法应用 ${effort}；请在供应商配置中为该模型声明 variants 后再发送`,
+      );
+    if (!supported.includes(effort))
+      throw new Error(
+        `当前模型 ${model} 不支持推理强度 ${effort}（可选：${supported.join("、")}），请在会话设置里重新选择`,
+      );
+    return effort;
+  }
+
+  /**
    * Effort chosen in Deck. Models that advertise a variant list keep the
-   * allowlist (unknown effort is dropped, otherwise OpenCode rejects it).
+   * allowlist; an effort the model does not offer fails fast (otherwise the
+   * turn would silently run at the server default while settings show
+   * another level). Unknown models still drop, avoiding variant sends
+   * before the provider catalog has loaded.
    * A catalog entry without any variant metadata means the provider never
    * declared `variants` for that model: OpenCode answers such a prompt with
    * "Variant unavailable" and the whole turn fails, so fail fast here with
    * the config hint instead of letting the user hit it mid-run.
-   * Unknown profiles/models still drop, avoiding variant sends before the
-   * provider catalog has loaded.
    */
   private threadVariant(thread: ThreadSummary) {
     const effort = thread.reasoningEffort?.trim();
     if (!effort) return undefined;
-    const parsed = this.modelInput(thread.model || thread.resolvedModel || "");
+    const raw = thread.model || thread.resolvedModel || "";
+    if (!raw || raw === "default") return undefined;
+    const parsed = this.modelInput(raw);
     if (!parsed) return undefined;
-    const model = `${parsed.providerID}/${parsed.modelID}`;
-    const profiles = this.projectCatalogs.get(thread.cwd)?.profiles || this.profiles;
-    const profile = profiles.find((item) => item.id === parsed.providerID);
-    if (!profile) return undefined;
-    const meta = profile.models?.[parsed.modelID];
-    if (!meta) return undefined;
-    const supported = modelVariants(meta);
-    if (!supported)
-      throw new Error(
-        `当前模型 ${model} 未配置推理强度档位，无法应用 ${effort}；请在供应商配置中为该模型声明 variants 后再发送`,
-      );
-    if (!supported.some((item) => item.reasoningEffort === effort))
-      return undefined;
-    return effort;
+    return this.checkEffortSupported(thread, `${parsed.providerID}/${parsed.modelID}`, effort);
   }
 
   private modelContextLimit(providerID: string, modelID: string, directory?: string) {
@@ -2166,16 +2312,37 @@ export class OpenCodeAdapter extends EventEmitter {
     const thread = this.requireThread(threadId);
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("任务结束后才能修改 OpenCode 会话设置");
-    if (settings.model) {
-      thread.model = settings.model;
-      // 和 model 一起刷新 resolvedModel，输入框格子不用等下轮才换名。
-      thread.resolvedModel = settings.model;
-      const label = this.modelLabelFor(thread, settings.model);
-      if (label) thread.modelLabel = label;
-      else delete thread.modelLabel;
+    if (settings.model !== undefined) {
+      const trimmed = typeof settings.model === "string" ? settings.model.trim() : "";
+      if (!trimmed || trimmed === "default") {
+        // 清空即回到“跟随默认”：删显式模型与派生展示，不再把旧值写回去。
+        thread.model = "default";
+        delete thread.resolvedModel;
+        delete thread.modelLabel;
+      } else {
+        const model = this.requireModelSetting(settings.model);
+        thread.model = model;
+        // 和 model 一起刷新 resolvedModel，输入框格子不用等下轮才换名。
+        thread.resolvedModel = model;
+        const label = this.modelLabelFor(thread, model);
+        if (label) thread.modelLabel = label;
+        else delete thread.modelLabel;
+      }
     }
-    if (settings.reasoningEffort !== undefined)
-      thread.reasoningEffort = settings.reasoningEffort || undefined;
+    if (settings.reasoningEffort !== undefined) {
+      const effort =
+        typeof settings.reasoningEffort === "string" ? settings.reasoningEffort.trim() : "";
+      if (effort) {
+        // 写入时即校验：模型已知且档位不在允许表直接拒绝，不留到发送时
+        // 静默按默认档位跑。模型未知/catalog 未就绪时宽容，发送时把关。
+        const raw =
+          thread.model && thread.model !== "default"
+            ? thread.model
+            : thread.resolvedModel || "";
+        if (raw) this.checkEffortSupported(thread, raw, effort);
+        thread.reasoningEffort = settings.reasoningEffort;
+      } else thread.reasoningEffort = undefined;
+    }
     // Same persistence as createThread: a refresh or restart must not drop the
     // model/effort picked in Deck.
     await this.options.threadSettings?.update(this.id, threadId, {
@@ -2187,6 +2354,35 @@ export class OpenCodeAdapter extends EventEmitter {
     return thread;
   }
 
+  /**
+   * 会话本地清理统一入口：deleteThread / session.deleted 共用。
+   * 清 idle 定时器、turn 跟踪、分支/标题/子会话映射，并撤掉该会话（含其
+   * subagent 子会话）的挂起审批。调用方负责原生 DELETE 与广播。
+   */
+  private purgeThread(sessionId: string) {
+    this.clearIdleTimer(sessionId);
+    this.endRunningTurn(sessionId);
+    // 先收集要撤审批的会话：自己 + 挂在它名下的 subagent 子会话。
+    const approvalSessions = new Set([sessionId]);
+    for (const [child, parent] of this.childParents)
+      if (parent === sessionId) approvalSessions.add(child);
+    this.threads.delete(sessionId);
+    this.sessionTitles.delete(sessionId);
+    this.forkChildren.delete(sessionId);
+    for (const child of approvalSessions) {
+      this.childParents.delete(child);
+      const partId = this.childTaskParts.get(child);
+      if (partId) this.taskPartSnapshots.delete(partId);
+      this.childTaskParts.delete(child);
+      this.pendingChildActivity.delete(child);
+    }
+    // 挂起审批：thread 已摘除，clearApproval 只发 approval.resolved，
+    // 不会把已删会话翻回 running，也不会触发多余的状态回查。
+    for (const [approvalId, approval] of this.approvals)
+      if (approvalSessions.has(approval.sessionID))
+        this.clearApproval(approvalId);
+  }
+
   async deleteThread(_providerId: string, threadId: string) {
     const thread = this.requireThread(threadId);
     if (thread.status === "running" || thread.status === "waiting")
@@ -2195,9 +2391,7 @@ export class OpenCodeAdapter extends EventEmitter {
       method: "DELETE",
       directory: thread.cwd,
     });
-    this.threads.delete(threadId);
-    this.sessionTitles.delete(threadId);
-    this.forkChildren.delete(threadId);
+    this.purgeThread(threadId);
     this.broadcast("thread.deleted", { agentId: this.id, threadId });
     return { ok: true };
   }
@@ -2286,13 +2480,28 @@ export class OpenCodeAdapter extends EventEmitter {
       forkedFromId: threadId,
       updatedAt: Date.now(),
     };
-    if (source.model || source.reasoningEffort) {
+    // 先落内存（并发事件/refreshAll 靠 forkChildren 认分支），再落盘；
+    // 落盘失败必须回滚原生分支，否则“前端报失败、原生留孤儿”，重试越堆越多。
+    this.threads.set(branch.id, branch);
+    try {
       await this.options.threadSettings?.update(this.id, branch.id, {
+        providerId: source.providerId,
         model: branch.model,
         reasoningEffort: source.reasoningEffort,
+        forkedFromId: threadId,
       });
+    } catch (error: any) {
+      this.threads.delete(branch.id);
+      this.forkChildren.delete(branch.id);
+      this.sessionTitles.delete(branch.id);
+      await this.request(`/session/${encodeURIComponent(branch.id)}`, {
+        method: "DELETE",
+        directory: branch.cwd,
+      }).catch(() => undefined);
+      throw new Error(
+        `分支已创建但本地保存失败，已回滚清理，请重试：${String(error?.message || error)}`,
+      );
     }
-    this.threads.set(branch.id, branch);
     this.broadcast("thread.updated", branch);
     return branch;
   }
@@ -2335,7 +2544,19 @@ export class OpenCodeAdapter extends EventEmitter {
           messageID: boundary,
         })
       : await this.createEmptyBranch(source);
-    await this.sendTurn(source.providerId, branch.id, value, images);
+    try {
+      await this.sendTurn(source.providerId, branch.id, value, images);
+    } catch (error: any) {
+      // 分支本身可用（历史完整保留），只是新一轮没发出去：把失败挂在分支上
+      // 并广播，用户直接在该分支重试，不用再建一个分支堆垃圾。
+      const current = this.threads.get(branch.id);
+      if (current) {
+        current.lastError = String(error?.message || error || "重试发送失败");
+        current.updatedAt = Date.now();
+        this.broadcast("thread.updated", current);
+      }
+      throw error;
+    }
     return this.threads.get(branch.id) || branch;
   }
 
@@ -2376,13 +2597,27 @@ export class OpenCodeAdapter extends EventEmitter {
       forkedFromId: source.id,
       updatedAt: Date.now(),
     };
-    if (source.model || source.reasoningEffort) {
+    // 同 forkThread：先落内存再落盘，落盘失败回滚原生会话。
+    this.threads.set(branch.id, branch);
+    try {
       await this.options.threadSettings?.update(this.id, branch.id, {
+        providerId: source.providerId,
         model: branch.model,
         reasoningEffort: source.reasoningEffort,
+        forkedFromId: source.id,
       });
+    } catch (error: any) {
+      this.threads.delete(branch.id);
+      this.forkChildren.delete(branch.id);
+      this.sessionTitles.delete(branch.id);
+      await this.request(`/session/${encodeURIComponent(branch.id)}`, {
+        method: "DELETE",
+        directory: branch.cwd,
+      }).catch(() => undefined);
+      throw new Error(
+        `分支已创建但本地保存失败，已回滚清理，请重试：${String(error?.message || error)}`,
+      );
     }
-    this.threads.set(branch.id, branch);
     this.broadcast("thread.updated", branch);
     return branch;
   }
@@ -2422,6 +2657,17 @@ export class OpenCodeAdapter extends EventEmitter {
    * 与 `sendTurn` 一致，避免用默认模型执行命令。
    */
   async runSessionCommand(
+    providerId: string,
+    threadId: string,
+    command: string,
+    args?: string,
+  ) {
+    return this.serializeSend(threadId, () =>
+      this.runSessionCommandLocked(providerId, threadId, command, args),
+    );
+  }
+
+  private async runSessionCommandLocked(
     _providerId: string,
     threadId: string,
     command: string,
@@ -2429,12 +2675,15 @@ export class OpenCodeAdapter extends EventEmitter {
   ) {
     const thread = this.requireThread(threadId);
     if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
+    // 命令同样独占一轮：与 sendTurn 共用受理锁，被顶掉的旧轮补 interrupted。
+    const displacedTurnId =
+      thread.status === "running" || thread.status === "waiting"
+        ? thread.activeTurnId
+        : undefined;
     const name = String(command || "").trim().replace(/^\/+/, "");
     if (!name) throw new Error("命令名称不能为空");
-    const parsed =
-      thread.model && thread.model !== "default"
-        ? this.modelInput(thread.model)
-        : undefined;
+    // 模型沿用会话当前选择：非法设置直接大声失败，见 sendModelOf。
+    const parsed = this.sendModelOf(thread);
     const variant = this.threadVariant(thread);
     const turnId = randomUUID();
     this.clearIdleTimer(thread.id);
@@ -2448,6 +2697,11 @@ export class OpenCodeAdapter extends EventEmitter {
       threadId,
       turn: { id: turnId, status: "inProgress" },
     });
+    if (displacedTurnId && displacedTurnId !== turnId)
+      this.emitAgentEvent(thread, "turn/completed", {
+        threadId,
+        turn: { id: displacedTurnId, status: "interrupted" },
+      });
     // Unlike prompt_async, this endpoint returns only after the command's
     // entire agent run. Keep the HTTP request alive without blocking Deck's
     // command response or timing out an active task after 60 seconds.
@@ -2504,11 +2758,17 @@ export class OpenCodeAdapter extends EventEmitter {
     if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
     if (thread.status === "running" || thread.status === "waiting")
       throw new Error("任务结束后才能压缩 OpenCode 会话上下文");
-    const explicit =
-      thread.model && thread.model !== "default"
-        ? this.modelInput(thread.model)
+    // 显式设置非法时大声失败；已解析模型只采纳合法值，脏值跳过走默认。
+    const explicit = this.sendModelOf(thread);
+    const resolvedInput =
+      !explicit && thread.resolvedModel
+        ? this.modelInput(thread.resolvedModel)
         : undefined;
-    const resolved = explicit || this.modelInput(thread.resolvedModel || "");
+    const resolved =
+      explicit ||
+      (resolvedInput?.providerID && resolvedInput?.modelID
+        ? resolvedInput
+        : undefined);
     const target =
       resolved || this.projectCatalogs.get(thread.cwd)?.defaultModel || this.configDefault;
     if (!target)
@@ -2613,6 +2873,17 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   async sendTurn(
+    providerId: string,
+    threadId: string,
+    text: string,
+    images?: TurnImage[],
+  ) {
+    return this.serializeSend(threadId, () =>
+      this.sendTurnLocked(providerId, threadId, text, images),
+    );
+  }
+
+  private async sendTurnLocked(
     _providerId: string,
     threadId: string,
     text: string,
@@ -2621,15 +2892,20 @@ export class OpenCodeAdapter extends EventEmitter {
     const thread = this.requireThread(threadId);
     if (!text.trim() && !images?.length) throw new Error("请输入指令或图片");
     if (thread.archived) throw new Error("会话已归档，请先恢复再发送");
+    // 忙时允许接管（feedback/abort-then-send 与 messages 能力依赖它）：
+    // 受理锁保证同时只有一个受理，被顶掉的旧轮记下来，后面补 interrupted，
+    // 否则前端旧轮转圈永远收不到 turn/completed。
+    const displacedTurnId =
+      thread.status === "running" || thread.status === "waiting"
+        ? thread.activeTurnId
+        : undefined;
     if (thread.status !== "running" && thread.status !== "waiting" &&
       this.options.threadSettings?.deferred?.(this.id, threadId))
       await this.options.threadSettings.applyDeferred(this.id, threadId, (settings) =>
         this.updateThreadSettings(_providerId, threadId, settings),
       );
-    const parsed =
-      thread.model && thread.model !== "default"
-        ? this.modelInput(thread.model)
-        : undefined;
+    // 非法模型设置直接大声失败，绝不带着空 modelID 发送（见 sendModelOf）。
+    const parsed = this.sendModelOf(thread);
     if (images?.length && parsed) {
       const profiles = this.projectCatalogs.get(thread.cwd)?.profiles || this.profiles;
       const meta = profiles.find(
@@ -2675,6 +2951,12 @@ export class OpenCodeAdapter extends EventEmitter {
       threadId,
       turn: { id: turnId, status: "inProgress" },
     });
+    // 忙时接管：旧轮已被新 prompt 顶掉，补发 interrupted 让前端闭环。
+    if (displacedTurnId && displacedTurnId !== turnId)
+      this.emitAgentEvent(thread, "turn/completed", {
+        threadId,
+        turn: { id: displacedTurnId, status: "interrupted" },
+      });
     const model = parsed;
     try {
       // /message waits for the entire agent run. A proxy or caller can time out
@@ -2696,32 +2978,46 @@ export class OpenCodeAdapter extends EventEmitter {
       // POST 失败（模型被拒、server 重启中）时必须回滚上面的 running 标记，
       // 否则没有任何 session.status 事件能纠正，线程永久卡 running。
       // 若服务端实际已收下请求，后续 busy 事件会把它置回 running，自愈。
+      // 回滚前验 turnId：慢请求的失败不能砸掉后来者已接管的新轮。
       const detail = String(error?.message || error || "OpenCode 任务发送失败");
       this.clearIdleTimer(thread.id);
       const current = this.threads.get(thread.id);
-      if (current) {
-        current.status = "error";
-        current.activeTurnId = undefined;
-        current.lastError = detail;
-        current.updatedAt = Date.now();
-        this.broadcast("thread.updated", current);
-        this.emitAgentEvent(current, "turn/completed", {
-          threadId,
-          turn: { id: turnId, status: "failed", error: { message: detail } },
-        });
-      }
+      if (!current || current.activeTurnId !== turnId) throw error;
+      current.status = "error";
+      current.activeTurnId = undefined;
+      current.lastError = detail;
+      current.updatedAt = Date.now();
+      this.broadcast("thread.updated", current);
+      this.emitAgentEvent(current, "turn/completed", {
+        threadId,
+        turn: { id: turnId, status: "failed", error: { message: detail } },
+      });
       throw error;
     }
     return { turn: { id: turnId, status: "inProgress" } };
   }
 
-  async interrupt(_providerId: string, threadId: string, _turnId: string) {
+  async interrupt(_providerId: string, threadId: string, turnId: string) {
     const thread = this.requireThread(threadId);
     if (thread.archived) throw new Error("会话已归档，请先恢复再操作");
-    await this.request(`/session/${encodeURIComponent(threadId)}/abort`, {
-      method: "POST",
-      directory: thread.cwd,
-    });
+    // turnId 一致性：只打断自己这轮。调用方拿着过期 turnId 进来说明该轮
+    // 已被接管或结束，此时 abort 会误杀新轮，直接拒绝比误杀诚实。
+    if (turnId && thread.activeTurnId && thread.activeTurnId !== turnId)
+      throw new Error("该轮次已结束或被新轮接管，无需打断");
+    try {
+      // 停止按钮不能跟着等 60s：abort 轻量，10s 发不出去就是真有问题。
+      await this.request(`/session/${encodeURIComponent(threadId)}/abort`, {
+        method: "POST",
+        directory: thread.cwd,
+        retry: false,
+        timeoutMs: 10_000,
+      });
+    } catch (error: any) {
+      // abort 没发出去：本地状态原样保留（后续事件仍能纠正），抛可重试的
+      // 明确错误，不要让上层误以为“已停止”。真卡死走 forceStop 强制归位。
+      const detail = String(error?.message || error || "未知错误");
+      throw new Error(`停止请求发送失败（${detail}），请重试或使用紧急停止`);
+    }
     return { ok: true };
   }
 
@@ -3143,6 +3439,11 @@ export class OpenCodeAdapter extends EventEmitter {
       body.part?.sessionID ||
       body.session?.id;
     const thread = sessionId ? this.threads.get(sessionId) : undefined;
+    // 看门狗心跳：该会话的在途回合记一次事件时间，静默 running 才会被对账。
+    if (sessionId) {
+      const tracked = this.runningTurns.get(sessionId);
+      if (tracked) tracked.lastEventAt = Date.now();
+    }
     // 实例被 dispose（我们自己的 reload、外部 PATCH /config 等）后，对应
     // 目录的供应商/模型目录缓存作废，下次 listModels 重新拉取。
     if (payload?.type === "server.instance.disposed") {
@@ -3183,18 +3484,7 @@ export class OpenCodeAdapter extends EventEmitter {
       return;
     }
     if (payload?.type === "session.deleted" && sessionId) {
-      this.clearIdleTimer(sessionId);
-      this.threads.delete(sessionId);
-      this.sessionTitles.delete(sessionId);
-      this.forkChildren.delete(sessionId);
-      for (const [child, parent] of this.childParents) {
-        if (parent !== sessionId) continue;
-        this.childParents.delete(child);
-        const partId = this.childTaskParts.get(child);
-        if (partId) this.taskPartSnapshots.delete(partId);
-        this.childTaskParts.delete(child);
-        this.pendingChildActivity.delete(child);
-      }
+      this.purgeThread(sessionId);
       this.broadcast("thread.deleted", {
         agentId: this.id,
         threadId: sessionId,
@@ -3215,6 +3505,8 @@ export class OpenCodeAdapter extends EventEmitter {
     }
     if (payload?.type === "session.error" && thread) {
       this.clearIdleTimer(thread.id);
+      // 回合终态：停掉 token 跟踪，否则 runningTurns 残留被下一轮误收。
+      this.endRunningTurn(thread.id);
       const turnId = thread.activeTurnId || "opencode";
       // 手动停止走中断分支：idle + turn interrupted，不算失败、不写 lastError。
       if (isAbortError(body.error)) {
@@ -3400,10 +3692,14 @@ export class OpenCodeAdapter extends EventEmitter {
     const id = String(messageId || "").trim();
     if (!id) return;
     this.messageRoles.set(id, String(role || ""));
-    if (this.messageRoles.size > 400)
-      this.messageRoles = new Map(
-        [...this.messageRoles].slice(-200),
-      );
+    // 超限删最旧的游标删除：整表重建是 O(N) 抖动，message.updated 风暴下每条都抖一次。
+    if (this.messageRoles.size > 400) {
+      let drop = this.messageRoles.size - 200;
+      for (const key of this.messageRoles.keys()) {
+        if (drop-- <= 0) break;
+        this.messageRoles.delete(key);
+      }
+    }
   }
 
   /**
@@ -3451,13 +3747,43 @@ export class OpenCodeAdapter extends EventEmitter {
   }
 
   private modelInput(value: string) {
-    const separator = value.indexOf("/");
-    return separator > 0
-      ? {
-          providerID: value.slice(0, separator),
-          modelID: value.slice(separator + 1),
-        }
-      : undefined;
+    return parseModelSetting(value);
+  }
+
+  /**
+   * 会话模型设置校验（写入路径专用，读取保持宽容）。
+   * `default` 或 `provider/model`（两侧都不能为空）才合法。手填模式下
+   * 的半截输入（如 `opencode-go/`）一旦落盘，每轮会以空 modelID 发给
+   * serve，serve 静默回退到默认模型——设置显示与实际执行从此分叉，且
+   * 全程无报错。写入时直接大声拒绝，绝不静默存脏值。
+   */
+  private requireModelSetting(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) throw new Error("模型不能为空，请在会话设置里重新选择模型");
+    if (trimmed === "default") return trimmed;
+    const parsed = this.modelInput(trimmed);
+    if (!parsed?.providerID || !parsed?.modelID)
+      throw new Error(
+        `模型格式无效：应为 provider/model（如 opencode-go/glm-5.3-flash），当前为“${trimmed}”，请重新选择`,
+      );
+    // 存归一化形式（分段 trim），内存与落盘用同一个字符串，重启不分叉。
+    return `${parsed.providerID}/${parsed.modelID}`;
+  }
+
+  /**
+   * 发送路径的模型解析：显式设置必须合法，否则大声失败，绝不能带着空
+   * modelID 发给 serve（serve 会静默回退到默认模型，造成“设置一个模型、
+   * 实际跑另一个模型”）。历史脏数据（如 `opencode-go/`）走到这里会被
+   * 拦下，用户重选模型即可恢复。
+   */
+  private sendModelOf(thread: ThreadSummary) {
+    if (!thread.model || thread.model === "default") return undefined;
+    const parsed = this.modelInput(thread.model.trim());
+    if (!parsed?.providerID || !parsed?.modelID)
+      throw new Error(
+        `当前模型设置“${thread.model}”无效，不发送以免静默用错模型；请在会话设置里重新选择模型`,
+      );
+    return parsed;
   }
 
   private requireThread(threadId: string) {

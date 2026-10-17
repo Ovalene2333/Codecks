@@ -51,6 +51,7 @@ import {
 import type { ComposerImage } from "./images";
 import { readComposerDraft, writeComposerDraft } from "./drafts";
 import { collectStreamed } from "./streaming";
+import { getDeckSettings, useDeckSettings } from "../deck-settings";
 import { applyExpandedTurns, fetchTurnDetail } from "./turn-stats";
 import {
   loadedUserMessages,
@@ -67,6 +68,8 @@ import { draftFromUserMessage, userMessageText } from "./user-message";
 const EMPTY_TURNS: any[] = [];
 // 默认值必须是稳定引用：内联 `= []` 每次渲染都是新数组，会让依赖它的 effect 无限重跑。
 const EMPTY_DELIVERIES: MessageDelivery[] = [];
+/** 长会话分页：每次“加载更早”追加的轮数。初始值走本设备设置 initialTurns。 */
+const TURN_PAGE_SIZE = 60;
 
 /** 执行失败横幅：可折叠成单行预览，也可忽略整条（同签名的新错误会再次弹出）。 */
 function TaskErrorNotice({
@@ -241,6 +244,15 @@ export function ChatWorkspace({
   const [statusNote, setStatusNote] = useState("");
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
+  /**
+   * 长会话分页：初次只拉设置里的最新 N 轮（默认 10），点“加载更早”每次加
+   * TURN_PAGE_SIZE。limit 走 ref，load 回调身份稳定，不触发多余重拉。
+   */
+  const { initialTurns } = useDeckSettings();
+  const [turnLimit, setTurnLimit] = useState(() => initialTurns);
+  const turnLimitRef = useRef(turnLimit);
+  turnLimitRef.current = turnLimit;
+  const [loadingMoreTurns, setLoadingMoreTurns] = useState(false);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [commandModal, setCommandModal] = useState<CommandModalKind>();
   const [modelCatalog, setModelCatalog] = useState<ModelInfo[]>([]);
@@ -292,12 +304,12 @@ export function ChatWorkspace({
   const updateDraft = (next: typeof draft) => {
     setDraft(writeComposerDraft(threadCacheKey, next));
   };
-  const load = useCallback(
-    (fresh = false) => {
+  const loadPage = useCallback(
+    (limit: number, fresh = false) => {
       const version = loadVersion.current;
       return dedupeThreadLoad(
         threadCacheKey,
-        () => fetchThreadFull(thread, threadCacheKey),
+        () => fetchThreadFull(thread, threadCacheKey, { turnLimit: limit }),
         fresh,
       )
         .then((data) => {
@@ -330,6 +342,20 @@ export function ChatWorkspace({
     },
     [threadCacheKey, thread.id, thread.providerId, thread.agentId],
   );
+  const load = useCallback(
+    (fresh = false) => loadPage(turnLimitRef.current, fresh),
+    [loadPage],
+  );
+  /** “加载更早”：追加分页并用 fresh 语义排到旧请求之后，避免旧响应覆盖。 */
+  const loadMoreTurns = useCallback(() => {
+    const next = turnLimitRef.current + TURN_PAGE_SIZE;
+    turnLimitRef.current = next;
+    setTurnLimit(next);
+    setLoadingMoreTurns(true);
+    return loadPage(next, true).finally(() => {
+      setLoadingMoreTurns(false);
+    });
+  }, [loadPage]);
   useEffect(() => {
     setThreadLoadSettled(false);
     loadVersion.current += 1;
@@ -340,8 +366,20 @@ export function ChatWorkspace({
     setFull(cached || undefined);
     // 切会话时上一个会话的分支重发意图一并丢弃，避免串到新会话。
     setRetrySource(undefined);
+    // 分页回到设置基线：每个会话初次只看最新的 N 轮。
+    const baseline = getDeckSettings().initialTurns;
+    turnLimitRef.current = baseline;
+    setTurnLimit(baseline);
+    setLoadingMoreTurns(false);
     load();
   }, [load, threadCacheKey]);
+  /** 设置里调大初始轮数：当前会话直接追加载，只增不减，不吞已加载内容。 */
+  useEffect(() => {
+    if (initialTurns <= turnLimitRef.current) return;
+    turnLimitRef.current = initialTurns;
+    setTurnLimit(initialTurns);
+    void loadPage(initialTurns, true).catch(() => undefined);
+  }, [initialTurns, loadPage]);
   useEffect(() => {
     const id = thread.agentId || "codex";
     // codex 用内置 SLASH_COMMANDS，claude 无会话命令；其余 agent（opencode、
@@ -1132,6 +1170,9 @@ export function ChatWorkspace({
     !thread.tokenUsage && full?.tokenUsage
       ? { ...thread, tokenUsage: full.tokenUsage }
       : thread;
+  const loadedTurns = Array.isArray(full?.turns) ? full.turns : EMPTY_TURNS;
+  const totalTurns = Number(full?.totalTurns) || loadedTurns.length;
+  const remainingTurns = Math.max(0, totalTurns - loadedTurns.length);
   return (
     <main className="chat">
       <ChatHeader
@@ -1160,7 +1201,21 @@ export function ChatWorkspace({
       >
         <Timeline
           thread={thread}
-          turns={Array.isArray(full?.turns) ? full.turns : EMPTY_TURNS}
+          turns={loadedTurns}
+          olderTurns={
+            remainingTurns > 0
+              ? {
+                  remaining: remainingTurns,
+                  loading: loadingMoreTurns,
+                  onLoadMore: () => {
+                    if (loadingMoreTurns) return;
+                    loadMoreTurns().catch((err: Error) => {
+                      onToast(`加载更早消息失败：${err.message}`);
+                    });
+                  },
+                }
+              : undefined
+          }
           streamed={streamed}
           streamedItems={streamedItems}
           streamedEntries={streamedEntries}
