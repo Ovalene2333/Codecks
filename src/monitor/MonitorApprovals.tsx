@@ -5,6 +5,7 @@ import {
   useState,
   type PointerEvent,
 } from "react";
+import { Button } from "../kit";
 import {
   BellRing,
   ChevronLeft,
@@ -182,16 +183,17 @@ export function MonitorApprovals({
         <h2>待处理审批</h2>
         <b className="monitor-count">{approvals.length}</b>
         {bulkTargets.length > 1 ? (
-          <button
-            type="button"
-            className="text-btn"
-            disabled={bulkBusy || Boolean(resolvingId)}
+          <Button
+            variant="ghost"
+            size="sm"
+            busy={bulkBusy}
+            disabled={Boolean(resolvingId)}
             onClick={() => void resolveAll()}
             aria-label={`全部允许其余 ${bulkTargets.length} 条权限请求`}
             title={`本会话内始终允许其余 ${bulkTargets.length} 条权限请求；问答类需逐条处理`}
           >
             {bulkBusy ? "正在允许…" : "全部允许"}
-          </button>
+          </Button>
         ) : null}
         {bulkError ? (
           <span className="monitor-bulk-error" role="alert">

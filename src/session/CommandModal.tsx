@@ -1,5 +1,7 @@
 import { Select } from "../kit/Select";
+import { Button } from "../kit";
 import { useMemo, useState } from "react";
+import { LoaderCircle } from "lucide-react";
 import { api } from "../api";
 import { SwrCache, useSwr } from "../swr-cache";
 import { threadPath } from "../agents";
@@ -65,6 +67,9 @@ export function CommandModal({
       className="command-modal"
       onClose={onClose}
     >
+      {locked && (mode.kind === "model" || mode.kind === "permissions") ? (
+        <p className="command-help">修改会在下一轮任务开始时生效。</p>
+      ) : null}
       {mode.kind === "model" && (
         <ModelCommand
           thread={thread}
@@ -117,17 +122,15 @@ function ModelCommand({ thread, locked, onSettings, onClose }: any) {
         reasoningEffort={next.reasoningEffort}
         onChange={setNext}
       />
-      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
-      <button
-        type="button"
-        className="primary"
+      <Button
+        variant="primary"
         disabled={!next.model}
         onClick={async () => {
           if (await onSettings(next)) onClose();
         }}
       >
         应用
-      </button>
+      </Button>
     </div>
   );
 }
@@ -191,10 +194,8 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
           ))}
         </Select>
       </label>
-      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
-      <button
-        type="button"
-        className="primary"
+      <Button
+        variant="primary"
         onClick={async () => {
           if (
             await onSettings({
@@ -205,7 +206,7 @@ function PermissionsCommand({ thread, locked, onSettings, onClose }: any) {
         }}
       >
         应用
-      </button>
+      </Button>
     </div>
   );
 }
@@ -236,16 +237,14 @@ function ClaudePermissionsCommand({
           ))}
         </Select>
       </label>
-      {locked && <p className="command-help">修改会在下一轮任务开始时生效。</p>}
-      <button
-        type="button"
-        className="primary"
+      <Button
+        variant="primary"
         onClick={async () => {
           if (await onSettings({ permissionMode })) onClose();
         }}
       >
         应用
-      </button>
+      </Button>
     </div>
   );
 }
@@ -358,7 +357,7 @@ function McpCommand({ thread, verbose }: any) {
               <summary>
                 <b>{server.name}</b>
                 <span>
-                  {authLabel(server.authStatus)} · {tools.length} 个工具
+                  {authLabel(server.authStatus)}，{tools.length} 个工具
                 </span>
               </summary>
               <div>
@@ -384,11 +383,7 @@ function CommandListState({ loading, error, empty, children }: any) {
       {children}
       {loading && (
         <div className="command-loading" role="status">
-          <span className="loading-dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
+          <LoaderCircle className="ui-spin" aria-hidden="true" />
           正在读取
         </div>
       )}

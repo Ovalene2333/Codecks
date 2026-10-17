@@ -60,28 +60,11 @@
   gap: 6px;
   padding: 0 12px 8px;
 }
+/* 库视图分段：外观走 kit Seg（.ui-seg），这里只管在工具栏里占满。
+   计数跟在标签后，浅色不加底色。 */
 .library-segment {
-  display: flex;
   flex: 1;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
-}
-.library-segment > button {
-  flex: 1;
-  min-height: 30px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-  cursor: pointer;
-}
-.library-segment > button.on {
-  background: var(--surface);
-  color: var(--text);
+  min-width: 0;
 }
 .library-segment em {
   margin-left: 4px;
@@ -137,12 +120,7 @@
   font-size: var(--fs-meta);
   font-weight: var(--fw-strong);
 }
-.sidebar-meta .watch-strip button.active {
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
-}
+/* .watch-strip button.active 的最终值在 deck-ui.css（中性选中态）。 */
 .sidebar-meta .watch-strip em {
   margin-left: 0;
   color: var(--danger);
@@ -280,18 +258,7 @@
   background: color-mix(in srgb, var(--surface) 80%, transparent);
   outline: none;
 }
-.session-row.selected {
-  border-left-color: transparent;
-  background:
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 13%, transparent),
-      color-mix(in srgb, var(--accent) 4%, transparent) 58%,
-      transparent
-    ),
-    var(--surface);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
+/* .session-row.selected 的最终值在 deck-ui.css（中性底色，不加强调色竖条）。 */
 .session-row .session-search-hit {
   display: flex;
   align-items: baseline;
@@ -561,24 +528,6 @@
   border-radius: var(--radius-md);
 }
 
-.library-segment {
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  border-color: var(--control-border);
-  color: var(--text);
-}
-
-.library-segment > button {
-  min-height: 26px;
-  border-radius: var(--radius-xs);
-  font-weight: var(--fw-medium);
-}
-
-.library-segment > button:hover:not(.on) {
-  background: var(--control-hover);
-  color: var(--text);
-}
-
 .new-session-btn {
   min-height: var(--control-h);
   padding: 0 var(--space-3);
@@ -647,7 +596,7 @@
 }
 
 @media (max-width: 760px) {
-  .library-segment > button {
+  .library-segment .ui-seg__item {
     min-height: 36px;
   }
 }

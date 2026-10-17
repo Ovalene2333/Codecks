@@ -332,7 +332,7 @@ export function ProjectGroupView({
           })}
           {hiddenCount > 0 && (
             <button type="button" className="session-more" onClick={onToggle}>
-              其余 {hiddenCount} 条
+              其余 {hiddenCount} 个
             </button>
           )}
         </div>

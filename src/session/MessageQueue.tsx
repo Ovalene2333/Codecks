@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { RotateCcw, X, Zap } from "lucide-react";
 import type { MessageDelivery } from "../types";
+import { Button } from "../kit";
 
 type Action = (id: string) => Promise<void>;
 
@@ -28,7 +29,7 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     : item.status === "interrupting" ? "正在停止当前任务"
     : item.status === "sending" ? "正在发送"
     : item.status === "failed" ? "发送未完成"
-    : item.mode === "queue" ? "已追加 · 等待当前任务结束" : "即时反馈 · 等待处理";
+    : item.mode === "queue" ? "已追加，等待当前任务结束" : "即时反馈，等待处理";
   const label = item.status === "delivered" ? "已发送"
     : item.status === "interrupting" ? "停止中"
     : item.status === "sending" ? "发送中"
@@ -43,15 +44,15 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
         </span>}
         <span className="session-message-queue-controls">
           <span role="status" aria-label={status} title={status}>{label}</span>
-          {canFeedback && <button type="button" disabled={acting} aria-label="即时反馈"
+          {canFeedback && <Button variant="ghost" iconOnly size="sm" busy={acting} aria-label="即时反馈"
             title={feedbackInterrupts ? "即时反馈：先停止当前任务，再发送这条消息" : "即时反馈：直接反馈给当前任务，无需停止"}
-            onClick={() => void act(onFeedback)}><Zap aria-hidden="true" /></button>}
-          {item.canRetry && onRetry && <button type="button" disabled={acting} aria-label="重试" title="重试"
-            onClick={() => void act(onRetry)}><RotateCcw aria-hidden="true" /></button>}
-          {item.status !== "sending" && item.status !== "delivered" && onCancel && <button type="button" disabled={acting}
+            onClick={() => void act(onFeedback)}><Zap aria-hidden="true" /></Button>}
+          {item.canRetry && onRetry && <Button variant="ghost" iconOnly size="sm" busy={acting} aria-label="重试" title="重试"
+            onClick={() => void act(onRetry)}><RotateCcw aria-hidden="true" /></Button>}
+          {item.status !== "sending" && item.status !== "delivered" && onCancel && <Button variant="ghost" iconOnly size="sm" busy={acting}
             aria-label={item.status === "failed" ? "移除记录" : "取消"}
             title={item.status === "failed" ? "移除记录" : "取消追加"}
-            onClick={() => void act(onCancel)}><X aria-hidden="true" /></button>}
+            onClick={() => void act(onCancel)}><X aria-hidden="true" /></Button>}
         </span>
         {item.error && <span className="session-message-queue-error" role="alert">{item.error}</span>}
       </div>

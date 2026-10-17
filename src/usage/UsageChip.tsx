@@ -14,7 +14,7 @@ import {
   usageWindowLabel,
 } from "./format";
 import { Drawer } from "../ui";
-import { Tip } from "../kit";
+import { Empty, Seg, Tip } from "../kit";
 import { formatTokens, relativeTime } from "../format";
 import { buildUsageStats, type UsageTotals } from "./stats";
 import { estimateCost, formatCost, planPrice } from "./cost";
@@ -112,26 +112,16 @@ export function UsageDrawer({
 
   return (
     <Drawer title="用量" onClose={onClose}>
-      <div className="usage-tabs" role="tablist" aria-label="用量视图">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "stats"}
-          className={tab === "stats" ? "on" : ""}
-          onClick={() => setTab("stats")}
-        >
-          统计
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "limits"}
-          className={tab === "limits" ? "on" : ""}
-          onClick={() => setTab("limits")}
-        >
-          {CODEX_QUOTA_TITLE}
-        </button>
-      </div>
+      <Seg<UsageView>
+        label="用量视图"
+        className="usage-tabs"
+        value={tab}
+        onChange={setTab}
+        items={[
+          { value: "stats", label: "统计" },
+          { value: "limits", label: CODEX_QUOTA_TITLE },
+        ]}
+      />
       {tab === "stats" ? (
         <UsageStats
           threads={threads}
@@ -186,28 +176,32 @@ function UsageStats({
       <section className="usage-summary usage-cost" aria-label="估算费用">
         <span>估算费用</span>
         <strong>{formatCost(cost)}</strong>
-        <p className="usage-note">按公开 API 目录价折算，仅供参考。</p>
+        <p className="usage-note">按公开 API 目录价折算。</p>
       </section>
-      <div className="usage-level" role="tablist" aria-label="统计层级">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={level === "projects"}
-          className={level === "projects" ? "on" : ""}
-          onClick={() => setLevel("projects")}
-        >
-          项目 <em>{stats.projects.length}</em>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={level === "sessions"}
-          className={level === "sessions" ? "on" : ""}
-          onClick={() => setLevel("sessions")}
-        >
-          会话 <em>{stats.sessions.length}</em>
-        </button>
-      </div>
+      <Seg<"projects" | "sessions">
+        label="统计层级"
+        className="usage-level"
+        value={level}
+        onChange={setLevel}
+        items={[
+          {
+            value: "projects",
+            label: (
+              <>
+                项目 <em>{stats.projects.length}</em>
+              </>
+            ),
+          },
+          {
+            value: "sessions",
+            label: (
+              <>
+                会话 <em>{stats.sessions.length}</em>
+              </>
+            ),
+          },
+        ]}
+      />
       {rows.length ? (
         <div className="usage-ranking">
           {level === "projects"
@@ -216,7 +210,7 @@ function UsageStats({
                   key={row.key}
                   icon={<Folder />}
                   title={row.name}
-                  subtitle={`${row.sessionCount} 个会话 · ${row.cwd}`}
+                  subtitle={`${row.sessionCount} 个会话，${row.cwd}`}
                   totals={row.totals}
                   max={max}
                 />
@@ -226,7 +220,7 @@ function UsageStats({
                   key={row.key}
                   icon={<MessageSquare />}
                   title={row.thread.name}
-                  subtitle={`${relativeTime(row.thread.updatedAt)} · ${row.thread.model}`}
+                  subtitle={`${relativeTime(row.thread.updatedAt)}，${row.thread.model}`}
                   totals={row.totals}
                   max={max}
                   current={row.key === currentSessionKey}
@@ -234,11 +228,12 @@ function UsageStats({
               ))}
         </div>
       ) : (
-        <div className="usage-empty">
-          <Gauge />
-          <b>暂无会话用量</b>
-          <span>运行一次任务后，累计 Token 会显示在这里。</span>
-        </div>
+        <Empty
+          compact
+          icon={<Gauge />}
+          title="暂无会话用量"
+          desc="运行一次任务后，累计 Token 会显示在这里。"
+        />
       )}
       {stats.totals.reasoningOutput > 0 ? (
         <p className="usage-note">
@@ -293,7 +288,7 @@ function UsageRow({
       <div className="usage-rank-track">
         <i style={{ width: `${width}%` }} />
       </div>
-      {details.length ? <p>{details.join(" · ")}</p> : null}
+      {details.length ? <p>{details.join("，")}</p> : null}
     </div>
   );
 }

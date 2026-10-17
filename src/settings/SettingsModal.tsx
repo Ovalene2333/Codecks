@@ -61,7 +61,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { id: "interface", label: "界面", icon: Palette, desc: "主题、动画、消息排版与模板，仅作用于当前设备。" },
   { id: "session", label: "会话", icon: MessageSquare, desc: "新建会话的默认值、输入方式与系统提醒。" },
-  { id: "agents", label: "Agent", icon: Bot, desc: "停用的 Agent 不启动，也不出现在新建会话中。改完配置后重载即可生效，无需重启。" },
+  { id: "agents", label: "Agent", icon: Bot, desc: "停用的 Agent 不启动，也不出现在新建会话中。" },
   { id: "providers", label: "供应商", icon: Plug, desc: "管理 Codex、Claude、OpenCode 的自定义供应商；CC Switch 为可选只读来源。" },
   { id: "tools", label: "工具", icon: Wrench, desc: "工具菜单的显示项与打开方式。" },
   { id: "shortcuts", label: "快捷键", icon: Keyboard, desc: "桌面端键盘快捷键一览。" },
@@ -421,15 +421,16 @@ export function SettingsModal({
         onClose={requestClose}
         leading={
           canGoBack ? (
-            <button
-              type="button"
-              className="icon-btn settings-back"
+            <Button
+              variant="ghost"
+              iconOnly
+              className="settings-back"
               aria-label="返回"
               title="返回"
               onClick={back}
             >
               <ChevronLeft />
-            </button>
+            </Button>
           ) : undefined
         }
       >

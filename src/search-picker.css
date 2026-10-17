@@ -454,19 +454,6 @@
   background: transparent;
 }
 
-.session-toolbar--panel .search-picker {
-  width: 100%;
-  max-width: none;
-}
-
-.session-toolbar--panel .search-picker-trigger {
-  min-height: 40px;
-  padding: 0 30px 0 11px;
-  border-color: var(--control-border);
-  background: var(--control);
-  font-size: var(--fs-ui);
-}
-
 .phone-session-settings .search-picker {
   width: 100%;
   max-width: none;

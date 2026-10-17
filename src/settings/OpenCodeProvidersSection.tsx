@@ -2,7 +2,7 @@ import { Select } from "../kit/Select";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image as ImageIcon, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api, post, remove } from "../api";
-import { Button, Disclosure, Dot, Field, Group, Note, SearchField, Switch, type DotTone } from "../kit";
+import { Button, Disclosure, Dot, Empty, Field, Group, Note, SearchField, Switch, type DotTone } from "../kit";
 import { Modal } from "../ui";
 import { useDirtyFlag } from "./dirty";
 
@@ -365,7 +365,14 @@ export function OpenCodeProvidersSection({
           {actions ? <div className="ui-pgroup__actions">{actions}</div> : null}
         </header>
         {!visible.length ? (
-          <p className="ui-pgroup__empty">{needle ? `没有匹配「${query.trim()}」的供应商。` : "暂无自定义供应商。"}</p>
+          <Empty
+            compact
+            title={
+              needle
+                ? `没有匹配「${query.trim()}」的供应商`
+                : "暂无自定义供应商"
+            }
+          />
         ) : (
         <div className="ui-pcard-list">
           {visible.map((provider) => {
@@ -654,7 +661,7 @@ export function OpenCodeProvidersSection({
                         model.variants.length ? `${model.variants.length} 档` : "",
                       ]
                         .filter(Boolean)
-                        .join(" · ") || "接口跟随供应商"}
+                        .join("，") || "接口跟随供应商"}
                       defaultOpen={modelAdvancedOpen(model, index)}
                     >
                       <Field label="接口">

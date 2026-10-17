@@ -268,28 +268,6 @@
   cursor: grabbing;
 }
 
-/* 开关＋文字说明行（表单内用，开关本身只有无障碍名称）。 */
-.ui-switch-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-
-.ui-switch-row__text {
-  display: grid;
-  gap: 2px;
-  color: var(--text);
-  font-size: var(--fs-ui);
-  line-height: var(--lh-ui);
-}
-
-.ui-switch-row__text small {
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-  line-height: var(--lh-ui);
-}
-
 @keyframes ui-pulse {
   50% {
     opacity: 0.45;
@@ -972,7 +950,8 @@
   min-width: 0;
 }
 
-.ui-inline-add > .ui-input {
+.ui-inline-add > .ui-input,
+.ui-inline-add > .search-picker {
   flex: 1;
   min-width: 0;
 }
@@ -1074,12 +1053,6 @@
   margin-left: auto;
 }
 
-.ui-pgroup__empty {
-  margin: 0;
-  padding: var(--space-2) 0;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-}
 
 .ui-pcard-list {
   display: grid;
@@ -1246,6 +1219,22 @@
   color: var(--text-dim);
   font-size: var(--fs-meta);
   line-height: var(--lh-ui);
+}
+
+/* 列表/抽屉内的小空态：不占视口高度，图标与标题降一档。 */
+.ui-empty--compact {
+  min-height: 0;
+  padding: var(--space-6) var(--space-4);
+}
+
+.ui-empty--compact > svg {
+  width: var(--fs-heading);
+  height: var(--fs-heading);
+}
+
+.ui-empty--compact h2 {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-title);
 }
 
 /* ── Disclosure（Base UI Collapsible）───────────────────────

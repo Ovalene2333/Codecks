@@ -23,7 +23,7 @@ export function OperationStatus({
   const elapsed = seconds >= 60 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
   return (
     <div className={`operation-status ${className}`} role="status">
-      <span className="operation-status-spinner" aria-hidden="true"><LoaderCircle /></span>
+      <LoaderCircle className="operation-status-spinner ui-spin" aria-hidden="true" />
       <div className="operation-status-content">
         <div className="operation-status-heading">
           <strong>{title}</strong>

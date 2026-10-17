@@ -41,7 +41,7 @@ test("permissions command renders browser-friendly controls", async () => {
   assert.match(html, /权限与审批/);
   assert.match(html, /workspace-write/);
   assert.match(html, /on-request/);
-  assert.match(html, /class="primary"/);
+  assert.match(html, /class="ui-btn ui-btn--primary"/);
 });
 
 test("running model command permits saving settings for the next turn", async () => {

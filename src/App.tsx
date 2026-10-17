@@ -85,6 +85,7 @@ import { WakeModal } from "./overlays/WakeModal";
 import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
 import { UsageDrawer, type UsageView } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
+import { Button } from "./kit";
 import { Modal } from "./ui";
 import { appendCodexEvent } from "./session/streaming";
 import {
@@ -1311,7 +1312,7 @@ export function App() {
                   pattern="\d{6}"
                   placeholder="6 位验证码"
                 />
-                <button className="primary">验证并连接</button>
+                <Button variant="primary" type="submit">验证并连接</Button>
               </form>
               {pairMessage && <p className="auth-error">{pairMessage}</p>}
               <div className="auth-divider">或</div>
@@ -1329,7 +1330,7 @@ export function App() {
             }}
           >
             <input name="token" type="password" placeholder="访问令牌" />
-            <button className="primary">连接</button>
+            <Button variant="primary" type="submit">连接</Button>
           </form>
         </div>
       </div>
@@ -1785,9 +1786,8 @@ export function App() {
             这条记录来自已有 Codex 历史，可以查看内容；它是外部终端里的会话，Deck
             只展示不接管。
           </p>
-          <button
-            className="primary"
-            type="button"
+          <Button
+            variant="primary"
             onClick={async () => {
               const result = await api<{ command: string }>(
                 `/runtime/terminal-command?cwd=${encodeURIComponent(historyHelp.cwd)}`,
@@ -1797,7 +1797,7 @@ export function App() {
             }}
           >
             复制终端接入命令
-          </button>
+          </Button>
         </Modal>
       )}
       {sheet && (
@@ -2012,13 +2012,12 @@ export function App() {
                     ? "修改不会影响当前任务"
                     : "设置自动保存"}
               </span>
-              <button
-                type="button"
-                className="primary"
+              <Button
+                variant="primary"
                 onClick={() => setSessionSettingsOpen(false)}
               >
                 完成
-              </button>
+              </Button>
             </footer>
           </Modal>
         )}

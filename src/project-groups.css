@@ -101,7 +101,7 @@
   color: var(--text-dim);
   font-size: var(--fs-ui);
   font-weight: var(--fw-medium);
-  line-height: 20px;
+  line-height: var(--lh-ui);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -110,7 +110,7 @@
   color: var(--text-faint);
   font-size: var(--fs-micro);
   font-weight: var(--fw-regular);
-  line-height: 20px;
+  line-height: var(--lh-ui);
   white-space: nowrap;
 }
 .project-heading b {
@@ -412,15 +412,6 @@
   cursor: default;
   opacity: 0.55;
 }
-.text-btn {
-  justify-self: start;
-  border: 0;
-  background: transparent;
-  color: var(--text-dim);
-  padding: 0;
-  font-size: var(--fs-meta);
-  cursor: pointer;
-}
 .dir-toolbar {
   display: flex;
   align-items: center;
@@ -496,27 +487,6 @@
   flex: none;
   gap: 2px;
   margin: -4px -6px 0 0;
-}
-.task-error-controls button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.task-error-controls button:hover {
-  background: var(--control-hover);
-  color: var(--text);
-}
-.task-error-controls svg {
-  width: 14px;
-  height: 14px;
 }
 .task-error.collapsed .task-error-preview {
   white-space: nowrap;
@@ -669,17 +639,6 @@
   border-color: var(--control-border);
 }
 
-.text-btn {
-  border: 1px solid var(--control-border);
-  background: var(--control);
-  color: var(--text);
-  padding: 0 var(--space-3);
-  min-height: var(--control-h);
-  border-radius: var(--radius-sm);
-  font-weight: var(--fw-medium);
-  box-shadow: none;
-  border-color: var(--control-border);
-}
 
 .wsl-cwd-btn {
   color: var(--text);
@@ -707,10 +666,10 @@
   flex: none;
   padding: 1px 5px;
   border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent-hover);
   font-size: var(--fs-micro);
-  font-weight: 600;
-  line-height: 16px;
+  font-weight: var(--fw-strong);
+  line-height: var(--lh-ui);
 }

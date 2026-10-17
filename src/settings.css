@@ -32,22 +32,6 @@
   width: 150px;
   min-width: 0;
 }
-.message-preview {
-  margin: var(--space-3) 0;
-  padding: var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  min-width: 0;
-}
-.message-preview summary {
-  cursor: pointer;
-  font-size: var(--fs-ui);
-  color: var(--text-dim);
-}
-.message-preview .message {
-  margin-top: var(--space-4);
-}
 
 /* ── 面板型弹窗（.ui-panel）─────────────────────────────────
    标题与标签固定，只有内容区（.ui-panel__body）滚动；高度固定，

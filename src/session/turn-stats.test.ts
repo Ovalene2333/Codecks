@@ -9,7 +9,20 @@ import {
   formatTurnDuration,
   progressTps,
   statsLine,
+  timestampMs,
 } from "./turn-stats";
+
+test("timestampMs accepts seconds, milliseconds and ISO strings", () => {
+  assert.equal(timestampMs(1_700_000_000), 1_700_000_000_000);
+  assert.equal(timestampMs(1_700_000_000_000), 1_700_000_000_000);
+  assert.equal(timestampMs("1700000000"), 1_700_000_000_000);
+  assert.equal(
+    timestampMs("2023-11-14T22:13:20.000Z"),
+    1_700_000_000_000,
+  );
+  assert.equal(timestampMs(undefined), 0);
+  assert.equal(timestampMs("not a time"), 0);
+});
 
 test("formatTps keeps one decimal below 100", () => {
   assert.equal(formatTps(47.619), "47.6 token/s");

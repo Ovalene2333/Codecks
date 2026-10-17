@@ -9,7 +9,7 @@ import {
   sameTypography,
   type MessageTypography,
 } from "../message-typography";
-import { Button, Choice, Group, Row, Section, Slider } from "../kit";
+import { Button, Choice, Disclosure, Group, Row, Section, Slider } from "../kit";
 import { AssistantMarkdown } from "../session/markdown";
 
 const PREVIEW = `## 消息排版预览
@@ -198,16 +198,14 @@ export function MessageTypographySection() {
           }
         />
       </Group>
-      <details
-        className="message-preview"
-        open
-        style={messageTypographyVariables(typography) as CSSProperties}
-      >
-        <summary>实时预览</summary>
-        <div className="message agent">
+      <Disclosure title="实时预览" defaultOpen>
+        <div
+          className="message agent"
+          style={messageTypographyVariables(typography) as CSSProperties}
+        >
           <AssistantMarkdown text={PREVIEW} />
         </div>
-      </details>
+      </Disclosure>
       <Group>
         <Row
           stack

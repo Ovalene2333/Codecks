@@ -2,7 +2,7 @@ import { Folder, Plus } from "lucide-react";
 import { BrandMark } from "../layout/BrandMark";
 import type { ProjectGroup } from "../projects";
 import type { RuntimeSnapshot } from "../types";
-import { usageChipMetric } from "../usage/format";
+import { CODEX_QUOTA_TITLE, usageChipMetric } from "../usage/format";
 
 export function Welcome({
   recent,
@@ -39,7 +39,7 @@ export function Welcome({
           </span>
           {runtime?.configPending && <span>供应商待应用</span>}
           <button type="button" className="welcome-usage" onClick={onUsage}>
-            官方额度 {usage}
+            {CODEX_QUOTA_TITLE} {usage.replace(" · ", " ")}
           </button>
         </p>
         <div className="recent-head">

@@ -8,18 +8,15 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
-  Clock3,
   Command,
   FolderSearch,
   Globe,
   Hourglass,
-  Inbox,
   MessageSquareText,
   Minimize2,
   MoreHorizontal,
   OctagonMinus,
   Pencil,
-  Play,
   Radar,
   RotateCw,
   Send,
@@ -32,6 +29,7 @@ import { agentShortName } from "../agents";
 import { post, remove } from "../api";
 import { relativeTime, sessionKey } from "../format";
 import { Button } from "../kit";
+import { ConfirmDialog } from "../ui";
 import type { ProjectGroup } from "../projects";
 import type {
   Approval,
@@ -186,7 +184,6 @@ function Row({
 function Panel({
   id,
   tone,
-  Icon,
   title,
   count,
   actions,
@@ -195,7 +192,6 @@ function Panel({
 }: {
   id: string;
   tone: string;
-  Icon: typeof Command;
   title: string;
   count?: number;
   actions?: ReactNode;
@@ -205,7 +201,6 @@ function Panel({
   return (
     <section id={id} className={`monitor-panel home-panel ${tone}`} aria-label={title}>
       <div className="monitor-panel-head">
-        <Icon aria-hidden="true" />
         <h2>{title}</h2>
         {count ? <span className="home-count">{count}</span> : null}
         {actions ? <div className="home-panel-actions">{actions}</div> : null}
@@ -323,7 +318,7 @@ function LostRow({
       timeTitle={`发现于 ${new Date(lost.endedAt).toLocaleString("zh-CN")}`}
       detail={
         <span className="home-row-step">
-          <b>监督进程失联 · {lost.label}</b>
+          <b>监督进程失联：{lost.label}</b>
           {lost.state ? <code>{lost.state}</code> : null}
           <span>{lost.reason}</span>
         </span>
@@ -387,7 +382,6 @@ function AttentionPanel({
     <Panel
       id="home-attention"
       tone="attention"
-      Icon={CircleAlert}
       title="需要处理"
       count={items.length + deliveries.length + lost.length}
     >
@@ -472,7 +466,6 @@ function UnseenPanel({
     <Panel
       id="home-unseen"
       tone="unseen"
-      Icon={Inbox}
       title="新回复"
       count={items.length}
       actions={
@@ -484,7 +477,7 @@ function UnseenPanel({
       footer={
         items.length > UNSEEN_LIMIT ? (
           <button type="button" className="home-more" onClick={() => setExpanded(!expanded)}>
-            {hidden > 0 ? `展开其余 ${hidden} 条` : "收起"}
+            {hidden > 0 ? `展开其余 ${hidden} 个` : "收起"}
           </button>
         ) : null
       }
@@ -535,7 +528,7 @@ function RunningPanel({
 }) {
   const now = useNow(1_000);
   return (
-    <Panel id="home-running" tone="running" Icon={Play} title="运行中" count={items.length}>
+    <Panel id="home-running" tone="running" title="运行中" count={items.length}>
       {items.map((item) => {
         const { thread, activity, stalled } = item;
         const step = activity?.step;
@@ -606,7 +599,6 @@ function RecentPanel({
     <Panel
       id="home-recent"
       tone="recent"
-      Icon={Clock3}
       title="最近会话"
       footer={
         <button type="button" className="home-more home-more-all" onClick={onShowAll}>
@@ -665,64 +657,82 @@ function WatchPanel({
   onOpen: (thread: ThreadSummary) => void;
 }) {
   const now = useNow(30_000);
+  const [stopping, setStopping] = useState<WakeWatcher>();
   // 连接出问题的排前面，其余按启动先后，顺序稳定。
   const sorted = [...watchers].sort(
     (a, b) => Number(Boolean(b.failures)) - Number(Boolean(a.failures)),
   );
   return (
-    <Panel id="home-watch" tone="watch" Icon={Radar} title="deck-api 监督中" count={watchers.length}>
-      {sorted.length ? null : (
-        <li className="home-empty">
-          <b>没有正在监督的远端任务</b>
-          <span>让 agent 用 deck-api wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
-        </li>
-      )}
-      {sorted.map((watcher) => {
-        const thread = watcher.threadId
-          ? threadOf.get(activityKey(watcher.agentId, watcher.threadId))
-          : undefined;
-        const title = [
-          `${watcher.label} · 代号 ${watcher.code} · 进程号 ${watcher.pid}`,
-          watcher.state && watcher.stateAt
-            ? `状态 ${watcher.state}（${relativeTime(watcher.stateAt)}）`
-            : "",
-          `$ ${watcher.command}`,
-          watcher.log ? `日志 ${watcher.log}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n");
-        return (
-          <Row
-            key={watcher.pid}
-            thread={thread}
-            name={thread ? undefined : `代号 ${watcher.code}（未绑定会话）`}
-            project={thread ? projectOf.get(sessionKey(thread)) : undefined}
-            tone={watcher.failures ? "watch warn" : "watch"}
-            lead={<Radar />}
-            time={roughly("已盯", now - watcher.startedAt)}
-            timeTitle={`启动于 ${new Date(watcher.startedAt).toLocaleString("zh-CN")}`}
-            detail={watchDetail(watcher)}
-            title={title}
-            onOpen={thread ? () => onOpen(thread) : undefined}
-            menu={false}
-            action={
-              <button
-                type="button"
-                className="home-row-done"
-                title="停止这个监督进程（不会再唤醒会话）"
-                aria-label={`停止监督进程 ${watcher.label}`}
-                onClick={() => {
-                  if (window.confirm(`停止监督进程「${watcher.label}」？远端任务不受影响，但结束时不会再唤醒会话。`))
-                    post(`/monitor/watchers/${watcher.pid}/stop`).catch(() => {});
-                }}
-              >
-                <Square />
-              </button>
-            }
-          />
-        );
-      })}
-    </Panel>
+    <>
+      <Panel id="home-watch" tone="watch" title="deck-api 监督中" count={watchers.length}>
+        {sorted.length ? null : (
+          <li className="home-empty">
+            <b>没有正在监督的远端任务</b>
+            <span>让 agent 用 deck-api wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
+          </li>
+        )}
+        {sorted.map((watcher) => {
+          const thread = watcher.threadId
+            ? threadOf.get(activityKey(watcher.agentId, watcher.threadId))
+            : undefined;
+          const title = [
+            `${watcher.label} · 代号 ${watcher.code} · 进程号 ${watcher.pid}`,
+            watcher.state && watcher.stateAt
+              ? `状态 ${watcher.state}（${relativeTime(watcher.stateAt)}）`
+              : "",
+            `$ ${watcher.command}`,
+            watcher.log ? `日志 ${watcher.log}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+          return (
+            <Row
+              key={watcher.pid}
+              thread={thread}
+              name={thread ? undefined : `代号 ${watcher.code}（未绑定会话）`}
+              project={thread ? projectOf.get(sessionKey(thread)) : undefined}
+              tone={watcher.failures ? "watch warn" : "watch"}
+              lead={<Radar />}
+              time={roughly("已盯", now - watcher.startedAt)}
+              timeTitle={`启动于 ${new Date(watcher.startedAt).toLocaleString("zh-CN")}`}
+              detail={watchDetail(watcher)}
+              title={title}
+              onOpen={thread ? () => onOpen(thread) : undefined}
+              menu={false}
+              action={
+                <button
+                  type="button"
+                  className="home-row-done"
+                  title="停止这个监督进程（不会再唤醒会话）"
+                  aria-label={`停止监督进程 ${watcher.label}`}
+                  onClick={() => setStopping(watcher)}
+                >
+                  <Square />
+                </button>
+              }
+            />
+          );
+        })}
+      </Panel>
+      {stopping ? (
+        <ConfirmDialog
+          title="停止监督进程"
+          body={
+            <p>
+              停止「{stopping.label}」？远端任务不受影响，但结束时不会再唤醒会话。
+            </p>
+          }
+          confirmLabel="停止"
+          danger
+          onClose={() => setStopping(undefined)}
+          onConfirm={() => {
+            const current = stopping;
+            setStopping(undefined);
+            void post(`/monitor/watchers/${current.pid}/stop`).catch(() => {});
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

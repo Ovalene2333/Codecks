@@ -236,7 +236,7 @@ export function SearchablePicker({
         index={index}
         className="search-picker-option"
         aria-label={
-          option.group ? `${option.label} · ${option.group}` : option.label
+          option.group ? `${option.label}，${option.group}` : option.label
         }
         title={option.hint || option.label}
       >

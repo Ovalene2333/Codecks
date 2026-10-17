@@ -150,10 +150,22 @@ export function OpenCodePermissionsSection({
       {!data && !error && <p className="ui-section__desc">正在读取权限配置…</p>}
       {error && <p className="ui-error">{error}</p>}
       {!error && notice && <p className="ui-section__desc">{notice}</p>}
-      {data && !data.online && <Note>OpenCode 未运行，改动将在下次启动时生效。</Note>}
-      {rules["*"] === "allow" && (
-        <Note tone="warn">所有工具已设为直接允许，不再询问；请确认环境可信。</Note>
-      )}
+      {(() => {
+        const notices = [
+          data && !data.online
+            ? "OpenCode 未运行，改动将在下次启动时生效。"
+            : "",
+          rules["*"] === "allow"
+            ? "所有工具已设为直接允许，不再询问；请确认环境可信。"
+            : "",
+        ].filter(Boolean);
+        if (!notices.length) return null;
+        return (
+          <Note tone={rules["*"] === "allow" ? "warn" : "neutral"}>
+            {notices.join(" ")}
+          </Note>
+        );
+      })()}
       {data && (
         <Group>
           {tools.map((tool) => {

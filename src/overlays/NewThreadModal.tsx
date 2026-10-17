@@ -1,4 +1,6 @@
 import { Select } from "../kit/Select";
+import { Field, Seg } from "../kit";
+import { Button } from "../kit";
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Sparkles } from "lucide-react";
 import { api, post } from "../api";
@@ -272,32 +274,6 @@ export function NewThreadModal({
       <form className="form" onSubmit={submit}>
         <label>
           Agent
-          {acpAgents.length ? (
-            <div
-              className="library-segment"
-              role="tablist"
-              aria-label="启动方式"
-            >
-              <button
-                type="button"
-                role="tab"
-                className={protocolTab === "native" ? "on" : ""}
-                aria-selected={protocolTab === "native"}
-                onClick={() => selectProtocol("native")}
-              >
-                原生
-              </button>
-              <button
-                type="button"
-                role="tab"
-                className={protocolTab === "acp" ? "on" : ""}
-                aria-selected={protocolTab === "acp"}
-                onClick={() => selectProtocol("acp")}
-              >
-                ACP
-              </button>
-            </div>
-          ) : null}
           <Select
             value={agentId}
             onValueChange={(nextValue) => selectAgent(nextValue as AgentId)}
@@ -319,6 +295,19 @@ export function NewThreadModal({
             ))}
           </Select>
         </label>
+        {acpAgents.length ? (
+          <Field label="启动方式" group>
+            <Seg<"native" | "acp">
+              label="启动方式"
+              value={protocolTab}
+              onChange={selectProtocol}
+              items={[
+                { value: "native", label: "原生" },
+                { value: "acp", label: "ACP" },
+              ]}
+            />
+          </Field>
+        ) : null}
         {agentId === "codex" ? (
           <>
             <label>
@@ -364,7 +353,7 @@ export function NewThreadModal({
                     (item) => item.id === nextValue,
                   );
                   if (profile?.official) {
-                    window.alert(
+                    setError(
                       "官方登录档位不能在这里选择，请在终端完成登录后使用。",
                     );
                     return;
@@ -621,8 +610,8 @@ export function NewThreadModal({
           </>
         )}
         {error && <p className="error-text">{error}</p>}
-        <button
-          className="primary"
+        <Button
+          variant="primary"
           type="submit"
           disabled={
             submitting ||
@@ -633,7 +622,7 @@ export function NewThreadModal({
         >
           <Sparkles />
           {submitting ? "正在创建…" : "创建会话"}
-        </button>
+        </Button>
       </form>
       {browse && (
         <DirBrowser

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { Button } from "../kit";
 import { HeartPulse } from "lucide-react";
 import { api } from "../api";
 import { SwrCache } from "../swr-cache";
@@ -152,13 +153,14 @@ export function MonitorHealth({
         <HeartPulse aria-hidden="true" />
         <h2>运行健康</h2>
         {onOpenAgentSettings ? (
-          <button
-            type="button"
-            className="text-btn monitor-panel-link"
+          <Button
+            variant="ghost"
+            size="sm"
+            className="monitor-panel-link"
             onClick={onOpenAgentSettings}
           >
             管理
-          </button>
+          </Button>
         ) : null}
       </header>
       <ul className="monitor-health-list">

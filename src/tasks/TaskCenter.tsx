@@ -12,6 +12,7 @@ import { api, post } from "../api";
 import { threadActionPath } from "../agents";
 import { basename } from "../format";
 import type { ActiveTask, AgentId, ThreadSummary } from "../types";
+import { Empty, Seg } from "../kit";
 import { ConfirmDialog, Drawer } from "../ui";
 
 function elapsed(startedAt: number, now: number) {
@@ -117,25 +118,38 @@ export function TaskCenter({
         onClose={onClose}
       >
         <div className="task-center-head">
-          <div className="task-filters" role="tablist" aria-label="任务状态">
-            {(["all", "running", "waiting"] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                className={filter === value ? "on" : ""}
-                aria-selected={filter === value}
-                onClick={() => setFilter(value)}
-              >
-                {value === "all"
-                  ? "全部"
-                  : value === "running"
-                    ? "运行中"
-                    : "待确认"}
-                <em>{counts[value]}</em>
-              </button>
-            ))}
-          </div>
+          <Seg<"all" | "running" | "waiting">
+            label="任务状态"
+            className="task-filters"
+            value={filter}
+            onChange={setFilter}
+            items={[
+              {
+                value: "all",
+                label: (
+                  <>
+                    全部<em>{counts.all}</em>
+                  </>
+                ),
+              },
+              {
+                value: "running",
+                label: (
+                  <>
+                    运行中<em>{counts.running}</em>
+                  </>
+                ),
+              },
+              {
+                value: "waiting",
+                label: (
+                  <>
+                    待确认<em>{counts.waiting}</em>
+                  </>
+                ),
+              },
+            ]}
+          />
           <button
             type="button"
             className={`icon-btn task-refresh ${loading ? "refreshing" : ""}`}
@@ -148,15 +162,13 @@ export function TaskCenter({
         {error && <p className="error-banner">{error}</p>}
         <div className="task-list" aria-busy={loading}>
           {!loading && !visible.length && (
-            <div className="task-empty">
-              <Activity />
-              <b>没有进行中的任务</b>
-              <small>
-                {scopeThreadId
-                  ? "此会话当前空闲"
-                  : "所有受管会话当前空闲"}
-              </small>
-            </div>
+            <Empty
+              icon={<Activity />}
+              title="没有进行中的任务"
+              desc={
+                scopeThreadId ? "此会话当前空闲" : "所有受管会话当前空闲"
+              }
+            />
           )}
           {visible.map((task) => (
             <section className="task-row" key={task.id}>
@@ -178,7 +190,7 @@ export function TaskCenter({
                 <div>
                   <strong>{task.threadName}</strong>
                   <small>
-                    {basename(task.cwd)} · {task.model}
+                    {basename(task.cwd)}，{task.model}
                   </small>
                 </div>
                 <ArrowUpRight />
@@ -202,13 +214,13 @@ export function TaskCenter({
                             ? "后台终端"
                             : "执行中"}
                           {command.osPid != null
-                            ? ` · PID ${command.osPid}`
+                            ? `，PID ${command.osPid}`
                             : ""}
                           {command.cpuPercent != null
-                            ? ` · CPU ${command.cpuPercent.toFixed(1)}%`
+                            ? `，CPU ${command.cpuPercent.toFixed(1)}%`
                             : ""}
                           {memory(command.rssKb)
-                            ? ` · ${memory(command.rssKb)}`
+                            ? `，${memory(command.rssKb)}`
                             : ""}
                         </small>
                       </div>
@@ -252,7 +264,7 @@ export function TaskCenter({
                 onClick={() => setConfirm({ kind: "turn", task })}
               >
                 <CircleStop />
-                停止整个任务
+                停止当前轮次
               </button>
             </section>
           ))}
@@ -261,7 +273,7 @@ export function TaskCenter({
       {confirm && (
         <div className="task-confirm-layer">
           <ConfirmDialog
-            title={confirm.kind === "process" ? "停止后台终端" : "停止整个任务"}
+            title={confirm.kind === "process" ? "停止后台终端" : "停止当前轮次"}
             body={
               <p>
                 {confirm.kind === "process" ? (

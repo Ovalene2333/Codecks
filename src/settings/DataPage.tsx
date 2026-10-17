@@ -338,7 +338,7 @@ export function DataPage({
             title="本地缓存"
             desc={
               usage.bytes
-                ? `${formatBytes(usage.bytes)} · ${usage.threads} 个会话全文。用于加速首屏加载，可随时重建。`
+                ? `${formatBytes(usage.bytes)}，${usage.threads} 个会话全文。用于加速首屏加载，可随时重建。`
                 : "没有缓存"
             }
             side={
@@ -407,7 +407,7 @@ export function DataPage({
               key={thread.id}
               dot={thread.status === "waiting" ? "warn" : "busy"}
               title={thread.name}
-              desc={`${agentName(agents, thread)} · ${
+              desc={`${agentName(agents, thread)}，${
                 thread.status === "waiting" ? "等待确认" : "运行中"
               }`}
               side={

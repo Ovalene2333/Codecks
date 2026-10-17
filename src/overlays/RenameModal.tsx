@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button } from "../kit";
 import { Modal } from "../ui";
 
 export function RenameModal({
@@ -39,9 +40,9 @@ export function RenameModal({
           />
         </label>
         {error && <p className="error-text">{error}</p>}
-        <button className="primary" type="submit">
+        <Button variant="primary" type="submit">
           确定
-        </button>
+        </Button>
       </form>
     </Modal>
   );

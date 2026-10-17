@@ -17,6 +17,23 @@ export interface TurnProgress {
   elapsedMs?: number;
 }
 
+/**
+ * 回合时间戳 → 毫秒。Codex app-server 的 startedAt/completedAt 是 Unix 秒，
+ * OpenCode 是毫秒，Claude/ACP 是 ISO 字符串；不能一律交给 Date.parse。
+ */
+export function timestampMs(value: unknown) {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim()
+        ? /^\d+$/.test(value.trim())
+          ? Number(value)
+          : Date.parse(value)
+        : NaN;
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return numeric < 1e12 ? numeric * 1_000 : numeric;
+}
+
 /** 47.6 token/s、167 token/s：百以上取整，以下留一位小数。 */
 export function formatTps(tps: unknown) {
   const value = Number(tps);

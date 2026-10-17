@@ -1,3 +1,4 @@
+import { Button } from "../kit";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Lock, ShieldAlert, X } from "lucide-react";
 import { api, post, remove } from "../api";
@@ -112,35 +113,39 @@ function TaskErrorNotice({
             <p>{message}</p>
             {code && <small>错误类型：{code}</small>}
             {contextExceeded && (
-              <button className="primary" type="button" onClick={onCompact}>
+              <Button variant="primary" onClick={onCompact}>
                 压缩上下文
-              </button>
+              </Button>
             )}
             {usageLimit && (
-              <button className="primary" type="button" onClick={onUsage}>
+              <Button variant="primary" onClick={onUsage}>
                 查看 Codex 额度
-              </button>
+              </Button>
             )}
           </>
         )}
       </div>
       <div className="task-error-controls">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          iconOnly
+          size="sm"
           aria-label={collapsed ? "展开错误详情" : "折叠错误详情"}
           title={collapsed ? "展开错误详情" : "折叠错误详情"}
           onClick={() => setCollapsed((value) => !value)}
         >
           {collapsed ? <ChevronDown /> : <ChevronUp />}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          iconOnly
+          size="sm"
           aria-label="忽略这条错误"
           title="忽略这条错误"
           onClick={onDismiss}
         >
           <X />
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -604,13 +609,13 @@ export function ChatWorkspace({
           : "未知";
       setStatusNote(
         [
-          `模型 ${thread.resolvedModel || thread.model}${thread.reasoningEffort ? ` · ${thread.reasoningEffort}` : ""}`,
+          `模型 ${thread.resolvedModel || thread.model}${thread.reasoningEffort ? `，${thread.reasoningEffort}` : ""}`,
           thread.agentId === "claude"
             ? `权限 ${CLAUDE_PERMISSION_OPTIONS.find((option) => option.value === (thread.permissionMode || "default"))?.label || "按需询问"}`
             : thread.agentId === "opencode"
               ? ""
-              : `沙箱 ${sandboxLabel(thread.sandbox || "workspace-write")} · 审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
-          `状态 ${THREAD_STATUS_LABELS[thread.status] || thread.status}${thread.activeTurnId ? " · 进行中" : ""}`,
+              : `沙箱 ${sandboxLabel(thread.sandbox || "workspace-write")}，审批 ${approvalModeLabel(thread.approvalPolicy, thread.approvalsReviewer)}`,
+          `状态 ${THREAD_STATUS_LABELS[thread.status] || thread.status}${thread.activeTurnId ? "（进行中）" : ""}`,
           thread.agentId === "opencode"
             ? ""
             : `Fast ${thread.serviceTier === "fast" ? "开启" : "关闭"}`,
@@ -646,7 +651,7 @@ export function ChatWorkspace({
       });
       if (applied && locked)
         setStatusNote(
-          `模型已保存（${command.model}${command.reasoningEffort ? ` · ${command.reasoningEffort}` : ""}），将从下一轮开始生效`,
+          `模型已保存（${command.model}${command.reasoningEffort ? `，${command.reasoningEffort}` : ""}），将从下一轮开始生效`,
         );
       return;
     }

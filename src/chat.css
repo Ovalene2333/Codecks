@@ -87,16 +87,13 @@
 .status.compact em {
   font-size: var(--fs-meta);
 }
+/* 待确认计数：正文旁的浅色数字，不加底色圆框（仅底栏角标例外）。 */
 .pending-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: var(--radius-pill);
-  background: var(--wait);
-  color: var(--accent-text);
+  background: none;
+  color: var(--wait);
   font-size: var(--fs-meta);
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
 }
 .provider-switch.secondary {
   max-width: 120px;
@@ -343,28 +340,6 @@
     color: var(--text);
     border-color: var(--line-strong);
   }
-}
-.session-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 280px;
-  padding: 24px 16px;
-  text-align: center;
-}
-.session-empty h3 {
-  max-width: 100%;
-  margin: 0;
-  font-size: var(--fs-heading);
-  font-weight: var(--fw-strong);
-  overflow-wrap: anywhere;
-}
-.session-empty-lead {
-  margin: 8px 0 0;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
 }
 .session-empty-prompts {
   display: flex;
@@ -1170,10 +1145,6 @@
   color: var(--text-soft);
   font-size: var(--fs-meta);
 }
-.approval-actions .approve.session {
-  background: var(--control);
-  border-color: var(--control-border);
-}
 .composer {
   flex: none;
   position: relative;
@@ -1223,32 +1194,6 @@
   margin-top: var(--space-1);
   color: var(--danger);
   font-size: var(--fs-meta);
-}
-.session-message-queue-controls button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: var(--space-6);
-  min-height: var(--space-6);
-  padding: var(--space-1);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-.session-message-queue-controls button svg {
-  width: var(--space-4);
-  height: var(--space-4);
-}
-.session-message-queue-controls button:hover:not(:disabled),
-.session-message-queue-controls button:focus-visible {
-  background: var(--control-hover);
-  color: var(--text);
-}
-.session-message-queue-controls button:disabled {
-  opacity: 0.5;
-  cursor: wait;
 }
 @media (pointer: coarse) {
   .session-message-queue-controls button {
@@ -1827,7 +1772,7 @@ button.composer-context-seg:focus-visible {
 .command-modal {
   width: min(620px, 100%);
 }
-.command-form .primary {
+.command-form > .ui-btn {
   justify-self: end;
   min-width: 96px;
 }
@@ -2107,7 +2052,7 @@ button.composer-context-seg:focus-visible {
   color: var(--text);
 }
 
-.task-error .primary {
+.task-error .ui-btn--primary {
   margin-top: 8px;
   min-height: 36px;
 }
@@ -2546,10 +2491,6 @@ button.composer-context-seg:focus-visible {
   .approval-actions {
     flex-direction: column;
   }
-  .approval-actions button {
-    width: 100%;
-    min-height: 48px;
-  }
   .overflow-menu {
     min-width: 40px;
     min-height: 40px;
@@ -2672,35 +2613,10 @@ button.composer-context-seg:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
-.approval-actions .approve.session {
-  color: var(--text);
-}
-
-.approval-actions .approve:not(.session) {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-text);
-}
-
-.approval-actions .approve:not(.session):hover:not(:disabled) {
-  border-color: var(--primary-hover);
-  background: var(--primary-hover);
-  color: var(--primary-text);
-}
-
+/* 审批操作按钮已迁 kit Button：外观走 .ui-btn，这里只管布局。 */
 .approval-actions > button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
   flex: 0 1 auto;
   min-width: 96px;
-}
-
-.approval-actions button:hover:not(:disabled) {
-  border-color: var(--line-strong);
-  background: var(--control-hover);
-  color: var(--text);
 }
 
 .approval-card {
@@ -2909,16 +2825,6 @@ button.composer-context-seg:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.approval-resolve-busy {
-  flex: none;
-  margin: 0;
-  padding: var(--space-2) 15px;
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-meta);
-  line-height: var(--lh-ui);
-  color: var(--text-dim);
-}
-
 .approval-resolve-error {
   flex: none;
   margin: 0;
@@ -3063,11 +2969,6 @@ button.composer-context-seg:focus-visible {
 .origin-chip {
   background: var(--surface-muted);
   border-color: var(--line);
-}
-
-.pending-count {
-  background: var(--surface-2);
-  color: var(--text-dim);
 }
 
 .permission-list {

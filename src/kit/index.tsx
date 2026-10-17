@@ -432,14 +432,17 @@ export function Empty({
   title,
   desc,
   action,
+  compact,
 }: {
   icon?: ReactNode;
   title: ReactNode;
   desc?: ReactNode;
   action?: ReactNode;
+  /** 列表内 / 抽屉内的小空态：不撑满视口，图标与标题降一档。 */
+  compact?: boolean;
 }) {
   return (
-    <div className="ui-empty">
+    <div className={cx("ui-empty", compact && "ui-empty--compact")}>
       {icon}
       <h2>{title}</h2>
       {desc ? <p>{desc}</p> : null}

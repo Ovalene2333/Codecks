@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { Folder, GitBranch } from "lucide-react";
 import type { ThreadSummary, MessageDelivery } from "../types";
+import { Empty } from "../kit";
 import { RenderErrorBoundary } from "../ui";
 import { OperationStatus } from "./OperationStatus";
 import { TurnBlock } from "./TurnBlock";
@@ -286,24 +287,26 @@ export function Timeline({
         </button>
       )}
       {showEmpty ? (
-        <div className="session-empty">
-          <h3>在 {basename(thread.cwd) || thread.name} 开始</h3>
-          <p className="session-empty-lead">描述你的任务，或选一个起点。</p>
-          {onQuickPrompt ? (
-            <div className="session-empty-prompts">
-              {QUICK_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt.text}
-                  type="button"
-                  onClick={() => onQuickPrompt(prompt.text)}
-                  title={prompt.text}
-                >
-                  {prompt.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+        <Empty
+          title={`在 ${basename(thread.cwd) || thread.name} 开始`}
+          desc="描述你的任务，或选一个起点。"
+          action={
+            onQuickPrompt ? (
+              <div className="session-empty-prompts">
+                {QUICK_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt.text}
+                    type="button"
+                    onClick={() => onQuickPrompt(prompt.text)}
+                    title={prompt.text}
+                  >
+                    {prompt.label}
+                  </button>
+                ))}
+              </div>
+            ) : null
+          }
+        />
       ) : (
         <div className="session-meta">
           <Folder />

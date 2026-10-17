@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Button } from "../kit";
 import { Gauge, RefreshCw } from "lucide-react";
 import { formatTokens, sessionKey } from "../format";
 import type { RateLimitWindow, RuntimeSnapshot, ThreadSummary } from "../types";
@@ -93,13 +94,14 @@ export function MonitorUsage({
       <header className="monitor-panel-head">
         <Gauge aria-hidden="true" />
         <h2>用量与额度</h2>
-        <button
-          type="button"
-          className="text-btn monitor-panel-link"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="monitor-panel-link"
           onClick={() => onOpenUsage("stats")}
         >
           明细
-        </button>
+        </Button>
       </header>
       <div className="monitor-usage-totals">
         <div>

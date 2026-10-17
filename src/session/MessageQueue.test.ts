@@ -54,7 +54,7 @@ test("queued messages appear as user bubbles in the timeline with full text and 
   }));
   assert.ok(html.includes(item.text!));
   assert.match(html, /class="message user"/);
-  assert.match(html, /已追加 · 等待当前任务结束/);
+  assert.match(html, /aria-label="已追加，等待当前任务结束"/);
   assert.match(html, /aria-label="即时反馈"/);
   assert.match(html, /aria-label="取消"/);
   assert.match(html, /2 张图片/);

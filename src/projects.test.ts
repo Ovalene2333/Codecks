@@ -367,6 +367,23 @@ test("explicit project approval reviewers remain unchanged", () => {
   assert.equal(defaults.approvalsReviewer, "user");
 });
 
+test("pinned project order ignores session activity", () => {
+  const records = [
+    { key: "/a", cwd: "/a", name: "a", pinned: true, updatedAt: 20 },
+    { key: "/b", cwd: "/b", name: "b", pinned: true, updatedAt: 10 },
+  ];
+  const first = mergeProjectGroups(records, [
+    { ...thread("/a", "a1"), updatedAt: 100, status: "running" as const },
+    { ...thread("/b", "b1"), updatedAt: 200, status: "running" as const },
+  ]);
+  const second = mergeProjectGroups(records, [
+    { ...thread("/a", "a1"), updatedAt: 300, status: "running" as const },
+    { ...thread("/b", "b1"), updatedAt: 250, status: "running" as const },
+  ]);
+  assert.deepEqual(first.map((group) => group.key), ["/a", "/b"]);
+  assert.deepEqual(second.map((group) => group.key), ["/a", "/b"]);
+});
+
 test("quickNewProjects keeps pinned-first order and skips hidden or pathless groups", () => {
   const groups = mergeProjectGroups(
     [

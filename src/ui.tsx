@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { Button } from "./kit";
 import { OperationStatus } from "./session/OperationStatus";
 import type { ThreadSummary } from "./types";
 import { overlayMarkOf } from "./deck-history";
@@ -257,18 +258,14 @@ export function ConfirmDialog({
         detail="操作进行中，关闭窗口后会在后台继续。"
         slowDetail="仍在处理，关闭窗口后会在后台继续。" />}
       <div className="confirm-actions">
-        <button type="button" onClick={onClose}>
-          {busy ? "后台继续" : "取消"}
-        </button>
-        <button
-          type="button"
-          className={danger ? "danger-btn" : "primary"}
+        <Button onClick={onClose}>{busy ? "后台继续" : "取消"}</Button>
+        <Button
+          variant={danger ? "danger" : "primary"}
           onClick={confirm}
-          disabled={busy}
-          aria-busy={busy}
+          busy={busy}
         >
           {busy ? (title.includes("删除") ? "正在删除…" : "正在处理…") : confirmLabel}
-        </button>
+        </Button>
       </div>
     </Modal>
   );

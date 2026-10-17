@@ -19,7 +19,7 @@ export const openCodeAdapter: AgentUiAdapter = {
     if (item?.type === "contextCompaction")
       return (
         <details className="rail-row tool-row context-compaction">
-          <summary>上下文已压缩{item.text ? " · 查看摘要" : ""}</summary>
+          <summary>上下文已压缩{item.text ? "（查看摘要）" : ""}</summary>
           {item.text ? <div><AssistantMarkdown text={item.text} /></div> : null}
         </details>
       );

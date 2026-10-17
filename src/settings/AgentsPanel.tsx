@@ -29,7 +29,7 @@ function statusText(agent: AgentDescriptor) {
   if (health.tone === "ok" && health.label === "在线")
     return { text: first || undefined, full: detail || "" };
   return {
-    text: first ? `${health.label} · ${first}` : health.label,
+    text: first ? `${health.label}，${first}` : health.label,
     full: detail || "",
     tone: health.tone === "error" ? ("danger" as const) : undefined,
   };
@@ -71,7 +71,7 @@ function AgentRow({
               tone="info"
               title={`${agentName(agents, { agentId: agent.fallbackFor })} 的备选：主 Agent 可用时，本 Agent 仅显示使用中的会话`}
             >
-              备选{agent.standby ? " · 待命" : ""}
+              备选{agent.standby ? "（待命）" : ""}
             </Badge>
           ) : null}
         </>

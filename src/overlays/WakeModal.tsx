@@ -4,6 +4,7 @@ import { api, getToken, post, remove } from "../api";
 import { copyText } from "../clipboard";
 import { threadPath } from "../agents";
 import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
+import { Button, Field, Switch } from "../kit";
 import { Modal } from "../ui";
 import { AskForm } from "./AskForm";
 
@@ -135,24 +136,28 @@ export function WakeModal({
                 <b>失联：{item.label}</b>
                 <small>{item.reason}</small>
               </span>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 title="通知会话：发一条唤醒说明监督进程已失联"
                 aria-label={`通知会话 ${item.label} 已失联`}
-                disabled={busy}
+                busy={busy}
                 onClick={() => notifyLost(item)}
               >
                 <Send />
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 title="忽略"
                 aria-label={`忽略 ${item.label} 的失联记录`}
-                disabled={busy}
+                busy={busy}
                 onClick={() => dismissLost(item)}
               >
                 <X />
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -166,19 +171,21 @@ export function WakeModal({
                 <b>监督中：{item.label}</b>
                 <small>
                   进程号 {item.pid}
-                  {item.state ? ` · ${item.state}` : ""}
-                  {item.failures ? ` · 连接失败 ${item.failures}/10` : ""}
+                  {item.state ? `，${item.state}` : ""}
+                  {item.failures ? `，连接失败 ${item.failures}/10` : ""}
                 </small>
               </span>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
                 title="停止这个监督进程（不会再唤醒会话）"
                 aria-label={`停止监督进程 ${item.label}`}
-                disabled={busy}
+                busy={busy}
                 onClick={() => stopWatcher(item)}
               >
                 <Square />
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -192,7 +199,7 @@ export function WakeModal({
   );
 
   return (
-    <Modal title="deck-api · 任务回传" onClose={onClose}>
+    <Modal title="任务回传" onClose={onClose}>
       <AskForm thread={thread} onCreated={onCreated} />
       {!loaded ? (
         <p className="form-hint">正在读取唤醒状态…</p>
@@ -209,8 +216,8 @@ export function WakeModal({
               </div>
               {supervision}
               <p className="form-hint">
-                agent 用 deck-api wake 挂监督进程时会自动用上这个代号；外部脚本
-                POST 以下端点也能向本会话注入一条消息。
+                agent 用 deck-api wake 会自动用上这个代号；外部脚本可 POST
+                以下端点注入消息。
               </p>
               <div className="wake-endpoint">
                 <span>POST</span>
@@ -220,60 +227,46 @@ export function WakeModal({
               <pre className="wake-curl">{curl}</pre>
               {error && <p className="error-text">{error}</p>}
               <div className="wake-actions">
-                <button type="button" onClick={copyCurl}>
+                <Button onClick={copyCurl}>
                   {copied ? <Check /> : <Copy />}
                   {copied ? "已复制" : "复制 curl 命令"}
-                </button>
-                <button
-                  type="button"
-                  className="danger-btn"
-                  disabled={busy}
-                  onClick={disable}
-                >
+                </Button>
+                <Button variant="danger" busy={busy} onClick={disable}>
                   关闭唤醒（回收代号）
-                </button>
+                </Button>
               </div>
             </>
           ) : (
             <>
               {supervision}
               <p className="form-hint">
-                无需手动开启：agent 用 deck-api wake 挂监督进程时，Deck 会识别发起命令的会话并自动分配代号。
-                只有想自定义代号、或让外部脚本调用
+                无需手动开启：agent 用 deck-api wake 会自动分配代号；只有自定义
+                代号或让外部脚本调用
                 <code> POST /api/deck/events/&lt;代号&gt; </code>
                 时才需要在这里开启。
               </p>
-              <label>
-                自定义代号（留空随机生成）
+              <Field label="自定义代号" hint="留空随机生成">
                 <input
                   value={preferred}
                   placeholder="如 gpu-train"
                   onChange={(event) => setPreferred(event.target.value)}
                 />
-              </label>
-              <label className="wake-notify">
+              </Field>
+              <div className="wake-notify">
                 <span className="wake-notify-text">
                   <b>开启时通知会话</b>
                   <small>注入一条说明消息，agent 可自助部署 watcher</small>
                 </span>
-                <span className="switch">
-                  <input
-                    type="checkbox"
-                    checked={notify}
-                    onChange={(event) => setNotify(event.target.checked)}
-                  />
-                  <i aria-hidden="true" />
-                </span>
-              </label>
+                <Switch
+                  checked={notify}
+                  onChange={setNotify}
+                  label="开启时通知会话"
+                />
+              </div>
               {error && <p className="error-text">{error}</p>}
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={enable}
-              >
+              <Button variant="primary" busy={busy} onClick={enable}>
                 开启唤醒
-              </button>
+              </Button>
             </>
           )}
         </div>

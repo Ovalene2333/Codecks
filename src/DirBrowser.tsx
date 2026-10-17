@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, Folder, Home, ArrowUp } from "lucide-react";
 import { api } from "./api";
+import { Button, Empty } from "./kit";
 import { Modal } from "./ui";
 
 interface DirListing {
@@ -68,18 +69,17 @@ export function DirBrowser({
             </button>
           ))}
           {listing && !listing.entries.length && (
-            <p className="empty-list">这个目录下没有子文件夹</p>
+            <Empty compact title="这个目录下没有子文件夹" />
           )}
         </div>
         {error && <p className="error-text">{error}</p>}
-        <button
-          className="primary"
-          type="button"
+        <Button
+          variant="primary"
           disabled={!listing?.path}
           onClick={() => listing?.path && onSelect(listing.path)}
         >
           使用此目录
-        </button>
+        </Button>
       </div>
     </Modal>
   );

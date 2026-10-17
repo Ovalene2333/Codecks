@@ -1,4 +1,5 @@
 import { Minimize2 } from "lucide-react";
+import { Button } from "../kit";
 import { formatTokens } from "../format";
 import type { TokenUsage } from "../types";
 
@@ -16,14 +17,15 @@ export function ContextBar({
   const hasData = usage?.used != null || usage?.limit != null;
   if (!hasData && onCompact && !showUnknown)
     return (
-      <button
-        type="button"
-        className="text-btn compact-btn"
+      <Button
+        variant="ghost"
+        size="sm"
+        className="compact-btn"
+        busy={compacting}
         onClick={onCompact}
-        disabled={compacting}
       >
         压缩
-      </button>
+      </Button>
     );
   const pct =
     usage?.used != null && usage.limit && usage.limit > 0
@@ -47,16 +49,17 @@ export function ContextBar({
         {pct != null ? `${pct}%` : label || "--/--"}
       </span>
       {onCompact ? (
-        <button
-          type="button"
-          className="text-btn compact-btn"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="compact-btn"
+          busy={compacting}
           onClick={onCompact}
-          disabled={compacting}
           title="压缩上下文"
           aria-label="压缩上下文"
         >
           <Minimize2 />
-        </button>
+        </Button>
       ) : null}
     </div>
   );

@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
 import { sessionKey } from "../format";
-import { Menu, MenuItem, MenuLabel, MenuSep, Tip } from "../kit";
+import { Empty, Menu, MenuItem, MenuLabel, MenuSep, Seg, Tip } from "../kit";
 import type { DeckNotificationPermission } from "../notifications";
 import {
   SIDEBAR_WIDTH_MAX,
@@ -322,26 +322,30 @@ export function Sidebar({
         </button>
       </div>
       <div className="library-bar">
-        <div className="library-segment" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            className={library === "active" ? "on" : ""}
-            aria-selected={library === "active"}
-            onClick={() => onLibrary("active")}
-          >
-            未归档 <em>{sessionCount}</em>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            className={library === "archived" ? "on" : ""}
-            aria-selected={library === "archived"}
-            onClick={() => onLibrary("archived")}
-          >
-            归档 <em>{archivedCount}</em>
-          </button>
-        </div>
+        <Seg
+          label="库视图"
+          className="library-segment"
+          value={library}
+          onChange={onLibrary}
+          items={[
+            {
+              value: "active",
+              label: (
+                <>
+                  未归档 <em>{sessionCount}</em>
+                </>
+              ),
+            },
+            {
+              value: "archived",
+              label: (
+                <>
+                  归档 <em>{archivedCount}</em>
+                </>
+              ),
+            },
+          ]}
+        />
         <button
           className={`icon-btn ${loading ? "refreshing" : ""}`}
           onClick={onRefresh}
@@ -366,9 +370,9 @@ export function Sidebar({
           {loading && !projectCount
             ? "正在读取项目…"
             : loading
-              ? `同步中 · ${projectCount} 个项目`
+              ? `同步中，${projectCount} 个项目`
               : searching
-                ? `${matchCount} 个匹配 · ${projects.length} 个项目${contentSearchPending ? " · 检索中" : contentSearchProgress?.building ? ` · 已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
+                ? `${matchCount} 个匹配，${projects.length} 个项目${contentSearchPending ? "，检索中" : contentSearchProgress?.building ? `，已索引 ${contentSearchProgress.indexed}/${contentSearchProgress.total}` : ""}`
                 : library === "archived"
                   ? `${projects.length} 个归档项目`
                   : `${projectCount} 个项目`}
@@ -473,23 +477,24 @@ export function Sidebar({
           </div>
         )}
         {!loading && !contentSearchPending && !projects.length && (
-          <div className="empty-list">
-            {emptyKind === "search" ? <Search /> : <Bot />}
-            <p>
-              {emptyKind === "search"
+          <Empty
+            compact
+            icon={emptyKind === "search" ? <Search /> : <Bot />}
+            title={
+              emptyKind === "search"
                 ? "没有匹配的会话"
                 : emptyKind === "archived"
                   ? "归档箱是空的"
-                  : "暂无会话"}
-            </p>
-            <small>
-              {emptyKind === "search"
+                  : "暂无会话"
+            }
+            desc={
+              emptyKind === "search"
                 ? "清除搜索或状态筛选后重试"
                 : emptyKind === "archived"
                   ? "归档的会话会出现在这里"
-                  : "点「新建」开始一个会话"}
-            </small>
-          </div>
+                  : "点「新建」开始一个会话"
+            }
+          />
         )}
       </div>
       <div className="sidebar-footer">

@@ -27,7 +27,7 @@ function platformLabel(platform?: string, wsl?: boolean) {
         : platform === "linux"
           ? "Linux"
           : platform || "未知";
-  return wsl ? `${name} · WSL` : name;
+  return wsl ? `${name}（WSL）` : name;
 }
 
 function browserLabel() {
@@ -159,7 +159,7 @@ export function AboutPage({
                   </Badge>
                 ) : null
               }
-              desc={`${platformLabel(server.platform, server.wsl)} · Node ${server.node.replace(/^v/, "")} · 已运行 ${formatUptime(now - server.startedAt)}`}
+              desc={`${platformLabel(server.platform, server.wsl)}，Node ${server.node.replace(/^v/, "")}，已运行 ${formatUptime(now - server.startedAt)}`}
             />
           ) : (
             <Row
@@ -206,7 +206,7 @@ export function AboutPage({
             title="Agent"
             desc={`${online.length} / ${enabled.length} 个已启用的在线${
               agents.length > enabled.length
-                ? ` · ${agents.length - enabled.length} 个未启用`
+                ? `，${agents.length - enabled.length} 个未启用`
                 : ""
             }`}
           />
@@ -228,7 +228,7 @@ export function AboutPage({
         <Group>
           <Row
             title={browserLabel()}
-            desc={`${standalone() ? "已安装为应用" : "在浏览器中打开"} · ${window.innerWidth}×${window.innerHeight}`}
+            desc={`${standalone() ? "已安装为应用" : "在浏览器中打开"}，${window.innerWidth}×${window.innerHeight}`}
           />
         </Group>
       </Section>

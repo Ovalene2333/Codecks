@@ -10,6 +10,7 @@ import {
 import type { Approval, ApprovalResolveBody, FileChange } from "../types";
 import { agentName } from "../agents";
 import { displayText } from "../format";
+import { Button } from "../kit";
 import { FileDiff } from "./FileDiff";
 
 export function defaultDecisions(approval: Approval) {
@@ -294,66 +295,54 @@ export function ApprovalCard({
           {error}
         </p>
       ) : null}
-      {disabled ? (
-        <p className="approval-resolve-busy" role="status">
-          处理中…
-        </p>
-      ) : null}
       <div className="approval-actions">
         {moreOpen ? (
           <>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => setMoreOpen(false)}
-            >
+            <Button busy={disabled} onClick={() => setMoreOpen(false)}>
               返回
-            </button>
-            <button
-              type="button"
-              className={selectedAction?.tone === "reject" ? "" : "approve"}
-              disabled={disabled || !selectedAction}
+            </Button>
+            <Button
+              variant={selectedAction?.tone === "reject" ? "default" : "primary"}
+              busy={disabled}
+              disabled={!selectedAction}
               title={selectedAction?.label}
               onClick={() =>
                 selectedAction && onResolve(approval.id, selectedAction.body)
               }
             >
               确认所选操作
-            </button>
+            </Button>
           </>
         ) : (
           <>
             {rejectAction ? (
-              <button
-                type="button"
-                disabled={disabled}
+              <Button
+                busy={disabled}
                 onClick={() => onResolve(approval.id, rejectAction.body)}
               >
                 {rejectAction.label}
-              </button>
+              </Button>
             ) : null}
             {extraActions.length > 0 ? (
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => setMoreOpen(true)}
+              <Button
+                busy={disabled}
                 aria-label="更多授权选项"
                 title="更多授权选项"
+                onClick={() => setMoreOpen(true)}
               >
                 更多 <ChevronDown aria-hidden="true" />
-              </button>
+              </Button>
             ) : null}
             {allowAction ? (
-              <button
-                type="button"
-                className="approve"
-                disabled={disabled}
+              <Button
+                variant="primary"
+                busy={disabled}
                 title={allowAction.label}
                 onClick={() => onResolve(approval.id, allowAction.body)}
               >
                 <Check aria-hidden="true" />
                 {allowAction.label}
-              </button>
+              </Button>
             ) : null}
           </>
         )}
@@ -456,7 +445,6 @@ function PermissionApproval({
         </span>
         <div>
           <b>{actor} 请求权限</b>
-          <small>选择本回合或本会话授予的权限</small>
         </div>
       </header>
       <div className="approval-content">
@@ -494,16 +482,10 @@ function PermissionApproval({
           {error}
         </p>
       ) : null}
-      {disabled ? (
-        <p className="approval-resolve-busy" role="status">
-          处理中…
-        </p>
-      ) : null}
       <div className="approval-actions">
-        <button
-          type="button"
-          disabled={disabled}
-          className={hasSelectedPermission ? "approve" : undefined}
+        <Button
+          variant={hasSelectedPermission ? "primary" : "default"}
+          busy={disabled}
           onClick={() =>
             onResolve(approval.id, {
               permissions: grantedPermissions(raw, items, selected),
@@ -511,12 +493,11 @@ function PermissionApproval({
             })
           }
         >
-          {hasSelectedPermission ? "允许所选 · 本回合" : "拒绝权限"}
-        </button>
+          {hasSelectedPermission ? "允许所选（本回合）" : "拒绝权限"}
+        </Button>
         {hasSelectedPermission ? (
-          <button
-            type="button"
-            disabled={disabled}
+          <Button
+            busy={disabled}
             onClick={() =>
               onResolve(approval.id, {
                 permissions: grantedPermissions(raw, items, selected),
@@ -524,8 +505,8 @@ function PermissionApproval({
               })
             }
           >
-            允许所选 · 本会话
-          </button>
+            允许所选（本会话）
+          </Button>
         ) : null}
       </div>
     </article>
@@ -721,16 +702,11 @@ function QuestionApproval({
           {error}
         </p>
       ) : null}
-      {disabled ? (
-        <p className="approval-resolve-busy" role="status">
-          处理中…
-        </p>
-      ) : null}
       <div className="approval-actions">
-        <button
-          type="button"
-          className="approve"
-          disabled={!ready || disabled}
+        <Button
+          variant="primary"
+          busy={disabled}
+          disabled={!ready}
           onClick={() =>
             onResolve(approval.id, {
               answers: items.map((question, index) => ({
@@ -746,7 +722,7 @@ function QuestionApproval({
           }
         >
           提交回答
-        </button>
+        </Button>
       </div>
     </article>
   );

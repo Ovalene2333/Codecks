@@ -22,6 +22,20 @@ const SOURCE_LABEL: Record<string, string> = {
   saved: "已保存",
 };
 
+const RUNTIME_DESC =
+  "服务进程与 CLI 版本；切换后仅重启此 Agent，有会话运行时不可切换。";
+
+/** 运行时告警合成一条 Note：一屏最多一个提示条。 */
+function RuntimeNotes({ notices }: { notices: (string | false | undefined)[] }) {
+  const lines = notices.filter(Boolean) as string[];
+  if (!lines.length) return null;
+  return (
+    <Note tone="warn" title={lines.length > 1 ? "运行时需要处理" : undefined}>
+      {lines.join(" ")}
+    </Note>
+  );
+}
+
 function CliVersionField({
   name,
   command,
@@ -63,45 +77,43 @@ function CliVersionField({
     <>
       <Field label="运行版本">
         <div className="ui-inline-add">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <SearchablePicker
-              ariaLabel={`${name} 运行版本`}
-              value={selected}
-              onChange={onChange}
-              disabled={disabled}
-              loading={loading}
-              fallbackLabel={
-                selected ? "手动指定的 CLI" : "自动选择（系统 PATH）"
-              }
-              options={[
-                {
-                  value: "",
-                  label: "自动选择（系统 PATH）",
-                  hint: command,
-                  meta: usingAuto ? "使用中" : undefined,
-                },
-                ...bins.map((item) => {
-                  const source = SOURCE_LABEL[item.source] || item.source;
-                  const inUse = usingBin && effective === item.bin;
-                  return item.version
-                    ? {
-                        // 版本与来源并进标签：触发器直接读出「v… · npm 全局」，
-                        // 列表里不再重复显示 meta 徽标（「使用中」除外）。
-                        value: item.bin,
-                        label: `v${item.version} · ${source}`,
-                        hint: item.bin,
-                        meta: inUse ? "使用中" : undefined,
-                      }
-                    : {
-                        value: item.bin,
-                        label: "版本未知",
-                        meta: inUse ? "使用中" : source,
-                        hint: item.bin,
-                      };
-                }),
-              ]}
-            />
-          </div>
+          <SearchablePicker
+            ariaLabel={`${name} 运行版本`}
+            value={selected}
+            onChange={onChange}
+            disabled={disabled}
+            loading={loading}
+            fallbackLabel={
+              selected ? "手动指定的 CLI" : "自动选择（系统 PATH）"
+            }
+            options={[
+              {
+                value: "",
+                label: "自动选择（系统 PATH）",
+                hint: command,
+                meta: usingAuto ? "使用中" : undefined,
+              },
+              ...bins.map((item) => {
+                const source = SOURCE_LABEL[item.source] || item.source;
+                const inUse = usingBin && effective === item.bin;
+                return item.version
+                  ? {
+                      // 版本与来源并进标签：触发器直接读出「v… · npm 全局」，
+                      // 列表里不再重复显示 meta 徽标（「使用中」除外）。
+                      value: item.bin,
+                      label: `v${item.version}（${source}）`,
+                      hint: item.bin,
+                      meta: inUse ? "使用中" : undefined,
+                    }
+                  : {
+                      value: item.bin,
+                      label: "版本未知",
+                      meta: inUse ? "使用中" : source,
+                      hint: item.bin,
+                    };
+              }),
+            ]}
+          />
           {onScan ? (
             <Button
               size="sm"
@@ -280,21 +292,17 @@ export function LocalBackendSection({
   };
 
   return (
-    <Section
-      title="运行时"
-      desc="服务进程与 CLI 版本；切换后仅重启此 Agent，有会话运行时不可切换。"
-    >
-      {pinned ? (
-        <Note tone="warn">
-          已由环境变量指定，无法在此修改；改完环境变量后重启 Deck。
-        </Note>
-      ) : null}
-      {versionMismatch ? (
-        <Note tone="warn" title="运行版本与选择的版本不一致">
-          当前运行 {versionOf(effective)}，已选择 {versionOf(selected)}
-          ；空闲后点「应用并重启」。
-        </Note>
-      ) : null}
+    <Section title="运行时" desc={RUNTIME_DESC}>
+      <RuntimeNotes
+        notices={[
+          pinned
+            ? "已由环境变量指定，无法在此修改；改完环境变量后重启 Deck。"
+            : "",
+          versionMismatch
+            ? `运行版本与选择的版本不一致：当前运行 ${versionOf(effective)}，已选择 ${versionOf(selected)}；空闲后点「应用并重启」。`
+            : "",
+        ]}
+      />
       <Group pad>
         <CliVersionField
           name={name}
@@ -353,10 +361,10 @@ export function LocalBackendSection({
         ) : null}
       </Group>
       {agent === "opencode" ? (
-        <Note>
+        <p className="ui-field__hint">
           根据所选 CLI 自动适配 V1 / V2。
           {activeProtocol ? `当前使用 ${activeProtocol.toUpperCase()}。` : ""}
-        </Note>
+        </p>
       ) : null}
     </Section>
   );
@@ -438,35 +446,26 @@ export function CodexBackendSection({
   );
   const stale = runtime?.staleBackend;
   return (
-    <Section
-      title="运行时"
-      desc="服务进程与 CLI 版本；切换后仅重启此 Agent，有会话运行时不可切换。"
-    >
-      {runtime?.codexBinPinned ? (
-        <Note tone="warn">
-          已由环境变量指定，无法在此修改；改完环境变量后重启 Deck。
-        </Note>
-      ) : null}
-      {mismatch ? (
-        <Note tone="warn" title="运行版本与选择的版本不一致">
-          当前运行 {mismatch.running}，已选择 {mismatch.selected}
-          ；空闲后点「应用并重启」。
-        </Note>
-      ) : null}
-      {stale ? (
-        <Note tone="warn" title="发现之前遗留的服务进程">
-          进程号 {stale.pid}
-          {stale.codexVersion ? `（${stale.codexVersion}）` : ""}{" "}
-          还在运行，不会自动清理；确认无用请手动结束。
-        </Note>
-      ) : null}
+    <Section title="运行时" desc={RUNTIME_DESC}>
+      <RuntimeNotes
+        notices={[
+          runtime?.codexBinPinned
+            ? "已由环境变量指定，无法在此修改；改完环境变量后重启 Deck。"
+            : "",
+          mismatch
+            ? `运行版本与选择的版本不一致：当前运行 ${mismatch.running}，已选择 ${mismatch.selected}；空闲后点「应用并重启」。`
+            : "",
+          stale
+            ? `发现之前遗留的服务进程：进程号 ${stale.pid}${
+                stale.codexVersion ? `（${stale.codexVersion}）` : ""
+              } 还在运行，不会自动清理；确认无用请手动结束。`
+            : "",
+          missing && !loading
+            ? "已保存的 CLI 路径不可用；重新扫描后选择其它版本，或选回「自动选择」。"
+            : "",
+        ]}
+      />
       <Group pad>
-        {missing && !loading && (
-          <p className="ui-field__hint" role="note">
-            已保存的 CLI
-            路径不可用；重新扫描后选择其它版本，或选回「自动选择」。
-          </p>
-        )}
         <CliVersionField
           name="Codex"
           command="codex"

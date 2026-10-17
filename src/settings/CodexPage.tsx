@@ -255,7 +255,7 @@ export function CodexPage({
             {contextError && <p className="ui-error">{contextError}</p>}
             <div className="ui-actions ui-actions--split">
               <span className="ui-field__hint">
-                保存后重启共享服务；有任务运行时无法保存。
+                有任务运行时无法保存。
               </span>
               <Button
                 type="submit"

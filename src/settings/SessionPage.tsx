@@ -20,7 +20,7 @@ import { SessionDefaultsSection } from "./SessionDefaultsSection";
 
 const PERMISSION_TEXT: Record<DeckNotificationPermission, string> = {
   granted: "浏览器已授权，由下方开关控制。",
-  denied: "已被浏览器拒绝；点“重新请求”无弹窗时，需在浏览器站点设置中手动允许通知。",
+  denied: "已被浏览器拒绝；请在浏览器站点设置中手动允许通知。",
   default: "尚未授权。授权后，审批与新回复将推送系统通知。",
   unsupported: "当前浏览器不支持系统通知。",
 };
@@ -130,8 +130,13 @@ export function SessionPage({
             title="通知权限"
             desc={
               insecure
-                ? "当前是 HTTP 内网地址，浏览器只允许 HTTPS 或 localhost 发送通知。两条路：用 HTTPS 域名访问；或在 chrome://flags 搜“安全来源”，把本站地址加为受信任来源后重载。"
+                ? "HTTP 内网地址不允许发送系统通知。"
                 : PERMISSION_TEXT[notificationPermission]
+            }
+            descTitle={
+              insecure
+                ? "浏览器只允许 HTTPS 或 localhost 发送通知。可改用 HTTPS 域名访问，或在 chrome://flags 将本站加为受信任来源后重载。"
+                : undefined
             }
             side={
               insecure ? undefined : notificationPermission === "default" ? (

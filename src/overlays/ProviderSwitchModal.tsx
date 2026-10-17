@@ -6,6 +6,7 @@ import { threadPath } from "../agents";
 import { threadIsUnsent } from "../format";
 import { ModelPicker } from "../ModelPicker";
 import type { AgentProfile, Provider, ThreadSummary } from "../types";
+import { Button } from "../kit";
 import { Modal } from "../ui";
 
 export function ProviderSwitchModal({
@@ -119,7 +120,11 @@ export function ProviderSwitchModal({
           />
         )}
         {error && <p className="error-text">{error}</p>}
-        <button className="primary" disabled={busy || !targetProviderId}>
+        <Button
+          variant="primary"
+          type="submit"
+          disabled={busy || !targetProviderId}
+        >
           <ArrowRightLeft />
           {busy
             ? isClaude
@@ -132,7 +137,7 @@ export function ProviderSwitchModal({
               : unsent
                 ? "直接切换"
                 : "创建切换分支"}
-        </button>
+        </Button>
       </form>
     </Modal>
   );

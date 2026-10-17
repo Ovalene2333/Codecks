@@ -26,6 +26,7 @@ import {
   formatTurnDuration,
   progressTps,
   statsLine,
+  timestampMs,
 } from "./turn-stats";
 import { assistantImageParts, userImageParts } from "./images";
 import type {
@@ -417,7 +418,7 @@ function TurnItemInner({
       displayText(item.reasoningEffort),
     ]
       .filter(Boolean)
-      .join(" · ");
+      .join("，");
     const title =
       prompt ||
       (agentIds.length === 1
@@ -434,7 +435,7 @@ function TurnItemInner({
         output={[meta, prompt, agentLines.join("\n")]
           .filter(Boolean)
           .join("\n\n")}
-        activity={agentLines.join(" · ")}
+        activity={agentLines.join("；")}
       />
     );
   }
@@ -1053,7 +1054,9 @@ function TurnBlockInner({
       pendingBefore.set(index, [...(pendingBefore.get(index) || []), message]);
   }
   const started =
-    Date.parse(turn.startedAt || turn.createdAt || turn.updatedAt || "") ||
+    timestampMs(turn.startedAt) ||
+    timestampMs(turn.createdAt) ||
+    timestampMs(turn.updatedAt) ||
     thread.updatedAt;
   // 服务端按回合打标（历史或发送时快照）；没有打标的旧数据才回落到
   // 会话当前设置。打标过的回合不回落 effort，「当时没设」就是没设。
@@ -1290,8 +1293,14 @@ function TurnMetaLine({
       </div>
     );
   }
-  // 结束时间：回合更新时间就是收针时刻，老数据回落到推算的开始时间。
-  const endedAt = Date.parse(turn?.updatedAt || "") || started;
+  // 结束时间优先取回合真正的完成时刻。updatedAt 只是最后一条消息/交互
+  // 的时间（有的 agent 甚至没有），不能当收针时刻。
+  const endedAt =
+    timestampMs(turn?.completedAt) ||
+    timestampMs(turn?.endedAt) ||
+    timestampMs(turn?.stats?.endedAt) ||
+    timestampMs(turn?.updatedAt) ||
+    started;
   return (
     <div className="rail-row rail-row--meta" aria-label={`第 ${index} 轮`}>
       {forkable ? (
@@ -1338,8 +1347,17 @@ function usageOf(turn: any) {
   const stats = turn?.stats;
   if (stats && Number(stats.durationMs) > 0)
     return formatTurnDuration(stats.durationMs);
-  const startAt = Date.parse(turn?.startedAt || turn?.createdAt || "") || 0;
-  const endAt = Date.parse(turn?.updatedAt || "") || 0;
+  const startAt =
+    timestampMs(stats?.startedAt) ||
+    timestampMs(turn?.startedAt) ||
+    timestampMs(turn?.createdAt) ||
+    0;
+  const endAt =
+    timestampMs(turn?.completedAt) ||
+    timestampMs(turn?.endedAt) ||
+    timestampMs(stats?.endedAt) ||
+    timestampMs(turn?.updatedAt) ||
+    0;
   if (startAt > 0 && endAt > startAt)
     return formatTurnDuration(endAt - startAt);
   return "";

@@ -255,8 +255,7 @@ export function MonitorPanel({
           {editing ? (
             <div className="monitor-layout-bar">
               <p>
-                按住拖动或用箭头调整顺序，主栏和右栏各自排列；审批卡片固定在最上方。
-                顺序只保存在这台设备上。
+                拖动或用箭头调整顺序，审批卡片固定在最上方；顺序只保存在这台设备上。
               </p>
               <div className="monitor-layout-bar-actions">
                 <Button

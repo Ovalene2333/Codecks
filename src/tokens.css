@@ -136,6 +136,8 @@
   --focus-halo: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 20%, transparent);
   /* 不随主题变的纯白：开关圆点、深色底上的常亮图标。 */
   --static-white: #fff;
+  /* 不随主题变的深墨：状态色（--wait 等）底上的文字，需始终可读。 */
+  --static-ink: #1a1305;
 
   --ok: #4fb286;
   --wait: #d6a343;

@@ -497,7 +497,7 @@ test("TurnBlock renders collabAgentToolCall cards and plain wait rows", () => {
   assert.match(html, /class="rail-row tool-row subagent-row ok"/);
   assert.match(html, /启动子代理/);
   assert.match(html, /核对实验结果并汇总/);
-  assert.match(html, /gpt-5 · high/);
+  assert.match(html, /gpt-5，high/);
   assert.match(html, /01a0f07d 已完成 done/);
   // wait 没有载荷：卡片只剩一行标题。
   assert.match(html, /等待子代理/);

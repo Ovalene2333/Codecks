@@ -15,6 +15,11 @@ export interface ProjectGroup {
   defaults?: ProjectRecord["defaults"];
   sessions: ThreadSummary[];
   updatedAt: number;
+  /**
+   * 置顶项目的排序时间。取项目记录自己的 updatedAt，而不是会话活动时间：
+   * 两个置顶项目同时有会话在跑时，不会随着流式事件反复交换位置。
+   */
+  pinnedAt?: number;
 }
 
 export function normalizeProjectPath(cwd: string) {
@@ -86,6 +91,9 @@ export function mergeProjectGroups(
       defaults: existing?.defaults || record.defaults,
       sessions: existing?.sessions || [],
       updatedAt: Math.max(existing?.updatedAt || 0, record.updatedAt || 0),
+      pinnedAt: record.pinned
+        ? Math.max(existing?.pinnedAt || 0, record.updatedAt || 0)
+        : existing?.pinnedAt,
     });
   }
   for (const thread of [...threads].sort((a, b) => b.updatedAt - a.updatedAt)) {
@@ -106,6 +114,10 @@ export function mergeProjectGroups(
     .filter((group) => !group.hidden || group.sessions.length > 0)
     .sort((a, b) => {
       if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      if (a.pinned && b.pinned) {
+        const byPinned = (b.pinnedAt || 0) - (a.pinnedAt || 0);
+        return byPinned || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+      }
       return b.updatedAt - a.updatedAt;
     });
 }

@@ -180,7 +180,7 @@ export function ChatHeader({
                     ? `远程唤醒已开启 · 代号 ${wake.code}（本机暂无监督进程）`
                     : "deck-api · 任务回传与 Agent 询问"
               }
-              aria-label="deck-api · 任务回传与 Agent 询问"
+              aria-label="deck-api，任务回传与 Agent 询问"
             >
               <Radar />
             </button>
@@ -208,7 +208,7 @@ export function ChatHeader({
       <div className="mobile-chat-meta">
         {thread.agentId === "claude" && (
           <span className="mobile-claude-connection">
-            Deck {thread.claudeConnected ? "已连接" : "未连接"}
+            Claude {thread.claudeConnected ? "已连接" : "未连接"}
           </span>
         )}
         {showStatus && (

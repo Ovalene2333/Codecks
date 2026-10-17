@@ -1,4 +1,5 @@
 import { Select } from "../kit/Select";
+import { Button } from "../kit";
 import type {
   ApprovalMode,
   ApprovalPolicy,
@@ -231,15 +232,16 @@ export function SessionToolbar({
         </div>
       )}
       {showCompact && (thread.agentId || "codex") === "codex" && (
-        <button
-          type="button"
-          className="text-btn compact-btn"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="compact-btn"
+          busy={Boolean(thread.compacting)}
           onClick={onCompact}
-          disabled={Boolean(thread.compacting)}
         >
           <Minimize2 />
           压缩
-        </button>
+        </Button>
       )}
     </div>
   );

@@ -424,7 +424,7 @@ export function ProvidersPage({
             </Note>
           ) : null}
           {providerSection("CC Switch", ccProviders)}
-          <Section title="CC Switch">
+          <Section title="CC Switch 同步">
             <Group>
               <Row
                 dot={hasCcSwitch ? "ok" : "off"}

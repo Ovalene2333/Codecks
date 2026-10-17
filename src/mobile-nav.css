@@ -121,25 +121,6 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* 抵消 styles.css 里遗留的全局 `nav button` / `nav button span`
-     （固定 42px 高、左对齐，标签带灰色胶囊底和 margin-left:auto）。 */
-  .mobile-tabbar > button {
-    width: auto;
-    height: auto;
-    font-weight: var(--fw-regular);
-    text-align: center;
-  }
-
-  .mobile-tabbar > button > span {
-    margin: 0;
-    padding: 0;
-    border-radius: 0;
-    background: none;
-    color: inherit;
-    font-size: inherit;
-    white-space: nowrap;
-  }
-
   .mobile-tabbar > button svg {
     width: 20px;
     height: 20px;
@@ -176,10 +157,6 @@
     height: 20px;
   }
 
-  .mobile-tabbar > .mobile-tabbar-new:active {
-    transform: scale(0.96);
-  }
-
   .mobile-tabbar-badge {
     position: absolute;
     top: 3px;
@@ -190,7 +167,7 @@
     border-radius: var(--radius-md);
     background: var(--wait);
     /* 状态色底上的固定深字：需始终可读，不随主题变。 */
-    color: #1a1305;
+    color: var(--static-ink);
     font-size: var(--fs-micro);
     font-weight: var(--fw-strong);
     font-style: normal;
@@ -209,8 +186,3 @@
   }
 }
 
-@media (max-width: 760px) and (prefers-reduced-motion: reduce) {
-  .mobile-tabbar > .mobile-tabbar-new:active {
-    transform: none;
-  }
-}

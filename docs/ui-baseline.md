@@ -235,6 +235,7 @@ header（标题，固定）
 | 裸值 | 位置 | 原因 |
 | --- | --- | --- |
 | `font-size: 16px`（触屏输入框） | `kit.css` / `chat.css` / `search-picker.css` | 低于 16px 时 iOS Safari 聚焦会整页放大 |
+| `line-height: 24px`（触屏输入行） | `chat.css` | 与 16px 触屏输入框锁死的行高 |
 | `em` 字号（`1.08em` 等） | `chat.css` 消息排版 | 跟随用户可调的 `--message-size` 缩放 |
 | `line-height: 40px` | `chat.css` `.composer-model-label` | 与定高 40px 锁死的垂直居中 hack |
 | `font-size: 0` | 图标字排版 | 图文隐藏术 |
