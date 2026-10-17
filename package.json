@@ -7,14 +7,14 @@
   "repository": "https://github.com/Ovalene2333/Codecks",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k \"node --experimental-sqlite --import tsx --watch server/index.ts\" \"vite\"",
     "build": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.server.json && vite build",
-    "start": "node dist-server/server/index.js",
-    "lan": "node dist-server/server/index.js --lan",
-    "lan6": "node dist-server/server/index.js --lan6",
-    "cf-tunnel": "node dist-server/server/index.js --cf-tunnel",
-    "share": "node dist-server/server/index.js --share",
-    "test": "node --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
+    "start": "node --experimental-sqlite dist-server/server/index.js",
+    "lan": "node --experimental-sqlite dist-server/server/index.js --lan",
+    "lan6": "node --experimental-sqlite dist-server/server/index.js --lan6",
+    "cf-tunnel": "node --experimental-sqlite dist-server/server/index.js --cf-tunnel",
+    "share": "node --experimental-sqlite dist-server/server/index.js --share",
+    "test": "node --experimental-sqlite --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.283",
@@ -30,7 +30,7 @@
     "cookie": "^1.0.2",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
-    "node-pty": "^1.1.0",
+    "node-pty": "1.2.0-beta.15",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

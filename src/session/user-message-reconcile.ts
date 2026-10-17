@@ -95,7 +95,8 @@ export function matchingUserMessageIndex(
         (sameTurn &&
           agentId !== "codex" &&
           agentId !== "claude" &&
-          agentId !== "opencode"))
+          agentId !== "opencode" &&
+          agentId !== "opencode-v2"))
         ? actual.text.replace(/(?:\s*\[image\])+\s*$/g, "").trim()
         : actual.text;
     if (matched.has(index) || excluded.has(index) || actualText !== text)

@@ -304,6 +304,7 @@ function TurnItemInner({
         <AssistantMarkdown
           text={streamed !== undefined ? streamed : displayText(item.text)}
           onCopy={onCopy}
+          thread={thread}
         />
         {images.length > 0 && (
           <div className="message-images assistant-images">
@@ -1079,7 +1080,7 @@ function TurnBlockInner({
               <div
                 className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
               >
-                <AssistantMarkdown text={message.text} onCopy={onCopy} />
+                <AssistantMarkdown text={message.text} onCopy={onCopy} thread={thread} />
                 {message.itemId === streamingItemId && <i />}
               </div>
             </Fragment>

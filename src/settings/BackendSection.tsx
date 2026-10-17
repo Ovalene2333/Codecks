@@ -33,6 +33,7 @@ function CliVersionField({
   onChange,
   onToast,
   onScan,
+  scanAction,
   action,
 }: {
   name: string;
@@ -46,6 +47,7 @@ function CliVersionField({
   onToast: (message: string) => void;
   /** 重新扫描已安装版本；收进 picker 行尾部的图标（MD3 列表补充动作），不再独立浮行。 */
   onScan?: () => void;
+  scanAction?: ReactNode;
   /** 路径行行尾的动作（如「应用并重启」），与路径同排；路径行常驻，
    * 按钮位置不再随是否选中版本来回跳。 */
   action?: ReactNode;
@@ -69,7 +71,7 @@ function CliVersionField({
               disabled={disabled}
               loading={loading}
               fallbackLabel={
-                selected ? "已保存的版本不可用" : "自动选择（系统 PATH）"
+                selected ? "手动指定的 CLI" : "自动选择（系统 PATH）"
               }
               options={[
                 {
@@ -112,6 +114,7 @@ function CliVersionField({
               探测
             </Button>
           ) : null}
+          {scanAction}
         </div>
       </Field>
       <div className="cli-row">
@@ -144,6 +147,7 @@ function CliVersionField({
 type LocalAgent = "claude" | "opencode";
 
 interface BinsResult {
+  activeProtocol?: "v1" | "v2";
   bins: CodexBinInfo[];
   selected: string;
   effective: string;
@@ -177,10 +181,9 @@ export function LocalBackendSection({
   const [pinned, setPinned] = useState(cached?.pinned || false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activeProtocol, setActiveProtocol] = useState(cached?.activeProtocol);
   const name = agent === "claude" ? "Claude Code" : "OpenCode";
-  const missing = Boolean(
-    selected && !bins.some((item) => item.bin === selected),
-  );
+  const [manualPath, setManualPath] = useState(false);
   /** 有缓存数据时复扫不再锁 UI，避免重进页面时控件集体变灰、内容闪变。 */
   const blocking = loading && bins.length === 0;
 
@@ -190,6 +193,7 @@ export function LocalBackendSection({
     setSaved(result.selected);
     setEffective(result.effective);
     setPinned(result.pinned);
+    setActiveProtocol(result.activeProtocol);
   };
 
   const load = async () => {
@@ -212,7 +216,10 @@ export function LocalBackendSection({
   const changed = selected !== saved;
   /** 按钮文案跟着是否有改动走：没换版本点它就是重启当前。 */
   const applyDisabled =
-    pinned || blocking || missing || saved === undefined || (!changed && !onRestart);
+    pinned ||
+    blocking ||
+    saved === undefined ||
+    (!changed && !onRestart);
   const applyLabel = saving ? "应用中…" : changed ? "应用并重启" : "重启";
   /** 运行中与已选择的版本对不上时提示（Codex 页同款；只在给了 onRestart
    * 的合并按钮页显示，从扫描结果本地推导版本号）。 */
@@ -243,7 +250,9 @@ export function LocalBackendSection({
       const response = await put<{
         result: { reloaded: boolean; busyCount: number; error?: string };
         snapshot: Snapshot;
-      }>(`/agents/${agent}/bin`, { bin: selected });
+      }>(`/agents/${agent}/bin`, {
+        bin: selected,
+      });
       if (response.result.error) throw new Error(response.result.error);
       if (!response.result.reloaded) {
         onToast(
@@ -261,6 +270,7 @@ export function LocalBackendSection({
           selected,
           effective: selected || agent,
         });
+      await load();
       onToast(`已应用 ${name} CLI 版本并重启`);
     } catch (err: any) {
       onToast(err?.message || String(err));
@@ -294,9 +304,23 @@ export function LocalBackendSection({
           effective={effective}
           disabled={pinned || blocking || saving}
           loading={loading}
-          onChange={setSelected}
+          onChange={(value) => {
+            setSelected(value);
+            setManualPath(false);
+          }}
           onToast={onToast}
           onScan={() => void load()}
+          scanAction={
+            <Button
+              size="sm"
+              disabled={pinned || blocking || saving}
+              aria-label="手动指定 CLI 路径"
+              aria-expanded={manualPath}
+              onClick={() => setManualPath((value) => !value)}
+            >
+              {manualPath ? "收起" : "手动指定"}
+            </Button>
+          }
           action={
             <Button
               variant="primary"
@@ -308,7 +332,32 @@ export function LocalBackendSection({
             </Button>
           }
         />
+        {manualPath ? (
+          <Field label="CLI 可执行文件路径">
+            <input
+              className="ui-input"
+              aria-label={`${name} CLI 可执行文件路径`}
+              value={selected}
+              disabled={pinned || blocking || saving}
+              placeholder="例如 /opt/demo/opencode/bin/opencode"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setSelected(event.target.value)}
+              onBlur={() => setSelected((value) => value.trim())}
+            />
+            <p className="ui-field__hint">
+              填写 Deck 服务所在机器上的可执行文件完整路径（不是目录）。
+              点击「应用并重启」验证并保存；留空则使用系统 PATH。
+            </p>
+          </Field>
+        ) : null}
       </Group>
+      {agent === "opencode" ? (
+        <Note>
+          根据所选 CLI 自动适配 V1 / V2。
+          {activeProtocol ? `当前使用 ${activeProtocol.toUpperCase()}。` : ""}
+        </Note>
+      ) : null}
     </Section>
   );
 }
@@ -370,7 +419,11 @@ export function CodexBackendSection({
       setSaved(selected);
       const entry = binsCache.get("codex");
       if (entry)
-        binsCache.set("codex", { ...entry, selected, effective: selected || "codex" });
+        binsCache.set("codex", {
+          ...entry,
+          selected,
+          effective: selected || "codex",
+        });
       onToast("已应用 Codex CLI 版本；生效状态以实际运行的服务为准");
     } catch (err: any) {
       onToast(err.message);
@@ -410,7 +463,8 @@ export function CodexBackendSection({
       <Group pad>
         {missing && !loading && (
           <p className="ui-field__hint" role="note">
-            已保存的 CLI 路径不可用；重新扫描后选择其它版本，或选回「自动选择」。
+            已保存的 CLI
+            路径不可用；重新扫描后选择其它版本，或选回「自动选择」。
           </p>
         )}
         <CliVersionField

@@ -188,7 +188,7 @@ export function SessionToolbar({
     </>
   ) : agentId === "claude" ? (
     claudePermissionField
-  ) : agentId === "opencode" ? null : (
+  ) : agentId === "opencode" || agentId === "opencode-v2" ? null : (
     sessionModeField
   );
   const executionTitle =
@@ -219,7 +219,7 @@ export function SessionToolbar({
           {modelFields}
           {agentId === "claude" ? (
             claudePermissionField
-          ) : agentId === "opencode" ? null : isCodex ? (
+          ) : agentId === "opencode" || agentId === "opencode-v2" ? null : isCodex ? (
             <>
               {sandboxField}
               {approvalField}

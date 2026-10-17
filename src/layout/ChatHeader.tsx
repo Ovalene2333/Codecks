@@ -19,7 +19,7 @@ import { ContextBar } from "../usage/ContextBar";
 
 function agentBadgeLabel(agentId: string | undefined, agentName: string) {
   if (agentId === "claude") return "Claude";
-  if (agentId === "opencode") return "OpenCode";
+  if (agentId === "opencode" || agentId === "opencode-v2") return "OpenCode";
   if (!agentId || agentId === "codex") return "Codex";
   return agentName;
 }

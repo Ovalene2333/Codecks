@@ -1255,7 +1255,7 @@ export function ChatWorkspace({
           targetFallbackReady={threadLoadSettled && Boolean(full)}
           onCopy={() => onToast("已复制")}
           onForkFrom={
-            capabilities.fork && ["codex", "claude", "opencode"].includes(thread.agentId || "codex")
+            capabilities.fork && ["codex", "claude", "opencode", "opencode-v2"].includes(thread.agentId || "codex")
               ? (turnId) => forkFrom(turnId)
               : undefined
           }

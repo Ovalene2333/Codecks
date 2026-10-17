@@ -43,8 +43,8 @@ export function affinityListParams(
   providerId?: string,
   cwd?: string,
 ): AffinityListParams {
-  // 和模型目录请求键同粒度：opencode 按目录，其他 agent 按供应商。
-  if (agentId === "opencode") {
+  // 和模型目录请求键同粒度：opencode 系按目录，其他 agent 按供应商。
+  if (agentId === "opencode" || agentId === "opencode-v2") {
     const directory = cwd?.trim();
     return directory ? { directory } : {};
   }

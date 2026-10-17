@@ -246,15 +246,21 @@ export class ProviderStore {
   }
 
   /** Claude/OpenCode 的本机 CLI 选择与 Codex 一起保存在 runtime-config.json。 */
-  runtimeAgentBin(agent: "claude" | "opencode"): string {
-    const key = agent === "claude" ? "claudeBin" : "opencodeBin";
-    const value = this.readRuntimeConfigExtra()[key];
+  runtimeAgentBin(agent: "claude" | "opencode" | "opencode-v2"): string {
+    const key =
+      agent === "claude" ? "claudeBin" : agent === "opencode" ? "opencodeBin" : "opencodeV2Bin";
+    const config = this.readRuntimeConfigExtra();
+    const value = config[key] ?? (agent === "opencode" ? config.opencodeV2Bin : undefined);
     return typeof value === "string" ? value : "";
   }
 
-  async updateRuntimeAgentBin(agent: "claude" | "opencode", bin: string) {
-    const key = agent === "claude" ? "claudeBin" : "opencodeBin";
-    const next = { ...this.readRuntimeConfigExtra(), [key]: bin.trim() };
+  async updateRuntimeAgentBin(agent: "claude" | "opencode" | "opencode-v2", bin: string) {
+    const key =
+      agent === "claude" ? "claudeBin" : agent === "opencode" ? "opencodeBin" : "opencodeV2Bin";
+    const next = {
+      ...this.readRuntimeConfigExtra(),
+      [key]: bin.trim(),
+    };
     await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
     return this.runtimeAgentBin(agent);
   }

@@ -136,7 +136,7 @@ export function ModelPicker({
   /* OpenCode model ids already carry their provider (`providerID/modelID`), so
      its catalog is agent-scoped and needs no providerId; every adapter still
      renders the same grouped, searchable picker with a manual-entry escape. */
-  const combinedCatalog = agentId === "opencode";
+  const combinedCatalog = agentId === "opencode" || agentId === "opencode-v2";
   /* 工作目录每敲一个键都会变，而 opencode 的项目目录是按 directory 现查
      （/provider + /config，绕过服务端缓存）。目录键防抖一档，避免边输入
      边打出一串请求、选择器反复闪 loading。 */
@@ -247,8 +247,8 @@ export function ModelPicker({
     () =>
       affinityListParams(
         agentId,
-        agentId === "opencode" ? "" : providerId,
-        agentId === "opencode" ? debouncedCwd : undefined,
+        agentId === "opencode" || agentId === "opencode-v2" ? "" : providerId,
+        agentId === "opencode" || agentId === "opencode-v2" ? debouncedCwd : undefined,
       ),
     [agentId, providerId, debouncedCwd],
   );

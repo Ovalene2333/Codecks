@@ -52,8 +52,9 @@ export const remove = <T = any>(url: string, body?: any) =>
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-export async function getBlob(url: string) {
+export async function getBlob(url: string, signal?: AbortSignal) {
   const response = await fetch(`/api${url}`, {
+    signal,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {

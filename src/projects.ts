@@ -210,7 +210,7 @@ export function filterProjectGroups(
             const agent =
               thread.agentId === "claude"
                 ? "Claude Code"
-                : thread.agentId === "opencode"
+                : thread.agentId === "opencode" || thread.agentId === "opencode-v2"
                   ? "OpenCode"
                   : !thread.agentId || thread.agentId === "codex"
                     ? "Codex"

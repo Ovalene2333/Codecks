@@ -26,7 +26,7 @@ import {
 import { listDirectories } from "./fs-browse.js";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
-import { OpenCodeAdapter } from "./agents/opencode-adapter.js";
+import { createOpenCodeRuntime } from "./opencode-runtime.js";
 import { listLocalAgentBins, probeLocalAgentBin, type LocalAgent } from "./local-agent-bins.js";
 import { AcpAdapter } from "./agents/acp-adapter.js";
 import {
@@ -74,7 +74,7 @@ import {
   describeThread,
   resolveWakeSession,
 } from "./wake-resolve.js";
-import { resolveThreadImage } from "./thread-image.js";
+import { referencedThreadImages, resolveThreadImage } from "./thread-image.js";
 import {
   deleteOpenCodeProvider,
   listOpenCodeProviders,
@@ -210,8 +210,7 @@ const claude = new ClaudeAdapter({
   initialThreads,
   threadSettings,
 });
-const opencode = new OpenCodeAdapter({
-  bin: process.env.OPENCODE_BIN || store.runtimeAgentBin("opencode") || undefined,
+const opencodeOptions = {
   initialThreads,
   initialDirectories: [
     ...projects.list().map((project) => project.cwd),
@@ -219,6 +218,12 @@ const opencode = new OpenCodeAdapter({
     ...initialThreads.map((thread) => thread.cwd),
   ],
   threadSettings,
+};
+const opencodeEnvBin = process.env.OPENCODE_BIN || process.env.OPENCODE_V2_BIN;
+const opencode = createOpenCodeRuntime({
+  bin: opencodeEnvBin || store.runtimeAgentBin("opencode") || undefined,
+  v1: opencodeOptions,
+  v2: opencodeOptions,
 });
 // ACP agents（devin acp、kimi acp 等）：descriptor 驱动，启动失败的 agent
 // 只在 startAll 里表现为 offline，不影响其它 adapter。
@@ -234,7 +239,9 @@ const acpDirectories = () =>
 const agents = new AgentRegistry();
 agents.register(manager, { toggleable: false });
 agents.register(claude, { enabled: agentSettings.enabled("claude") });
-agents.register(opencode, { enabled: agentSettings.enabled("opencode") });
+agents.register(opencode, {
+  enabled: agentSettings.enabled("opencode"),
+});
 const acpHost = new AcpAgentHost({
   registry: agents,
   settings: agentSettings,
@@ -758,13 +765,14 @@ app.get(
   "/api/agents/:agentId/bins",
   route(async (req) => {
     const id = selectableAgent(req.params.agentId);
-    const envBin = id === "claude" ? process.env.CLAUDE_BIN : process.env.OPENCODE_BIN;
+    const envBin = id === "claude" ? process.env.CLAUDE_BIN : opencodeEnvBin;
     const selected = store.runtimeAgentBin(id);
     return {
       bins: await listLocalAgentBins(id, selected),
       selected,
       effective: envBin || selected || id,
       pinned: Boolean(envBin?.trim()),
+      ...(id === "opencode" ? { activeProtocol: opencode.runtimeProtocol() } : {}),
     };
   }),
 );
@@ -772,23 +780,26 @@ app.put(
   "/api/agents/:agentId/bin",
   route(async (req) => {
     const id = selectableAgent(req.params.agentId);
-    const envBin = id === "claude" ? process.env.CLAUDE_BIN : process.env.OPENCODE_BIN;
+    const envBin = id === "claude" ? process.env.CLAUDE_BIN : opencodeEnvBin;
     if (envBin?.trim()) throw new Error(`${id.toUpperCase()}_BIN 已指定，请修改环境变量后重启 Deck`);
     const { bin } = z.object({ bin: z.string().max(1024) }).parse(req.body);
     const selected = bin.trim();
     if (selected && !await probeLocalAgentBin(selected))
       throw new Error(`该后端不可用（无法执行 ${selected} --version）`);
     const previous = store.runtimeAgentBin(id);
-    const adapter = id === "claude" ? claude : opencode;
     const result = await agents.switchExecutable(
       id,
       async () => {
         await store.updateRuntimeAgentBin(id, selected);
-        adapter.selectExecutable(selected);
+        if (id === "opencode") {
+          opencode.selectExecutable(selected);
+        } else claude.selectExecutable(selected);
       },
       async () => {
         await store.updateRuntimeAgentBin(id, previous);
-        adapter.selectExecutable(previous);
+        if (id === "opencode") {
+          opencode.selectExecutable(previous);
+        } else claude.selectExecutable(previous);
       },
     );
     return { result, snapshot: fullSnapshot() };
@@ -1284,7 +1295,9 @@ app.get(
       ...(snapshot.archivedThreads || []),
     ].find((item) => item.id === threadId);
     if (!thread?.cwd) throw new Error("会话不存在或没有工作目录");
-    const imagePath = await resolveThreadImage(thread.cwd, requestedPath);
+    const imagePath = await resolveThreadImage(thread.cwd, requestedPath, async () =>
+      referencedThreadImages(await agents.readThread(id, threadId, { background: true })),
+    );
     await new Promise<void>((resolve, reject) => {
       res.sendFile(imagePath, (error) => (error ? reject(error) : resolve()));
     });

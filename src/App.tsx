@@ -415,7 +415,9 @@ export function App() {
       .catch((error) => {
         if (error.message.includes("令牌")) setAuthError(true);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq === refreshSeqRef.current) setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -928,7 +930,7 @@ export function App() {
   // URL 指向的会话已不存在（过期/被删）：宽限期后退回工作区。
   // 宽限覆盖“新建会话尚未出现在 snapshot”的窗口。
   useEffect(() => {
-    if (!selected || !sessionKeyFromPath(location.pathname)) return;
+    if (loading || historySyncing || !selected || !sessionKeyFromPath(location.pathname)) return;
     if (allThreads.some((thread) => sessionKey(thread) === selected)) return;
     const grace = Math.max(500, 4000 - (Date.now() - selectedAtRef.current));
     const timer = window.setTimeout(() => {
@@ -939,7 +941,7 @@ export function App() {
       );
     }, grace);
     return () => window.clearTimeout(timer);
-  }, [selected, allThreads]);
+  }, [selected, allThreads, loading, historySyncing]);
 
   const recentProjects = useMemo(() => {
     const fromPrefs = (snapshot.preferences?.recentDirs || [])

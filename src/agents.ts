@@ -48,7 +48,8 @@ export function agentProtocol(
     return agent.protocol;
   return agent.id === "codex" ||
     agent.id === "claude" ||
-    agent.id === "opencode"
+    agent.id === "opencode" ||
+    agent.id === "opencode-v2"
     ? "native"
     : "acp";
 }
@@ -79,7 +80,7 @@ export function capabilitiesFor(
   if (agents?.find((agent) => agent.id === id)?.capabilities)
     return agents.find((agent) => agent.id === id)!.capabilities;
   if (id === "codex") return CODEX_CAPABILITIES;
-  if (id === "claude" || id === "opencode")
+  if (id === "claude" || id === "opencode" || id === "opencode-v2")
     return {
       ...CODEX_CAPABILITIES,
       archive: false,
@@ -119,9 +120,11 @@ export function agentName(
       ? "Claude Code"
       : id === "opencode"
         ? "OpenCode"
-        : id === "codex"
-          ? "Codex"
-          : agentShortName(id))
+        : id === "opencode-v2"
+          ? "OpenCode V2"
+          : id === "codex"
+            ? "Codex"
+            : agentShortName(id))
   );
 }
 
@@ -130,6 +133,7 @@ export function agentShortName(id: string | undefined) {
   if (!id || id === "codex") return "Codex";
   if (id === "claude") return "Claude";
   if (id === "opencode") return "OpenCode";
+  if (id === "opencode-v2") return "OpenCode V2";
   return id.slice(0, 1).toUpperCase() + id.slice(1);
 }
 
@@ -148,7 +152,8 @@ export function providerForThread(
   );
   // OpenCode model ids carry their provider, so the model a thread runs on is
   // the truth even when the stored providerId predates a model switch.
-  if (agentIdFor(thread) === "opencode") {
+  // V2 用同一套 provider/model 字符串格式。
+  if (agentIdFor(thread) === "opencode" || agentIdFor(thread) === "opencode-v2") {
     const fromModel = opencodeProviderId(
       (thread as { resolvedModel?: string }).resolvedModel || thread.model,
     );

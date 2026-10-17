@@ -6,7 +6,8 @@ Deck 的运行时层以 Agent 为边界。Codex、Claude Code、OpenCode 等 CLI
 必须各自实现 adapter；Deck 不把不同 CLI 的私有协议混进同一个 manager。
 
 Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入生产后端、
-通用 Agent API 和网页核心会话流程；OpenCode V1 通过原生 HTTP API 接入。
+通用 Agent API 和网页核心会话流程；OpenCode V1 通过原生 HTTP API 接入，
+V2 由独立 adapter（`opencode-v2`）接入 `/api/*` 新契约。
 
 ## 目录与职责
 
@@ -18,6 +19,7 @@ Codex adapter 已完整接入网页兼容入口。Claude Code adapter 已接入�
 | `server/agents/claude-adapter.ts`   | Claude Agent SDK 会话、流式事件、审批和生命周期 |
 | `server/agents/claude-history.ts`   | Claude JSONL 消息树主链与通用 Turn 归一化       |
 | `server/agents/opencode-adapter.ts` | OpenCode serve HTTP API 会话与审批              |
+| `server/agents/opencode-v2-adapter.ts` | OpenCode V2 `/api/*` 会话与审批（独立进程） |
 | `server/agents/acp-client.ts`       | ACP agent 子进程与 stdio JSON-RPC 传输          |
 | `server/agents/acp-adapter.ts`      | 通用 ACP adapter：一个实现驱动所有 ACP CLI      |
 | `server/agents/acp-agents.ts`       | ACP descriptor 内置表与用户配置加载             |
@@ -33,8 +35,9 @@ server/index.ts
     -> AgentAdapter
       -> CodexAdapter -> CodexClient
       -> ClaudeAdapter -> Claude Agent SDK
-      -> OpenCodeAdapter -> opencode serve
-      -> AcpAdapter -> AcpClient -> <cli> acp（任意 ACP 子进程）
+       -> OpenCodeAdapter -> opencode serve
+       -> OpenCodeV2Adapter -> opencode-v2 serve（独立进程/端口/会话库）
+       -> AcpAdapter -> AcpClient -> <cli> acp（任意 ACP 子进程）
 ```
 
 `AgentRegistry` 不应导入任何 Codex、Claude 或 OpenCode 私有类型。
@@ -63,7 +66,7 @@ server/index.ts
 
 `readThread(providerId, threadId, { turnLimit?, beforeTurn? })` 的选项是可选优化；不支持的 adapter 仍可返回全文，由 HTTP 层切片。无选项的读取必须返回全文，供搜索索引使用。原生分页返回的尾部必须从完整用户回合开始；存在更早历史时携带 `__cachedTailOmitted > 0` 和 `hasMoreTurns: true`，不知道总轮数时省略 `totalTurns`，不要伪造计数。HTTP 层不能把尾部写入全文搜索索引或再次覆盖其分页标记。
 
-可选的 `readTurn(providerId, threadId, turnId)` 用于工具输出展开，避免为了一个回合下载全部历史；没有实现时 registry 回退到全文读取后查找。OpenCode V1 使用原生 `limit` 和不透明 `before` 游标，旧版只支持 `limit` 时逐步扩大尾部，不支持分页时回退全文；暂存撤回的历史仍按原生撤回边界过滤。V1 适配器保留维护；未来 V2 使用独立 adapter，实现相同的 Deck 契约，V1 路由和事件不应混入 V2 传输层。
+可选的 `readTurn(providerId, threadId, turnId)` 用于工具输出展开，避免为了一个回合下载全部历史；没有实现时 registry 回退到全文读取后查找。OpenCode V1 使用原生 `limit` 和不透明 `before` 游标，旧版只支持 `limit` 时逐步扩大尾部，不支持分页时回退全文；暂存撤回的历史仍按原生撤回边界过滤。V2 已有独立 adapter（`opencode-v2-adapter.ts`），实现相同的 Deck 契约（message `limit/order/cursor` 分页），V1 路由和事件不混入 V2 传输层。
 
 后台搜索通过 `readThread(..., { background: true })` 进入 registry，完整历史仍交给 adapter 读取；registry 在交互期间以及结束后的短暂窗口内让索引排队，避免后台工作抢占用户操作。
 
@@ -245,6 +248,59 @@ Codex 的「编辑」另走 App Server 原生 `thread/revert { beforeTurnId }`�
 同时处理 `session.status` 的 `busy`、`retry`、`idle` 和独立的
 `session.idle`；文本增量来自 `message.part.delta`。
 没有实现的 review、shell 和 MCP 枚举保持关闭。
+
+## OpenCode V2 Adapter
+
+`OpenCodeV2Adapter`（agentId `opencode-v2`）走 V2 `/api/*` 新契约，与 V1
+adapter 完全隔离：各起自己的 serve 进程（V2 二进制由 `OPENCODE_V2_BIN`
+指定，缺省为 `opencode-v2`）、各管自己的会话库。V1 路由与事件名
+（`/session`、`/global/event`、`/config`、`message.updated` 等）不得混入
+V2 传输层；V2 模型字符串沿用 V1 的 `providerID/modelID` 形，前端
+`opencodeProviderId` 直接复用。
+
+协议要点（effect HttpApi 信封 `{data}` / `{data, cursor}` /
+`{location, data}`，`_tag` 错误体）：
+
+- 会话：`POST /api/session {location: {directory}, title?, agent?, model?}`、
+  `GET /api/session`（无目录过滤，全量拉回后 Deck 侧按
+  `location.directory` 归属）、`GET /api/session/:id`。
+  只有 `parentID` 的 subagent 衍生会话隐藏，带 `fork` 标记的分支副本保留。
+- 消息：`GET /api/session/:id/message?limit=&order=&cursor=`，默认倒序、
+  cursor 不透明（`{previous, next}`）。adapter 按时间正序归一化；
+  `readThread` 的 `turnLimit`/`beforeTurn` 靠翻页（上限 200/页）实现，
+  尾部从完整用户回合开始、带 `hasMoreTurns`/`__cachedTailOmitted`，
+  与 V1 的 Deck 分页契约一致。
+- 消息形状是平铺的：user 正文在顶层 `text`，assistant 正文在
+  `content[]`（`text`/`reasoning`/`tool`，tool 的 `state.status` 为
+  streaming|running|completed|error），归一化为 Deck 的
+  userMessage/agentMessage/reasoning/commandExecution，未知类型留
+  `extension`（`agentId: opencode-v2`）。
+- 发送：`POST /api/session/:id/prompt {prompt: {text}}`，受理即返回
+  running（message id 进 `activeTurnId`），执行结果走事件；图片未验证，
+  带图直接拒绝。
+- 事件（`/api/event` SSE，断线指数退避重连）：`session.created/deleted/
+  renamed/moved`、`session.status`/`session.idle` 状态机、
+  `session.step.*`（dev 构建为 `session.next.step.*`，按后缀兼容）、
+  `session.text.delta`/`session.reasoning.delta`（`item/updated` 直播）、
+  `session.tool.*`、`session.usage.recorded/updated`（tokenUsage）、
+  `session.compaction.*`、`session.revert.*`（历史刷新通知）、
+  `permission.asked/replied`（decision once/always/reject，
+  对应 accept/acceptForSession/decline）、`form.created`（问答审批）。
+- 模型/供应商：`GET /api/model`（`{id, providerID, name, capabilities,
+  limit, enabled}`）与 `GET /api/provider`；会话内切换走
+  `POST /:id/model {model: {providerID, id}}` 与 `POST /:id/agent {agent}`。
+- 未接线即友好失败：dev 构建对未实现的路由返回 SPA HTML 回退，
+  adapter 识别 HTML/404/503 后抛中文错误，不吞成空成功。
+
+当前能力矩阵：approvals、archive（Deck 侧软归档）、messages、delete、
+fork、images、interrupt、models、sessionSettings、skills 为 true；
+mcp、review、shell 为 false。delete/fork/command/compact/revert 等方法
+按协议实现，dev 构建未接线的部分遇到 SPA HTML 回退或 503 时抛中文友好
+错误（不吞成空成功），随服务端接线自动可用；rename 走 Deck 侧标题先行。
+与 V1 有意的三处差异：send 繁忙时排队而非顶掉旧轮；allowForProject
+退化为会话级允许；模型无推理强度档位。
+`OPENCODE_TRACE_REQUESTS=1` 同样输出 V2 请求耗时。
+实测版本与剩余限制见 [OpenCode V2 迁移 TODO](opencode-v2-todo.md)。
 
 ## 通用 ACP Adapter
 

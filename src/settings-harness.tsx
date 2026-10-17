@@ -292,7 +292,7 @@ const backendBins = {
   ],
   opencode: [
     { bin: "/opt/demo/opencode-v1/bin/opencode", version: "1.0.0", source: "standard" },
-    { bin: "/opt/demo/opencode-v2/bin/opencode", version: "1.2.0", source: "path" },
+    { bin: "/opt/demo/opencode-v2/bin/opencode", version: "2.0.32", source: "path" },
   ],
 };
 const selectedBins: Record<keyof typeof backendBins, string> = {
@@ -309,7 +309,7 @@ window.fetch = async (input, init) => {
   if (binsAgent) {
     const agentId = binsAgent[1] as "claude" | "opencode";
     if (method === "GET" && binsAgent[2] === "bins")
-      return json({ bins: backendBins[agentId], selected: selectedBins[agentId], effective: selectedBins[agentId] || agentId, pinned: false });
+      return json({ bins: backendBins[agentId], selected: selectedBins[agentId], effective: selectedBins[agentId] || agentId, pinned: false, ...(agentId === "opencode" ? { activeProtocol: selectedBins.opencode.includes("v1") ? "v1" : "v2" } : {}) });
     if (method === "PUT" && binsAgent[2] === "bin") {
       await sleep(latency);
       selectedBins[agentId] = body.bin || "";

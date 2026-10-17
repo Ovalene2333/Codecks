@@ -54,8 +54,8 @@ function catalogPathForComposer(thread: {
   cwd?: string;
 }) {
   const agentId = thread.agentId || "codex";
-  return agentId === "opencode"
-    ? `/agents/opencode/models${thread.cwd ? `?directory=${encodeURIComponent(thread.cwd)}` : ""}`
+  return agentId === "opencode" || agentId === "opencode-v2"
+    ? `/agents/${agentId}/models${thread.cwd ? `?directory=${encodeURIComponent(thread.cwd)}` : ""}`
     : agentId !== "codex"
       ? `/agents/${agentId}/models?providerId=${encodeURIComponent(thread.providerId || "")}`
       : `/providers/${thread.providerId}/models`;
@@ -68,7 +68,7 @@ function composerCatalogEnabled(thread: {
   const agentId = thread.agentId || "codex";
   return agentId === "codex"
     ? Boolean(thread.providerId)
-    : agentId === "opencode" || Boolean(thread.providerId);
+    : agentId === "opencode" || agentId === "opencode-v2" || Boolean(thread.providerId);
 }
 
 const CONTEXT_FIELD_LABELS: Record<ContextField, string> = {

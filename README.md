@@ -192,7 +192,7 @@ Codecks 直接读本机的 `~/.codex`，不复制 `CODEX_HOME`，也不会把历
 - 任务运行中发的新消息默认「追加」排队，等当前任务完成后处理；已发出的待发送气泡上可以改成「即时反馈」立即介入（各后端按能力实现为 steer 或先打断再发），空闲时都开新 Turn。持久队列重启不丢，各后端行为见 [消息输送文档](docs/message-transport.md)
 - 历史里的用户消息可以带回输入框修改，也可以从那条消息之前开分支重试。分支自动继承原会话的权限、沙箱和模型档位，不用重新设置
 - 输入框支持 Codex 的常用指令：`/model`、`/permissions`、`/skills`、`/status`、`/ps`、`/usage`、`/mention`、`/fast`、`/mcp`、`/compact`、`/review`、`/init`、`/diff`、`/plan`、`/goal`，还有 `!command` 无沙箱执行。完整语法和后续计划见 [Slash 指令文档](docs/slash-commands.md)
-- 助手回复里的 Markdown 图片，以及 Codex 或兼容 Agent 生成的图片，先显示成「点击加载」，点了才请求，并且懒加载。用手机流量时能省不少
+- 助手回复里的 Markdown 图片，以及 Codex 或兼容 Agent 生成的图片，先显示成「点击加载」，点了才请求，并且懒加载。本地图片支持文件路径和 `file://` 地址；工作目录外的图片仅在会话包含明确图片记录时可读取。加载失败可重试，超时会显示重试入口。用手机流量时能省不少
 - 每个 Turn 会汇总本轮读过的文件。命令、文件改动、MCP 和动态工具调用跟着实时事件马上出现，不用等历史落盘
 - 一次改了多个文件的 `update`，或者连续几次 `update`，会合并成一个可展开的文件改动组。读取和检索显示成可展开的中文动作，点开能看命令、参数和返回内容
 - OpenCode 连续的文件编辑收成一行「编辑 N 次 · 文件名」，`Edit applied successfully.` 这种没信息量的回执默认藏起来，点开只看有实际内容的输出
@@ -348,7 +348,13 @@ OpenCode 会话优先通过原生消息分页读取最近几轮，工具步骤�
 
 正文读取也受请求超时保护。排查加载、删除或分支耗时时，可在启动 Deck 前设置 `OPENCODE_TRACE_REQUESTS=1`，服务端日志会记录接口类型、状态码、响应头耗时和单次请求总耗时（不记录会话 ID、目录或正文）；关闭该变量即可停止记录。
 
-> **版本要求：面向 OpenCode V1（1.x）**。适配器走 `opencode serve` 的 V1 REST 接口（`/session`、`/global/event`、`/config` 等），对 V2 的 `/api/*` 新契约不兼容；OpenCode 2 尚未发布 stable（npm `latest` 仍为 1.x），且 V2 安装会替换 V1 二进制，升级前请先完成迁移。配置文件侧 V2 仍读取 `opencode.json(c)` 原位置并兼容 V1 字段，迁移要点与待办见 [docs/opencode-v2-todo.md](docs/opencode-v2-todo.md)。
+> **运行时自动适配 V1 / V2。** Agent 设置仅保留一个 OpenCode。在「设置 → Agent → OpenCode → 运行时」点「探测」，从同一列表选择已安装的 CLI，再点「应用并重启」；Deck 根据所选 CLI 版本自动匹配接口（1.x → V1，2.x → V2），无需选择协议。探测覆盖当前用户的 PATH、npm、Bun、原生安装及常见版本目录，也会检查已保存路径。消息、工具输出和审批使用相同界面；有会话运行或等待审批时不能切换，启动失败会恢复旧选择。V1/V2 直接读取各自的原生历史，不复制或迁移会话。`OPENCODE_BIN` 可固定 CLI 路径；CLI 在原路径跨主版本升级后，重启运行时会重新匹配接口。旧 `OPENCODE_V2_BIN` 和已保存的独立 V2 路径作为兼容回退读取，不再创建第二个 Agent。配置及剩余迁移差异见 [docs/opencode-v2-todo.md](docs/opencode-v2-todo.md)。
+
+手动下载或开发中的 CLI 可在「设置 → Agent → OpenCode → 运行时」点击「手动指定 CLI 路径」，填写 Deck 服务所在机器上可执行文件的完整路径（不是解压目录），再点「应用并重启」。保存时验证版本并自动选择 V1/V2，启动失败会恢复旧选择；留空恢复系统 PATH。Claude 的运行时也支持此入口。
+
+OpenCode V2 2.0.32 的正文、思考与工具状态会实时更新；工具步骤结束后会话仍保持运行，整轮完成才恢复空闲。命令审批与问答表单关联到对应会话，图片在刷新历史后保留；长会话支持向前分页。模型、技能和命令目录按会话项目读取，避免混用其他项目的配置。
+
+> **OpenCode V2。** 选择 2.x CLI 后自动使用 `/api/*` 接口，并处理本机 REST 与事件流鉴权。功能与 V1 对齐：会话列表/新建/读取（含 message 分页）、发送（含图片附件与模型校验）、通用消息、中断、删除、分支（含按轮分支与历史重试）、重命名、归档、流式文本与工具事件、权限审批、模型目录与会话设置、技能/命令枚举与执行、压缩、撤回；前端选择器、命令面板、新建会话、工具栏与搜索与 V1 一致。V2 dev 构建尚未接线的接口遇到时会返回明确的中文提示（不吞成空成功），随服务端接线自动可用；事件名同时兼容 `session.*` 与 dev 构建的 `session.next.*` 前缀。V2 的会话存储与 V1 独立（dev 构建用单独数据库），两侧看不到对方的会话。有意不同的三处：发送繁忙时排队而非顶掉旧轮；项目级持久授权退化为会话级允许；模型无推理强度档位。
 
 > **实验性支持。** 安装并登录 [OpenCode](https://opencode.ai/) CLI 后，Codecks 会在启动时运行独立的本机 `opencode serve`，并通过其本地 HTTP API 管理会话。默认从 `PATH` 查找 `opencode`；Windows 会通过 npm 安装生成的 `opencode.cmd` 启动，可通过 `OPENCODE_BIN` 指定其它可执行文件或脚本。冷启动最多等待 30 秒，失败时 Agent 状态会保留 OpenCode 的 stderr 摘要。OpenCode 未安装或启动失败不会阻止 Codex/Claude 使用，Agent 选择器会显示其离线状态；OpenCode 进程异常退出时只会让 Deck 内的 OpenCode 离线，不会按已退出的 PID 清理或影响电脑上其它 OpenCode 实例。`opencode serve` 会把每个目录的配置与供应商目录缓存在内存里，外部编辑 `opencode.json` 或 `opencode auth login` 之后，在「设置 → Agent」里点 OpenCode 的「重载」即可让新供应商和模型生效，不用重启 Deck，也不会中断或改写现有会话（运行中的会话会先排队，重载等它空闲或加 force）。serve 进程直接继承 Deck 的环境，按 opencode 的标准规则读配置与登录态（`$XDG_CONFIG_HOME/opencode` 或 `~/.config/opencode`、数据目录下的 `auth.json`），Deck 的全局配置编辑写的就是 serve 读的同一个目录；想让两者用另一份目录时，给 Deck 设置 `OPENCODE_CONFIG_DIR`（opencode 原生支持的全局配置目录）与 `XDG_DATA_HOME`（auth.json 所在目录）再启动即可，Deck 不会自动猜测其它用户目录。`opencode serve` 是 Bun 进程，长时间运行内存只增不减；没有忙碌会话和待审批、且空闲超过 30 分钟时，Deck 会自动把它杀掉重建一次（会话从 `/session` 重新拉回，主机内存可回收数百 MB），设 `OPENCODE_IDLE_RESTART_MS=0` 可关闭。模型选择器默认只列已连接的供应商（对齐 opencode 自己的模型栏），搜索行上的「已连接」开关可以切回全部目录。
 
@@ -590,6 +596,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CLAUDE_CONFIG_DIR`             | `~/.claude`                | Claude 配置与历史目录（也认 `CLAUDE_HOME`）；WSL 可指向 `/mnt/c/Users/<用户>/.claude`  |
 | `CLAUDE_BIN`                    | 自动发现                   | Claude Code 原生可执行文件或 JavaScript 入口；Windows npm `.cmd` 会通过 `cmd.exe` 启动 |
 | `OPENCODE_BIN`                  | `opencode`                 | OpenCode CLI 路径，用于启动本机 OpenCode server                                        |
+| `OPENCODE_V2_BIN`               | —              | 旧 V2 CLI 路径的兼容变量；未设置 `OPENCODE_BIN` 时使用，统一显示为 OpenCode   |
 | `OPENCODE_TRACE_REQUESTS`       | `0`                        | 设为 `1` 输出 OpenCode 请求耗时日志，帮助定位加载、删除和分支等待                       |
 | `OPENCODE_IDLE_RESTART_MS`      | `1800000`                  | OpenCode serve 空闲多久后自动重启一次回收进程内存（无忙碌会话/待审批才执行）；`0` 关闭   |
 | `OPENCODE_CONFIG_DIR`           | `~/.config/opencode`       | OpenCode 全局配置目录（opencode 原生变量）；`auth.json`/会话库随 `XDG_DATA_HOME` 走    |

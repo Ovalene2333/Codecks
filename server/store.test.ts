@@ -204,3 +204,15 @@ test('refreshCcSwitch rediscovers a newly available database', async () => {
     )
   })
 })
+
+
+test('old standalone OpenCode V2 selection falls back to the unified runtime', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-opencode-legacy-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const store = new ProviderStore(dir)
+  await store.load()
+  await store.updateRuntimeAgentBin('opencode-v2', '/opt/demo/bin/opencode-v2')
+  assert.equal(store.runtimeAgentBin('opencode'), '/opt/demo/bin/opencode-v2')
+  await store.updateRuntimeAgentBin('opencode', '')
+  assert.equal(store.runtimeAgentBin('opencode'), '')
+})

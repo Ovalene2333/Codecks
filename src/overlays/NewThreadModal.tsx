@@ -119,7 +119,7 @@ export function NewThreadModal({
   // 服务端把 `${id}-current` 视作「当前配置档」占位；opencode 的 providerId
   // 由模型 id 携带，留空沿用旧行为。
   const placeholderProviderId = (id: AgentId) =>
-    id === "opencode" ? "" : `${id}-current`;
+    id === "opencode" || id === "opencode-v2" ? "" : `${id}-current`;
   const seedProviderId = (id: AgentId) =>
     preferredProfile(profilesFor(id))?.id || placeholderProviderId(id);
   const [refreshedProfiles, setRefreshedProfiles] = useState<
@@ -444,15 +444,17 @@ export function NewThreadModal({
                   ...current,
                   model: next.model,
                   reasoningEffort: next.reasoningEffort,
-                  ...(agentId === "opencode" && opencodeProviderId(next.model)
-                    ? // The model id carries the provider, so the thread keeps
-                      // pointing at the right one without a second picker.
-                      { providerId: opencodeProviderId(next.model) }
+                  ...(agentId === "opencode" || agentId === "opencode-v2"
+                    ? opencodeProviderId(next.model)
+                      ? // The model id carries the provider, so the thread keeps
+                        // pointing at the right one without a second picker.
+                        { providerId: opencodeProviderId(next.model) }
+                      : {}
                     : {}),
                 }))
               }
             />
-            {agentId === "opencode" ? null : profilesLoading ||
+            {agentId === "opencode" || agentId === "opencode-v2" ? null : profilesLoading ||
               profiles.length > 1 ? (
               <label>
                 配置档

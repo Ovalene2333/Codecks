@@ -74,7 +74,8 @@ export function parseComposerCommand(
   if (!match) return undefined;
   const key = match[1].toLowerCase();
   const arg = (match[2] || "").trim();
-  if (agentId === "opencode") return parseOpenCodeCommand(key, arg);
+  if (agentId === "opencode" || agentId === "opencode-v2")
+    return parseOpenCodeCommand(key, arg);
   // ACP 等通用 agent：斜杠命令原样透传，由 agent 自己解释；/model 例外，
   // agent 暴露模型目录（configOptions/models spec）时走 Deck 的模型面板，
   // 没有目录时再回落为透传文本。
@@ -191,7 +192,7 @@ export function matchingSlashCommands(
   if (!value.startsWith("/")) return [];
   const query = value.toLowerCase();
   // ACP 等通用 agent：只补全 agent 自报的 availableCommands。
-  if (agentId !== "codex" && agentId !== "claude" && agentId !== "opencode") {
+  if (agentId !== "codex" && agentId !== "claude" && agentId !== "opencode" && agentId !== "opencode-v2") {
     const seen = new Set<string>();
     const items: SlashMenuItem[] = [];
     for (const extra of extraCommands) {
@@ -207,7 +208,7 @@ export function matchingSlashCommands(
     }
     return items;
   }
-  if (agentId === "opencode") {
+  if (agentId === "opencode" || agentId === "opencode-v2") {
     const seen = new Set<string>();
     const items: SlashMenuItem[] = [];
     for (const item of [...OPENCODE_COMMANDS]) {
