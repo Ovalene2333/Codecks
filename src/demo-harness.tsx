@@ -167,6 +167,12 @@ const APPROVALS: Approval[] = [
     request: { method: "item/fileChange/requestApproval", params: { threadId: "index" } },
     changes: [{ path: `${SHOP}/migrations/0042_orders_created_at.sql`, kind: "add", diff: "+CREATE INDEX idx_orders_created_at ON orders (created_at);\n" }],
     cwd: SHOP },
+  // 当前演示会话自己的审批：会话页显示在输入框上方，全局浮窗只提示上面两条。
+  ...(params.has("dock")
+    ? [{ id: "retry:approval-3", providerId: "official", agentId: "codex", kind: "command",
+        request: { method: "item/commandExecution/requestApproval", params: { threadId: "retry" } },
+        command: "npm test -- orders --runInBand", cwd: SHOP, reason: "跑订单相关测试，确认重试只产生一个订单" } as Approval]
+    : []),
 ];
 
 const empty = params.has("empty");

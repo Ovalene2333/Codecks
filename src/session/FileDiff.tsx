@@ -1,3 +1,4 @@
+import { RailDetails } from "./RailDetails";
 import { FilePenLine } from "lucide-react";
 import { changeKindLabel, changeKindText, shortenPath } from "../format";
 import type { FileChange } from "../types";
@@ -31,7 +32,7 @@ export function FileDiff({
         const diff = typeof row.diff === "string" ? row.diff : "";
         const path = shortenPath(row.path || "", cwd);
         return (
-          <details key={`${row.path || "file"}-${index}`} className="file-diff-card">
+          <RailDetails key={`${row.path || "file"}-${index}`} className="file-diff-card">
             <summary>
               <FilePenLine />
               <span className={`kind ${kind}`}>{changeKindText(kind)}</span>
@@ -50,7 +51,7 @@ export function FileDiff({
             ) : (
               <p className="diff-empty">暂无 diff</p>
             )}
-          </details>
+          </RailDetails>
         );
       })}
     </div>

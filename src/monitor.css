@@ -137,6 +137,27 @@
   font-size: var(--fs-meta);
 }
 
+/* 实时快照落地前：状态条先占位，不拿缓存里的运行中/卡住计数冒充实时状态。 */
+.monitor-strip-skeleton {
+  width: 86px;
+  height: 12px;
+  margin: 0 var(--space-2);
+  border-radius: var(--radius-xs);
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-from) 0%,
+    var(--skeleton-mid) 45%,
+    var(--skeleton-from) 100%
+  );
+  background-size: 200% 100%;
+  animation: home-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.monitor-strip-skeleton.short {
+  width: 58px;
+  animation-delay: 0.15s;
+}
+
 .monitor-layout {
   display: grid;
   flex: 1;
@@ -291,37 +312,6 @@
   touch-action: pan-y;
 }
 
-.monitor-approvals-body > .approval-session-link {
-  flex: none;
-  width: auto;
-  min-height: var(--control-h);
-  margin: var(--space-2) var(--space-4) 0;
-  padding: var(--space-1) 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.monitor-approvals-body > .approval-session-link:hover {
-  background: transparent;
-  color: var(--text);
-}
-
-.monitor-approvals .approval-session-link > span {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-}
-
-.monitor-approvals .approval-session-link small {
-  flex: none;
-}
-
-.monitor-approvals .approval-session-link b {
-  font-size: var(--fs-ui);
-  font-weight: var(--fw-medium);
-}
-
 .monitor-approvals .approval-card {
   flex: 1 1 auto;
   min-height: 0;
@@ -360,6 +350,7 @@
 @media (max-width: 760px) {
   .monitor-approvals .approval-reason,
   .monitor-approvals .approval-cwd,
+  .monitor-approvals .approval-type,
   .monitor-approvals .permission-list,
   .monitor-approvals .question-block,
   .monitor-approvals .question-list { padding-left: 13px; }
@@ -367,7 +358,6 @@
   .monitor-approvals .approval-title { padding-inline: 13px; }
   .monitor-approvals .approval-command-wrap { margin-inline: 13px; }
   .monitor-approvals .approval-actions { padding: var(--space-3) 13px 13px; }
-  .monitor-approvals-body > .approval-session-link { margin-inline: 13px; }
 }
 
 /* 会话卡片 */
@@ -636,6 +626,79 @@
 }
 
 .home-row-done svg { width: 16px; height: 16px; }
+
+/* 运行中 / 最近会话首次取快照前用骨架占位，避免亮出上次退出时的旧计时。 */
+.home-row-skeleton {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 56px;
+  grid-template-areas:
+    "dot head time"
+    ". detail detail";
+  align-items: center;
+  gap: 7px 10px;
+  padding: 12px 8px;
+}
+
+.home-skeleton-dot,
+.home-skeleton-head,
+.home-skeleton-time,
+.home-skeleton-detail {
+  background: linear-gradient(
+    90deg,
+    var(--skeleton-from) 0%,
+    var(--skeleton-mid) 45%,
+    var(--skeleton-from) 100%
+  );
+  background-size: 200% 100%;
+  animation: home-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.home-skeleton-dot {
+  grid-area: dot;
+  justify-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.home-skeleton-head {
+  grid-area: head;
+  width: min(46%, 220px);
+  height: 10px;
+  border-radius: var(--radius-xs);
+}
+
+.home-skeleton-time {
+  grid-area: time;
+  justify-self: end;
+  width: 44px;
+  height: 9px;
+  border-radius: var(--radius-xs);
+}
+
+.home-skeleton-detail {
+  grid-area: detail;
+  width: min(70%, 360px);
+  height: 9px;
+  border-radius: var(--radius-xs);
+}
+
+.home-row-skeleton:nth-child(2) > * { animation-delay: 0.15s; }
+.home-row-skeleton:nth-child(2) .home-skeleton-head { width: min(36%, 180px); }
+.home-row-skeleton:nth-child(2) .home-skeleton-detail { width: min(52%, 280px); }
+
+@keyframes home-skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor-strip-skeleton,
+  .home-skeleton-dot,
+  .home-skeleton-head,
+  .home-skeleton-time,
+  .home-skeleton-detail { animation: none; }
+}
 
 .home-more {
   display: block;

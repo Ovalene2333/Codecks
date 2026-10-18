@@ -141,11 +141,12 @@ export function App() {
   const { hiddenTools } = useDeckSettings();
   const [snapshot, setSnapshot] = useState(() => {
     const cached = readSnapshotCache();
-    // 首页“运行中”的步骤、“新回复”的预览靠活动数据：用缓存先画出来，
-    // 实时快照到了再整体替换，避免这两块刷新后先空着再跳出来。
+    // “新回复 / 最近会话”的预览靠活动数据：用缓存先画出来，实时快照到了再替换。
+    // “运行中”不再用缓存计时，等本轮快照落地前显示骨架，免得亮出上次退出时的旧状态。
     if (cached?.activities) resetActivities(cached.activities);
     return cached || empty;
   });
+  const [snapshotLive, setSnapshotLive] = useState(false);
   const [loading, setLoading] = useState(
     () => !hasSidebarData(readSnapshotCache()),
   );
@@ -403,6 +404,7 @@ export function App() {
         // 期间收到过 WS 消息时，响应里的活动可能比已推送的旧，交给 WS 为准。
         if (wsClockRef.current === startClock && next.activities)
           resetActivities(next.activities);
+        setSnapshotLive(true);
         setSnapshot((current) => {
           const reconciled =
             wsClockRef.current === startClock
@@ -640,6 +642,7 @@ export function App() {
         // 让 refresh 响应落地时能选择保守合并而非整体覆盖。
         wsClockRef.current += 1;
         if (message.type === "snapshot") {
+          setSnapshotLive(true);
           if (message.data.activities) resetActivities(message.data.activities);
           setSnapshot((current) => reconcileSnapshot(current, message.data));
         } else if (message.type === "activity.updated")
@@ -1512,6 +1515,7 @@ export function App() {
             searchMatches={contentMatches}
             query={query}
             loading={loading || historySyncing}
+            live={snapshotLive}
             notificationPermission={notificationPermission}
             onSelect={selectThread}
             onOpenThread={openSession}

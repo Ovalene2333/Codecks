@@ -188,6 +188,7 @@ function Panel({
   count,
   actions,
   footer,
+  busy,
   children,
 }: {
   id: string;
@@ -196,10 +197,16 @@ function Panel({
   count?: number;
   actions?: ReactNode;
   footer?: ReactNode;
+  busy?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section id={id} className={`monitor-panel home-panel ${tone}`} aria-label={title}>
+    <section
+      id={id}
+      className={`monitor-panel home-panel ${tone}`}
+      aria-label={title}
+      aria-busy={busy || undefined}
+    >
       <div className="monitor-panel-head">
         <h2>{title}</h2>
         {count ? <span className="home-count">{count}</span> : null}
@@ -208,6 +215,32 @@ function Panel({
       <ul className="home-list">{children}</ul>
       {footer}
     </section>
+  );
+}
+
+/** 实时数据落地前的占位行：结构与 Row 对齐，出数据时高度不跳。 */
+function PanelSkeleton({
+  id,
+  tone,
+  title,
+  rows,
+}: {
+  id: string;
+  tone: string;
+  title: string;
+  rows: number;
+}) {
+  return (
+    <Panel id={id} tone={tone} title={title} busy>
+      {Array.from({ length: rows }, (_, index) => (
+        <li className="home-row home-row-skeleton" key={index} aria-hidden="true">
+          <span className="home-skeleton-dot" />
+          <span className="home-skeleton-head" />
+          <span className="home-skeleton-time" />
+          <span className="home-skeleton-detail" />
+        </li>
+      ))}
+    </Panel>
   );
 }
 
@@ -519,14 +552,18 @@ function UnseenPanel({
 
 function RunningPanel({
   items,
+  loading,
   projectOf,
   onOpen,
 }: {
   items: RunningItem[];
+  loading?: boolean;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
 }) {
   const now = useNow(1_000);
+  if (loading)
+    return <PanelSkeleton id="home-running" tone="running" title="运行中" rows={2} />;
   return (
     <Panel id="home-running" tone="running" title="运行中" count={items.length}>
       {items.map((item) => {
@@ -586,15 +623,19 @@ function RunningPanel({
 
 function RecentPanel({
   items,
+  loading,
   projectOf,
   onOpen,
   onShowAll,
 }: {
   items: HomeItem[];
+  loading?: boolean;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
   onShowAll: () => void;
 }) {
+  if (loading)
+    return <PanelSkeleton id="home-recent" tone="recent" title="最近会话" rows={3} />;
   return (
     <Panel
       id="home-recent"
@@ -750,6 +791,7 @@ export function MonitorBoard({
   deliveries,
   watchers,
   lostWatchers = [],
+  live = true,
   projectOf,
   onOpen,
   onMarkSeen,
@@ -769,6 +811,8 @@ export function MonitorBoard({
   watchers?: WakeWatcher[];
   /** 失联待处理的 watcher。 */
   lostWatchers?: LostWakeWatcher[];
+  /** 本轮实时快照是否已落地：运行中 / 最近会话此时才改用实时数据。 */
+  live?: boolean;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
   onMarkSeen: (key: string) => void;
@@ -840,13 +884,19 @@ export function MonitorBoard({
           />
         ) : null;
       case "running":
-        return board.running.length ? (
-          <RunningPanel items={board.running} projectOf={projectOf} onOpen={onOpen} />
+        return !live || board.running.length ? (
+          <RunningPanel
+            items={live ? board.running : []}
+            loading={!live}
+            projectOf={projectOf}
+            onOpen={onOpen}
+          />
         ) : null;
       case "recent":
-        return board.recent.length ? (
+        return !live || board.recent.length ? (
           <RecentPanel
-            items={board.recent}
+            items={live ? board.recent : []}
+            loading={!live}
             projectOf={projectOf}
             onOpen={onOpen}
             onShowAll={onShowAll}

@@ -1,19 +1,430 @@
+/* ── 审批卡片与容器 ────────────────────────────────────────────────
+   ApprovalCard 的唯一样式源，三个容器共用：
+     .approval-inbox  会话页/全局浮窗展开态；收起态共用标题栏 / 手机 .approval-inbox-trigger
+     .monitor-approvals 首页审批队列（monitor.css 只调容器边距）
+   卡片三层：标题行（动作 + 容器控件） → 内容（理由 / 目录 / 命令或改动） → 操作行。
+   左右内边距统一走 --approval-pad，所有内容沿同一条左缘对齐。 */
+
+.approval-card {
+  --approval-pad: 16px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  color: var(--text);
+}
+
+.approval-title {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px var(--approval-pad) 6px;
+}
+
+.approval-icon {
+  display: grid;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--wait);
+}
+
+.approval-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.approval-title > div:not(.approval-title-aside) {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.approval-title b {
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-ui);
+}
+
+.approval-title small {
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+.approval-title-aside {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin: -4px -4px -4px auto;
+}
+
+/* 三行结构：会话（类型 · 名称 · 项目）→ 请求类型 → 具体内容。 */
+.approval-title > div.approval-session {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.approval-session-agent {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+
+.approval-session-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-session-project {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-session-open {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.approval-session-open:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.approval-session-open svg {
+  width: 14px;
+  height: 14px;
+}
+
+.approval-type {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 0 var(--approval-pad) 8px;
+  color: var(--text-soft);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+.approval-type small {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+/* 会话上下文已在第一行：命令块压到少量行高，超长内容内部滚动。 */
+.approval-card.has-session .approval-command {
+  max-height: min(14vh, 96px);
+}
+
+.approval-title-aside .icon-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+}
+
+.approval-title-aside .icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.approval-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.approval-reason {
+  margin: 0;
+  padding: 0 var(--approval-pad) 8px;
+  color: var(--text-soft);
+  font-size: var(--fs-ui);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+.approval-cwd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--approval-pad) 8px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+.approval-cwd span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-cwd svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.8;
+}
+
+.approval-command-wrap {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  margin: 0 var(--approval-pad) 12px;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text-soft);
+}
+
+.approval-command-wrap > svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--text-faint);
+  stroke-width: 1.8;
+}
+
+.approval-command {
+  min-width: 0;
+  max-height: min(30vh, 240px);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.approval-copy-command {
+  display: inline-flex;
+  align-items: center;
+  align-self: start;
+  gap: 4px;
+  min-height: 24px;
+  margin: -3px 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.approval-copy-command svg {
+  width: 13px;
+  height: 13px;
+}
+
+.approval-copy-command:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+
+.approval-file-count {
+  margin: 0 var(--approval-pad) 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+
+.approval-card .file-diff-list {
+  margin: 0 var(--approval-pad) 10px;
+}
+
+.approval-card :is(.permission-list, .question-block, .question-list) {
+  padding-right: var(--approval-pad);
+  padding-left: var(--approval-pad);
+}
+
+.approval-permission-hint {
+  margin: 0 var(--approval-pad) 8px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+
+.approval-more-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 var(--approval-pad) 12px;
+  padding: 0;
+  border: 0;
+}
+
+.approval-more-options[hidden] {
+  display: none;
+}
+
+.approval-more-options legend {
+  flex: 0 0 100%;
+  padding: 0 0 2px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+
+.approval-more-options label {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+  cursor: pointer;
+}
+
+.approval-more-options input[type="radio"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.approval-more-options label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-more-options label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.approval-resolve-error {
+  flex: none;
+  margin: 0;
+  padding: 8px var(--approval-pad);
+  border-top: 1px solid var(--line);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+}
+
+/* 操作行：拒绝靠左，「更多 / 允许」靠右；按钮按内容宽，不再三等分拉满。 */
+.approval-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px var(--approval-pad) 12px;
+  border-top: 1px solid var(--line);
+}
+
+.approval-actions > button {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: var(--control-h);
+  white-space: nowrap;
+}
+
+.approval-actions > button:first-child:not(:only-child) {
+  margin-right: auto;
+}
+
+/* 命令审批保留三个固定位置，更多切换为返回时不移动。 */
+.approval-command-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 74px 128px;
+}
+
+.approval-command-actions > button:first-child:not(:only-child) {
+  justify-self: start;
+  margin-right: 0;
+}
+
+.approval-command-actions > button[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.approval-command-actions > button > svg {
+  display: block;
+}
+
+/* ── 全局浮窗：展开态 ─────────────────────────────────────────── */
 .approval-inbox {
   position: fixed;
   z-index: 40;
-  top: 104px;
+  top: 62px;
   right: 18px;
   display: flex;
   flex-direction: column;
-  width: min(var(--modal-w), calc(100vw - 36px));
+  width: min(460px, calc(100vw - 36px));
   min-width: 0;
-  max-height: calc(100dvh - 122px);
+  max-height: calc(100dvh - 140px);
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   box-shadow: var(--shadow-lg);
-  animation: approval-inbox-in 160ms ease both;
+  animation: approval-inbox-in 160ms ease;
+}
+
+.approval-inbox.is-collapsed .approval-inbox-header {
+  border-bottom: 0;
+}
+
+.approval-inbox.is-dragging {
+  user-select: none;
 }
 
 .approval-inbox-backdrop {
@@ -28,21 +439,44 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-height: 44px;
-  padding: 4px 6px 4px 16px;
+  padding: 4px 6px 4px 14px;
   border-bottom: 1px solid var(--line);
 }
 
-.approval-inbox-header > b {
-  margin-right: auto;
+/* 只有这个小手柄能拖动，避免在标题行空白处误触。 */
+.approval-drag-grip {
+  display: grid;
+  flex: none;
+  width: 20px;
+  height: 28px;
+  margin-left: -6px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.approval-drag-grip:hover {
+  background: var(--control-hover);
   color: var(--text);
-  font-size: var(--fs-ui);
-  font-weight: var(--fw-medium);
+}
+
+.approval-drag-grip:active {
+  cursor: grabbing;
+}
+
+.approval-drag-grip svg {
+  width: 14px;
+  height: 14px;
 }
 
 .approval-inbox-symbol {
   display: grid;
+  flex: none;
   width: 16px;
   height: 16px;
   place-items: center;
@@ -56,8 +490,52 @@
   stroke-width: 1.8;
 }
 
+/* 会话名即标题：点击打开该会话。 */
+.approval-inbox-session {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-right: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+b.approval-inbox-session {
+  cursor: default;
+}
+
+.approval-inbox-session b {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-inbox-session svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+}
+
+button.approval-inbox-session:hover b {
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
 .approval-inbox-header nav {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 2px;
 }
@@ -66,6 +544,7 @@
   margin-right: 4px;
   color: var(--text-dim);
   font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
 }
 
 .approval-inbox-header .icon-btn {
@@ -82,7 +561,7 @@
 /* 批量通过：文字按钮，平时安静，hover 才强调，不跟图标按钮抢。 */
 .approval-inbox-bulk {
   flex: none;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -108,116 +587,17 @@
   margin: 8px 16px 0;
 }
 
-/* 会话入口：一行「会话 名称 ↗」，不再套一层卡片。 */
-.approval-session-link {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  width: calc(100% - 32px);
-  min-height: var(--control-h);
-  margin: 8px 16px 0;
-  padding: 4px 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.approval-session-link:hover {
-  background: transparent;
-}
-
-.approval-session-link:hover b {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: var(--line-strong);
-}
-
-.approval-session-link > span {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  gap: 8px;
-  flex: 1;
-}
-
-.approval-session-link small {
-  flex: none;
-  color: var(--text-faint);
-  font-size: var(--fs-meta);
-}
-
-.approval-session-link b {
-  overflow: hidden;
-  font-size: var(--fs-ui);
-  font-weight: var(--fw-medium);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.approval-session-link svg {
-  width: 14px;
-  height: 14px;
-  color: var(--text-faint);
-}
-
 .approval-inbox .approval-card {
-  display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
-.approval-inbox .approval-title {
-  flex: none;
-  padding: 8px 16px 4px;
-}
-
+/* 浮窗头部已有盾牌，卡片标题不再重复图标。 */
 .approval-inbox .approval-icon {
   display: none;
 }
 
-.approval-inbox .approval-reason,
-.approval-inbox .approval-cwd,
-.approval-inbox .permission-list,
-.approval-inbox .question-block,
-.approval-inbox .question-list {
-  padding-left: 16px;
-}
-
-.approval-inbox .approval-command-wrap {
-  margin-left: 16px;
-}
-
-.approval-inbox .approval-permission-hint {
-  margin-left: 16px;
-}
-
 .approval-inbox .approval-content {
   flex: 0 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.approval-inbox .approval-actions {
-  flex: none;
-  padding: 12px 16px;
-  background: var(--surface-raised);
-}
-
-.approval-inbox .approval-actions > button {
-  min-width: 0;
-  flex: 1 1 0;
-  width: 0;
 }
 
 .approval-notification-opt-in {
@@ -245,6 +625,7 @@
   height: 14px;
 }
 
+/* 手机收起态：「待审批 n」按钮。 */
 .approval-inbox-trigger {
   position: fixed;
   z-index: 40;
@@ -255,7 +636,7 @@
   gap: 8px;
   min-height: var(--control-h);
   padding: 0 10px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
   color: var(--text);
@@ -278,11 +659,49 @@
 @keyframes approval-inbox-in {
   from {
     opacity: 0;
-    transform: translateY(-6px);
   }
 }
 
 @media (max-width: 760px) {
+  .approval-card {
+    --approval-pad: 14px;
+  }
+
+  .approval-actions {
+    gap: 8px;
+    padding: 10px var(--approval-pad) 12px;
+  }
+
+  /* 触屏：按钮等分整行、够高；「允许」略宽。 */
+  .approval-actions > button {
+    flex: 1 1 0;
+    width: 0;
+    min-height: var(--touch-h);
+  }
+
+  .approval-actions > button:first-child:not(:only-child) {
+    margin-right: 0;
+  }
+
+  .approval-actions > button.ui-btn--primary {
+    flex-grow: 1.6;
+  }
+
+  .approval-command-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr);
+  }
+
+  .approval-command-actions > button {
+    width: 100%;
+    padding-inline: 6px;
+  }
+
+  .approval-title-aside .icon-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+  }
+
   .approval-inbox-backdrop {
     position: fixed;
     z-index: 39;
@@ -298,7 +717,7 @@
     left: 0;
     width: 100%;
     max-height: min(
-      90dvh,
+      64dvh,
       calc(100dvh - var(--approval-visual-inset, 0px) - var(--space-2))
     );
     padding-bottom: env(safe-area-inset-bottom);
@@ -319,36 +738,8 @@
     padding-top: 4px;
   }
 
-  .approval-session-link {
-    min-height: 48px;
-  }
-
-  .approval-inbox .approval-reason,
-  .approval-inbox .approval-cwd,
-  .approval-inbox .permission-list,
-  .approval-inbox .question-block,
-  .approval-inbox .question-list {
-    padding-left: 13px;
-  }
-
-  .approval-inbox .approval-command-wrap {
-    margin-inline: 13px;
-  }
-
-  .approval-inbox .approval-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .approval-inbox .approval-actions > button {
-    min-height: var(--touch-h);
-    width: 0;
-    flex: 1 1 0;
-  }
-
-  .approval-inbox .approval-actions > button.approve {
-    flex-grow: 2;
+  .approval-drag-grip {
+    display: none;
   }
 
   .approval-inbox-trigger {

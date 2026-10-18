@@ -100,3 +100,69 @@ test("Codex edit rewinds the current thread before the selected turn", async () 
   await assert.rejects(adapter.revertSession("p", "t1", "turn-1"), /运行中/);
   assert.equal(calls.length, 1);
 });
+
+function rewindFixture(failRevert?: Error) {
+  const adapter = new CodexAdapter({ listPublic: () => [] } as any, "/tmp") as any;
+  const calls: Array<{ method: string; params: any }> = [];
+  const turns = ["turn-1", "turn-2", "turn-3"].map((id) => ({ id }));
+  adapter.threads.set("t1", {
+    id: "t1", providerId: "acme", status: "idle", tokenUsage: { used: 10 },
+  });
+  adapter.ensureLoaded = async () => {};
+  adapter.readThread = async () => ({ turns });
+  adapter.usageStore.remove = async () => {};
+  adapter.ensure = async () => ({ request: async (method: string, params: any) => {
+    calls.push({ method, params });
+    if (method === "thread/revert" && failRevert) throw failRevert;
+    return {};
+  } });
+  return { adapter, calls, turns };
+}
+
+test("Codex undo without a target removes the latest turn", async () => {
+  const { adapter, calls } = rewindFixture();
+  assert.deepEqual(await adapter.revertSession("acme", "t1"), {
+    messageID: "turn-3", files: 0, additions: 0, deletions: 0,
+  });
+  assert.deepEqual(calls, [{ method: "thread/revert", params: { threadId: "t1", beforeTurnId: "turn-3" } }]);
+});
+
+test("older Codex rewinds selected and later turns using native rollback", async () => {
+  const { adapter, calls } = rewindFixture(new Error("unknown method thread/revert"));
+  await adapter.revertSession("acme", "t1", "turn-2");
+  assert.deepEqual(calls, [
+    { method: "thread/revert", params: { threadId: "t1", beforeTurnId: "turn-2" } },
+    { method: "thread/rollback", params: { threadId: "t1", numTurns: 2 } },
+  ]);
+  assert.equal(adapter.threads.get("t1").tokenUsage, undefined);
+});
+
+test("failed Codex revert preserves usage and never retries other errors", async () => {
+  const { adapter, calls } = rewindFixture(new Error("thread is busy"));
+  await assert.rejects(adapter.revertSession("acme", "t1", "turn-2"), /busy/);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(adapter.threads.get("t1").tokenUsage, { used: 10 });
+});
+
+test("Codex rejects cross-provider, archived, busy and empty rewinds", async () => {
+  const { adapter, calls, turns } = rewindFixture();
+  await assert.rejects(adapter.revertSession("other", "t1", "turn-2"), /不存在/);
+  const thread = adapter.threads.get("t1");
+  thread.archived = true;
+  await assert.rejects(adapter.revertSession("acme", "t1", "turn-2"), /归档/);
+  thread.archived = false;
+  for (const status of ["running", "waiting"]) {
+    thread.status = status;
+    await assert.rejects(adapter.revertSession("acme", "t1", "turn-2"), /运行中/);
+  }
+  thread.status = "idle";
+  turns.length = 0;
+  await assert.rejects(adapter.revertSession("acme", "t1"), /没有可撤回/);
+  assert.equal(calls.length, 0);
+});
+
+test("legacy Codex never rolls back an unknown target", async () => {
+  const { adapter, calls } = rewindFixture(new Error("Method not found"));
+  await assert.rejects(adapter.revertSession("acme", "t1", "missing"), /未找到/);
+  assert.equal(calls.length, 1);
+});

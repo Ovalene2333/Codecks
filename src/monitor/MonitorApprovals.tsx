@@ -6,13 +6,7 @@ import {
   type PointerEvent,
 } from "react";
 import { Button } from "../kit";
-import {
-  BellRing,
-  ChevronLeft,
-  ChevronRight,
-  ExternalLink,
-  ShieldAlert,
-} from "lucide-react";
+import { BellRing, ChevronLeft, ChevronRight, ShieldAlert } from "lucide-react";
 import type { DeckNotificationPermission } from "../notifications";
 import { ApprovalCard, type ApprovalDraft } from "../session/ApprovalCard";
 import { bulkApprovableApprovals, isGoneError } from "../session/approvalBulk";
@@ -244,19 +238,6 @@ export function MonitorApprovals({
         }}
         aria-live="polite"
       >
-        {thread ? (
-          <button
-            type="button"
-            className="approval-session-link"
-            onClick={() => onOpenThread(thread)}
-          >
-            <span>
-              <small>会话</small>
-              <b>{thread.name}</b>
-            </span>
-            <ExternalLink aria-hidden="true" />
-          </button>
-        ) : null}
         <RenderErrorBoundary
           resetKey={active.id}
           fallback={<p className="error-banner">这条审批无法显示</p>}
@@ -272,6 +253,15 @@ export function MonitorApprovals({
             draft={drafts[active.id]}
             onDraftChange={(draft) =>
               setDrafts((current) => ({ ...current, [active.id]: draft }))
+            }
+            session={
+              thread
+                ? {
+                    name: thread.name,
+                    cwd: thread.cwd,
+                    onOpen: () => onOpenThread(thread),
+                  }
+                : undefined
             }
           />
         </RenderErrorBoundary>

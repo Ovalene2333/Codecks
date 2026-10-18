@@ -1408,14 +1408,35 @@ export class CodexAdapter extends EventEmitter {
   /** In-place conversation rewind. Codex does not revert workspace files. */
   async revertSession(providerId: string, threadId: string, beforeTurnId?: string) {
     const thread = this.threads.get(threadId);
-    if (!thread) throw new Error("Codex 会话不存在");
+    if (!thread || thread.providerId !== providerId)
+      throw new Error("Codex 会话不存在");
     if (thread.status === "running" || thread.status === "waiting")
-      throw new Error("任务运行中不能编辑历史消息，请先停止任务");
-    const target = String(beforeTurnId || "").trim();
-    if (!target) throw new Error("请选择要编辑的消息");
+      throw new Error("任务运行中不能撤回或编辑历史消息，请先停止任务");
+    if (thread.archived) throw new Error("归档会话不能撤回消息");
     await this.ensureLoaded(providerId, threadId);
     const client = await this.ensure(providerId);
-    await client.request("thread/revert", { threadId, beforeTurnId: target });
+    let turns: any[] | undefined;
+    const readTurns = async () => {
+      if (!turns) {
+        const full = await this.readThread(providerId, threadId);
+        turns = Array.isArray(full?.turns) ? full.turns : [];
+      }
+      return turns!;
+    };
+    const target = beforeTurnId?.trim() || String((await readTurns()).at(-1)?.id || "");
+    if (!target) throw new Error("没有可撤回的消息");
+    try {
+      await client.request("thread/revert", { threadId, beforeTurnId: target });
+    } catch (error: unknown) {
+      // Older CLI versions expose rollback instead of revert. Only an unknown
+      // method permits retrying through the legacy protocol, never other errors.
+      if (!/unknown method|method not found|method.*not supported/i.test(String((error as any)?.message || error)))
+        throw error;
+      const history = await readTurns();
+      const index = history.findIndex((turn) => String(turn.id) === target);
+      if (index < 0) throw new Error("未找到要撤回的消息，请刷新会话后重试");
+      await client.request("thread/rollback", { threadId, numTurns: history.length - index });
+    }
     thread.status = "idle";
     thread.activeTurnId = undefined;
     thread.lastError = undefined;

@@ -369,3 +369,34 @@ test("user and assistant messages use a solid rail row for their first line", ()
   assert.match(html, /class="message-block__body"/);
   assert.doesNotMatch(html, /rail-row--message/);
 });
+
+test("assistant label appears once per user message within a turn", () => {
+  const thread: ThreadSummary = {
+    id: "thread-rail-continued",
+    providerId: "official",
+    name: "会话",
+    preview: "",
+    cwd: "/tmp/project",
+    model: "gpt",
+    status: "idle",
+    updatedAt: Date.now(),
+  };
+  const html = renderToStaticMarkup(
+    createElement(TurnBlock, {
+      turn: {
+        id: "turn-continued",
+        status: "completed",
+        items: [
+          { id: "u1", type: "userMessage", text: "问题" },
+          { id: "a1", type: "agentMessage", text: "先看看" },
+          { id: "c1", type: "commandExecution", command: "ls", status: "completed", exitCode: 0 },
+          { id: "a2", type: "agentMessage", text: "改好了" },
+        ],
+      },
+      index: 1,
+      thread,
+    }),
+  );
+  assert.equal((html.match(/>助手</g) || []).length, 1);
+  assert.match(html, /message-block--continued/);
+});

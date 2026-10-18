@@ -275,37 +275,40 @@
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
 }
+/* 会话起点：轨道语法里的「第 0 行」——与工具行同一图标/文字锚点，
+   不再是悬在中间的描边框。 */
 .session-meta {
-  margin: 0 auto 28px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  font-family: var(--font-sans);
-  font-size: var(--fs-meta);
   display: flex;
   align-items: center;
-  gap: 7px;
-  width: max-content;
-  max-width: 100%;
+  gap: 8px;
   min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
+  margin: 0 0 18px;
+  padding: 0 0 0 10px;
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
 }
 .session-meta svg {
   width: 13px;
+  height: 13px;
   flex: none;
+  transform: translateY(-0.5px);
 }
 .session-meta-cwd {
   min-width: 0;
-  flex: 1 999 auto;
+  flex: 0 999 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .session-meta-model {
-  border-left: 1px solid var(--line-strong);
   padding-left: 8px;
-  margin-left: 2px;
+  margin-left: 0;
+  border-left: 1px solid var(--line);
+  font-family: var(--font-mono);
   min-width: 0;
   flex: 0 1 auto;
   overflow: hidden;
@@ -365,22 +368,32 @@
   background: var(--control-hover);
   color: var(--text);
 }
+/* 分支来源：紧跟会话起点行，同一锚点；可点，hover 只提亮文字。 */
 .origin-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: fit-content;
-  margin: 0 auto 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
+  max-width: 100%;
+  min-height: 26px;
+  margin: -14px 0 18px;
+  padding: 0 0 0 10px;
+  border: 0;
+  background: transparent;
   color: var(--text-dim);
-  padding: 6px 10px;
   font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+  text-align: left;
   cursor: pointer;
+}
+.origin-chip:hover,
+.origin-chip:focus-visible {
+  color: var(--text);
 }
 .origin-chip svg {
   width: 13px;
+  height: 13px;
+  flex: none;
 }
 .turn-block {
   margin: 0 0 6px;
@@ -632,9 +645,9 @@
   background: var(--surface-muted);
 }
 .timeline .tool-item {
-  margin: 2px 0;
+  margin: 0;
   border: 0;
-  border-left: 2px solid var(--line-strong);
+  border-left: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--text-dim);
@@ -685,8 +698,8 @@
 /* 独立图片项与工具行同一语言：左竖条、透明底、暗色小字；
    加载占位按钮不再画成带边框的卡片。 */
 .timeline .image-message {
-  margin: 2px 0;
-  border-left: 2px solid var(--line-strong);
+  margin: 0;
+  border-left: 2px solid transparent;
   color: var(--text-dim);
   font-size: var(--fs-meta);
 }
@@ -755,12 +768,8 @@
   margin: 4px 0 6px;
 }
 .tool-row.reasoning {
-  border-color: var(--line-strong);
   background: transparent;
   color: var(--text-dim);
-}
-.todo-row {
-  border-color: var(--line-strong);
 }
 .todo-head {
   display: flex;
@@ -841,34 +850,7 @@
   padding: 3px 7px;
   cursor: pointer;
 }
-.command-card,
-.command-row {
-  border-left-color: var(--line-strong);
-}
-.command-card.running,
-.command-row.running {
-  border-left-color: var(--wait);
-}
-.command-card.ok,
-.command-row.ok {
-  border-left-color: var(--ok);
-}
-.command-card.failed,
-.command-row.failed {
-  border-left-color: var(--danger);
-}
-.subagent-row {
-  border-left-color: var(--line-strong);
-}
-.subagent-row.running {
-  border-left-color: var(--wait);
-}
-.subagent-row.ok {
-  border-left-color: var(--ok);
-}
-.subagent-row.failed {
-  border-left-color: var(--danger);
-}
+/* 行状态色（running/failed/interrupted）统一在「Rail」段里定义。 */
 .subagent-row.running .tool-action {
   color: var(--wait);
 }
@@ -905,10 +887,6 @@
 }
 /* Codex 多代理 tick：与子代理卡片同一语言，interrupted 用警示色竖条；
    成串出现时收进 .subagent-ticks 分组，展开逐条列出。 */
-.subagent-row.interrupted,
-.subagent-ticks.interrupted {
-  border-left-color: var(--wait);
-}
 .timeline .subagent-ticks > ul {
   display: grid;
   gap: 4px;
@@ -952,20 +930,6 @@
 .tool-action.changes {
   color: var(--text-dim);
 }
-.tool-group,
-.file-change-group {
-  border-left-color: var(--line-strong) !important;
-}
-.tool-group.running,
-.file-change-group.running,
-.tool-call-row.running {
-  border-left-color: var(--wait) !important;
-}
-.tool-group.failed,
-.file-change-group.failed,
-.tool-call-row.failed {
-  border-left-color: var(--danger) !important;
-}
 .timeline .tool-group > .tool-group-list {
   display: grid;
   gap: 5px;
@@ -1001,9 +965,6 @@
   font-size: var(--fs-meta);
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-.read-summary {
-  border-left-color: var(--text-dim) !important;
 }
 .read-summary summary strong {
   flex: none;
@@ -1064,10 +1025,6 @@
 }
 /* 未识别条目与工具行同一语言（左竖条+单行+展开 JSON），虚线竖条保留
    「这是兜底渲染」的暗示，文字再压暗一档。 */
-.timeline .unknown-item {
-  border-left-style: dashed;
-  border-left-color: var(--line);
-}
 .unknown-item .tool-action,
 .unknown-item .tool-command {
   color: var(--text-faint);
@@ -1132,25 +1089,7 @@
   color: var(--text-dim);
   font-size: var(--fs-meta);
 }
-.approval-card {
-  border: 1px solid var(--warning-border);
-  background: var(--surface);
-}
-.approval-cwd {
-  margin: 0 14px 8px;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  font-size: var(--fs-meta);
-}
-.approval-command {
-  margin: 0 12px 10px;
-  padding: 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
-  font-family: var(--font-mono);
-  font-size: var(--fs-meta);
-  white-space: pre-wrap;
-}
+
 .permission-list,
 .question-block {
   display: grid;
@@ -1159,11 +1098,15 @@
   color: var(--text-soft);
   font-size: var(--fs-meta);
 }
+/* 输入框与时间线共用同一内容列（--session-width），左右边缘对齐。
+   时间线常驻滚动条槽位，右侧补上同宽留白（--scrollbar-gutter 由
+   Timeline 运行时量出，缺省 0）。 */
 .composer {
   flex: none;
   position: relative;
-  padding: 10px max(30px, calc((100% - 760px) / 2))
-    max(14px, env(safe-area-inset-bottom));
+  --column-pad: max(30px, calc((100% - var(--session-width, 980px)) / 2));
+  padding: 10px calc(var(--column-pad) + var(--scrollbar-gutter, 0px))
+    max(14px, env(safe-area-inset-bottom)) var(--column-pad);
   background: linear-gradient(transparent, var(--composer-fade) 16px);
 }
 .composer-session-controls {
@@ -2075,35 +2018,62 @@ button.composer-context-seg:focus-visible {
     opacity: 0.35;
   }
 }
-/* ── Rail row（轨道行） ──────────────────────────────────────────
-   同一条 git-graph 式左轨上的一切行共用「rail-row」基类与视觉语法：
-   工具行/思考/子代理/todo 走 .rail-row + 既有语义类（tool-row 等），
-   回合收针行是宽变体 .rail-row--meta（--tm-* 作用域令牌），形态：
-   进行中   扳手 + 阶段词 + 用时 + TPS（全靠左）；
-   收针后   ⑂ 创建分支 + 用时 + TPS 靠左，右端 第 n 轮 / 结束时间 /
-            模型-effort；中缝留白撑开。
-   列宽对齐规则只看令牌，不散落魔法数。 */
+/* ── Rail（轨道） ────────────────────────────────────────────────
+   一轮对话 = 一条连续的左轨。轨道线由 .turn-block::before 画出、贯穿
+   整轮（用户提问、助手正文、工具行、收针行），行与行之间不再断开。
+   每一行自己的 2px 左边默认透明，只在需要表达状态时着色、盖在轨道上：
+     running / waiting → --wait，failed → --danger，其余保持轨道本色。
+   几何锚点（所有行共用）：
+     轨道 x=0..2；行首图标 x=10..23；文字/正文起始 x=31（--rail-text）。
+   回合收针行是宽变体 .rail-row--meta（--tm-* 作用域令牌）：
+     进行中   脉冲点 + [具体阶段词] + 用时 + TPS（全靠左）；
+     收针后   ⑂ 分支 + 用时 + TPS 靠左，右端 第 n 轮 / 结束时间 /
+              模型-effort；中缝留白撑开。 */
+.timeline {
+  --rail-line: var(--line-strong);
+  --rail-text: 31px;
+}
+.turn-block,
+.session-message-queue {
+  position: relative;
+}
+.turn-block::before,
+.session-message-queue::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--rail-line);
+  pointer-events: none;
+}
 .rail-row,
 .timeline .tool-row {
-  margin: 1px 0;
+  position: relative;
+  margin: 0;
   border: 0;
-  border-left: 2px solid var(--line-strong);
+  border-left: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--text-dim);
   font-size: var(--fs-meta);
 }
+/* 状态色段：只给「需要注意」的状态上色，成功行保持轨道本色，
+   避免满屏绿条。 */
+.timeline :is(.tool-row, .tool-item).running,
+.timeline :is(.subagent-row, .subagent-ticks).interrupted {
+  border-left-color: var(--wait);
+}
+.timeline :is(.tool-row, .tool-item).failed {
+  border-left-color: var(--danger);
+}
 .process-group > .process-group__body {
   padding-left: var(--space-3);
 }
-/* 消息：只有第一行走实线 rail-row，正文在轨道外自然展开。
-   同一会话里工具行、消息首行都保持一格一格的轨道节奏，
-   又不会让整段长文占一条超宽虚线。 */
-.rail-row.todo-row {
-  border-left-style: dashed;
-}
 .message-block {
-  margin: 1px 0;
+  margin: 0;
 }
 .message-block__head {
   display: flex;
@@ -2122,11 +2092,24 @@ button.composer-context-seg:focus-visible {
   color: var(--text-faint);
   transform: translateY(-0.5px);
 }
+.message-block--user .message-block__head > svg,
 .message-block--user .message-block__who {
   color: var(--text-soft);
 }
+.message-block--user .message-block__who {
+  font-weight: var(--fw-medium);
+}
 .message-block--agent .message-block__who {
   color: var(--text-dim);
+}
+/* 同一轮的后续助手段落：没有头行，正文与上一段之间留一点呼吸。 */
+.message-block--continued {
+  padding-top: 4px;
+}
+.message-block__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 0 2px var(--rail-text);
 }
 .rail-row__head-right {
   display: flex;
@@ -2156,19 +2139,33 @@ button.composer-context-seg:focus-visible {
 }
 .message-block__body {
   min-width: 0;
-  padding: 1px 0 1px 31px;
+  padding: 1px 0 1px var(--rail-text);
 }
 .message-block__body .message {
   max-width: min(100%, var(--message-width, 100%));
   margin: 0;
   padding: 0;
 }
+/* 用户提问是每一轮的锚点：轻底色面板 + 正文主色，扫读时一眼找到
+   「这一轮问了什么」；宽度随内容，不超过消息行宽。 */
 .message-block--user .message-block__body .message.user {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  width: fit-content;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   box-shadow: none;
-  color: var(--text-soft);
+  color: var(--text);
+}
+.message-block--user .message-block__body {
+  padding-bottom: 6px;
+}
+/* 轮与轮之间留出明确的间隔：轨道在这里断开，就是回合边界。 */
+.turn-block {
+  margin: 0 0 22px;
+}
+.turn-block:last-child {
+  margin-bottom: 6px;
 }
 /* 待发消息复用首行轨道，但保留队列自己的操作按钮布局。 */
 .message-block.user-message-wrap {
@@ -2191,6 +2188,9 @@ button.composer-context-seg:focus-visible {
     min-height: 38px;
   }
   .turn-block {
+    margin-bottom: 16px;
+  }
+  .turn-block:last-child {
     margin-bottom: 4px;
   }
 }
@@ -2223,15 +2223,33 @@ button.composer-context-seg:focus-visible {
   color: var(--text-faint);
   transform: translateY(-0.5px);
 }
-.rail-row--running > svg {
-  color: var(--ok);
+/* 进行中的节点：与侧栏「运行中」同款的状态点，占图标同宽的格子，
+   用时列与工具行文字同一起始线。 */
+.rail-row__pulse {
+  display: grid;
+  flex: none;
+  width: var(--tm-icon);
+  height: var(--tm-icon);
+  place-items: center;
+}
+.rail-row__pulse::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
   animation: pulse 1.6s ease-in-out infinite;
 }
-.rail-row--waiting > svg {
-  color: var(--wait);
+.rail-row--waiting .rail-row__pulse::before {
+  background: var(--wait);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wait) 18%, transparent);
+}
+.rail-row--running .rail-row__usage {
+  color: var(--text-dim);
 }
 @media (prefers-reduced-motion: reduce) {
-  .rail-row--running > svg {
+  .rail-row__pulse::before {
     animation: none;
   }
 }
@@ -2322,10 +2340,6 @@ button.composer-context-seg:focus-visible {
   flex: none;
   color: var(--text-faint);
 }
-/* 窄屏两行布局的断行点：桌面永远是死元素。 */
-.rail-row--meta .rail-row__break {
-  display: none;
-}
 @media (max-width: 1100px) {
   .toolbar-select :is(select, .ui-select-trigger),
   .toolbar-select input {
@@ -2338,48 +2352,27 @@ button.composer-context-seg:focus-visible {
   .rail-row--meta {
     min-height: 38px;
   }
-  /* 窄屏收针行变两行（信息保全，不再裁掉模型）：
-     第一行 ⑂ 创建分支 ····· 第n轮 HH:MM；第二行 用时 tps ····· 模型-effort。
-     令牌放开为内容宽 + order 重排 + 全宽断行点换行；
-     模型列收回自适应宽度、可收缩截断。 */
+  /* 窄屏收针行保持一行：⑂ 用时 ····· 第n轮 HH:MM 模型-effort。
+     分支只留图标（title/aria 保留全称），TPS 让位（各段统计里仍可见），
+     模型列吃掉剩余宽度、在列内省略，悬停/长按 title 看全称。 */
   .rail-row--meta:not(.rail-row--running) {
     --tm-min-usage: 0;
     --tm-min-tps: 0;
-    --tm-min-round: 3.5em;
+    --tm-min-round: 0;
     --tm-min-end: 0;
     --tm-min-model: 0;
-    flex-wrap: wrap;
-    row-gap: 2px;
-    min-height: 44px;
   }
-  .rail-row--meta:not(.rail-row--running) .rail-row__round {
-    margin-left: auto;
+  .rail-row--meta:not(.rail-row--running) .rail-row__fork {
+    min-width: 28px;
+    min-height: 32px;
   }
-  .rail-row--meta:not(.rail-row--running) .rail-row__break {
-    order: 4;
-    display: block;
-    flex: 0 0 100%;
-    height: 0;
-    min-height: 0;
-  }
-  .rail-row--meta:not(.rail-row--running) .rail-row__usage {
-    order: 5;
-  }
+  .rail-row--meta:not(.rail-row--running) .rail-row__fork > span,
   .rail-row--meta:not(.rail-row--running) .rail-row__tps {
-    order: 6;
-  }
-  /* 窄屏第二行由 usage / tps / model 分享；不要再放一个 flex:1 的
-     中缝，否则它会吃满整行，把长模型名挤到第三行。 */
-  .rail-row--meta:not(.rail-row--running) .rail-row__spacer {
     display: none;
   }
-  /* 模型列吃掉第二行剩余宽度：短名右对齐，长名在列内省略，
-     不会因为 flex-basis 是内容宽而把整行挤到第三行。 */
   .rail-row--meta:not(.rail-row--running) .rail-row__model {
-    order: 8;
     display: flex;
-    flex: 1 1 0;
-    justify-content: flex-end;
+    flex: 0 1 auto;
     min-width: 0;
   }
   .rail-row--meta:not(.rail-row--running) .rail-row__model > span {
@@ -2617,9 +2610,7 @@ button.composer-context-seg:focus-visible {
   .timeline-turns {
     order: 2;
   }
-  .approval-actions {
-    flex-direction: column;
-  }
+
   .overflow-menu {
     min-width: 40px;
     min-height: 40px;
@@ -2740,233 +2731,6 @@ button.composer-context-seg:focus-visible {
 .message-table-number {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-}
-
-/* 审批操作按钮已迁 kit Button：外观走 .ui-btn，这里只管布局。 */
-.approval-actions > button {
-  flex: 0 1 auto;
-  min-width: 96px;
-}
-
-.approval-card {
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  margin: 18px 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  box-shadow: none;
-  border-color: var(--line);
-  color: var(--text);
-  animation: content-enter 180ms ease-out both;
-}
-
-.approval-card .approval-actions {
-  display: flex;
-  flex-direction: row;
-  flex: none;
-  flex-wrap: wrap;
-}
-
-.approval-card .approval-actions > button {
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  min-height: 36px;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.approval-card .approval-command {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  overflow: auto;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-size: var(--fs-meta);
-  line-height: var(--lh-body);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.approval-card .approval-command-wrap {
-  grid-template-columns: 16px minmax(0, 1fr) auto;
-}
-
-.approval-command-wrap {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: start;
-  gap: 9px;
-  margin: 0 16px 14px 42px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
-  color: var(--text-soft);
-  border-color: var(--line);
-}
-
-.approval-command-wrap > svg {
-  width: 15px;
-  height: 15px;
-  margin-top: 1px;
-  color: var(--text-faint);
-  stroke-width: 1.8;
-}
-
-.approval-content {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.approval-copy-command {
-  display: inline-flex;
-  align-items: center;
-  align-self: start;
-  gap: var(--space-1);
-  min-height: 28px;
-  margin: -5px -5px -5px 0;
-  padding: 0 var(--space-1);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-  cursor: pointer;
-}
-
-.approval-copy-command svg {
-  width: 13px;
-  height: 13px;
-}
-
-.approval-copy-command:hover {
-  background: var(--control-hover);
-  color: var(--text);
-}
-
-.approval-cwd {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 0 16px 10px 42px;
-  line-height: var(--lh-ui);
-}
-
-.approval-cwd span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.approval-cwd svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.8;
-}
-
-.approval-file-count {
-  margin: 0 15px var(--space-2);
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-}
-
-.approval-icon {
-  display: grid;
-  flex: none;
-  width: 16px;
-  height: 20px;
-  place-items: center;
-  color: var(--wait);
-  border-color: color-mix(in srgb, var(--wait) 35%, var(--line));
-  background: color-mix(in srgb, var(--wait) 10%, var(--surface));
-}
-
-.approval-icon svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 1.8;
-}
-
-.approval-more-options {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-  margin: 0 15px 15px;
-  padding: var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-}
-
-.approval-more-options label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 44px;
-  padding: var(--space-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.approval-more-options label span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.approval-more-options label:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.approval-more-options legend {
-  padding: 0 var(--space-1);
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-}
-
-.approval-more-options[hidden] {
-  display: none;
-}
-
-.approval-permission-hint {
-  margin: 0 16px var(--space-2) 42px;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-}
-
-.approval-reason {
-  margin: 0;
-  padding: 0 16px 12px 42px;
-  color: var(--text-soft);
-  font-size: var(--fs-body);
-  line-height: var(--lh-body);
-  overflow-wrap: anywhere;
-}
-
-.approval-resolve-error {
-  flex: none;
-  margin: 0;
-  padding: var(--space-2) 15px;
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-meta);
-  line-height: var(--lh-ui);
-  background: var(--danger-bg);
-  color: var(--danger-text);
-}
-
-.approval-title > div {
-  min-width: 0;
 }
 
 .chat {
@@ -3093,11 +2857,6 @@ button.composer-context-seg:focus-visible {
 
 .optimistic-turn {
   animation: content-enter 180ms ease-out both;
-}
-
-.origin-chip {
-  background: var(--surface-muted);
-  border-color: var(--line);
 }
 
 .permission-list {
@@ -3304,10 +3063,6 @@ button.composer-context-seg:focus-visible {
   animation: status-breathe 1.6s ease-in-out infinite;
 }
 
-.timeline .tool-item {
-  border-left-color: var(--line-strong);
-}
-
 .timeline .tool-item > div {
   border-color: var(--line);
   color: var(--text-soft);
@@ -3316,10 +3071,6 @@ button.composer-context-seg:focus-visible {
 .timeline .tool-item pre {
   border-color: var(--line);
   color: var(--text-soft);
-}
-
-.timeline .tool-row {
-  border-left-color: var(--line-strong);
 }
 
 .timeline .tool-row > div {
@@ -3399,91 +3150,6 @@ button.composer-context-seg:focus-visible {
 }
 
 @media (max-width: 760px) {
-  .approval-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    padding: 10px 13px 13px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-actions > button {
-    width: 100%;
-    min-width: 0;
-    min-height: var(--touch-h);
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-actions > button:last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-actions > button:only-child {
-    grid-column: 1 / -1;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-card {
-    margin: 10px 0 14px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-card .approval-actions > button {
-    min-height: var(--touch-h);
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-command-wrap {
-    margin: 0 13px 12px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-cwd {
-    padding: 0 13px 10px 39px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-file-count {
-    margin-right: 13px;
-    margin-left: 13px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-more-options {
-    margin-right: 13px;
-    margin-left: 13px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-permission-hint {
-    margin-left: 13px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-reason {
-    padding: 0 13px 10px 39px;
-  }
-}
-
-@media (max-width: 760px) {
-  .approval-title {
-    padding: 13px 13px 10px;
-  }
-}
-
-@media (max-width: 760px) {
   .chat-header-actions {
     gap: 4px;
   }
@@ -3506,5 +3172,23 @@ button.composer-context-seg:focus-visible {
 @media (max-width: 760px) {
   .recent-create {
     min-height: 44px;
+  }
+}
+
+/* 长工具输出读到底部后可直接收起；按钮不复用内容区的 div 样式。 */
+.rail-details-collapse.ui-btn {
+  display: none;
+  width: calc(100% - 16px);
+  min-height: 32px;
+  margin: 6px 8px 8px;
+}
+
+details[open] > .rail-details-collapse.ui-btn {
+  display: flex;
+}
+
+@media (max-width: 760px) {
+  .rail-details-collapse.ui-btn {
+    min-height: var(--touch-h);
   }
 }

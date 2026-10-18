@@ -1747,7 +1747,8 @@ app.post(
   "/api/agents/:agentId/threads/:threadId/revert",
   route(async (req) => {
     const id = agentId(req.params.agentId);
-    if (id !== "opencode") throw new Error("该 Agent 暂不支持撤回消息");
+    if (id !== "opencode" && id !== "codex")
+      throw new Error("该 Agent 暂不支持撤回消息");
     const input = z
       .object({ messageID: z.string().min(1).max(200).optional() })
       .parse(req.body || {});

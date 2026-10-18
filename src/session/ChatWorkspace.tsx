@@ -1005,7 +1005,7 @@ export function ChatWorkspace({
       setRevertConfirm(undefined);
     }
   };
-  /** Timeline 按条“撤回”按钮：opencode 专属，复用同一确认链路。 */
+  /** Timeline 按条撤回复用统一确认链路。 */
   const openMessageRevert = (turnId: string, item: any) => {
     if (locked || sending || thread.compacting) return;
     const text = displayText(userMessageText(item)).trim().slice(0, 42);
@@ -1278,7 +1278,7 @@ export function ChatWorkspace({
               : undefined
           }
           onRevertUserMessage={
-            (thread.agentId || "codex") === "opencode"
+            ["codex", "opencode"].includes(thread.agentId || "codex")
               ? openMessageRevert
               : undefined
           }
@@ -1418,9 +1418,13 @@ export function ChatWorkspace({
                   {revertConfirm.mode === "message"
                     ? "及之后全部回复"
                     : "所在最近一轮及之后全部回复"}
-                  ，并恢复相关文件。提交过的重要改动请先自行备份。
+                  {(thread.agentId || "codex") === "codex"
+                    ? "。仅回退对话历史，工作区文件不会自动恢复。"
+                    : "，并恢复相关文件。提交过的重要改动请先自行备份。"}
                 </p>
-                <p>若项目不是 git 仓库，仅回滚对话、不恢复文件。</p>
+                {(thread.agentId || "codex") !== "codex" ? (
+                  <p>若项目不是 git 仓库，仅回滚对话、不恢复文件。</p>
+                ) : null}
                 <p>
                   只想换个说法重试、又不想丢历史时，请取消并改用消息旁的「从此重试」或每轮下的「从此处分支」。
                 </p>

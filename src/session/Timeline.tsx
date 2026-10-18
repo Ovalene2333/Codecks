@@ -141,8 +141,17 @@ export function Timeline({
     const element = timeline.current;
     if (!element) return;
     viewportHeight.current = element.clientHeight;
+    // 时间线常驻滚动条槽位；把槽宽交给同列的输入框/审批条，两者左右缘
+    // 才能与轨道对齐（覆盖式滚动条为 0）。
+    const syncGutter = () =>
+      element.parentElement?.style.setProperty(
+        "--scrollbar-gutter",
+        `${Math.max(0, element.offsetWidth - element.clientWidth)}px`,
+      );
+    syncGutter();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
+      syncGutter();
       if (element.clientHeight === viewportHeight.current) return;
       viewportHeight.current = element.clientHeight;
       // 输入框换行/虚拟键盘会改变消息区高度。贴底继续贴底；

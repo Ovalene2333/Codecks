@@ -1,3 +1,4 @@
+import { RailDetails } from "./RailDetails";
 import {
   Fragment,
   memo,
@@ -86,7 +87,7 @@ function UnknownItem({ item }: { item: any }) {
     item?.title || item?.command || item?.path || item?.tool || item?.name,
   );
   return (
-    <details className="rail-row tool-row unknown-item">
+    <RailDetails className="rail-row tool-row unknown-item">
       <summary>
         <Puzzle />
         <span className="tool-action">{type}</span>
@@ -97,7 +98,7 @@ function UnknownItem({ item }: { item: any }) {
         ) : null}
       </summary>
       <pre>{raw}</pre>
-    </details>
+    </RailDetails>
   );
 }
 
@@ -135,7 +136,7 @@ function SubAgentCard({
   }, [state]);
   return (
     <div className={`rail-row tool-row subagent-row ${state}`}>
-      <details
+      <RailDetails
         open={open}
         onToggle={(event) => setOpen(event.currentTarget.open)}
       >
@@ -165,7 +166,7 @@ function SubAgentCard({
           turnId={turnId}
           onExpandTurn={onExpandTurn}
         />
-      </details>
+      </RailDetails>
     </div>
   );
 }
@@ -220,10 +221,13 @@ function TurnItemInner({
   thread,
   turnId,
   onExpandTurn,
+  continued,
 }: {
   item: any;
   streamed?: string;
   streaming?: boolean;
+  /** 本轮前面已出现过助手消息：头行省略，见 MessageRow。 */
+  continued?: boolean;
   cwd?: string;
   onCopy?: () => void;
   onEditUserMessage?: (item: any) => void;
@@ -333,7 +337,7 @@ function TurnItemInner({
     // 该条回复自己的生成统计（用时/TPS，服务端在 item 上盖章）。
     const itemStats = statsLine(item.stats);
     return (
-      <MessageRow role="agent" meta={itemStats || undefined}>
+      <MessageRow role="agent" meta={itemStats || undefined} continued={continued}>
         <div className={`message agent ${streaming ? "streaming" : ""}`}>
           <AssistantMarkdown
             text={streamed !== undefined ? streamed : displayText(item.text)}
@@ -359,7 +363,7 @@ function TurnItemInner({
   }
   if (item.type === "reasoning")
     return (
-      <details className="rail-row tool-row reasoning">
+      <RailDetails className="rail-row tool-row reasoning">
         <summary>
           <Activity />
           思考过程
@@ -368,7 +372,7 @@ function TurnItemInner({
           <div className="tool-time">{statsLine(item.stats)}</div>
         ) : null}
         <div>{reasoningText(item)}</div>
-      </details>
+      </RailDetails>
     );
   if (item.type === "subagent") {
     const state =
@@ -521,7 +525,7 @@ function TurnItemInner({
             .filter(Boolean)
             .join("\n\n");
     return (
-      <details
+      <RailDetails
         className={`rail-row tool-row command-row ${presentation.kind}-row ${state}`}
       >
         <summary>
@@ -550,7 +554,7 @@ function TurnItemInner({
         ) : null}
         {detail ? <pre>{detail}</pre> : null}
         <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
-      </details>
+      </RailDetails>
     );
   }
   if (item.type === "fileChange")
@@ -572,7 +576,7 @@ function TurnItemInner({
       .filter(Boolean)
       .join("\n\n");
     return (
-      <details className={`rail-row tool-row tool-call-row ${state}`}>
+      <RailDetails className={`rail-row tool-row tool-call-row ${state}`}>
         <summary>
           <Wrench />
           <span className="tool-action">{tool}</span>
@@ -585,7 +589,7 @@ function TurnItemInner({
         <ToolTime item={item} />
         {detail ? <pre>{detail}</pre> : null}
         <FoldedLoad item={item} turnId={turnId} onExpandTurn={onExpandTurn} />
-      </details>
+      </RailDetails>
     );
   }
   // 裸图片项（imageView/imageGeneration 等没有专属渲染器的类型）兜底——
@@ -622,15 +626,31 @@ function MessageRow({
   role,
   meta,
   actions,
+  continued = false,
   className = "",
   children,
 }: {
   role: "user" | "agent";
   meta?: ReactNode;
   actions?: ReactNode;
+  /** 同一轮里助手的后续段落：不再重复「助手」头行，统计挪到段尾弱显示。 */
+  continued?: boolean;
   className?: string;
   children: ReactNode;
 }) {
+  if (continued)
+    return (
+      <div
+        className={`message-block message-block--${role} message-block--continued ${className}`.trim()}
+      >
+        <div className="message-block__body">{children}</div>
+        {meta ? (
+          <div className="message-block__foot">
+            <span className="rail-row__meta">{meta}</span>
+          </div>
+        ) : null}
+      </div>
+    );
   const Icon = role === "user" ? UserRound : Sparkles;
   return (
     <div
@@ -678,7 +698,7 @@ function FileChangeGroup({
     0,
   );
   return (
-    <details className={`rail-row tool-row file-change-group ${state}`}>
+    <RailDetails className={`rail-row tool-row file-change-group ${state}`}>
       <summary>
         <Files />
         <span className={`tool-action ${label}`}>{changeKindText(label)}</span>
@@ -694,7 +714,7 @@ function FileChangeGroup({
           />
         ) : null}
       </div>
-    </details>
+    </RailDetails>
   );
 }
 
@@ -733,7 +753,7 @@ function ToolGroup({
     0,
   );
   return (
-    <details
+    <RailDetails
       className={`rail-row tool-row tool-group edit-group ${state}`}
       title={items.length > 1 ? `共 ${items.length} 次` : undefined}
     >
@@ -773,7 +793,7 @@ function ToolGroup({
           onExpandTurn={onExpandTurn}
         />
       ) : null}
-    </details>
+    </RailDetails>
   );
 }
 
@@ -810,7 +830,7 @@ function FileTouchGroup({
       ? "编辑"
       : "读取";
   return (
-    <details className={`rail-row tool-row file-touch-group ${state}`}>
+    <RailDetails className={`rail-row tool-row file-touch-group ${state}`}>
       <summary>
         {bothKinds || actions[0]?.kind === "edit" ? (
           <Pencil />
@@ -832,7 +852,7 @@ function FileTouchGroup({
         ))}
       </ul>
       <FoldedLoad item={items[0]} turnId={turnId} onExpandTurn={onExpandTurn} />
-    </details>
+    </RailDetails>
   );
 }
 
@@ -845,7 +865,7 @@ function SubAgentTickGroup({ items }: { items: any[] }) {
     ...new Set(items.map(subAgentActivityName).filter(Boolean)),
   ];
   return (
-    <details
+    <RailDetails
       className={`rail-row tool-row subagent-row subagent-ticks ${kinds.includes("interrupted") ? "interrupted" : "ok"}`}
     >
       <summary>
@@ -872,14 +892,14 @@ function SubAgentTickGroup({ items }: { items: any[] }) {
           );
         })}
       </ul>
-    </details>
+    </RailDetails>
   );
 }
 
 function ReadSummary({ targets }: { targets: string[] }) {
   if (targets.length === 0) return null;
   return (
-    <details className="rail-row tool-row read-summary">
+    <RailDetails className="rail-row tool-row read-summary">
       <summary>
         <BookOpenText />
         <span className="tool-action read">本轮已读取</span>
@@ -895,7 +915,7 @@ function ReadSummary({ targets }: { targets: string[] }) {
           </li>
         ))}
       </ul>
-    </details>
+    </RailDetails>
   );
 }
 
@@ -985,7 +1005,7 @@ function ProcessGroup({
     if (target) setOpen(true);
   }, [target, targetRequest]);
   return (
-    <details
+    <RailDetails
       className="rail-row tool-row process-group"
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
@@ -996,7 +1016,7 @@ function ProcessGroup({
         <span className="file-change-count">{count} 项</span>
       </summary>
       <div className="process-group__body">{children}</div>
-    </details>
+    </RailDetails>
   );
 }
 
@@ -1232,6 +1252,24 @@ function TurnBlockInner({
   const model = turn.model || thread.resolvedModel || thread.model;
   const effort = turn.model ? turn.reasoningEffort : thread.reasoningEffort;
   const stats = statsLine(turn.stats);
+  // 「助手」头行每段用户消息之后只出现一次：同一轮里的后续 commentary /
+  // 最终回复沿轨道直接续写，避免一轮里反复出现同一个标签。
+  const continuedAgent = new Set<number>();
+  {
+    let seenAgent = false;
+    renderEntries.forEach((entry, entryIndex) => {
+      const type =
+        entry.kind === "message"
+          ? "agentMessage"
+          : entry.kind === "item"
+            ? String(entry.item?.type || "")
+            : "";
+      if (type === "userMessage" || pendingBefore.has(entryIndex)) seenAgent = false;
+      if (type !== "agentMessage") return;
+      if (seenAgent) continuedAgent.add(entryIndex);
+      seenAgent = true;
+    });
+  }
 
   const renderUnit = (entry: LiveUnit, itemIndex: number) => {
     const pendingMarkup = (pendingBefore.get(itemIndex) || []).map(
@@ -1244,7 +1282,11 @@ function TurnBlockInner({
       return (
         <Fragment key={`live-msg-${message.itemId}`}>
           {pendingMarkup}
-          <MessageRow role="agent" className="streaming-message-row">
+          <MessageRow
+            role="agent"
+            className="streaming-message-row"
+            continued={continuedAgent.has(itemIndex)}
+          >
             <div
               className={`message agent ${message.itemId === streamingItemId ? "streaming" : ""}`}
             >
@@ -1317,6 +1359,7 @@ function TurnBlockInner({
         item={item}
         streamed={liveText}
         streaming={String(item.id) === streamingItemId}
+        continued={continuedAgent.has(itemIndex)}
         cwd={thread.cwd}
         onCopy={onCopy}
         onEditUserMessage={
@@ -1367,7 +1410,6 @@ function TurnBlockInner({
       className={`turn-block ${active ? "active" : ""} ${highlighted ? "search-target" : ""}`}
       data-turn-id={turn?.id ? String(turn.id) : undefined}
     >
-      <ReadSummary targets={readTargets} />
       {renderChunks.map((chunk) => {
         if (chunk.kind === "process")
           return (
@@ -1389,6 +1431,8 @@ function TurnBlockInner({
       {pendingAtEnd.map((message) => (
         <OptimisticUserMessage key={message.id} message={message} />
       ))}
+      {/* 本轮读取汇总是回合的结论，放在收针行之前，不再压在用户提问上面。 */}
+      {completed ? <ReadSummary targets={readTargets} /> : null}
       <TurnMetaLine
         thread={thread}
         turn={turn}
@@ -1456,13 +1500,16 @@ function TurnMetaLine({
       turnProgress.turnId === String(turn.id))
       ? turnProgress
       : undefined;
-  const phaseLabel = waiting
+  // 具体阶段（等待确认/思考/输出）才写阶段词；泛化的「正在运行」不再重复
+  // 上一行「正在执行 xxx」的信息，状态行只剩秒表和速度。
+  const specificPhase = waiting
     ? "等待确认"
     : stepType === "reasoning"
       ? "正在思考"
       : stepType === "agentMessage"
         ? "输出回复"
-        : "正在运行";
+        : "";
+  const phaseLabel = specificPhase || "正在运行";
   const startedAt = activity?.turnStartedAt ?? started ?? now;
   // 回合时长使用简洁的「x.x s」文案；
   // 结束回合用 turn.stats 的终值，共用同一列宽与运行态跨行对齐。
@@ -1482,8 +1529,10 @@ function TurnMetaLine({
         className={`rail-row rail-row--meta rail-row--running${waiting ? " rail-row--waiting" : ""}`}
         aria-label={`第 ${index} 轮，${phaseLabel}`}
       >
-        <Wrench />
-        <span className="rail-row__phase">{phaseLabel}</span>
+        <i className="rail-row__pulse" aria-hidden="true" />
+        {specificPhase ? (
+          <span className="rail-row__phase">{specificPhase}</span>
+        ) : null}
         <span className="rail-row__usage">{usageText}</span>
         <span className="rail-row__tps">{tpsText}</span>
       </div>
@@ -1509,7 +1558,7 @@ function TurnMetaLine({
           aria-label="从此处分支"
         >
           <GitFork />
-          创建分支
+          <span>分支</span>
         </button>
       ) : null}
       <span className="rail-row__usage">{usageText}</span>
@@ -1517,8 +1566,6 @@ function TurnMetaLine({
       <span className="rail-row__spacer" aria-hidden="true" />
       <span className="rail-row__round">第 {index} 轮</span>
       <span className="rail-row__end">{fmtTime(endedAt)}</span>
-      {/* 窄屏把 用时/TPS/模型 换到第二行的断行点；桌面隐藏。 */}
-      <i className="rail-row__break" aria-hidden="true" />
       {model ? (
         <span
           className="rail-row__model"

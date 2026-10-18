@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
   Copy,
+  ExternalLink,
   FolderOpen,
   ShieldAlert,
   Terminal,
 } from "lucide-react";
 import type { Approval, ApprovalResolveBody, FileChange } from "../types";
 import { agentName } from "../agents";
-import { displayText } from "../format";
+import { basename, displayText } from "../format";
 import { Button } from "../kit";
 import { FileDiff } from "./FileDiff";
 
@@ -57,67 +58,69 @@ export function agentOptionList(approval: Approval): AgentPermissionOption[] {
     .filter((entry) => entry.optionId);
 }
 
-export function ApprovalCard({
-  approval,
-  onResolve,
-  disabled = false,
-  error,
-  draft,
-  onDraftChange,
-}: {
-  approval: Approval;
-  onResolve: (id: string, body: ApprovalResolveBody) => void;
-  disabled?: boolean;
-  error?: string;
-  draft?: ApprovalDraft;
-  onDraftChange?: (draft: ApprovalDraft) => void;
-}) {
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [selectedExtra, setSelectedExtra] = useState<string>();
-  const [copyLabel, setCopyLabel] = useState("复制");
-  const moreRef = useRef<HTMLFieldSetElement>(null);
-  useEffect(() => {
-    if (moreOpen) moreRef.current?.scrollIntoView({ block: "nearest" });
-  }, [moreOpen]);
-  const kind =
+function approvalKind(approval: Approval) {
+  return (
     approval.kind ||
-    (approval.request.method?.includes("fileChange") ? "file" : "command");
-  const params = approval.request.params || {};
-  const changes: FileChange[] | undefined =
-    approval.changes || params.fileChange?.changes || params.changes;
-  const questions = approval.questions || params.questions || [];
-  const permissionItems = permissionItemsFrom(
-    approval.permissions || params.permissions,
+    (approval.request.method?.includes("fileChange") ? "file" : "command")
   );
-  const actor = agentName(undefined, approval);
+}
 
-  if (kind === "permission")
-    return (
-      <PermissionApproval
-        approval={approval}
-        actor={actor}
-        items={permissionItems}
-        onResolve={onResolve}
-        disabled={disabled}
-        error={error}
-        draft={draft}
-        onDraftChange={onDraftChange}
-      />
-    );
-  if (kind === "question")
-    return (
-      <QuestionApproval
-        approval={approval}
-        actor={actor}
-        questions={questions}
-        onResolve={onResolve}
-        disabled={disabled}
-        error={error}
-        draft={draft}
-        onDraftChange={onDraftChange}
-      />
-    );
+function approvalCommand(approval: Approval) {
+  const params = approval.request.params || {};
+  return (
+    approval.command ||
+    (typeof params.command === "string"
+      ? params.command
+      : Array.isArray(params.command)
+        ? params.command.join(" ")
+        : "")
+  );
+}
 
+/** 卡片标题里的动作短语（不含 agent 名）：执行命令 / 修改文件 / … */
+export function approvalActionLabel(approval: Approval) {
+  const kind = approvalKind(approval);
+  const params = approval.request.params || {};
+  if (kind === "permission") return "请求权限";
+  if (kind === "question") return "需要你回答";
+  if (kind === "file") return "请求修改文件";
+  if (params.permission?.permission === "external_directory")
+    return "请求访问项目外目录";
+  if (approval.networkApproval) return "请求网络访问";
+  return "请求执行命令";
+}
+
+/**
+ * 会话上下文：有会话名或目录时，卡片第一行改显示「类型 · 名称 · 项目」，
+ * 第二行只留请求类型，第三行留下具体内容。没有上下文时保持原标题。
+ */
+export interface ApprovalSessionInfo {
+  name?: string;
+  cwd?: string;
+  /** 有值时显示「打开会话」按钮。 */
+  onOpen?: () => void;
+}
+
+/** 请求类型的短标签：访问外部目录 / 执行命令 / 修改文件 … */
+export function approvalTypeLabel(approval: Approval) {
+  const kind = approvalKind(approval);
+  const params = approval.request.params || {};
+  if (kind === "permission") return "请求额外权限";
+  if (kind === "question") return "需要你回答";
+  if (kind === "file") return "修改文件";
+  if (params.permission?.permission === "external_directory")
+    return "访问外部目录";
+  if (approval.networkApproval) return "访问网络";
+  return "执行命令";
+}
+
+/**
+ * 命令/文件类审批的按钮档位：拒绝、允许一次，其余进「更多」。
+ * 权限与问答有自己的表单，不走这里（返回 undefined）。
+ */
+export function approvalDecisionActions(approval: Approval) {
+  const kind = approvalKind(approval);
+  if (kind === "permission" || kind === "question") return undefined;
   const decisions = defaultDecisions(approval);
   // ACP（devin 等）把完整 options 透传过来时逐档渲染，点哪档回哪个
   // optionId——devin 一次会给 Allow/本会话/本项目/全局/bypass/拒绝等多档。
@@ -198,39 +201,181 @@ export function ApprovalCard({
   const extraActions = actions.filter(
     (action) => action.id !== rejectAction?.id && action.id !== allowAction?.id,
   );
+  return { rejectAction, allowAction, extraActions };
+}
+
+/** 收起态单行摘要用：命令原文 / 文件数 / 动作短语，取最有信息量的一项。 */
+export function approvalDetail(approval: Approval) {
+  const command = approvalCommand(approval);
+  if (command) return command;
+  const params = approval.request.params || {};
+  const changes: FileChange[] | undefined =
+    approval.changes || params.fileChange?.changes || params.changes;
+  if (Array.isArray(changes) && changes.length)
+    return changes.length === 1
+      ? String(changes[0]?.path || "1 个文件")
+      : `${changes.length} 个文件`;
+  return displayText(approval.reason || params.reason);
+}
+
+function samePath(a: string, b?: string) {
+  const trim = (value: string) => value.replace(/[\\/]+$/, "");
+  return Boolean(b) && trim(a) === trim(String(b));
+}
+
+/** 审批第一行：会话类型 · 名称 · 项目（点击可打开会话）。 */
+function SessionLine({
+  session,
+  actor,
+  aside,
+}: {
+  session: ApprovalSessionInfo;
+  actor: string;
+  aside?: ReactNode;
+}) {
+  const project = session.cwd ? basename(session.cwd) : "";
+  return (
+    <header className="approval-title approval-session-line">
+      <div className="approval-session">
+        <span className="approval-session-agent">{actor}</span>
+        {session.name ? (
+          <b className="approval-session-name" title={session.name}>
+            {session.name}
+          </b>
+        ) : null}
+        {project ? (
+          <span className="approval-session-project" title={session.cwd}>
+            {project}
+          </span>
+        ) : null}
+      </div>
+      {session.onOpen ? (
+        <button
+          type="button"
+          className="approval-session-open"
+          onClick={session.onOpen}
+          aria-label={session.name ? `打开会话「${session.name}」` : "打开会话"}
+          title={session.name ? `打开会话「${session.name}」` : "打开会话"}
+        >
+          <ExternalLink aria-hidden="true" />
+        </button>
+      ) : null}
+      {aside ? <div className="approval-title-aside">{aside}</div> : null}
+    </header>
+  );
+}
+
+export function ApprovalCard({
+  approval,
+  onResolve,
+  disabled = false,
+  error,
+  draft,
+  onDraftChange,
+  contextCwd,
+  session,
+  aside,
+}: {
+  approval: Approval;
+  onResolve: (id: string, body: ApprovalResolveBody) => void;
+  disabled?: boolean;
+  error?: string;
+  draft?: ApprovalDraft;
+  onDraftChange?: (draft: ApprovalDraft) => void;
+  /** 所在会话的工作目录：与请求目录相同时不再重复显示目录行。 */
+  contextCwd?: string;
+  /** 跨会话展示时传入会话信息，卡片改用「会话 / 类型 / 内容」三行结构。 */
+  session?: ApprovalSessionInfo;
+  /** 标题行右侧的容器控件（翻页、收起等），让容器不必再多占一行。 */
+  aside?: ReactNode;
+}) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [selectedExtra, setSelectedExtra] = useState<string>();
+  const [copyLabel, setCopyLabel] = useState("复制");
+  const moreRef = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    if (moreOpen) moreRef.current?.scrollIntoView({ block: "nearest" });
+  }, [moreOpen]);
+  const kind = approvalKind(approval);
+  const params = approval.request.params || {};
+  const changes: FileChange[] | undefined =
+    approval.changes || params.fileChange?.changes || params.changes;
+  const questions = approval.questions || params.questions || [];
+  const permissionItems = permissionItemsFrom(
+    approval.permissions || params.permissions,
+  );
+  const actor = agentName(undefined, approval);
+  const rawCwd = displayText(approval.cwd || params.cwd);
+  const cwd = samePath(rawCwd, contextCwd) ? "" : rawCwd;
+  const hasSession = Boolean(session?.name || session?.cwd);
+
+  if (kind === "permission")
+    return (
+      <PermissionApproval
+        approval={approval}
+        actor={actor}
+        items={permissionItems}
+        onResolve={onResolve}
+        disabled={disabled}
+        error={error}
+        draft={draft}
+        onDraftChange={onDraftChange}
+        cwd={cwd}
+        session={hasSession ? session : undefined}
+        aside={aside}
+      />
+    );
+  if (kind === "question")
+    return (
+      <QuestionApproval
+        approval={approval}
+        actor={actor}
+        questions={questions}
+        onResolve={onResolve}
+        disabled={disabled}
+        error={error}
+        draft={draft}
+        onDraftChange={onDraftChange}
+        session={hasSession ? session : undefined}
+        aside={aside}
+      />
+    );
+
+  const decided = approvalDecisionActions(approval);
+  const rejectAction = decided?.rejectAction;
+  const allowAction = decided?.allowAction;
+  const extraActions = decided?.extraActions || [];
   const selectedAction = extraActions.find(
     (action) => action.id === selectedExtra,
   );
-  const title =
-    kind === "file"
-      ? `${actor} 请求修改文件`
-      : params.permission?.permission === "external_directory"
-        ? `${actor} 请求访问项目外目录`
-        : approval.networkApproval
-          ? `${actor} 请求网络访问`
-          : `${actor} 请求执行命令`;
-  const command =
-    approval.command ||
-    (typeof params.command === "string"
-      ? params.command
-      : Array.isArray(params.command)
-        ? params.command.join(" ")
-        : "");
-  const cwd = displayText(approval.cwd || params.cwd);
+  const title = `${actor} ${approvalActionLabel(approval)}`;
+  const command = approvalCommand(approval);
   const reason = displayText(approval.reason || params.reason);
   return (
-    <article className={`approval-card kind-${kind}`}>
-      <header className="approval-title">
-        <span className="approval-icon" aria-hidden="true">
-          <ShieldAlert />
-        </span>
-        <div>
-          <b>{title}</b>
-        </div>
-      </header>
+    <article
+      className={`approval-card kind-${kind}${hasSession ? " has-session" : ""}`}
+    >
+      {hasSession ? (
+        <>
+          <SessionLine session={session!} actor={actor} aside={aside} />
+          <p className="approval-type">{approvalTypeLabel(approval)}</p>
+        </>
+      ) : (
+        <header className="approval-title">
+          <span className="approval-icon" aria-hidden="true">
+            <ShieldAlert />
+          </span>
+          <div>
+            <b>{title}</b>
+          </div>
+          {aside ? <div className="approval-title-aside">{aside}</div> : null}
+        </header>
+      )}
       <div className="approval-content">
-        {reason ? <p className="approval-reason">{reason}</p> : null}
-        {cwd ? (
+        {!hasSession && reason ? (
+          <p className="approval-reason">{reason}</p>
+        ) : null}
+        {!hasSession && cwd ? (
           <p className="approval-cwd">
             <FolderOpen aria-hidden="true" />
             <span title={cwd}>{cwd}</span>
@@ -295,57 +440,54 @@ export function ApprovalCard({
           {error}
         </p>
       ) : null}
-      <div className="approval-actions">
-        {moreOpen ? (
-          <>
-            <Button busy={disabled} onClick={() => setMoreOpen(false)}>
-              返回
-            </Button>
-            <Button
-              variant={selectedAction?.tone === "reject" ? "default" : "primary"}
-              busy={disabled}
-              disabled={!selectedAction}
-              title={selectedAction?.label}
-              onClick={() =>
-                selectedAction && onResolve(approval.id, selectedAction.body)
-              }
-            >
-              确认所选操作
-            </Button>
-          </>
+      <div className="approval-actions approval-command-actions">
+        {rejectAction && !moreOpen ? (
+          <Button
+            busy={disabled}
+            onClick={() => onResolve(approval.id, rejectAction.body)}
+          >
+            {rejectAction.label}
+          </Button>
         ) : (
-          <>
-            {rejectAction ? (
-              <Button
-                busy={disabled}
-                onClick={() => onResolve(approval.id, rejectAction.body)}
-              >
-                {rejectAction.label}
-              </Button>
-            ) : null}
-            {extraActions.length > 0 ? (
-              <Button
-                busy={disabled}
-                aria-label="更多授权选项"
-                title="更多授权选项"
-                onClick={() => setMoreOpen(true)}
-              >
-                更多 <ChevronDown aria-hidden="true" />
-              </Button>
-            ) : null}
-            {allowAction ? (
-              <Button
-                variant="primary"
-                busy={disabled}
-                title={allowAction.label}
-                onClick={() => onResolve(approval.id, allowAction.body)}
-              >
-                <Check aria-hidden="true" />
-                {allowAction.label}
-              </Button>
-            ) : null}
-          </>
+          <span aria-hidden="true" />
         )}
+        {extraActions.length > 0 ? (
+          <Button
+            busy={disabled}
+            aria-label={moreOpen ? "返回" : "更多授权选项"}
+            aria-expanded={moreOpen}
+            title={moreOpen ? "返回" : "更多授权选项"}
+            onClick={() => setMoreOpen((open) => !open)}
+          >
+            <span>{moreOpen ? "返回" : "更多"}</span>
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        ) : (
+          <span aria-hidden="true" />
+        )}
+        {moreOpen ? (
+          <Button
+            variant={selectedAction?.tone === "reject" ? "default" : "primary"}
+            busy={disabled}
+            disabled={!selectedAction}
+            title={selectedAction?.label}
+            onClick={() =>
+              selectedAction && onResolve(approval.id, selectedAction.body)
+            }
+          >
+            确认所选操作
+          </Button>
+        ) : allowAction ? (
+          <Button
+            variant="primary"
+            busy={disabled}
+            title={allowAction.label}
+            onClick={() => onResolve(approval.id, allowAction.body)}
+          >
+            <Check aria-hidden="true" />
+            <span>{allowAction.label}</span>
+          </Button>
+        ) : null}
       </div>
     </article>
   );
@@ -410,6 +552,9 @@ function PermissionApproval({
   error,
   draft,
   onDraftChange,
+  cwd,
+  session,
+  aside,
 }: {
   approval: Approval;
   actor: string;
@@ -419,6 +564,9 @@ function PermissionApproval({
   error?: string;
   draft?: ApprovalDraft;
   onDraftChange?: (draft: ApprovalDraft) => void;
+  cwd: string;
+  session?: ApprovalSessionInfo;
+  aside?: ReactNode;
 }) {
   const raw = approval.permissions || approval.request.params?.permissions;
   const [localSelected, setLocalSelected] = useState<Record<string, boolean>>(
@@ -432,24 +580,33 @@ function PermissionApproval({
   const reason = displayText(
     approval.reason || approval.request.params?.reason,
   );
-  const cwd = displayText(approval.cwd || approval.request.params?.cwd);
   const updateSelected = (next: Record<string, boolean>) => {
     setLocalSelected(next);
     onDraftChange?.({ ...draft, selectedPermissions: next });
   };
   return (
-    <article className="approval-card kind-permission">
-      <header className="approval-title">
-        <span className="approval-icon" aria-hidden="true">
-          <ShieldAlert />
-        </span>
-        <div>
-          <b>{actor} 请求权限</b>
-        </div>
-      </header>
+    <article
+      className={`approval-card kind-permission${session ? " has-session" : ""}`}
+    >
+      {session ? (
+        <>
+          <SessionLine session={session} actor={actor} aside={aside} />
+          <p className="approval-type">{approvalTypeLabel(approval)}</p>
+        </>
+      ) : (
+        <header className="approval-title">
+          <span className="approval-icon" aria-hidden="true">
+            <ShieldAlert />
+          </span>
+          <div>
+            <b>{actor} 请求权限</b>
+          </div>
+          {aside ? <div className="approval-title-aside">{aside}</div> : null}
+        </header>
+      )}
       <div className="approval-content">
         {reason ? <p className="approval-reason">{reason}</p> : null}
-        {cwd ? (
+        {!session && cwd ? (
           <p className="approval-cwd">
             <FolderOpen aria-hidden="true" />
             <span title={cwd}>{cwd}</span>
@@ -522,6 +679,8 @@ function QuestionApproval({
   error,
   draft,
   onDraftChange,
+  session,
+  aside,
 }: {
   approval: Approval;
   actor: string;
@@ -531,6 +690,8 @@ function QuestionApproval({
   error?: string;
   draft?: ApprovalDraft;
   onDraftChange?: (draft: ApprovalDraft) => void;
+  session?: ApprovalSessionInfo;
+  aside?: ReactNode;
 }) {
   const items = questions;
   const [localAnswers, setLocalAnswers] = useState<
@@ -579,18 +740,33 @@ function QuestionApproval({
   }).length;
   const ready = completed === items.length;
   return (
-    <article className="approval-card kind-question">
-      <header className="approval-title">
-        <span className="approval-icon" aria-hidden="true">
-          <ShieldAlert />
-        </span>
-        <div>
-          <b>{actor} 需要你回答</b>
-          <small>
-            已完成 {completed}/{items.length}
-          </small>
-        </div>
-      </header>
+    <article
+      className={`approval-card kind-question${session ? " has-session" : ""}`}
+    >
+      {session ? (
+        <>
+          <SessionLine session={session} actor={actor} aside={aside} />
+          <p className="approval-type">
+            {approvalTypeLabel(approval)}
+            <small>
+              已完成 {completed}/{items.length}
+            </small>
+          </p>
+        </>
+      ) : (
+        <header className="approval-title">
+          <span className="approval-icon" aria-hidden="true">
+            <ShieldAlert />
+          </span>
+          <div>
+            <b>{actor} 需要你回答</b>
+            <small>
+              已完成 {completed}/{items.length}
+            </small>
+          </div>
+          {aside ? <div className="approval-title-aside">{aside}</div> : null}
+        </header>
+      )}
       <div className="approval-content">
         <div className="question-list">
           {items.map((question, index) => {

@@ -55,16 +55,26 @@ function StatusStrip({
   threads,
   activities,
   hasApprovals,
+  live,
 }: {
   counts: StatusCounts;
   threads: ThreadSummary[];
   activities: ReadonlyMap<string, ThreadActivity>;
   hasApprovals: boolean;
+  /** 本轮快照是否已落地：运行中 / 卡住计数不能拿缓存冒充实时状态。 */
+  live: boolean;
 }) {
   const now = useNow(5_000);
   const stalled = threads.filter(
     (thread) => stalledFor(thread, activityOf(activities, thread), now) != null,
   ).length;
+  if (!live)
+    return (
+      <div className="monitor-strip" aria-label="正在同步会话状态" aria-busy="true">
+        <span className="monitor-strip-skeleton" aria-hidden="true" />
+        <span className="monitor-strip-skeleton short" aria-hidden="true" />
+      </div>
+    );
   const items = [
     {
       key: "waiting",
@@ -115,6 +125,7 @@ export function MonitorPanel({
   searchMatches,
   query,
   loading,
+  live = true,
   notificationPermission,
   onSelect,
   onOpenThread,
@@ -151,6 +162,8 @@ export function MonitorPanel({
   searchMatches: ReadonlyMap<string, SessionSearchMatch>;
   query: string;
   loading: boolean;
+  /** 本轮实时快照是否已落地；false 时首页运行中/最近会话显示骨架。 */
+  live?: boolean;
   notificationPermission: DeckNotificationPermission;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onOpenThread: (thread: ThreadSummary) => void;
@@ -277,6 +290,7 @@ export function MonitorPanel({
               threads={all}
               activities={activities}
               hasApprovals={approvals.length > 0}
+              live={live}
             />
           )}
           <div className="monitor-layout">
@@ -340,6 +354,7 @@ export function MonitorPanel({
                       deliveries={deliveries}
                       watchers={watchers}
                       lostWatchers={lostWatchers}
+                      live={live}
                       projectOf={projectOf}
                       onOpen={openThread}
                       onMarkSeen={onMarkSeen}

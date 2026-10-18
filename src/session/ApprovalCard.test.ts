@@ -14,6 +14,38 @@ function render(approval: Approval) {
   );
 }
 
+test("session context shows session, request type and compact detail", () => {
+  const html = renderToStaticMarkup(
+    createElement(ApprovalCard, {
+      approval: {
+        id: "s1:per_1",
+        agentId: "opencode",
+        providerId: "p",
+        kind: "command",
+        command: "/etc/*",
+        cwd: "/data/demo/codex_auto_pilot",
+        reason: "external_directory · /etc/*",
+        request: {
+          method: "opencode/permission.v2",
+          params: { permission: { permission: "external_directory" } },
+        },
+      } as Approval,
+      onResolve: () => undefined,
+      session: {
+        name: "尝试访问外部路径",
+        cwd: "/data/demo/codex_auto_pilot",
+      },
+    }),
+  );
+
+  assert.match(html, /approval-session-agent[^>]*>OpenCode/);
+  assert.match(html, /尝试访问外部路径/);
+  assert.match(html, /codex_auto_pilot/);
+  assert.match(html, /class="approval-type">访问外部目录/);
+  assert.match(html, /\/etc\/\*/);
+  assert.doesNotMatch(html, /external_directory/);
+});
+
 test("Claude approval cards name Claude Code instead of Codex", () => {
   const html = render({
     id: "approval-1",
