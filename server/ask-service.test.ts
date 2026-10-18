@@ -64,9 +64,9 @@ async function fixture(t: any) {
   const options = { file: path.join(dir, "asks.json"), agents, messages, timer: false as const };
   const service = new AskService(options); await service.load();
   t.after(async () => { service.close(); messages.close(); await rm(dir, { recursive: true, force: true }); });
-  const create = (returnMode: "queue" | "steer" | "interrupt" = "queue") => service.create({
+  const create = (returnMode: "queue" | "steer" | "interrupt" = "queue", detached = false) => service.create({
     sourceAgentId: "demo", sourceThreadId: "source", targetAgentId: "demo-review",
-    question: 'Review "demo"\nwith context', returnMode,
+    question: 'Review "demo"\nwith context', returnMode, detached,
     settings: { cwd: "/work/demo", providerId: "acme" },
   });
   return { fake, service, messages, create, options };
@@ -373,4 +373,136 @@ test("ask messages use the stable alias and never the wake lane or full ids", as
   assert.doesNotMatch(fake.sends[1].text, new RegExp(thread.id));
   assert.doesNotMatch(fake.sends[1].text, /\[wake:|\[message:/);
   assert.equal((item as any).wakeCode, undefined);
+});
+
+test("detached saves only the final answer and can be read repeatedly after offline reload", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { thread, item } = await create("interrupt", true);
+  assert.equal(thread.ask?.detached, true);
+  await messages.tick(); await service.tick();
+  assert.match(fake.sends[0].text, /detached 任务/);
+  assert.doesNotMatch(fake.sends[0].text, /结束前必须 send/);
+  assert.equal((await service.readResult(item.alias!)).result, null);
+  fake.finish(thread.id);
+  fake.turns.get(thread.id)![0].items = [
+    { type: "reasoning", text: "private reasoning" },
+    { type: "agentMessage", phase: "commentary", text: "private commentary" },
+    { type: "agentMessage", phase: "final_answer", text: "Delivered: src/demo.ts; checks passed" },
+  ];
+  await service.tick(); await service.tick(); await messages.tick();
+  const result = await service.readResult(`@${item.alias}`);
+  assert.equal(result.item.status, "completed");
+  assert.equal(result.item.resultAvailable, true);
+  assert.equal(result.result?.text, "Delivered: src/demo.ts; checks passed");
+  assert.equal(result.pending, false);
+  assert.equal((service.list()[0] as any).result, undefined);
+  assert.equal(askReplies(messages).length, 0);
+  assert.deepEqual(fake.interrupts, []);
+  service.close(); fake.online = false; fake.turns.clear();
+  fake.readThread = async () => { throw new Error("Demo offline"); };
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  assert.deepEqual((await restored.readResult(item.id)).result, result.result);
+  assert.deepEqual((await restored.readResult(item.alias!)).result, result.result);
+  await restored.tick(); assert.equal(askReplies(messages).length, 0);
+});
+
+test("detached failures, cancellation and delivery errors stay silent across reload", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  for (const status of ["failed", "interrupted", "cancelled"]) {
+    const { thread, item } = await create("interrupt", true);
+    await messages.tick(); await service.tick(); fake.finish(thread.id, "Partial output", status);
+    await service.tick();
+    const read = await service.readResult(item.alias!);
+    assert.equal(read.item.status, "failed"); assert.ok(read.item.error);
+    assert.equal(read.result, null); assert.equal(read.pending, false);
+  }
+  const cancelled = await create("queue", true);
+  await messages.cancel(cancelled.item.deliveryId!, "demo-review", cancelled.thread.id);
+  await service.tick(); assert.equal((await service.readResult(cancelled.item.id)).item.status, "failed");
+  const broken = await create("queue", true);
+  fake.sendMessage = async () => { throw new Error("Demo delivery rejected"); };
+  await messages.tick();
+  await service.tick(); assert.equal((await service.readResult(broken.item.id)).item.status, "failed");
+  service.close();
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  await restored.tick(); await messages.tick();
+  assert.equal(askReplies(messages).length, 0); assert.deepEqual(fake.interrupts, []);
+});
+
+test("detached completion events retry missing history and never return a stale follow-up result", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  const firstTurn = fake.threads.get(thread.id)!.activeTurnId;
+  const emit = (method: string, id: string, status: string) => fake.emit("event", {
+    type: "agent.event", data: { agentId: "demo-review", method, params: { threadId: thread.id, turn: { id, status } } },
+  });
+  emit("turn/completed", firstTurn!, "completed");
+  await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
+  assert.equal((await service.readResult(item.id)).pending, true);
+  service.close();
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  fake.finish(thread.id, "First result");
+  await restored.tick(); assert.equal((await restored.readResult(item.id)).result?.text, "First result");
+  emit("turn/started", "follow-up", "inProgress");
+  assert.equal((await restored.readResult(item.id)).result, null);
+  assert.equal((await restored.readResult(item.id)).item.status, "running");
+  await restored.sendFrom("demo-review", thread.id, "Explicit clarification", "queue");
+  assert.equal(askReplies(messages).length, 1);
+  fake.turns.set(thread.id, [{ id: "follow-up", status: "completed", items: [{ type: "agentMessage", text: "Follow-up result" }] }]);
+  emit("turn/completed", "follow-up", "completed");
+  await new Promise<void>((resolve) => setTimeout(resolve, 20)); await restored.tick();
+  assert.equal((await restored.readResult(item.id)).result?.text, "Follow-up result");
+  assert.equal(askReplies(messages).length, 1);
+});
+
+test("detached inspect reads live output without exposing reasoning or waking the source", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  fake.turns.set(thread.id, [{ id: "live", status: "inProgress", items: [
+    { type: "reasoning", text: "Hidden reasoning" },
+    { type: "agentMessage", text: "Working" },
+    { type: "commandExecution", command: "demo check", aggregatedOutput: "check A\ncheck B" },
+  ] }]);
+  const view = await service.inspect(item.alias!, 3);
+  assert.equal(view.output, "$ demo check\ncheck A\ncheck B");
+  assert.equal(view.truncated, true);
+  assert.equal((await service.readResult(item.id)).item.status, "running");
+  assert.equal(askReplies(messages).length, 0);
+  await assert.rejects(service.inspect(item.id, 0), /tail/);
+  await assert.rejects(service.inspect("missing-alias"), /不存在/);
+});
+
+test("unavailable detached history does not block recovery of an explicitly sent message", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { thread } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  fake.emit("event", { type: "agent.event", data: { agentId: "demo-review", method: "turn/completed",
+    params: { threadId: thread.id, turn: { id: fake.threads.get(thread.id)!.activeTurnId, status: "completed" } } } });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
+  const enqueue = messages.enqueue.bind(messages);
+  messages.enqueue = async () => { throw new Error("Demo temporary queue failure"); };
+  await assert.rejects(service.sendFrom("demo-review", thread.id, "Explicit question", "queue", "question"), /queue failure/);
+  service.close(); messages.enqueue = enqueue;
+  fake.readThread = async () => { throw new Error("Demo native history unavailable"); };
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  await restored.tick();
+  assert.equal(askReplies(messages).length, 1);
+  assert.match(askReplies(messages)[0].text!, /Explicit question/);
+});
+
+test("detached results explicitly report truncation and do not treat commentary as a final answer", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const first = await create("queue", true);
+  await messages.tick(); await service.tick(); fake.finish(first.thread.id, "x".repeat(80_010));
+  await service.tick();
+  const long = (await service.readResult(first.item.id)).result!;
+  assert.equal(long.text.length, 80_000); assert.equal(long.truncated, true);
+  const second = await create("queue", true);
+  await messages.tick(); await service.tick(); fake.finish(second.thread.id);
+  fake.turns.get(second.thread.id)![0].items = [{ type: "agentMessage", phase: "commentary", text: "Still investigating" }];
+  await service.tick();
+  assert.equal((await service.readResult(second.item.id)).result?.text, "");
+  assert.equal(askReplies(messages).length, 0);
 });

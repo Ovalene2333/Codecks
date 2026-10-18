@@ -9,7 +9,7 @@ import {
   Plus,
   Radar,
 } from "lucide-react";
-import { ASK_STATUS } from "../session/AskNotice";
+import { askStatusLabel } from "../session/AskNotice";
 import { agentShortName } from "../agents";
 import { previewSessions } from "../projects";
 import type { ProjectGroup as ProjectGroupData } from "../projects";
@@ -242,7 +242,7 @@ export function ProjectGroupView({
                     {agentLabel}
                   </small>
                   {thread.ask && (
-                    <small className="ask-badge" title={`Agent 询问 · ${ASK_STATUS[thread.ask.status]}`}>
+                    <small className="ask-badge" title={`Agent 询问 · ${askStatusLabel(thread.ask)}`}>
                       询问
                     </small>
                   )}

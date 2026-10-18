@@ -598,6 +598,12 @@ const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
   return `「${thread?.name || target.threadId}」（${target.agentId}）`;
 };
 app.get(["/api/deck/sessions", "/api/send/asks"], route(async () => ({ items: askService.list() })));
+app.get("/api/deck/sessions/:reference/result", route(async (req) =>
+  askService.readResult(param(req.params.reference)),
+));
+app.get("/api/deck/sessions/:reference/inspect", route(async (req) =>
+  askService.inspect(param(req.params.reference), z.coerce.number().int().min(1).max(200).default(40).parse(req.query.tail)),
+));
 app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
   items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
     id: agent.id, name: agent.name, online: agent.online,
@@ -617,6 +623,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     targetAgentId: agentIdSchema,
     question: z.string().trim().min(1).max(80_000),
     returnMode: z.enum(["queue", "steer", "interrupt"]).default("queue"),
+    detached: z.boolean().default(false),
     providerId: z.string().max(200).optional(),
     model: z.string().max(300).optional(),
     reasoningEffort: z.string().max(100).optional(),
@@ -629,9 +636,9 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
   if (resolution.thread.archived) throw new Error("发起会话已归档");
   const sourceCapabilities = agents.messageState(resolution.agentId, resolution.threadId).capabilities;
-  if (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "queue" ? "queue" : "feedback") ||
-    (input.returnMode === "interrupt" && !sourceCapabilities.interrupt)) throw new Error("发起 agent 不支持所选回传方式");
-  if (input.returnMode === "steer" && sourceCapabilities.messages?.busyBehavior !== "steer")
+  if (!input.detached && (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "queue" ? "queue" : "feedback") ||
+    (input.returnMode === "interrupt" && !sourceCapabilities.interrupt))) throw new Error("发起 agent 不支持所选回传方式");
+  if (!input.detached && input.returnMode === "steer" && sourceCapabilities.messages?.busyBehavior !== "steer")
     throw new Error("发起会话不支持即时追加（需要 Codex 这类支持转向当前回合的会话）；空闲时用 queue 会立即发送，运行时想打断请用 interrupt");
   if (!descriptor.capabilities.messages?.deliveryModes?.includes("queue")) throw new Error("目标 agent 不支持询问消息投递");
   if (askService.decorate(resolution.thread).ask) throw new Error("询问会话不能再次发起询问，请由原会话发起，避免循环调用");
@@ -653,7 +660,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   }
   const result = await askService.create({
     sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
-    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode,
+    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, detached: input.detached,
     settings: { ...configuration, cwd: resolution.thread.cwd, providerId, name: input.name },
   });
   broadcastSnapshotSoon();

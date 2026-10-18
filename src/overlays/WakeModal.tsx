@@ -5,7 +5,9 @@ import { copyText } from "../clipboard";
 import { agentShortName, threadPath } from "../agents";
 import { relativeTime, sessionKey } from "../format";
 import { sessionPath } from "../deck-history";
-import { ASK_STATUS } from "../session/AskNotice";
+import { askStatusLabel } from "../session/AskNotice";
+import { AskResult } from "./AskResult";
+import { AskForm } from "./AskForm";
 import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Button, Field, Switch } from "../kit";
 import { Modal } from "../ui";
@@ -18,8 +20,11 @@ type AskItem = {
   sourceThreadId: string;
   targetAgentId: string;
   targetThreadId?: string;
+  turnId?: string;
   targetProviderId?: string;
   returnMode: "queue" | "steer" | "interrupt";
+  detached?: boolean;
+  resultAvailable?: boolean;
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
   sentCount: number;
   updatedAt: number;
@@ -56,6 +61,7 @@ export function WakeModal({
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
   const [asks, setAsks] = useState<AskItem[]>([]);
   const [asksError, setAsksError] = useState("");
+  const [asksVersion, setAsksVersion] = useState(0);
   const storageKey = `deck:wake-hidden:v1:${sessionKey(thread)}`;
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => {
     try {
@@ -97,7 +103,7 @@ export function WakeModal({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [thread.id, thread.agentId]);
+  }, [thread.id, thread.agentId, asksVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +278,7 @@ export function WakeModal({
 
   return (
     <Modal title="任务回传" onClose={onClose}>
+      {!thread.ask && <AskForm thread={thread} onCreated={() => setAsksVersion((value) => value + 1)} />}
       {hidden.size > 0 && (
         <Button variant="ghost" size="sm" onClick={() => saveHidden(new Set())}>
           恢复隐藏记录（{hidden.size}）
@@ -292,10 +299,8 @@ export function WakeModal({
                     id: item.targetThreadId,
                   })
                 : "";
-              const noReply = item.status === "completed" && !item.sentCount;
-              const statusLabel = item.status === "completed" && item.sentCount
-                ? "已完成（已回传）"
-                : ASK_STATUS[item.status];
+              const noReply = !item.detached && item.status === "completed" && !item.sentCount;
+              const statusLabel = askStatusLabel(item);
               return (
                 <li key={item.id} className={`wake-ask${noReply ? " is-empty" : ""}`}>
                   <div className="wake-ask-main">
@@ -321,9 +326,10 @@ export function WakeModal({
                     </Button>
                   </div>
                   <small className="wake-ask-meta">
-                    累计回传 {item.sentCount} 条 · {item.returnMode === "interrupt" ? "打断回传" : item.returnMode === "steer" ? "即时追加回传" : "Queue 回传"} · {relativeTime(item.updatedAt)}
+                    累计回传 {item.sentCount} 条 · {item.detached ? "Detached · 自行读取" : item.returnMode === "interrupt" ? "打断回传" : item.returnMode === "steer" ? "即时追加回传" : "Queue 回传"} · {relativeTime(item.updatedAt)}
                   </small>
                   {item.error && <small className="wake-ask-error">{item.error}</small>}
+                  {item.detached && <AskResult key={item.turnId || item.id} reference={item.alias || item.id} />}
                 </li>
               );
             })}

@@ -8,7 +8,7 @@ type Target = { id: string; name: string; online: boolean; steer?: boolean; conf
 
 type ReturnMode = "queue" | "steer" | "interrupt";
 
-/** 目标支持 steer（codex 这类）时默认推荐即时追加；用户手动选过则尊重选择；切到不支持的目标会把 steer 落回 queue。 */
+/** 回传接收方（来源）支持 steer 时默认推荐即时追加；用户手动选过则尊重选择。 */
 export function resolveReturnMode(current: ReturnMode, touched: boolean, steer?: boolean): ReturnMode {
   if (steer && !touched) return "steer";
   if (!steer && current === "steer") return "queue";
@@ -26,6 +26,7 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelError, setModelError] = useState("");
   const [question, setQuestion] = useState("");
+  const [detached, setDetached] = useState(false);
   const [mode, setMode] = useState<ReturnMode>("queue");
   const [modeTouched, setModeTouched] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -52,15 +53,15 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
       .finally(() => { if (!cancelled) setModelsLoading(false); });
     return () => { cancelled = true; };
   }, [manual, target, provider, thread.cwd]);
-  // 目标支持 steer（codex 这类）时默认推荐即时追加；不支持时自动落回 queue。
-  // 用户手动选过模式后不再自动改，但切到不支持的目标会把已选的 steer 清掉。
+  // 回传方式由来源能力决定，与新建子会话的目标无关。
   useEffect(() => {
-    const selected = targets.find((item) => item.id === target);
-    if (!selected) return;
-    setMode((current) => resolveReturnMode(current, modeTouched, selected.steer));
-  }, [target, targets, modeTouched]);
+    const source = targets.find((item) => item.id === (thread.agentId || "codex"));
+    if (!source) return;
+    setMode((current) => resolveReturnMode(current, modeTouched, source.steer));
+  }, [thread.agentId, targets, modeTouched]);
   if (thread.ask) return null;
   const selectedTarget = targets.find((item) => item.id === target);
+  const sourceSteer = targets.find((item) => item.id === (thread.agentId || "codex"))?.steer;
   const selectedModel = models.find((item) => model ? item.id === model || item.model === model : item.isDefault);
   const efforts = selectedModel?.supportedReasoningEfforts || [];
   const configuration = { providerId: provider || undefined, model: model || undefined, reasoningEffort: effort || undefined };
@@ -76,16 +77,23 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
       setBusy(true); setError(""); setResult("");
       try {
         const response = await post<{ item: { id: string } }>("/deck/create", {
-          targetAgentId: target, question, returnMode: mode,
+          targetAgentId: target, question, returnMode: mode, detached,
           configuration: manual ? configuration : undefined, session: `${thread.agentId || "codex"}:${thread.id}`,
           sessionExplicit: true,
         });
-        setResult(`已创建询问 ${response.item.id}。本回合可以结束，不要 sleep 或轮询等待；目标会主动回传，最终回复不会自动转发。`);
+        setResult(detached
+          ? `已创建 Detached 询问 ${response.item.id}。可继续自己的工作，稍后在任务回传面板读取结果；完成、失败和中断都不自动通知来源。`
+          : `已创建询问 ${response.item.id}。本回合可以结束，不要 sleep 或轮询等待；目标会主动回传，最终回复不会自动转发。`);
         setQuestion(""); onCreated();
       } catch (error: any) { setError(error.message || "询问创建失败"); }
       finally { setBusy(false); }
     }}>
-      <p className="form-hint">每次新建独立会话；目标用 deck-api send 主动回传，最终回复不会自动转发。</p>
+      <p className="form-hint">每次新建独立会话；选择主动回传，或独立执行后自行读取结果。</p>
+      <label>协作方式<select aria-label="协作方式" value={detached ? "detached" : "send"} disabled={busy} onChange={(event) => setDetached(event.target.value === "detached")}>
+        <option value="send">Send：目标主动回传</option>
+        <option value="detached">Detached：独立执行，自行读取结果</option>
+      </select></label>
+      {detached && <p className="form-hint">最终答复会保存为结果；完成、失败和中断都不自动向来源发消息。目标仍可显式 send 联系来源。</p>}
       <label>目标 Agent<select aria-label="目标 Agent" value={target} disabled={busy || !targets.length} onChange={(event) => { setTarget(event.target.value); resetManual(); setManual(false); }}>
         {!targets.length && <option value="">正在读取…</option>}
         {targets.map((item) => <option key={item.id} value={item.id} disabled={!item.online}>{item.name}{!item.online ? "（离线）" : ""}</option>)}
@@ -119,12 +127,12 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
         }}>保存为此 Agent 的询问默认</Button>
         <p className="form-hint">空项交给目标 Agent 的原生默认处理。切换模型会清空推理强度；保存默认会应用到之后的询问。</p>
       </>}
-      <label>消息回传方式<select aria-label="消息回传方式" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value as typeof mode); setModeTouched(true); }}>
+      <label>{detached ? "显式 Send 的投递方式" : "消息回传方式"}<select aria-label="消息回传方式" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value as typeof mode); setModeTouched(true); }}>
         <option value="queue">Queue：等待当前回合结束</option>
-        <option value="steer" disabled={!!selectedTarget && !selectedTarget.steer}>即时追加：对方运行时直接塞进当前回合，不打断（codex 推荐；仅可转向会话支持）</option>
+        <option value="steer" disabled={!sourceSteer}>即时追加：来源运行时追加到当前回合，不打断</option>
         <option value="interrupt">打断：停止当前回合后发送</option>
       </select></label>
-      {selectedTarget?.steer && mode !== "steer" && <p className="form-hint">该目标支持即时追加（codex 推荐）：运行时直接追加、不打断，比 Queue 更快看到回传。</p>}
+      {sourceSteer && mode !== "steer" && <p className="form-hint">来源会话支持即时追加：运行时直接追加、不打断；此设置只影响主动 send。</p>}
       {mode === "steer" && <p className="form-hint">运行时直接追加、不打断；空闲时直接发送；对方回合变化时需重试。</p>}
       <label>问题<textarea aria-label="问题" rows={5} maxLength={80_000} value={question} disabled={busy} required onChange={(event) => setQuestion(event.target.value)} /></label>
       {error && <p className="error-text" role="alert">{error}</p>}

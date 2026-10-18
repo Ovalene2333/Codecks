@@ -88,6 +88,39 @@ test("deck-api create and send preserve caller, default mode and explicit destin
   await run("bash", [script, "wake", "--help"], { env }); assert.equal(requests.length, 4);
 });
 
+test("deck-api detached creation and read-only result/inspect commands preserve their contract", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-detached-cli-"));
+  const requests: { method?: string; path: string; body: any }[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push({ method: req.method, path: req.url!, body: JSON.parse(Buffer.concat(chunks).toString() || "{}") });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end('{"item":{"alias":"abcd1234"},"result":{"text":"Demo result"},"pending":false}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  const { stdout } = await run("bash", [script, "create", "demo-review", "--detached", "--session", "demo:source", "--", "Do independent work"], { env });
+  assert.equal(requests[0].body.detached, true);
+  assert.equal(requests[0].body.sessionExplicit, true);
+  assert.equal(requests[0].body.returnMode, "queue");
+  assert.match(stdout, /完成\/失败\/中断都不自动通知/);
+  assert.doesNotMatch(stdout, /本回合到此结束/);
+  await run("bash", [script, "result", "@abcd1234"], { env });
+  await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });
+  await run("bash", [script, "tasks"], { env });
+  assert.deepEqual(requests.slice(1).map(({ method, path }) => ({ method, path })), [
+    { method: "GET", path: "/api/deck/sessions/abcd1234/result" },
+    { method: "GET", path: "/api/deck/sessions/abcd1234/inspect?tail=30" },
+    { method: "GET", path: "/api/deck/sessions" },
+  ]);
+  for (const args of [["result", "../../other"], ["inspect", "@abcd1234", "--tail", "0"],
+    ["inspect", "@abcd1234", "--tail", "201"], ["result", "@abcd1234", "--tail", "3"]])
+    await assert.rejects(run("bash", [script, ...args], { env }));
+  assert.equal(requests.length, 4);
+});
+
 test("deck-api wake watch and poll spawn discovered workers and notify with the chosen mode", { skip: process.platform === "win32" }, async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-api-wake-cli-"));
   const events: any[] = [];

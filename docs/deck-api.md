@@ -1,9 +1,10 @@
 # deck-api 使用说明
 
-`deck-api` 是 Deck 的本地 Agent 通信入口，负责三件事：
+`deck-api` 是 Deck 的本地 Agent 通信入口，提供以下能力：
 
 - `create`：创建一个独立的 Agent 原生会话，并把它和发起会话绑定。
 - `send`：向已知会话主动发送消息，或让子会话向来源回传结论、进度和问题。
+- `create --detached` + `result` / `inspect`：独立执行，由来源按需领取交付、查看执行输出。
 - `wake`：监督 SSH / GPU / Slurm 等外部长任务，任务结束后唤醒对应会话。
 
 它不是另一个 Agent 框架，也不负责替 Agent 做计划。Deck 只提供**会话隔离、可靠投递和可观测性**，什么时候委派、什么时候回传由 Agent 决定。
@@ -99,7 +100,42 @@ bash "$DA" send --file ./result.txt
 bash "$DA" send --session demo-review:01a1503d-… -- '需要确认：超时是否包含排队时间？'
 ```
 
-`send` 可以多次调用，不会结束会话。正常结束时不会自动转发最终回复；**目标不主动 `send`，来源就收不到任何消息**。所以目标被要求即使没有新结论，也发送一条简短状态。
+默认 send 模式可以多次调用 `send`，不会结束会话。正常结束时不会自动转发最终回复；**目标不主动 `send`，来源就收不到任何消息**。所以该模式要求目标即使没有新结论，也发送一条简短状态。detached 模式则直接留下最终答复，由来源自行获取。
+
+### Detached：独立执行，稍后领取
+
+```bash
+bash "$DA" create codex --detached -- '独立完成模块，最终答复列出改动、产物和验证结果。'
+# 来源继续推进自己的工作，在合适时机读取
+bash "$DA" tasks
+bash "$DA" result @7f3a2c90
+bash "$DA" inspect @7f3a2c90 --tail 30
+bash "$DA" send --to @7f3a2c90 -- '补充约束：并发上限为 8。'
+```
+
+| | 默认 send 模式 | detached 模式 |
+| --- | --- | --- |
+| 常规交付 | 目标主动 `send` | 目标在本会话最终答复中交付 |
+| 正常结束 | 不自动转发 | 保存最终答复，不自动通知 |
+| 失败 / 中断 | 自动通知来源 | 保存状态和 error，不自动通知 |
+| 来源如何获取 | 等待回传 | `result` / `inspect` 按需读取 |
+| 显式 `send` | 投递消息 | 同样投递消息 |
+
+detached 控制默认通知策略，`--mode queue|steer|interrupt` 控制显式 `send` 的默认投递方式，两者独立。普通询问不发 `send` 并不等于 detached。
+
+`result @<alias>`（也可用完整询问 ID）返回：
+
+- `item`：当前状态、detached、resultAvailable、错误等元数据。
+- `result`：本回合的 `turnId`、`text`、`completedAt`、`truncated`；尚无结果时为 null。
+- `pending`：回合已完成，但原生历史尚未同步出结果。可稍后再查询，不要重新创建任务。
+
+结果只保存最终答复快照，不复制完整会话。优先提取原生 `final_answer`；无阶段标记的后端提取工具执行之后的尾部答复。没有文本时保留空交付，用户可打开子会话核对产物。超过 80,000 字符显式标记 truncated，全文保留在原生会话中。
+
+查询不会触发来源执行，也不会消耗结果；已保存交付可在 Deck 重启、目标离线后重复读取。继续追问启动新回合后，旧结果清除，新回合结束后保存新交付，避免把旧答复当成新结果。
+
+`inspect` 返回近期回复、命令输出和文件路径，不包含推理；默认 40 行，可设置 1–200 行，最多 80,000 字符，裁剪时返回 truncated。它需要读取原生会话，后端不可用时会报错，不会伪装成仍在运行。
+
+来源可以继续自己的工作，按需读取状态与结果；不要紧密轮询。**来源结束回合后，detached 不会自动把它唤醒。** 如需主动通知，可由子会话显式 `send`。
 
 ### 3. 来源继续追问
 
@@ -135,11 +171,11 @@ bash "$DA" wake poll -l job-4821 -i 120 -- \
 
 - 每次新建独立会话，正常保存在目标 Agent 的原生历史中，不复制历史。
 - 自动识别来源：优先使用进程树里 Deck 托管的 Agent 进程；环境变量身份需要进程树佐证。无法确认时拒绝猜测，可显式传 `--session <agentId:threadId>`。
-- 受理后返回 202，只表示会话已创建、初始问题已持久入队，不代表目标已经开始执行。发起方应结束本回合，不要 sleep、tail、ps 或轮询。
-- 回传是异步的，会以新的 `[ask:…]` 回合到达。
+- 受理后返回 202，只表示会话已创建、初始问题已持久入队，不代表目标已经开始执行。默认 send 模式发起方应结束本回合，不要 sleep、tail、ps 或轮询；detached 模式可以继续推进独立工作。
+- 主动回传是异步的，会以新的 `[ask:…]` 消息到达；detached 默认不回传。
 - 子会话不能再 `create`，避免递归；它可以用 `send` 和来源交流。
 - 目标使用 Deck 中保存的询问默认配置。只有用户明确要求时才传 `--provider` / `--model` / `--effort`；Agent 不应自行探测或挑选模型。
-- 启动失败、执行失败、被中断或目标被停用会自动通知来源，即使此前已经发送过进度。
+- 默认 send 模式启动/执行失败、被中断会自动通知来源，即使此前已发送进度；目标被停用只记录失败。detached 的所有失败路径均只记录状态和 error，不自动通知。
 
 ## send 语义
 
@@ -255,6 +291,7 @@ curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
 - 会话头部雷达按钮打开「deck-api · 任务回传」：查看询问、子会话、状态、回传统计、模型与 effort，也能管理唤醒代号和 watcher。
 - 总览首页的「deck-api 监督中」列出本机 watcher；失联记录出现在「需要处理」。
 - 询问完成但一条都没回传时会标红，点目标可打开子会话核对。
+- detached 完成不因未发送回传而标红；雷达面板可选择协作方式创建任务，并点击「读取结果」获取交付，来源和子会话均显示 detached 标识。
 - 完成但未回传的询问不占用总览的「新回复 / 最近会话」，审批和异常仍正常显示。
 - 询问关联、待发送消息、消息队列和唤醒 outbox 都会持久化，服务重启后继续处理。
 - 向绑定来源 `send` 期间重启导致受理结果不确定时，先检查会话，再用同一个 `--request-id` 重试，或新建会话；显式目标没有 `--request-id`，只能检查会话后再决定是否重发。
@@ -293,6 +330,8 @@ curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
 | `POST` | `/api/deck/prepare` | 识别来源、确认/分配唤醒代号、whoami |
 | `GET` | `/api/deck/agents` | 可用 Agent、配置和 steer 能力 |
 | `GET` | `/api/deck/sessions` | 询问台账、状态、别名、回传统计 |
+| `GET` | `/api/deck/sessions/:reference/result` | 按别名或询问 ID 读取状态与 detached 最终交付 |
+| `GET` | `/api/deck/sessions/:reference/inspect?tail=40` | 查看原生会话近期输出 |
 | `GET` | `/api/deck/targets` | 唤醒代号绑定 |
 | `POST` | `/api/deck/events/:code` | 兼容的唤醒事件入口 |
 | `GET` | `/s/:alias` | 短别名跳转到子会话 |

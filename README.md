@@ -277,6 +277,7 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 - **send 与 wake 分开**：`send` 只进已知会话的持久消息队列；新写法（绑定来源、`--to`、`@alias`）不读取或创建唤醒代号，`--code` 仅保留兼容定位。只有 watcher 结束等外部事件才走唤醒 outbox。消息头分别是 `[ask:<alias>]` / `[send:<id>]` 和 `[wake:<code>]`。
 - **稳定短别名**：每次询问自动分配一个短标识（如 `@7f3a2c`），首先生成后写入台账、永不重算；完整 ID 留在服务端和 UI，用 `send --to @<alias>` 继续追问，不用复制长 UUID。
 - **主动回传**：目标自己决定何时 `send` 结论、进度或澄清问题；正常结束不自动转发最终回复，启动/执行失败会自动通知。
+- **Detached 独立执行**：`create --detached` 后主 Agent 可继续工作，子会话的完成、失败和中断都不自动通知来源。用 `tasks` 看状态、`result @<alias>` 按需读取最终答复、`inspect @<alias> --tail 30` 查看近期执行输出；仍可显式 `send` 交流。已保存的交付可跨重启读取，雷达面板也支持创建与读取 detached 任务。
 - **可观测**：雷达面板查看询问和 watcher，总览首页显示正在监督的任务；失联 watcher 进入「需要处理」。
 
 ```bash
@@ -284,6 +285,9 @@ DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"
 bash "$DA" create codex --name '方案复核' -- '请根据以下代码提供第二意见：…'
 bash "$DA" send -- '结论：建议方案 B，依据是……。'
 bash "$DA" send --to @<alias> -- '补充约束：……'
+bash "$DA" create codex --detached -- '独立实现这个模块，最终答复列出产物和验证：…'
+bash "$DA" result @<alias>
+bash "$DA" inspect @<alias> --tail 30
 bash "$DA" wake -- ssh demo-box 'wait-for-job'
 ```
 

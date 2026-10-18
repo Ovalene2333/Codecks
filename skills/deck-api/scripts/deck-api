@@ -28,19 +28,34 @@ LOG_DIR="${DECK_API_LOG_DIR:-${DECK_SEND_LOG_DIR:-${DECK_WAKE_LOG_DIR:-$DECK_HOM
 DONE_RE_DEFAULT='^(COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE|DONE|EXITED|ERROR|GONE)'
 CODE_RE='^[a-z0-9][a-z0-9-]{1,30}$'
 
-usage() { # [create|send|wake] —— 不带参数打印总览，带主题打印对应段落
+usage() { # 不带参数打印总览，带主题打印对应段落
   case "${1-}" in
     create)
       cat <<'EOF'
-deck-api create <agentId> [--mode queue|steer|interrupt] [--name title] [--file path|-] -- <问题>
+deck-api create <agentId> [--detached] [--mode queue|steer|interrupt] [--name title] [--file path|-] -- <问题>
     创建独立会话并绑定来源；目标自行用 send 回传，不自动转发最终回复。
     受理后本回合就结束：不要 sleep、轮询或等待结果；回传会在新的 [ask] 回合到达。
     即使没有结论，目标也应主动 send 一条状态；目标不 send 时来源不会收到消息。
+    --detached 独立执行：目标在最终答复中交付，不要求 send；完成/失败/中断都不自动通知。
+    来源可继续自己的工作，在合适时机用 result @alias 领取结果、inspect @alias 查看输出。
+    detached 仍可显式 send 联系来源；--mode 只控制这些主动消息的默认投递方式。
     --mode 是目标消息回传到来源时的默认投递方式，默认 queue。
     queue 等来源空闲；steer 若来源正在运行则直接追加到当前回合（codex turn/steer，不打断），空闲时直接发送；
     interrupt 先停止来源当前回合再发送。steer 只支持 codex 这类可转向的会话。
     --session agent:thread 显式指定创建来源；默认由 Deck 识别（无法佐证时必须显式给出）。
     仅用户明确要求时使用 --provider id / --model id / --effort value；否则使用 Deck 默认。
+EOF
+      ;;
+    result|inspect)
+      cat <<'EOF'
+deck-api result @alias                       读取状态与已保存的 detached 最终答复
+deck-api inspect @alias [--tail 40]           查看原生会话最近输出（1 至 200 行）
+    也可用 create 返回的完整询问 ID。查询只读，不唤醒来源、不消耗结果，可重复读取。
+    result 返回 item、result（turnId/text/completedAt/truncated）、pending。
+    pending 表示回合已结束但原生历史尚未同步；运行中或失败时 result 为 null，请看状态/error。
+    inspect 返回近期回复、命令输出和文件路径，不包含推理；原生后端不可用时会报错。
+    result 的截断由 truncated 标记；全文保留在原生会话，可用短链接打开。
+    不要紧密轮询；先推进独立工作，再按需检查。来源结束回合后不会自行被唤醒。
 EOF
       ;;
     send)
@@ -71,21 +86,23 @@ EOF
       ;;
     *)
       cat <<'EOF'
-deck-api help [create|send|wake]              查看用法
+deck-api help [create|send|result|inspect|wake] 查看用法
 
 deck-api create …                             创建独立会话并绑定来源（help create 看详情）
+deck-api create <agentId> --detached …         独立执行，不自动通知来源
+deck-api result @alias / inspect @alias        按需领取结果 / 查看执行输出
 deck-api send …                               向来源或指定会话发消息（help send 看详情）
 deck-api wake …                               监督外部任务（help wake 看详情）
 
-deck-api agents / sessions                    查看可用 Agent / 创建记录（不是消息正文）
+deck-api agents / sessions（或 tasks）         查看可用 Agent / 创建记录（不是消息正文）
 deck-api whoami / list                        确认当前会话 / 查看唤醒代号
 deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
 
 queue 等目标空闲；steer 即时追加到目标当前回合（不打断，仅 codex 这类可转向会话支持）；interrupt 停止目标当前回合再发送。
 steer 时目标空闲则直接发送；目标回合已变化会失败，可用 --request-id 重试。
-create 受理后结束本回合，不要 sleep/轮询/等待；目标会以新的 [ask] 回合回传。
-create 会话正常结束没有自动通知：目标不 send，来源就收不到消息；即使没有结论，也应 send 一条状态。
-启动/执行失败仍自动通知。send 与 wake 是两条独立链路：send 不会创建或复用唤醒代号。
+默认 create 受理后结束本回合，不要 sleep/轮询/等待；目标用 send 回传，失败自动通知。
+detached 可继续自己的工作，稍后用 result/inspect 自行获取；完成与失败都不自动通知。
+send 与 wake 是两条独立链路：send 不会创建或复用唤醒代号。
 地址与令牌读取 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/{url,token}，
 可用 DECK_API_URL / DECK_TOKEN 覆盖；兼容 DECK_SEND_URL / DECK_WAKE_URL。
 旧 ask/watch/poll/asks/ps/stop 命令继续兼容。
@@ -276,17 +293,18 @@ if [ "$cmd" = wake ]; then
 fi
 if [ "${1-}" = --help ]; then usage "${cmd-}"; exit 0; fi
 case "$cmd" in
-  agents|asks|sessions)
+  agents|asks|sessions|tasks)
     if [ "$cmd" = agents ]; then api GET /api/deck/agents; else api GET /api/deck/sessions; fi
     ;;
   ask|create)
     if [ "${1-}" = --help ]; then usage create; exit 0; fi
     target=${1:?缺少目标 agentId}; shift
-    mode=queue; provider=''; model=''; effort=''; name=''; file=''
+    mode=queue; detached=false; provider=''; model=''; effort=''; name=''; file=''
     session=${CODEX_DECK_SESSION-}; session_explicit=false
     while [ $# -gt 0 ]; do
       case "$1" in
         --mode) mode=${2:?缺少 mode}; shift 2 ;;
+        --detached) detached=true; shift ;;
         --provider) provider=${2:?缺少 provider}; shift 2 ;;
         --model) model=${2:?缺少 model}; shift 2 ;;
         --effort) effort=${2:?缺少 effort}; shift 2 ;;
@@ -305,12 +323,32 @@ case "$cmd" in
     fi
     [ -n "$question" ] || { echo 'deck-api: 缺少问题' >&2; exit 1; }
     case "$mode" in queue|steer|interrupt) ;; *) echo 'deck-api: mode 应为 queue、steer 或 interrupt' >&2; exit 1 ;; esac
-    body=$(printf '{"targetAgentId":%s,"returnMode":%s,"providerId":%s,"model":%s,"reasoningEffort":%s,"name":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s,"question":%s}' \
-      "$(json_str "$target")" "$(json_str "$mode")" "$(json_str "$provider")" "$(json_str "$model")" \
+    body=$(printf '{"targetAgentId":%s,"returnMode":%s,"detached":%s,"providerId":%s,"model":%s,"reasoningEffort":%s,"name":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s,"question":%s}' \
+      "$(json_str "$target")" "$(json_str "$mode")" "$detached" "$(json_str "$provider")" "$(json_str "$model")" \
       "$(json_str "$effort")" "$(json_str "$name")" "$(json_str "$session")" "$session_explicit" \
       "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "$(json_str "$question")")
     api POST /api/deck/create "$body" || exit 1
-    echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 就不会有通知，失败会自动通知。'
+    if [ "$detached" = true ]; then
+      echo 'Detached 会话已创建；可继续自己的工作，稍后用 result @alias 领取或 inspect @alias 查看。完成/失败/中断都不自动通知；不要紧密轮询。'
+    else
+      echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 就不会有通知，失败会自动通知。'
+    fi
+    ;;
+  result|inspect)
+    reference=${1-}; reference=${reference#@}
+    [[ $reference =~ ^[a-z0-9-]{8,64}$ ]] || die "用法：deck-api $cmd @alias（或完整询问 ID）"
+    shift
+    tail=40
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --tail) [ "$cmd" = inspect ] || die "--tail 仅用于 inspect"; tail=${2:?缺少行数}; shift 2 ;;
+        *) die "未知参数 $1" ;;
+      esac
+    done
+    [[ $tail =~ ^[0-9]{1,3}$ ]] && [ "$tail" -ge 1 ] && [ "$tail" -le 200 ] || die "tail 应为 1 至 200 的整数"
+    endpoint="/api/deck/sessions/$reference/$cmd"
+    [ "$cmd" != inspect ] || endpoint+="?tail=$tail"
+    api GET "$endpoint" || exit 1
     ;;
   whoami)
     session=${CODEX_DECK_SESSION-}; session_explicit=false

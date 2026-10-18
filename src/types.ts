@@ -193,6 +193,9 @@ export interface ModelInfo {
 export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
 
 export interface AskSession {
+  /** 独立执行，正常结束与失败都不自动通知来源；仍允许显式 send。 */
+  detached?: boolean;
+  resultAvailable?: boolean;
   sentCount?: number;
   id: string;
   /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
