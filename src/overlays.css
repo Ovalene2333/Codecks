@@ -306,6 +306,98 @@
 .wake-form {
   gap: 14px;
 }
+.wake-asks {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.wake-asks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wake-asks-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-strong);
+}
+.wake-asks-head > span {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  text-align: center;
+}
+.wake-asks ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wake-ask {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.wake-ask.is-empty {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+}
+.wake-ask-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.wake-ask-main a,
+.wake-ask-main > span:not(.wake-ask-status) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-ui);
+  font-weight: var(--fw-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wake-ask-status {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+.wake-ask-status.is-running,
+.wake-ask-status.is-queued {
+  color: var(--accent);
+}
+.wake-ask.is-empty .wake-ask-status {
+  color: var(--danger);
+}
+.wake-ask-status.is-failed {
+  color: var(--danger);
+}
+.wake-ask-meta,
+.wake-ask-error {
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+}
+.wake-ask-meta {
+  color: var(--text-faint);
+}
+.wake-ask-error {
+  color: var(--danger);
+}
 .wake-form .form-hint code {
   padding: 1px 5px;
   border-radius: var(--radius-sm);
@@ -579,7 +671,6 @@
 .confirm-actions button {
   min-height: var(--control-h);
   padding: 0 var(--space-3);
-  color: var(--text);
   font-size: var(--fs-ui);
   font-weight: var(--fw-medium);
   box-shadow: none;

@@ -165,6 +165,28 @@ test("parseOpenCodeProviders reads model variants", () => {
   ]);
 });
 
+test("parseOpenCodeProviders orders variants from strongest to weakest", () => {
+  const entries = parseOpenCodeProviders({
+    provider: {
+      acme: {
+        options: { baseURL: "https://acme.example.com/v1" },
+        models: {
+          coder: {
+            variants: { low: {}, medium: {}, high: {}, xhigh: {}, max: {} },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(entries[0].models[0].variants, [
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+  ]);
+});
+
 test("parseOpenCodeProviders reads image support from modalities", () => {
   const entries = parseOpenCodeProviders({
     provider: {
@@ -349,10 +371,19 @@ test("upsert OpenCode provider replaces variants and keeps untouched ones", asyn
   await upsertOpenCodeProvider("project", dir, {
     id: "acme",
     baseURL: "https://acme.example.com/v1",
-    models: [{ id: "coder", variants: ["high"] }, { id: "chat", variants: [] }],
+    models: [
+      { id: "coder", variants: ["low", "max", "xhigh", "high", "medium"] },
+      { id: "chat", variants: [] },
+    ],
   });
   written = JSON.parse(await readFile(path.join(dir, "opencode.json"), "utf8"));
-  assert.deepEqual(Object.keys(written.provider.acme.models.coder.variants), ["high"]);
+  assert.deepEqual(Object.keys(written.provider.acme.models.coder.variants), [
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+  ]);
   assert.equal(written.provider.acme.models.chat.variants, undefined);
 });
 

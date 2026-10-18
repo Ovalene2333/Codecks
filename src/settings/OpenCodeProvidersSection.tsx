@@ -5,6 +5,7 @@ import { api, post, remove } from "../api";
 import { Button, Disclosure, Dot, Empty, Field, Group, Note, SearchField, Switch, type DotTone } from "../kit";
 import { Modal } from "../ui";
 import { useDirtyFlag } from "./dirty";
+import { sortReasoningVariants } from "../../shared/reasoning-variants";
 
 interface ProviderModel {
   id: string;
@@ -273,7 +274,10 @@ export function OpenCodeProvidersSection({
       setModel(key, { variantInput: "" });
       return;
     }
-    setModel(key, { variants: [...target.variants, name], variantInput: "" });
+    setModel(key, {
+      variants: sortReasoningVariants([...target.variants, name]),
+      variantInput: "",
+    });
   };
 
   const save = async (event: React.FormEvent) => {

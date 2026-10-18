@@ -43,8 +43,8 @@ function clampToViewport(x: number, y: number, width: number, height: number) {
 
 /**
  * 全局审批浮窗：所有会话（含当前会话）的待审批都在这里。
- * - 默认收起：桌面保留同一浮窗的标题栏，手机是「待审批 n」按钮；
- *   点开才展开完整卡片。收起态不放快捷允许，避免在看不全命令时误放行。
+ * - 新一批审批的第一条默认展开，处理后依次显示下一条；手动收起保留到本批结束。
+ * - 桌面收起时保留标题栏并可点击展开，手机显示「待审批 n」按钮。
  * - 桌面两种状态共用拖动手柄与位置，位置限制在视口内。
  */
 export function ApprovalInbox({
@@ -64,7 +64,8 @@ export function ApprovalInbox({
 }) {
   const queue = useApprovalQueue(approvals, onResolve);
   const { active, activeIndex } = queue;
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => approvals.length > 0);
+  const hadPendingApprovals = useRef(approvals.length > 0);
   const [mobile, setMobile] = useState(
     () =>
       typeof window !== "undefined" &&
@@ -215,9 +216,11 @@ export function ApprovalInbox({
     setPosition(next);
   };
 
-  // 队列清空后回到收起态：下一批请求先以单行提示出现，不直接弹大卡片。
+  // 只在队列由空变为非空时自动展开，不打断同一批请求内的手动收起。
   useEffect(() => {
     if (!approvals.length) setExpanded(false);
+    else if (!hadPendingApprovals.current) setExpanded(true);
+    hadPendingApprovals.current = approvals.length > 0;
     const pending = new Set(approvals.map((approval) => approval.id));
     for (const id of Object.keys(scrollPositions.current))
       if (!pending.has(id)) delete scrollPositions.current[id];
@@ -325,7 +328,17 @@ export function ApprovalInbox({
         }}
       >
         <div className="approval-inbox-handle" aria-hidden="true" />
-        <header className="approval-inbox-header">
+        <header
+          className="approval-inbox-header"
+          onClick={(event) => {
+            if (
+              !expanded &&
+              event.target instanceof Element &&
+              !event.target.closest("button, .approval-drag-grip")
+            )
+              toggleExpanded();
+          }}
+        >
           <span
             className="approval-drag-grip"
             aria-hidden="true"

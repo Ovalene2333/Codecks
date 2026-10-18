@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { AgentMessageError, assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageReceipt } from "./messages.js";
 import type {
   AgentAdapter,
+  AgentApproval,
   AgentCommand,
   AgentCreateThreadInput,
   AgentDescriptor,
@@ -11,6 +12,7 @@ import type {
 } from "./types.js";
 import type {
   ActiveTask,
+  ApprovalKind,
   ThreadSummary,
   TurnImage,
 } from "../types.js";
@@ -145,6 +147,8 @@ export class AgentRegistry extends EventEmitter {
   private forwarders = new Map<AgentId, (event: any) => void>();
   private locks = new Map<AgentId, Promise<unknown>>();
   private messageLocks = new Map<string, Promise<unknown>>();
+  /** 开发测试 API 注入的假审批：只在内存里，绝不进入任何 adapter。 */
+  private devApprovals = new Map<string, AgentApproval>();
   private taskSnapshot?: { at: number; tasks: ActiveTask[] };
   private taskRefresh?: Promise<ActiveTask[]>;
   private skillCache = new Map<
@@ -304,7 +308,10 @@ export class AgentRegistry extends EventEmitter {
       archivedThreads: live.flatMap((entry) =>
         shown(entry.snapshot.archivedThreads),
       ),
-      approvals: live.flatMap((entry) => entry.snapshot.approvals || []),
+      approvals: [
+        ...live.flatMap((entry) => entry.snapshot.approvals || []),
+        ...this.devApprovals.values(),
+      ],
     };
   }
 
@@ -708,8 +715,76 @@ export class AgentRegistry extends EventEmitter {
       answers?: unknown;
     },
   ) {
+    // 注入的假审批不经过 adapter，直接回执即可；否则测试卡会永远挂着。
+    if (this.devApprovals.delete(approvalId)) {
+      this.emit("event", {
+        type: "approval.resolved",
+        data: { agentId: id, approvalId },
+      });
+      return { ok: true as const, source: "dev" as const };
+    }
     const adapter = this.operation(id, "resolveApproval");
     return adapter.resolveApproval!(approvalId, body);
+  }
+
+  /**
+   * 开发测试 API：注入一条看起来和真实审批一样的假请求。
+   * 只存活在进程内存里，`resolveApproval` 时直接回执，不接触任何 agent 进程。
+   */
+  injectDevApproval(
+    input: {
+      agentId?: AgentId;
+      threadId?: string;
+      providerId?: string;
+      kind?: ApprovalKind;
+      method?: string;
+      params?: Record<string, unknown>;
+    } = {},
+  ) {
+    const id = input.agentId || ("codex" as AgentId);
+    const adapter = this.get(id);
+    if (!this.isEnabled(id)) throw new Error(`Agent ${id} 已停用`);
+    const threadId = input.threadId;
+    let providerId = input.providerId;
+    if (!providerId && threadId) {
+      const snapshot = adapter.snapshot();
+      providerId = [
+        ...snapshot.threads,
+        ...(snapshot.archivedThreads || []),
+      ].find((thread) => thread.id === threadId)?.providerId;
+    }
+    const approval: AgentApproval = {
+      id: `${threadId || "dev"}:dev-${randomUUID()}`,
+      agentId: id,
+      providerId: providerId || "dev",
+      kind: input.kind || "command",
+      request: {
+        method: input.method || "item/commandExecution/requestApproval",
+        params: {
+          ...(threadId ? { threadId } : {}),
+          ...input.params,
+        },
+      },
+    };
+    this.devApprovals.set(approval.id, approval);
+    this.emit("event", { type: "approval.requested", data: approval });
+    return approval;
+  }
+
+  listDevApprovals() {
+    return [...this.devApprovals.values()];
+  }
+
+  /** 清空所有注入审批，并逐个广播 resolved，避免客户端卡片残留。 */
+  clearDevApprovals() {
+    const approvals = [...this.devApprovals.values()];
+    this.devApprovals.clear();
+    for (const approval of approvals)
+      this.emit("event", {
+        type: "approval.resolved",
+        data: { agentId: approval.agentId, approvalId: approval.id },
+      });
+    return approvals.length;
   }
 
   async listSessionCommands(

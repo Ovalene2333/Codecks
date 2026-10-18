@@ -21,6 +21,7 @@ import type { ModelInfo } from "./types";
 import type { AgentId } from "./agents";
 import { SearchablePicker, type SearchableOption } from "./SearchablePicker";
 import { SwrCache } from "./swr-cache";
+import { compareReasoningVariants } from "../shared/reasoning-variants";
 
 /**
  * Model catalogs change rarely but are read every time a picker mounts (new
@@ -130,8 +131,9 @@ export function ModelPicker({
   const [manual, setManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
-  // 「上次选择 / 常用 / 收藏」：服务端按 agent + 供应商/目录作用域存储，
-  // 手机和桌面入口共享同一份（不能放浏览器本地存储）。
+  // 「上次选择 / 常用 / 收藏」：收藏按 agent 全局共享（跨项目/供应商），
+  // 上次选择与常用按 agent + 供应商/目录作用域；服务端存储，手机和桌面
+  // 入口共享同一份（不能放浏览器本地存储）。
   const [affinity, setAffinity] = useState<ModelAffinityData | null>(null);
   /* OpenCode model ids already carry their provider (`providerID/modelID`), so
      its catalog is agent-scoped and needs no providerId; every adapter still
@@ -153,6 +155,12 @@ export function ModelPicker({
   // 手填了目录里没有的模型时不要回退到默认模型的 effort，否则自定义
   // 供应商的手输模型会显示错的下拉；此时走下面的 fallback 手填入口。
   const selected = matched || (!model ? models.find((item) => item.isDefault) : undefined);
+  // OpenCode 系模型 ID 自带供应商前缀（provider/model）。触发器显示完整 ID，
+  // 避免只看到模型名时分不清来自哪个供应商；其他 agent 仍显示可读名称。
+  const triggerModelLabel = (() => {
+    const id = matched?.id || model;
+    return id.includes("/") ? id : undefined;
+  })();
 
   useEffect(() => {
     if (!providerId && !combinedCatalog) return;
@@ -209,7 +217,13 @@ export function ModelPicker({
     };
   }, [agentId, providerId, combinedCatalog, debouncedCwd]);
 
-  const efforts = selected?.supportedReasoningEfforts || [];
+  const efforts = useMemo(
+    () =>
+      [...(selected?.supportedReasoningEfforts || [])].sort((a, b) =>
+        compareReasoningVariants(a.reasoningEffort, b.reasoningEffort),
+      ),
+    [selected],
+  );
   const searchOptions = useMemo<SearchableOption[]>(
     () =>
       models.map((item) => ({
@@ -311,6 +325,7 @@ export function ModelPicker({
             emptyText="没有匹配的模型"
             connectedToggle={combinedCatalog}
             fallbackLabel={model || undefined}
+            triggerLabel={triggerModelLabel}
             onStar={toggleModelStar}
             onChange={(next) => {
               const nextModel = models.find(

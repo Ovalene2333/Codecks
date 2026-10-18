@@ -3,6 +3,12 @@
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Git Bash/MSYS 的 $$ 不是 Windows pid；Deck 的进程树扫描用 winpid。
+PID=$$
+if [ -r "/proc/$$/winpid" ]; then
+  win=$(cat "/proc/$$/winpid" 2>/dev/null || true)
+  [ -n "$win" ] && PID=$win
+fi
 DECK_HOME="${CODEX_DECK_HOME:-$HOME/.codex-deck}"
 INSTALLED="$DECK_HOME/bin/deck-api"
 
@@ -28,7 +34,8 @@ usage() { # [create|send|wake] —— 不带参数打印总览，带主题打印
       cat <<'EOF'
 deck-api create <agentId> [--mode queue|interrupt] [--name title] [--file path|-] -- <问题>
     创建独立会话并绑定来源；目标自行用 send 回传，不自动转发最终回复。
-    正常结束没有自动通知：目标不主动 send，来源就不会收到任何消息。
+    受理后本回合就结束：不要 sleep、轮询或等待结果；回传会在新的 [wake] 回合到达。
+    即使没有结论，目标也应主动 send 一条状态；目标不 send 时来源不会收到消息。
     --mode 是目标消息回传到来源时的默认投递方式，默认 queue。
     --session agent:thread 显式指定创建来源；默认由 Deck 识别（无法佐证时必须显式给出）。
     仅用户明确要求时使用 --provider id / --model id / --effort value；否则使用 Deck 默认。
@@ -40,9 +47,10 @@ deck-api send [--mode queue|interrupt] [--to agent:thread | --code code] [--file
     不指定目标时发给 create 绑定的来源；默认沿用创建时的 mode。
     消息必须放在 -- 之后；旧式 `send <代号> <消息>` 不接受。
     --to/--code 显式指定其他目标时默认 queue，不需要查询目标配置。
-    --session agent:thread 指定当前发送会话（不是收件人）。
+    --session agent:thread 指定当前发送会话（不是收件人）；多会话或跨平台时建议显式带上。
     --request-id id 可用于绑定来源消息的幂等重试；同一 id 不得换内容或 mode。
-    一次可发送进度、澄清问题或结果，可多次发送；2xx 表示持久受理，不表示已读。
+    一次可发送进度、澄清问题或结果，可多次发送；2xx 表示持久受理，不表示已送达或已读。
+    send 返回后不要等待、轮询或反复追问来源。
 EOF
       ;;
     wake|watch|poll)
@@ -69,7 +77,9 @@ deck-api whoami / list                        确认当前会话 / 查看唤醒�
 deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
 
 queue 等目标空闲；interrupt 停止目标当前回合再发送。
-create 会话正常结束没有自动通知：目标不 send，来源就收不到消息；启动/执行失败仍自动通知。
+create 受理后结束本回合，不要 sleep/轮询/等待；目标会以新的 [wake] 回合回传。
+create 会话正常结束没有自动通知：目标不 send，来源就收不到消息；即使没有结论，也应 send 一条状态。
+启动/执行失败仍自动通知。
 地址与令牌读取 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/{url,token}，
 可用 DECK_API_URL / DECK_TOKEN 覆盖；兼容 DECK_SEND_URL / DECK_WAKE_URL。
 旧 ask/watch/poll/asks/ps/stop 命令继续兼容。
@@ -125,7 +135,7 @@ prepare() {
   local code_json=null
   [ -n "$1" ] && code_json=$(json_str "$1")
   api POST /api/deck/prepare "$(printf '{"code":%s,"pid":%s,"cwd":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"command":%s,"force":%s,"dryRun":%s}' \
-    "$code_json" "$$" "$(json_str "$PWD")" "$(json_str "${session-}")" "${session_explicit:-false}" \
+    "$code_json" "$PID" "$(json_str "$PWD")" "$(json_str "${session-}")" "${session_explicit:-false}" \
     "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")"
 }
 
@@ -194,7 +204,13 @@ spawn() { # code subcommand args...
   else
     nohup bash "$SELF" "$@" >"$log" 2>&1 </dev/null &
   fi
-  echo "watcher 已在后台启动：pid $!，代号 $code，日志 $log"
+  local child=$! shown=$!
+  if [ -r "/proc/$child/winpid" ]; then
+    local win
+    win=$(cat "/proc/$child/winpid" 2>/dev/null || true)
+    [ -n "$win" ] && shown=$win
+  fi
+  echo "watcher 已在后台启动：pid $shown，代号 $code，日志 $log"
 }
 
 WATCH_TMP=""
@@ -286,9 +302,9 @@ case "$cmd" in
     body=$(printf '{"targetAgentId":%s,"returnMode":%s,"providerId":%s,"model":%s,"reasoningEffort":%s,"name":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s,"question":%s}' \
       "$(json_str "$target")" "$(json_str "$mode")" "$(json_str "$provider")" "$(json_str "$model")" \
       "$(json_str "$effort")" "$(json_str "$name")" "$(json_str "$session")" "$session_explicit" \
-      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$$" "$(json_str "$question")")
+      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "$(json_str "$question")")
     api POST /api/deck/create "$body" || exit 1
-    echo '会话已创建；目标将通过 deck-api send 主动回传（不主动 send 就没有通知），失败会自动通知。现在结束回合，无需等待。'
+    echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 就不会有通知，失败会自动通知。'
     ;;
   whoami)
     session=${CODEX_DECK_SESSION-}; session_explicit=false
@@ -331,7 +347,7 @@ case "$cmd" in
     [ -n "$text" ] || die "缺少消息内容"
     body=$(printf '{"text":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s' \
       "$(json_str "$text")" "$(json_str "$session")" "$session_explicit" \
-      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$$")
+      "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID")
     [ -z "$mode" ] || body+=",\"mode\":$(json_str "$mode")"
     [ -z "$to" ] || body+=",\"to\":$(json_str "$to")"
     [ -z "$code" ] || body+=",\"code\":$(json_str "$code")"

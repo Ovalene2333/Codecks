@@ -1969,7 +1969,6 @@ export function App() {
       {wakeThread && (
         <WakeModal
           thread={wakeThread}
-          onCreated={refresh}
           watchers={wakeFor(wakeThread).watchers}
           lost={wakeFor(wakeThread).lost}
           onClose={() => setWakeThread(null)}

@@ -2,11 +2,28 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Radar, Send, Square, X } from "lucide-react";
 import { api, getToken, post, remove } from "../api";
 import { copyText } from "../clipboard";
-import { threadPath } from "../agents";
+import { agentShortName, threadPath } from "../agents";
+import { relativeTime, sessionKey } from "../format";
+import { sessionPath } from "../deck-history";
+import { ASK_STATUS } from "../session/AskNotice";
 import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Button, Field, Switch } from "../kit";
 import { Modal } from "../ui";
-import { AskForm } from "./AskForm";
+
+
+type AskItem = {
+  id: string;
+  sourceAgentId: string;
+  sourceThreadId: string;
+  targetAgentId: string;
+  targetThreadId?: string;
+  targetProviderId?: string;
+  returnMode: "queue" | "interrupt";
+  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  sentCount: number;
+  updatedAt: number;
+  error?: string;
+};
 
 /**
  * 远程唤醒：查看本会话的 watcher（可停止）与失联记录（可通知/忽略），
@@ -18,7 +35,6 @@ export function WakeModal({
   watchers,
   lost,
   onClose,
-  onCreated,
 }: {
   thread: ThreadSummary;
   /** 本机正绑定此会话代号的 watcher（来自快照缓存，可能滞后几秒）。 */
@@ -26,7 +42,6 @@ export function WakeModal({
   /** 此会话失联待处理的 watcher。 */
   lost: LostWakeWatcher[];
   onClose: () => void;
-  onCreated: () => void;
 }) {
   const [code, setCode] = useState<string | null>(null);
   const [localUrl, setLocalUrl] = useState("");
@@ -38,6 +53,50 @@ export function WakeModal({
   const [copied, setCopied] = useState(false);
   /** 已点过停止/处理、等快照刷新的条目，先在界面上隐藏。 */
   const [handled, setHandled] = useState<ReadonlySet<string>>(new Set());
+  const [asks, setAsks] = useState<AskItem[]>([]);
+  const [asksError, setAsksError] = useState("");
+  const storageKey = `deck:wake-hidden:v1:${sessionKey(thread)}`;
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      return new Set(Array.isArray(saved) ? saved.filter((key): key is string => typeof key === "string") : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const saveHidden = (next: ReadonlySet<string>) => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify([...next]));
+    } catch {
+      setError("无法保存隐藏记录，刷新后可能重新显示");
+    }
+    setHidden(next);
+  };
+  const hide = (key: string) => saveHidden(new Set([...hidden, key]));
+  const watcherKey = (item: WakeWatcher) => `watcher:${item.pid}:${item.startedAt}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    const sourceAgent = thread.agentId || "codex";
+    const load = async () => {
+      try {
+        const { items } = await api<{ items: AskItem[] }>("/deck/sessions");
+        if (cancelled) return;
+        setAsks(items.filter((item) =>
+          item.sourceAgentId === sourceAgent && item.sourceThreadId === thread.id
+        ).sort((left, right) => right.updatedAt - left.updatedAt));
+        setAsksError("");
+      } catch (error: any) {
+        if (!cancelled) setAsksError(error.message || "询问记录读取失败");
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [thread.id, thread.agentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,8 +181,10 @@ export function WakeModal({
     }
   };
 
-  const liveWatchers = watchers.filter((item) => !handled.has(`pid:${item.pid}`));
+  const liveWatchers = watchers.filter((item) => !handled.has(`pid:${item.pid}`) && !hidden.has(watcherKey(item)));
   const openLost = lost.filter((item) => !handled.has(`lost:${item.id}`));
+
+  const visibleAsks = asks.filter((item) => !hidden.has(`ask:${item.id}`));
 
   const supervision = (
     <>
@@ -186,13 +247,23 @@ export function WakeModal({
               >
                 <Square />
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconOnly
+                title="隐藏记录（进程继续运行）"
+                aria-label={`隐藏监督进程 ${item.label} 的记录`}
+                onClick={() => hide(watcherKey(item))}
+              >
+                <X />
+              </Button>
             </li>
           ))}
         </ul>
       ) : (
         <div className="wake-watching" role="status">
           <Radar aria-hidden="true" />
-          本机暂无监督进程盯着此会话
+          暂无可见的监督进程
         </div>
       )}
     </>
@@ -200,7 +271,65 @@ export function WakeModal({
 
   return (
     <Modal title="任务回传" onClose={onClose}>
-      <AskForm thread={thread} onCreated={onCreated} />
+      {hidden.size > 0 && (
+        <Button variant="ghost" size="sm" onClick={() => saveHidden(new Set())}>
+          恢复隐藏记录（{hidden.size}）
+        </Button>
+      )}
+      {visibleAsks.length > 0 && (
+        <section className="wake-asks" aria-label="我发起的询问">
+          <div className="wake-asks-head">
+            <h3>我发起的询问</h3>
+            <span>{visibleAsks.length}</span>
+          </div>
+          <ul>
+            {visibleAsks.map((item) => {
+              const target = item.targetThreadId
+                ? sessionKey({
+                    agentId: item.targetAgentId,
+                    providerId: item.targetProviderId || "",
+                    id: item.targetThreadId,
+                  })
+                : "";
+              const noReply = item.status === "completed" && !item.sentCount;
+              const statusLabel = item.status === "completed" && item.sentCount
+                ? "已完成（已回传）"
+                : ASK_STATUS[item.status];
+              return (
+                <li key={item.id} className={`wake-ask${noReply ? " is-empty" : ""}`}>
+                  <div className="wake-ask-main">
+                    {target ? (
+                      <a href={sessionPath(target)}>
+                        {agentShortName(item.targetAgentId)} · {item.targetThreadId!.slice(0, 8)}
+                      </a>
+                    ) : (
+                      <span>{agentShortName(item.targetAgentId)}</span>
+                    )}
+                    <span className={`wake-ask-status is-${item.status}`}>
+                      {statusLabel}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      iconOnly
+                      title="隐藏询问记录"
+                      aria-label={`隐藏询问记录 ${item.targetThreadId || item.id}`}
+                      onClick={() => hide(`ask:${item.id}`)}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                  <small className="wake-ask-meta">
+                    累计回传 {item.sentCount} 条 · {item.returnMode === "interrupt" ? "打断回传" : "Queue 回传"} · {relativeTime(item.updatedAt)}
+                  </small>
+                  {item.error && <small className="wake-ask-error">{item.error}</small>}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      {asksError && <p className="error-text">{asksError}</p>}
       {!loaded ? (
         <p className="form-hint">正在读取唤醒状态…</p>
       ) : (

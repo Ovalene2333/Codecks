@@ -1187,7 +1187,7 @@ test("OpenCode sessions fall back to the generated slug and expose effort varian
   const gpt5 = models.find((model) => model.model === "openai/gpt-5");
   assert.deepEqual(
     gpt5?.supportedReasoningEfforts?.map((item) => item.reasoningEffort),
-    ["low", "medium", "high"],
+    ["high", "medium", "low"],
   );
   assert.equal(gpt5?.supportsImages, false);
   assert.equal(

@@ -8,7 +8,7 @@ export interface ModelAffinityParams {
 }
 
 export interface ModelAffinity {
-  /** 收藏的模型 id（model 字段），保持用户收藏顺序。 */
+  /** 收藏的模型 id（model 字段），跨项目/供应商共享，保持用户收藏顺序。 */
   starred: string[];
   /** 每个模型的累计选中次数。 */
   counts: Record<string, number>;
@@ -17,17 +17,29 @@ export interface ModelAffinity {
   updatedAt: number;
 }
 
+interface ModelAffinityScope {
+  counts: Record<string, number>;
+  last: string | null;
+  updatedAt: number;
+}
+
 interface StoredModelAffinity {
-  version: 1;
-  scopes: Partial<Record<string, ModelAffinity>>;
+  version: 2;
+  /** agent 级收藏：同一 agent 的所有项目/供应商共享。 */
+  starred: Record<string, string[]>;
+  scopes: Partial<Record<string, ModelAffinityScope>>;
 }
 
 /** 单作用域保留的选择记录上限，超出按次数从低往高裁。 */
 const MAX_COUNTS_PER_SCOPE = 200;
-/** 单作用域收藏上限。 */
-const MAX_STARRED_PER_SCOPE = 100;
+/** 单 agent 收藏上限。 */
+const MAX_STARRED_PER_AGENT = 100;
 
-const empty = (): StoredModelAffinity => ({ version: 1, scopes: {} });
+const empty = (): StoredModelAffinity => ({
+  version: 2,
+  starred: Object.create(null) as Record<string, string[]>,
+  scopes: {},
+});
 
 function cleanModelId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -64,22 +76,39 @@ export class ModelAffinityStore {
   async load() {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
-      if (parsed?.version !== 1 || !parsed?.scopes) return;
-      const scopes: Partial<Record<string, ModelAffinity>> = {};
+      const version = parsed?.version;
+      if ((version !== 1 && version !== 2) || !parsed?.scopes) return;
+      const starred: Record<string, string[]> = Object.create(null);
+      const rememberStar = (agent: string, id: string) => {
+        const list = (starred[agent] ||= []);
+        if (!list.includes(id)) list.push(id);
+      };
+      if (version === 2 && parsed.starred && typeof parsed.starred === "object") {
+        for (const [agent, list] of Object.entries(parsed.starred)) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            const id = cleanModelId(item);
+            if (id) rememberStar(agent, id);
+          }
+        }
+      }
+      const scopes: Partial<Record<string, ModelAffinityScope>> = {};
       for (const [key, entry] of Object.entries(parsed.scopes)) {
         if (!entry || typeof entry !== "object" || Array.isArray(entry))
           continue;
-        const scope: ModelAffinity = {
-          starred: [],
+        const scope: ModelAffinityScope = {
           counts: {},
           last: null,
           updatedAt: 0,
         };
         const record = entry as Record<string, unknown>;
-        if (Array.isArray(record.starred)) {
+        // v1 的收藏按作用域存；升级时并入 agent 级收藏，之后不再分项目。
+        if (version === 1 && Array.isArray(record.starred)) {
+          const separator = key.indexOf(":");
+          const agent = separator < 0 ? key : key.slice(0, separator);
           for (const item of record.starred) {
             const id = cleanModelId(item);
-            if (id && !scope.starred.includes(id)) scope.starred.push(id);
+            if (id) rememberStar(agent, id);
           }
         }
         if (record.counts && typeof record.counts === "object") {
@@ -99,7 +128,9 @@ export class ModelAffinityStore {
           scope.updatedAt = updatedAt;
         scopes[key] = scope;
       }
-      this.data = { version: 1, scopes };
+      for (const [agent, list] of Object.entries(starred))
+        starred[agent] = list.slice(0, MAX_STARRED_PER_AGENT);
+      this.data = { version: 2, starred, scopes };
     } catch (error: any) {
       // 脏 JSON / 首次运行都回退为空，绝不能拖垮启动。
       if (error?.code !== "ENOENT")
@@ -113,7 +144,7 @@ export class ModelAffinityStore {
   get(agentId: AgentId, params: ModelAffinityParams): ModelAffinity {
     const scope = this.data.scopes[modelAffinityScope(agentId, params)];
     return {
-      starred: scope ? [...scope.starred] : [],
+      starred: [...(this.data.starred[agentId] || [])],
       counts: scope ? { ...scope.counts } : {},
       last: scope?.last ?? null,
       updatedAt: scope?.updatedAt ?? 0,
@@ -126,7 +157,6 @@ export class ModelAffinityStore {
     if (!id) return this.get(agentId, params);
     const key = modelAffinityScope(agentId, params);
     const scope = (this.data.scopes[key] ||= {
-      starred: [],
       counts: {},
       last: null,
       updatedAt: 0,
@@ -139,7 +169,7 @@ export class ModelAffinityStore {
     return this.get(agentId, params);
   }
 
-  /** 收藏 / 取消收藏。 */
+  /** 收藏 / 取消收藏：写入 agent 级收藏，所有项目/供应商共享。 */
   async setStarred(
     agentId: AgentId,
     params: ModelAffinityParams,
@@ -148,22 +178,16 @@ export class ModelAffinityStore {
   ) {
     const id = cleanModelId(model);
     if (!id) return this.get(agentId, params);
-    const key = modelAffinityScope(agentId, params);
-    const scope = (this.data.scopes[key] ||= {
-      starred: [],
-      counts: {},
-      last: null,
-      updatedAt: 0,
-    });
-    scope.starred = scope.starred.filter((item) => item !== id);
-    if (on) scope.starred.unshift(id);
-    scope.starred = scope.starred.slice(0, MAX_STARRED_PER_SCOPE);
-    scope.updatedAt = Date.now();
+    const starred = (this.data.starred[agentId] || []).filter(
+      (item) => item !== id,
+    );
+    if (on) starred.unshift(id);
+    this.data.starred[agentId] = starred.slice(0, MAX_STARRED_PER_AGENT);
     await this.save();
     return this.get(agentId, params);
   }
 
-  private prune(scope: ModelAffinity) {
+  private prune(scope: ModelAffinityScope) {
     const models = Object.keys(scope.counts);
     if (models.length <= MAX_COUNTS_PER_SCOPE) return;
     // 留次数最高的；并列时后选中的优先（last 排最前）。

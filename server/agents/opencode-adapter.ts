@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { allowOpenCodeExternalDirectories, openCodeGlobalDir } from "../opencode-config.js";
+import { sortReasoningVariants } from "../../shared/reasoning-variants.js";
 import { assertMessageInput, messageBusy, type AgentMessageInput, type AgentMessageAcceptance } from "./messages.js";
 import { killProcessTree, stopChildProcess } from "../process-tree.js";
 import { findFreeListenPort } from "../runtime-port.js";
@@ -147,7 +148,9 @@ function modelSupportsImages(meta?: OpenCodeModelMeta): boolean | undefined {
 
 /** Reasoning effort in OpenCode is a model variant: low / medium / high / max. */
 function modelVariants(meta?: OpenCodeModelMeta) {
-  const names = Object.keys(meta?.variants || {}).filter(Boolean);
+  const names = sortReasoningVariants(
+    Object.keys(meta?.variants || {}).filter(Boolean),
+  );
   return names.length
     ? names.map((name) => ({ reasoningEffort: name }))
     : undefined;

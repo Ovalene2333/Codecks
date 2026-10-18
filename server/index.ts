@@ -37,6 +37,7 @@ import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
 import { foldTurns, sliceTurnsPage, TURN_SLICE_PARTIAL_KEY } from "./agents/turn-fold.js";
 import { registerMessageRoutes } from "./message-api.js";
+import { installDevApi } from "./dev-api.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentId } from "./agents/types.js";
 import type { ThreadSummary } from "./types.js";
@@ -45,7 +46,7 @@ import { formatHost, isIpv6Host, lanAddresses } from "./network.js";
 import { Pairing, PairRateLimiter } from "./pairing.js";
 import { printQrCode } from "./terminal-qr.js";
 import { startTunnel, type TunnelController } from "./tunnel.js";
-import { resolveRuntimeCodexHome } from "./runtime-home.js";
+import { installWslScripts, resolveRuntimeCodexHome, resolveWslDeckHome, resolveWslHome, writeWslDiscovery } from "./runtime-home.js";
 import { shouldUseWslRuntime } from "./runtime-platform.js";
 import {
   acquireRuntimeLock,
@@ -67,6 +68,8 @@ import { AskService } from "./ask-service.js";
 import {
   listWakeWatchers,
   readTail,
+  readWslTail,
+  stopWatcherProcess,
   verifyWatcherProcess,
   WakeWatcherCache,
 } from "./wake-watchers.js";
@@ -132,11 +135,19 @@ const wslWake =
       })
     : undefined;
 let codexHome: string;
+let wslHome: string | undefined;
+let wslDeckHome: string | undefined;
 try {
+  if (useWsl) {
+    wslHome = await resolveWslHome();
+    wslDeckHome = await resolveWslDeckHome().catch(() =>
+      path.posix.join(wslHome!, ".codex-deck"),
+    );
+  }
   codexHome = await resolveRuntimeCodexHome(
     useWsl ? process.env.CODEX_WSL_HOME : process.env.CODEX_HOME,
     dataDir,
-    { useWsl },
+    { useWsl, wslHome },
   );
 } catch (error: any) {
   const detail = error?.message || String(error);
@@ -311,15 +322,19 @@ await askSettings.load();
 // 的 deck-api 状态即时更新。
 // 台账记住见过的 watcher：进程消失却没留下「已唤醒/已停止」的记为失联，
 // 进首页「需要处理」。Deck 停机期间消失的也能在重启后发现。
+const watchDir = useWsl && wslDeckHome
+  ? path.posix.join(wslDeckHome, "watch")
+  : path.join(deckHome, "watch");
 const watcherLedger = new WakeWatcherLedger({
   file: path.join(dataDir, "wake-watchers.json"),
-  readLog: (file) => readTail(file).catch(() => undefined),
+  readLog: (file) =>
+    (useWsl ? readWslTail(file) : readTail(file)).catch(() => undefined),
   onChanged: () => broadcastSnapshotSoon(),
 });
 await watcherLedger.load();
 const watcherCache = new WakeWatcherCache(
   async () => {
-    const items = (await listWakeWatchers(path.join(deckHome, "watch"))).map(
+    const items = (await listWakeWatchers(watchDir, Date.now(), { wsl: useWsl })).map(
       (watcher) => ({
         ...watcher,
         ...threadSettings.findByWakeCode(watcher.code),
@@ -575,7 +590,7 @@ const resolveWakeCaller = async (input: z.infer<typeof wakePrepareSchema>) => re
   session: input.session || undefined, sessionExplicit: input.sessionExplicit,
   codexThread: input.codexThread || undefined,
   ancestors: input.pid ? await ancestorPids(input.pid) : [], cwd: input.cwd,
-}, { threads: agents.snapshot().threads, runtimePids: agents.runtimePids() });
+}, { threads: agents.snapshot().threads, runtimePids: agents.runtimePids(), trustEnv: useWsl });
 const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
   const thread = tryThreadSummary(target.agentId, target.threadId);
   return `「${thread?.name || target.threadId}」（${target.agentId}）`;
@@ -764,15 +779,11 @@ app.post(
     if (!watcher) throw new Error(`进程号 ${pid} 不是正在运行的 deck-api 监督进程`);
     // kill 前按 argv 复核一次：缓存扫描到 kill 之间进程可能退出、pid 可能
     // 被复用，SIGUSR1 的默认动作是终止，不能发给无关进程组。
-    if (!(await verifyWatcherProcess(pid)))
+    if (!(await verifyWatcherProcess(pid, { wsl: useWsl })))
       throw new Error(`进程 ${pid} 刚刚退出或已不是 deck-api watcher，取消停止`);
     watcherLedger.markStopping(watcher);
     // watcher 由 setsid 拉起，是进程组组长：连同它等待的 ssh 一起停。
-    try {
-      process.kill(-pid, "SIGUSR1");
-    } catch {
-      process.kill(pid, "SIGUSR1");
-    }
+    await stopWatcherProcess(pid, { wsl: useWsl });
     setTimeout(() => {
       watcherCache.invalidate();
       void watcherCache.current();
@@ -947,8 +958,9 @@ function affinityParams(req: { query: Record<string, unknown> }) {
   };
 }
 /**
- * 模型的「上次选择 / 常用 / 收藏」：agent + 供应商/目录作用域，
- * 多端入口共享，落服务端（见 model-affinity.ts）。
+ * 模型的「上次选择 / 常用 / 收藏」：收藏按 agent 全局共享（跨项目/供应商），
+ * 上次选择与常用仍按 agent + 供应商/目录作用域；多端入口共享，落服务端
+ * （见 model-affinity.ts）。
  */
 app.get(
   "/api/agents/:agentId/model-affinity",
@@ -1544,6 +1556,8 @@ app.post(
   }),
 );
 registerMessageRoutes(app, agents, messageDeliveries);
+if (installDevApi(app, agents))
+  process.stderr.write("开发测试 API 已启用：/api/dev/approvals\n");
 app.post(
   "/api/agents/:agentId/threads/:threadId/interrupt",
   route(async (req) => {
@@ -2693,6 +2707,33 @@ try {
   }
 } catch (error: any) {
   console.error("安装 Deck 调用脚本失败:", error?.message || error);
+}
+if (useWsl && wslDeckHome) {
+  try {
+    const wslBase = /127\.0\.0\.1|\[::1\]|localhost/.test(localBase)
+      ? host === "0.0.0.0" || host === "::"
+        ? lanAddresses(port, "", undefined, "ipv4")[0]?.replace(/\/$/, "")
+        : undefined
+      : localBase;
+    const discoveryUrl = wslBase || localBase;
+    await writeWslDiscovery(wslDeckHome, discoveryUrl, token);
+    await installWslScripts(
+      wslDeckHome,
+      ["deck-api", "deck-send", "deck-wake"].map((script) => ({
+        name: script,
+        content: readFileSync(
+          path.join(projectRoot, `skills/${script}/scripts/${script}`),
+          "utf8",
+        ),
+      })),
+    );
+    if (/127\.0\.0\.1|\[::1\]|localhost/.test(discoveryUrl))
+      process.stderr.write(
+        "WSL 模式提示：WSL 与 Windows 默认不共享 127.0.0.1。若 deck-api 无法连接 Deck，请启用 WSL 镜像网络，或用 --host 绑定具体 LAN IP，或在 WSL 设置 DECK_API_URL。\n",
+      );
+  } catch (error: any) {
+    console.error("写入 WSL 唤醒发现文件失败:", error?.message || error);
+  }
 }
 if (lanListener) {
   const urls = lanAddresses(port, token, undefined, ipv6Host ? "ipv6" : "ipv4");

@@ -831,3 +831,29 @@ test("disabling the primary agent lets its fallback take over", async () => {
     undefined,
   );
 });
+
+test("dev approvals join the snapshot and resolve without touching the adapter", async () => {
+  const codex = new FakeAgent("codex");
+  const registry = new AgentRegistry([codex]);
+  const events: any[] = [];
+  registry.on("event", (event) => events.push(event));
+
+  const approval = registry.injectDevApproval({
+    threadId: "codex-thread",
+    params: { command: "echo hi" },
+  });
+  assert.equal(approval.providerId, "codex-profile");
+  assert.equal(approval.request.params?.threadId, "codex-thread");
+  assert.deepEqual(
+    registry.snapshot().approvals.map((item) => item.id),
+    [approval.id],
+  );
+  assert.ok(events.some((event) => event.type === "approval.requested"));
+
+  assert.deepEqual(
+    await registry.resolveApproval("codex", approval.id, { decision: "accept" }),
+    { ok: true, source: "dev" },
+  );
+  assert.deepEqual(registry.snapshot().approvals, []);
+  assert.ok(events.some((event) => event.type === "approval.resolved"));
+});

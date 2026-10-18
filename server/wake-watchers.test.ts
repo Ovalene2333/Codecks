@@ -4,7 +4,10 @@ import {
   parseEtime,
   parseLogState,
   parseWatcherArgv,
+  parseWindowsProcessList,
+  parseWslProcessList,
   pickLog,
+  splitCommandLine,
   WakeWatcherCache,
 } from "./wake-watchers.js";
 import type { WakeWatcher } from "./types.js";
@@ -39,6 +42,37 @@ test("other processes and malformed argv are ignored", () => {
   // 代号不合法、缺少 -- 分隔
   assert.equal(parseWatcherArgv(["bash", "deck-wake", "_poll", "Bad!", "l", "60", RE, "0", "--", "x"]), undefined);
   assert.equal(parseWatcherArgv(["bash", "deck-wake", "_watch", "a1", "l", "40", "x"]), undefined);
+});
+
+test("quoted command lines keep paths with spaces together", () => {
+  assert.deepEqual(
+    splitCommandLine('"C:\\Program Files\\Git\\bin\\bash.exe" "C:\\Users\\u\\.codex-deck\\bin\\deck-api" _watch a1 demo 40 -- ssh box wait'),
+    ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Users\\u\\.codex-deck\\bin\\deck-api", "_watch", "a1", "demo", "40", "--", "ssh", "box", "wait"],
+  );
+});
+
+test("windows process list finds watcher argv and start time", () => {
+  const items = parseWindowsProcessList(
+    '123\t1700000000000\t"C:\\Program Files\\Git\\bin\\bash.exe" "C:\\Users\\u\\.codex-deck\\bin\\deck-api" _watch a1 demo 40 -- ssh box wait\r\n',
+  );
+  assert.equal(items.length, 1);
+  assert.equal(items[0].pid, 123);
+  assert.equal(items[0].startedAt, 1700000000000);
+  assert.deepEqual(parseWatcherArgv(items[0].argv), {
+    code: "a1", mode: "watch", label: "demo", command: "ssh box wait",
+  });
+});
+
+test("wsl ps list converts elapsed seconds to start time", () => {
+  const items = parseWslProcessList(
+    "55 120 bash /home/u/.codex-deck/bin/deck-api _poll a1 demo 60 ^DONE 0 -- ssh box check\n",
+    1_000_000,
+  );
+  assert.equal(items[0].pid, 55);
+  assert.equal(items[0].startedAt, 880_000);
+  assert.deepEqual(parseWatcherArgv(items[0].argv), {
+    code: "a1", mode: "poll", label: "demo", intervalSec: 60, command: "ssh box check",
+  });
 });
 
 test("ps etime becomes milliseconds", () => {

@@ -31,13 +31,27 @@ export interface WatcherArgs {
   command: string;
 }
 
+/** 保留带空格的引号参数；Windows/macOS 的进程命令行都是这种形式。 */
+export function splitCommandLine(line: string) {
+  return (line.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((token) =>
+    token.replace(/^(["'])(.*)\1$/, "$2"),
+  );
+}
+
+export interface WatcherScanOptions {
+  /** Windows 上通过 wsl.exe 扫描 WSL 内的 watcher。 */
+  wsl?: boolean;
+}
+
 /** `bash …/deck-wake _poll <code> <label> <interval> <re> <all> -- cmd…` / `_watch <code> <label> <lines> -- cmd…` */
 export function parseWatcherArgv(argv: string[]): WatcherArgs | undefined {
   const at = argv.findIndex(
     (arg, index) =>
       (arg === "_watch" || arg === "_poll") &&
       index > 0 &&
-      ["deck-api", "deck-send", "deck-wake"].includes(path.posix.basename(argv[index - 1])),
+      ["deck-api", "deck-send", "deck-wake"].includes(
+        path.posix.basename(argv[index - 1].replace(/\\/g, "/")),
+      ),
   );
   if (at < 0) return undefined;
   const rest = argv.slice(at + 1);
@@ -165,9 +179,85 @@ async function psProcesses(now: number): Promise<ProcessInfo[]> {
     const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
     const elapsed = match ? parseEtime(match[2]) : undefined;
     if (!match || elapsed == null) continue;
-    found.push({ pid: Number(match[1]), argv: match[3].split(/\s+/), startedAt: now - elapsed });
+    found.push({ pid: Number(match[1]), argv: splitCommandLine(match[3]), startedAt: now - elapsed });
   }
   return found;
+}
+
+/** Windows：CIM 给出完整命令行和启动时间；只保留含 deck-* 的进程。 */
+async function windowsProcesses(): Promise<ProcessInfo[]> {
+  const script =
+    "$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'deck-(api|send|wake)' } | ForEach-Object { '{0}\t{1}\t{2}' -f $_.ProcessId, ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds(), $_.CommandLine }";
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { windowsHide: true, timeout: 15_000, maxBuffer: 8 * 1024 * 1024 },
+  );
+  return parseWindowsProcessList(stdout);
+}
+
+export function parseWindowsProcessList(stdout: string): ProcessInfo[] {
+  const found: ProcessInfo[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\t(\d+)\t(.*)$/.exec(line);
+    if (!match) continue;
+    const command = match[3].trim();
+    if (!command.includes("deck-")) continue;
+    found.push({
+      pid: Number(match[1]),
+      argv: splitCommandLine(command),
+      startedAt: Number(match[2]),
+    });
+  }
+  return found;
+}
+
+/** WSL 内 ps：etimes 为已运行秒数，args 可能丢引号边界，但只影响标签展示。 */
+async function wslProcesses(now: number): Promise<ProcessInfo[]> {
+  const { stdout } = await execFileAsync(
+    "wsl.exe",
+    ["--exec", "ps", "-eww", "-o", "pid=,etimes=,args="],
+    { windowsHide: true, timeout: 15_000, maxBuffer: 8 * 1024 * 1024 },
+  );
+  return parseWslProcessList(stdout, now);
+}
+
+export function parseWslProcessList(stdout: string, now: number): ProcessInfo[] {
+  const found: ProcessInfo[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (!match) continue;
+    const command = match[3].trim();
+    if (!command.includes("deck-")) continue;
+    found.push({
+      pid: Number(match[1]),
+      argv: splitCommandLine(command),
+      startedAt: now - Number(match[2]) * 1_000,
+    });
+  }
+  return found;
+}
+
+async function wslList(logDir: string) {
+  const { stdout } = await execFileAsync(
+    "wsl.exe",
+    ["--exec", "sh", "-c", 'ls -1 -- "$1" 2>/dev/null || true', "sh", logDir],
+    { windowsHide: true, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
+  );
+  return stdout.split(/\r?\n/).filter(Boolean);
+}
+
+export async function readWslTail(file: string) {
+  const { stdout } = await execFileAsync(
+    "wsl.exe",
+    [
+      "--exec", "sh", "-c",
+      'tail -c "$2" -- "$1" 2>/dev/null || true',
+      "sh", file, String(LOG_TAIL_BYTES),
+    ],
+    { windowsHide: true, timeout: 10_000, maxBuffer: 2 * 1024 * 1024 },
+  );
+  return stdout;
 }
 
 export async function readTail(file: string) {
@@ -258,7 +348,37 @@ export class WakeWatcherCache {
  * 发停止信号前调用：缓存扫描与 kill 之间进程可能退出、pid 可能被复用，
  * 误发 SIGUSR1 的默认动作是终止进程。
  */
-export async function verifyWatcherProcess(pid: number): Promise<boolean> {
+export async function verifyWatcherProcess(
+  pid: number,
+  options: WatcherScanOptions = {},
+): Promise<boolean> {
+  if (options.wsl) {
+    try {
+      const { stdout } = await execFileAsync(
+        "wsl.exe",
+        ["--exec", "sh", "-c", 'cat "/proc/$1/cmdline" 2>/dev/null || true', "sh", String(pid)],
+        { windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024 },
+      );
+      const argv = stdout.split("\0").filter(Boolean);
+      return parseWatcherArgv(argv) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+  if (process.platform === "win32") {
+    try {
+      const script =
+        `$ErrorActionPreference='Stop'; (Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`;
+      const { stdout } = await execFileAsync(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        { windowsHide: true, timeout: 10_000, maxBuffer: 1024 * 1024 },
+      );
+      return parseWatcherArgv(splitCommandLine(stdout.trim())) !== undefined;
+    } catch {
+      return false;
+    }
+  }
   if (process.platform === "linux") {
     try {
       const raw = await fs.readFile(`/proc/${pid}/cmdline`, "utf8");
@@ -269,34 +389,76 @@ export async function verifyWatcherProcess(pid: number): Promise<boolean> {
       return false;
     }
   }
-  if (process.platform === "win32") return false;
   try {
     const { stdout } = await execFileAsync("ps", ["-o", "args=", "-p", String(pid)]);
-    return parseWatcherArgv(stdout.trim().split(/\s+/)) !== undefined;
+    return parseWatcherArgv(splitCommandLine(stdout.trim())) !== undefined;
   } catch {
     return false;
   }
 }
 
-export async function listWakeWatchers(logDir: string, now = Date.now()): Promise<WakeWatcher[]> {
-  if (process.platform === "win32") return [];
-  const processes =
-    process.platform === "linux" ? await linuxProcesses() : await psProcesses(now);
+export async function stopWatcherProcess(
+  pid: number,
+  options: WatcherScanOptions = {},
+) {
+  if (options.wsl) {
+    await execFileAsync(
+      "wsl.exe",
+      [
+        "--exec", "sh", "-c",
+        'kill -USR1 -- "-$1" 2>/dev/null || kill -USR1 "$1"',
+        "sh", String(pid),
+      ],
+      { windowsHide: true, timeout: 10_000 },
+    );
+    return;
+  }
+  if (process.platform === "win32") {
+    await execFileAsync(
+      "taskkill",
+      ["/PID", String(pid), "/T", "/F"],
+      { windowsHide: true, timeout: 10_000 },
+    );
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGUSR1");
+  } catch {
+    process.kill(pid, "SIGUSR1");
+  }
+}
+
+export async function listWakeWatchers(
+  logDir: string,
+  now = Date.now(),
+  options: WatcherScanOptions = {},
+): Promise<WakeWatcher[]> {
+  const processes = options.wsl
+    ? await wslProcesses(now)
+    : process.platform === "win32"
+      ? await windowsProcesses()
+      : process.platform === "linux"
+        ? await linuxProcesses()
+        : await psProcesses(now);
   const running = processes.flatMap((info) => {
     const args = parseWatcherArgv(info.argv);
     return args ? [{ ...info, args }] : [];
   });
   if (!running.length) return [];
-  const logs = await fs.readdir(logDir).catch(() => [] as string[]);
+  const logs = options.wsl
+    ? await wslList(logDir)
+    : await fs.readdir(logDir).catch(() => [] as string[]);
+  const readLog = options.wsl ? readWslTail : readTail;
+  const joinPath = options.wsl ? path.posix.join : path.join;
   const watchers = await Promise.all(
     running.map(async ({ pid, startedAt, args }) => {
       const watcher: WakeWatcher = { pid, startedAt: Math.round(startedAt), ...args };
       const name = pickLog(logs, args.code, startedAt);
       if (name) {
-        watcher.log = path.join(logDir, name);
+        watcher.log = joinPath(logDir, name);
         if (args.mode === "poll") {
           const { state, stateAt, failures, failedAt } = parseLogState(
-            await readTail(watcher.log).catch(() => ""),
+            await readLog(watcher.log).catch(() => ""),
           );
           if (state) Object.assign(watcher, { state, stateAt });
           // 连上之后脚本只清零计数、不写日志：两个轮询周期内没有新的失败就视为已恢复。

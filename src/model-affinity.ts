@@ -2,7 +2,7 @@ import { api, put } from "./api";
 import type { SearchableOption } from "./SearchablePicker";
 
 export interface ModelAffinityData {
-  /** 收藏的模型 id（model 字段），保持用户收藏顺序。 */
+  /** 收藏的模型 id（model 字段），同一 agent 跨项目/供应商共享，保持用户收藏顺序。 */
   starred: string[];
   /** 每个模型的累计选中次数。 */
   counts: Record<string, number>;
@@ -44,6 +44,7 @@ export function affinityListParams(
   cwd?: string,
 ): AffinityListParams {
   // 和模型目录请求键同粒度：opencode 系按目录，其他 agent 按供应商。
+  // 收藏由服务端按 agent 全局返回，不受这里的项目/供应商作用域影响。
   if (agentId === "opencode" || agentId === "opencode-v2") {
     const directory = cwd?.trim();
     return directory ? { directory } : {};

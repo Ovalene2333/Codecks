@@ -37,6 +37,12 @@ export interface WakeResolveContext {
   threads: ThreadSummary[];
   /** Deck 托管的 agent 后端进程。 */
   runtimePids: { agentId: AgentId; pid: number }[];
+  /**
+   * Windows 上由 wsl.exe 拉起的 Linux agent 与 Deck 不在同一 pid 命名空间，
+   * 这时没有可比较的进程树；WSL 模式改由会话标识（CODEX_DECK_SESSION /
+   * CODEX_THREAD_ID）识别，仍要求会话必须存在。
+   */
+  trustEnv?: boolean;
 }
 
 export type WakeResolution =
@@ -95,7 +101,8 @@ export function resolveWakeSession(
   // 它拉起的其它 agent 也会带着那个会话的变量。进程树明确指向别的
   // agent 时，这类变量不可信；进程树里完全找不到托管 agent 时同样
   // 不可信（可能是用户 shell 里残留的旧值），只有显式 --session 例外。
-  const envTrusted = (agentId: AgentId) => agents.includes(agentId);
+  const envTrusted = (agentId: AgentId) =>
+    Boolean(context.trustEnv) || agents.includes(agentId);
   const failure = (error: string, candidates: ThreadSummary[] = []): WakeResolution => ({
     ok: false,
     error,
@@ -122,9 +129,11 @@ export function resolveWakeSession(
   }
   if (!agents.length)
     return failure(
-      input.session || input.codexThread
-        ? "进程树里没有 Deck 托管的 agent，会话标识环境变量不可信；请用已知身份显式指定（create/send 用 --session，wake 用代号加 -f）"
-        : "无法判断命令来自哪个会话：进程树里没有 Deck 托管的 agent，也没有会话标识环境变量",
+      context.trustEnv && (input.session || input.codexThread)
+        ? "会话标识没有匹配到已知会话；请检查 --session / CODEX_THREAD_ID，或改用已知代号"
+        : input.session || input.codexThread
+          ? "进程树里没有 Deck 托管的 agent，会话标识环境变量不可信；请用已知身份显式指定（create/send 用 --session，wake 用代号加 -f）"
+          : "无法判断命令来自哪个会话：进程树里没有 Deck 托管的 agent，也没有会话标识环境变量",
     );
 
   const running = context.threads.filter(
@@ -186,9 +195,44 @@ async function parentOf(pid: number): Promise<number | undefined> {
   return Number.isInteger(ppid) && ppid > 0 ? ppid : undefined;
 }
 
-/** pid 自身及其祖先（由近到远），读不到即止；Windows 返回空。 */
+export function parseWindowsParentMap(stdout: string) {
+  const map = new Map<number, number>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (!match) continue;
+    map.set(Number(match[1]), Number(match[2]));
+  }
+  return map;
+}
+
+/** Windows 没有 /proc/ps：一次 CIM 查询拿全量父子关系，避免逐级启动 PowerShell。 */
+async function windowsParentMap() {
+  const script =
+    "$ErrorActionPreference='Stop'; Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }";
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    { windowsHide: true, timeout: 8_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  return parseWindowsParentMap(stdout);
+}
+
+/** pid 自身及其祖先（由近到远），读不到即止。 */
 export async function ancestorPids(pid: number): Promise<number[]> {
-  if (process.platform === "win32" || !Number.isInteger(pid) || pid <= 1) return [];
+  if (!Number.isInteger(pid) || pid <= 1) return [];
+  if (process.platform === "win32") {
+    const parents = await windowsParentMap().catch(() => undefined);
+    if (!parents) return [pid];
+    const chain: number[] = [pid];
+    let current = pid;
+    for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
+      const parent = parents.get(current);
+      if (!parent || parent === current || chain.includes(parent) || parent <= 1) break;
+      chain.push(parent);
+      current = parent;
+    }
+    return chain;
+  }
   const chain: number[] = [pid];
   let current = pid;
   for (let depth = 0; depth < MAX_DEPTH; depth += 1) {

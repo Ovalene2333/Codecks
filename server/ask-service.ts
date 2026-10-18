@@ -54,6 +54,7 @@ export class AskService {
       if (!item || item.turnId === turn.id) return;
       item.turnId = turn.id;
       item.status = "running";
+      item.updatedAt = Date.now();
       item.turnSentOffset = item.sentMessages?.length || 0;
       delete item.executionCompletion;
       delete item.executionFailure;
@@ -69,6 +70,7 @@ export class AskService {
       item.targetThreadId === data.params?.threadId && (!item.turnId || item.turnId === turn.id),
     );
     if (!item) return;
+    item.updatedAt = Date.now();
     item.executionCompletion = { turnId: turn.id, status: turn.status };
     if (turn.status !== "completed") {
       item.executionFailure = { turnId: turn.id,
@@ -99,6 +101,7 @@ export class AskService {
           throw new Error("主动消息台账格式无效");
         if (item.status === "creating") {
           item.status = "failed";
+          item.updatedAt = Date.now();
           item.error = "创建期间服务重启，请检查目标会话后重新发起询问";
         }
       }
@@ -117,7 +120,7 @@ export class AskService {
   }
 
   list() {
-    return this.items.map(({ response: _response, sentMessages, ...item }) => ({ ...item, sentCount: sentMessages?.length || 0 }));
+    return this.items.map(({ response: _response, sentMessages, question: _question, ...item }) => ({ ...item, sentCount: sentMessages?.length || 0 }));
   }
 
   decorate(thread: ThreadSummary): ThreadSummary {
@@ -150,6 +153,7 @@ export class AskService {
       item.targetThreadId = thread.id;
       item.targetProviderId = thread.providerId;
       item.status = "queued";
+      item.updatedAt = Date.now();
       await this.save();
       await this.start(item);
       return { item: this.list().find((entry) => entry.id === item.id)!, thread: this.decorate(thread) };
@@ -163,15 +167,19 @@ export class AskService {
     const delivery = await this.options.messages.enqueue(item.targetAgentId, item.targetThreadId!, "queue", {
       text: [
         `[deck-api:create:${item.id}] 来自 ${item.sourceAgentId}:${item.sourceThreadId} 的询问。`,
-        "由你决定何时以及回传什么：使用 deck-api send -- '需要告知发起方的内容' 主动发送（可多次发送进度、澄清问题或结果）。默认目标已绑定为发起会话，无需查询代号。",
-        "结束前请主动 send 有用的结论、关键依据和必要文件位置；完整过程留在本会话。最终回复不会自动转发，正常结束也不会有任何自动通知——来源只会看到你 send 的内容。不要为总结再调用其他模型。",
-        "执行入口优先使用 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api；项目内也可读取 deck-api skill。没有该入口时说明失败，不要猜测来源或借用其他会话。",
-        `本会话身份为 ${item.targetAgentId}:${item.targetThreadId}；自动识别有歧义时，将这个已知值作为 send 的 --session 参数（发送方身份），不要查询或猜测其他会话。`,
-        "这是独立询问会话；只使用本问题提供的上下文，不假设能看到发起会话的历史。",
+        "这是独立会话：你看不到发起会话的历史，需要的背景都在下面的问题里。",
+        "用 deck-api send 主动回传；可以多次发送进度、澄清问题或结果。默认收件人已绑定为发起会话，不需要查询代号。",
+        `本会话身份是 ${item.targetAgentId}:${item.targetThreadId}。推荐回传：用下一条的入口执行 send --session ${item.targetAgentId}:${item.targetThreadId} -- '<要回传的内容>'；显式身份可避免多会话或跨平台时自动识别失败。不要查询或猜测其他会话。`,
+        "执行入口优先使用 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api；项目内也可读取 deck-api skill。没有该入口时说明失败，不要借用其他会话身份。",
+        "结束前必须 send 一条最终结论（关键依据、文件或产物位置）。即使没有新结论、或不需要来源采取行动，也请 send 一条简短状态（如“已完成，无新增结论”）；不要静默结束。",
+        "正常结束不会自动转发最终回复，也不会自动通知来源；来源只会看到你 send 的内容。启动或执行失败会由 Deck 自动通知。",
+        "回传是异步的：send 返回成功后不要等待、轮询或反复追问来源；继续本会话工作或结束。来源的回复不会自动回到本会话，需要时由来源另行 send 到本会话。",
+        "一条消息只放对来源下一步有帮助的内容；完整分析、工具日志和讨论留在本会话，不要为总结再调用其他模型。单条消息上限 80000 字符。",
         "", item.question,
       ].join("\n"),
     }, { id: `ask:${item.id}` });
     item.deliveryId = delivery.id;
+    item.updatedAt = Date.now();
     await this.save();
   }
 
@@ -200,6 +208,7 @@ export class AskService {
           }
           if (delivery.status === "failed") {
             item.status = "failed";
+            item.updatedAt = Date.now();
             item.error = delivery.error || "询问消息投递失败";
             item.response = `询问失败：${item.error}`;
             await this.save();
@@ -209,6 +218,7 @@ export class AskService {
           if (delivery.status !== "delivered") continue;
           if (item.status === "queued") {
             item.status = "running";
+            item.updatedAt = Date.now();
             item.turnId = delivery.turnId;
             await this.save();
           }
@@ -248,6 +258,7 @@ export class AskService {
       message = { id: requestId || randomUUID(), text, mode: mode || item.returnMode };
       messages.push(message);
       if (item.status === "completed") item.status = "answered";
+      item.updatedAt = Date.now();
       await this.save();
     }
     if (!message.deliveryId) await this.deliverMessage(item, message);
@@ -268,19 +279,21 @@ export class AskService {
       prompt: `[wake:${item.wakeCode}] [ask:${item.id}] [message:${message.id}] ${item.targetAgentId}:${item.targetThreadId}\n${this.reference(item)}\n\n${message.text}`,
     });
     message.deliveryId = delivery.id;
+    item.updatedAt = Date.now();
     await this.save();
   }
 
   private async complete(item: AskRecord) {
     // 纯双向通信：正常结束不产生任何自动通知，来源只会看到目标主动 send
     // 的内容；status 仍记录 answered/completed 供 UI 与后续 send 路由使用。
-    const sentThisTurn = (item.sentMessages?.length || 0) > (item.turnSentOffset || 0);
-    item.status = sentThisTurn ? "answered" : "completed";
+    item.status = item.sentMessages?.length ? "answered" : "completed";
+    item.updatedAt = Date.now();
     await this.save();
   }
 
   private async fail(item: AskRecord, message: string, notify = true) {
     item.status = "failed";
+    item.updatedAt = Date.now();
     item.error = message.slice(0, 500);
     item.suppressFailureReply = !notify;
     item.response = notify ? `询问失败：${item.error}` : undefined;
@@ -297,6 +310,7 @@ export class AskService {
       mode: item.returnMode, prompt,
     });
     item.wakeDeliveryId = delivery.id;
+    item.updatedAt = Date.now();
     await this.save();
   }
 

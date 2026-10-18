@@ -88,7 +88,7 @@ test("setStarred pins newest first and toggles off", async () => {
   });
 });
 
-test("scopes stay isolated per agent and directory", async () => {
+test("counts and last stay scoped, stars are shared across projects", async () => {
   await withDir(async (dir) => {
     const store = new ModelAffinityStore(dir);
     await store.load();
@@ -96,12 +96,69 @@ test("scopes stay isolated per agent and directory", async () => {
     await store.setStarred("opencode", { directory: "/b" }, "m/b", true);
     await store.recordUse("codex", { providerId: "p" }, "m/c");
     assert.equal(store.get("opencode", { directory: "/a" }).last, "m/a");
-    assert.deepEqual(
-      store.get("opencode", { directory: "/b" }).starred,
-      ["m/b"],
-    );
+    // 收藏不再按项目/供应商隔离：同一 agent 的所有作用域都能看到。
+    assert.deepEqual(store.get("opencode", { directory: "/b" }).starred, [
+      "m/b",
+    ]);
+    assert.deepEqual(store.get("opencode", { directory: "/a" }).starred, [
+      "m/b",
+    ]);
     assert.equal(store.get("codex", { providerId: "p" }).last, "m/c");
-    assert.deepEqual(store.get("opencode", { directory: "/a" }).starred, []);
+    // 不同 agent 的模型 id 空间不同，收藏不跨 agent 混用。
+    assert.deepEqual(store.get("codex", { providerId: "p" }).starred, []);
+  });
+});
+
+test("v1 per-scope stars migrate into the shared agent list", async () => {
+  await withDir(async (dir) => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(
+      path.join(dir, "model-affinity.json"),
+      JSON.stringify({
+        version: 1,
+        scopes: {
+          "opencode:/a": {
+            starred: ["m/one", "m/two"],
+            counts: { "m/one": 2 },
+            last: "m/one",
+            updatedAt: 1,
+          },
+          "opencode:/b": {
+            starred: ["m/two", "m/three"],
+            counts: { "m/three": 1 },
+            last: "m/three",
+            updatedAt: 2,
+          },
+          "codex:openai": {
+            starred: ["gpt-5.2"],
+            counts: {},
+            last: null,
+            updatedAt: 3,
+          },
+        },
+      }),
+      "utf8",
+    );
+    const store = new ModelAffinityStore(dir);
+    await store.load();
+    assert.deepEqual(store.get("opencode", { directory: "/a" }).starred, [
+      "m/one",
+      "m/two",
+      "m/three",
+    ]);
+    assert.deepEqual(store.get("opencode", { directory: "/b" }).starred, [
+      "m/one",
+      "m/two",
+      "m/three",
+    ]);
+    assert.deepEqual(store.get("codex", { providerId: "openai" }).starred, [
+      "gpt-5.2",
+    ]);
+    // 迁移只并入收藏，次数与上次选择仍留在各自作用域。
+    assert.equal(store.get("opencode", { directory: "/a" }).last, "m/one");
+    assert.deepEqual(store.get("opencode", { directory: "/a" }).counts, {
+      "m/one": 2,
+    });
   });
 });
 

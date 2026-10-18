@@ -421,6 +421,7 @@
 
 .approval-inbox.is-collapsed .approval-inbox-header {
   border-bottom: 0;
+  cursor: pointer;
 }
 
 .approval-inbox.is-dragging {

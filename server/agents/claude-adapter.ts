@@ -847,9 +847,20 @@ export class ClaudeAdapter extends EventEmitter {
     );
   }
 
+  /** 存活 Claude Code 子进程的 pid；deck-api 用祖先链确认命令来自哪个会话。 */
+  runtimePids() {
+    const pids: number[] = [];
+    for (const child of this.spawnedClaude) {
+      const pid = (child as { pid?: unknown }).pid;
+      if (typeof pid === "number" && Number.isInteger(pid) && pid > 0)
+        pids.push(pid);
+    }
+    return [...new Set(pids)];
+  }
+
   /**
-   * 记录 SDK 拉起的包装进程并在其退出时摘除。只在 cmd/.bat 与 WSL
-   * 包裹路径上使用；直接 spawn 的进程由 SDK 自行管理。
+   * 记录 SDK 拉起的 Claude Code 进程并在其退出时摘除；runtimePids()
+   * 依赖这些 pid 让 deck-api 通过祖先链确认来源会话。
    */
   private trackClaudeProcess(child: SpawnedProcess): SpawnedProcess {
     this.spawnedClaude.add(child);
@@ -1603,16 +1614,12 @@ export class ClaudeAdapter extends EventEmitter {
             : this.options.claudeBin
               ? { pathToClaudeCodeExecutable: this.options.claudeBin }
               : {}),
-          env: {
-            ...this.runtimeEnv(
-              profile,
-              this.historyHomes.get(thread.id),
-              runtime,
-            ),
-            // 只读的会话标识：deck-wake 据此确认 watcher 属于哪个会话。
-            // 每个 Claude 会话独占一个进程，所以这个值不会串到别的会话。
-            CODEX_DECK_SESSION: `${this.id}:${thread.id}`,
-          },
+          env: this.runtimeEnv(
+            profile,
+            this.historyHomes.get(thread.id),
+            runtime,
+            `${this.id}:${thread.id}`,
+          ),
           stderr: onStderr,
           ...(runtime === "wsl"
             ? {
@@ -1625,15 +1632,12 @@ export class ClaudeAdapter extends EventEmitter {
                     ),
                   ),
               }
-            : process.platform === "win32" &&
-                /\.(?:cmd|bat)$/i.test(this.options.claudeBin || "")
-              ? {
+              : {
                   spawnClaudeCodeProcess: (options: SpawnOptions) =>
                     this.trackClaudeProcess(
                       spawnClaudeCodeProcess(options, onStderr),
                     ),
-                }
-              : {}),
+                }),
         },
       });
       this.active.set(thread.id, {
@@ -2250,6 +2254,7 @@ export class ClaudeAdapter extends EventEmitter {
     profile?: ClaudeProfile,
     historyHome?: string,
     runtime: "native" | "wsl" = "native",
+    session?: string,
   ) {
     const env = { ...process.env };
     const profileEnv = profile?.env || {};
@@ -2270,6 +2275,7 @@ export class ClaudeAdapter extends EventEmitter {
     const claudeHome = this.claudeConfigHome(undefined, historyHome);
     env.CLAUDE_CONFIG_DIR =
       runtime === "wsl" ? windowsPathToWsl(claudeHome) : claudeHome;
+    if (session) env.CODEX_DECK_SESSION = session;
     return runtime === "wsl"
       ? exposeEnvironmentToWsl(env, [
           ...Object.keys(profile?.env || {}),
@@ -2278,6 +2284,7 @@ export class ClaudeAdapter extends EventEmitter {
           "ANTHROPIC_BASE_URL",
           "CLAUDE_CODE_OAUTH_TOKEN",
           "CLAUDE_CONFIG_DIR",
+          ...(session ? ["CODEX_DECK_SESSION"] : []),
         ])
       : env;
   }

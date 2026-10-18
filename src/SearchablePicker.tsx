@@ -81,6 +81,7 @@ export function SearchablePicker({
   loading,
   disabled,
   fallbackLabel,
+  triggerLabel,
   connectedToggle,
   onStar,
 }: {
@@ -94,6 +95,8 @@ export function SearchablePicker({
   loading?: boolean;
   disabled?: boolean;
   fallbackLabel?: string;
+  /** 触发器优先展示的文字（如带供应商前缀的完整模型 ID），列表行仍用 label。 */
+  triggerLabel?: string;
   connectedToggle?: boolean;
   /** 行尾星标切换（传了才渲染星标按钮；点击不触发选中）。 */
   onStar?: (value: string) => void;
@@ -199,29 +202,16 @@ export function SearchablePicker({
     };
   }, [open, sheet]);
 
-  // Reopening reveals the selected model, including picks far down a large catalog.
+  // Always open at the top. Scrolling to the selected row used to fling long
+  // OpenCode catalogs to the bottom (virtual rows are measured lazily), which
+  // made users scroll all the way back up before they could browse.
   useLayoutEffect(() => {
     if (!open) return;
     const frame = requestAnimationFrame(() => {
-      const index = filtered.findIndex((option) => option.value === value);
-      if (virtualized)
-        virtualizer.scrollToIndex(Math.max(0, index), { align: "auto" });
-      else
-        listElement
-          ?.querySelector('[aria-selected="true"]')
-          ?.scrollIntoView({ block: "nearest" });
+      listElement?.scrollTo({ top: 0 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [
-    open,
-    query,
-    connectedOnly,
-    value,
-    filtered,
-    virtualized,
-    virtualizer,
-    listElement,
-  ]);
+  }, [open, query, listElement]);
 
   const renderOption = (option: SearchableOption, index: number) => (
     <>
@@ -325,9 +315,10 @@ export function SearchablePicker({
           }}
         >
           <span
-            className={`search-picker-label${selected || fallbackLabel ? "" : " is-placeholder"}`}
+            className={`search-picker-label${triggerLabel || selected || fallbackLabel ? "" : " is-placeholder"}`}
+            title={triggerLabel || selected?.label}
           >
-            {selected?.label || fallbackLabel || placeholder}
+            {triggerLabel || selected?.label || fallbackLabel || placeholder}
           </span>
           <ChevronDown />
         </Combobox.Trigger>

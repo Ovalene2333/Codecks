@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ancestorPids,
   bindingConflict,
+  parseWindowsParentMap,
   resolveWakeSession,
   within,
 } from "./wake-resolve.js";
@@ -60,6 +61,15 @@ test("environment identity without a deck process tree is rejected", () => {
   // 同样的环境变量配上对应的后端进程就成立。
   const corroborated = resolveWakeSession({ codexThread: "c1", ancestors: [9, 100] }, context);
   assert.equal(corroborated.ok && corroborated.threadId, "c1");
+});
+
+test("WSL mode can trust a known session identity without a comparable process tree", () => {
+  const trusted = { ...context, trustEnv: true };
+  const byEnv = resolveWakeSession({ session: "claude:k1", ancestors: [] }, trusted);
+  assert.equal(byEnv.ok && byEnv.threadId, "k1");
+  const unknown = resolveWakeSession({ session: "claude:nope", ancestors: [] }, trusted);
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.error, /没有匹配/);
 });
 
 test("inherited variables are ignored when the process tree says otherwise", () => {
@@ -120,4 +130,11 @@ test("ancestor chain of this process reaches its parent", { skip: process.platfo
   const chain = await ancestorPids(process.pid);
   assert.equal(chain[0], process.pid);
   assert.equal(chain[1], process.ppid);
+});
+
+test("windows process parent map ignores malformed lines", () => {
+  assert.deepEqual(
+    [...parseWindowsParentMap(" 10 4\r\n4 1\r\n0 0\r\nbad\r\n")],
+    [[10, 4], [4, 1], [0, 0]],
+  );
 });

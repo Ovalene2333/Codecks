@@ -61,8 +61,9 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
         const response = await post<{ item: { id: string } }>("/deck/create", {
           targetAgentId: target, question, returnMode: mode,
           configuration: manual ? configuration : undefined, session: `${thread.agentId || "codex"}:${thread.id}`,
+          sessionExplicit: true,
         });
-        setResult(`已创建询问 ${response.item.id}，请等待目标主动回传；最终回复不会自动转发。`);
+        setResult(`已创建询问 ${response.item.id}。本回合可以结束，不要 sleep 或轮询等待；目标会主动回传，最终回复不会自动转发。`);
         setQuestion(""); onCreated();
       } catch (error: any) { setError(error.message || "询问创建失败"); }
       finally { setBusy(false); }

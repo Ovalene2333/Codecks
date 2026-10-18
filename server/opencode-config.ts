@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sortReasoningVariants } from "../shared/reasoning-variants.js";
 
 export type OpenCodeConfigScope = "global" | "project";
 
@@ -311,10 +312,11 @@ function normalizeOneProvider(id: string, raw: any): OpenCodeProviderEntry {
       const variantsRaw = metaObj.variants;
       const variants =
         variantsRaw && typeof variantsRaw === "object" && !Array.isArray(variantsRaw)
-          ? Object.keys(variantsRaw as Record<string, unknown>)
-              .map((name) => String(name).trim())
-              .filter(Boolean)
-              .sort((a, b) => a.localeCompare(b))
+          ? sortReasoningVariants(
+              Object.keys(variantsRaw as Record<string, unknown>)
+                .map((name) => String(name).trim())
+                .filter(Boolean),
+            )
           : [];
       const supportsImages = supportsImagesOf(metaObj.modalities);
       const modelProvider =
@@ -444,7 +446,7 @@ function normalizeVariantNames(value: unknown): string[] | undefined {
     if (!name || seen.has(name)) continue;
     seen.add(name);
   }
-  return [...seen].sort((a, b) => a.localeCompare(b));
+  return sortReasoningVariants([...seen]);
 }
 
 function normalizeModelInputs(

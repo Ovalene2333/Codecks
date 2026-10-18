@@ -693,7 +693,7 @@
 }
 .timeline .tool-row:hover,
 .timeline .file-diff-card:hover {
-  background: var(--surface-muted);
+  background-color: var(--surface-muted);
 }
 /* 独立图片项与工具行同一语言：左竖条、透明底、暗色小字；
    加载占位按钮不再画成带边框的卡片。 */
@@ -2059,6 +2059,8 @@ button.composer-context-seg:focus-visible {
   background: transparent;
   color: var(--text-dim);
   font-size: var(--fs-meta);
+  /* 悬停背景只绘制到内边距，保留透明左边框下方的轨道线。 */
+  background-clip: padding-box;
 }
 /* 状态色段：只给「需要注意」的状态上色，成功行保持轨道本色，
    避免满屏绿条。 */
