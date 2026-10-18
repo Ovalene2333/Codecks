@@ -743,7 +743,7 @@ export function ChatWorkspace({
     if (command.kind === "plan") return post(commandPath("plan"));
     if (command.kind === "diff") return post(commandPath("diff"));
   };
-  const submit = async (candidate: typeof draft, restoreOnFailure: boolean, mode?: MessageDeliveryMode) => {
+  const submit = async (candidate: typeof draft, restoreOnFailure: boolean, mode?: MessageDeliveryMode | "append") => {
     const value = candidate.text.trim();
     // State updates are batched; Enter and a button click can reach this handler
     // before `sending` renders. Claim the submission synchronously.
@@ -831,6 +831,8 @@ export function ChatWorkspace({
           capabilities.messages ? `${threadPath(thread)}/messages` : threadActionPath(thread, "turns"), {
           text: value,
           ...(mode ? { mode } : {}),
+          // 即时追加必须钉住当前回合；若回合已结束，服务端会明确报错，由用户决定排队还是重试。
+          ...(mode === "append" && thread.activeTurnId ? { expectedTurnId: thread.activeTurnId } : {}),
           images: pendingImages.map((image) => ({
             url: image.url,
             name: image.name,
@@ -849,7 +851,10 @@ export function ChatWorkspace({
             : message));
         }
         if (receipt?.disposition === "queued") {
-          onToast(mode === "feedback" ? "即时反馈已受理" : "消息已追加，当前任务结束后处理");
+          onToast(mode === "feedback" ? "即时反馈已受理" : "消息已排队，当前任务结束后处理");
+          onSnapshot();
+        } else if (receipt?.disposition === "appended") {
+          onToast("已追加到当前任务");
           onSnapshot();
         }
       }
@@ -868,7 +873,7 @@ export function ChatWorkspace({
       setSending(false);
     }
   };
-  const send = (mode?: MessageDeliveryMode) => submit(draft, true, mode);
+  const send = (mode?: MessageDeliveryMode | "append") => submit(draft, true, mode);
   const readHistoryDraft = (item: any) => {
     const result = draftFromUserMessage(item);
     if (result.skippedImages) onToast("历史图片来自本机路径，请重新选择后发送");

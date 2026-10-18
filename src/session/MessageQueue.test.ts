@@ -19,7 +19,7 @@ const item: MessageDelivery = {
 const noop = () => {};
 const action = async () => {};
 
-test("all current transports default the composer to queue without a mode selector", () => {
+test("all current transports default the composer to queue, steerable ones offer instant append", () => {
   for (const busyBehavior of ["steer", "reject", "queue", "unknown"] as const) {
     const capabilities = { interrupt: true, messages: {
       busyBehavior, interruptScope: "session", deliveryModes: ["queue", "feedback"],
@@ -28,10 +28,11 @@ test("all current transports default the composer to queue without a mode select
       thread, capabilities, text: "继续", images: [], sending: false,
       onChange: noop, onImages: noop, onSend: noop, onCommand: noop, onStop: noop,
     }));
-    assert.doesNotMatch(html, /role="tablist"|发送模式/);
     assert.match(html, /data-slot="prompt-input"/);
     assert.match(html, /data-slot="prompt-input-footer"/);
-    assert.match(html, /class="prompt-input__button send" title="追加"/);
+    assert.match(html, /class="prompt-input__button send" title="排队"/);
+    if (busyBehavior === "steer") assert.match(html, /aria-label="发送方式"/);
+    else assert.doesNotMatch(html, /aria-label="发送方式"/);
   }
 });
 
@@ -54,7 +55,7 @@ test("queued messages appear as user bubbles in the timeline with full text and 
   }));
   assert.ok(html.includes(item.text!));
   assert.match(html, /class="message user"/);
-  assert.match(html, /aria-label="已追加，等待当前任务结束"/);
+  assert.match(html, /aria-label="已排队，等待当前任务结束"/);
   assert.match(html, /aria-label="即时反馈"/);
   assert.match(html, /aria-label="取消"/);
   assert.match(html, /2 张图片/);
@@ -82,4 +83,14 @@ test("only queued append bubbles expose promotion; in-flight and failed records 
   assert.doesNotMatch(unknown, /aria-label="重试"|aria-label="即时反馈"/);
   const unsent = render({ ...item, status: "failed", canRetry: true });
   assert.match(unsent, /aria-label="重试"/);
+  // 排队中的 Deck 注入消息不叫“你”，说话人直接标推送类型。
+  const pushed = render({ ...item, text: "[wake:abc123] [job] 任务结束" });
+  assert.match(pushed, /message-block__who">唤醒推送</);
+  assert.doesNotMatch(pushed, /message-block__who">你</);
+  const sent = render({ ...item, text: "[send:abcd1234] 补充上下文" });
+  assert.match(sent, /message-block__who">消息推送</);
+  const ask = render({ ...item, text: "[ask:7f3a2c] 结论：用 B" });
+  assert.match(ask, /message-block__who">询问回传</);
+  const human = render(item);
+  assert.match(human, /message-block__who">你</);
 });

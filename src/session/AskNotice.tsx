@@ -10,7 +10,8 @@ export function AskNotice({ thread }: { thread: ThreadSummary }) {
   const source = sessionKey({ agentId: ask.sourceAgentId, providerId: ask.sourceProviderId || "", id: ask.sourceThreadId });
   const status = ask.status === "completed" && ask.sentCount ? "已完成（已回传）" : ASK_STATUS[ask.status];
   return <div className="ask-notice" role="status">
-    <span>Agent 询问，{status}，{ask.returnMode === "interrupt" ? "打断回传" : "Queue 回传"}</span>
+    <span>Agent 询问，{status}，{ask.returnMode === "interrupt" ? "打断回传" : ask.returnMode === "steer" ? "即时追加回传" : "Queue 回传"}</span>
+    {ask.alias && <span>询问别名 @{ask.alias}</span>}
     <span>模型：{thread.model && thread.model !== "default" ? thread.model : "原生默认"}，推理强度：{thread.reasoningEffort || "原生默认"}</span>
     <span>累计提交回传 {ask.sentCount || 0} 条</span>
     <a href={sessionPath(source)}>查看发起会话</a>

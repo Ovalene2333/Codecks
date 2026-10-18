@@ -80,9 +80,12 @@ test("deck-api create and send preserve caller, default mode and explicit destin
   assert.equal(requests[1].body.requestId, "demo-result"); assert.equal(requests[1].body.to, undefined);
   await run("bash", [script, "send", "--to", "demo:other", "--mode", "interrupt", "--", "Follow up"], { env });
   assert.equal(requests[2].body.to, "demo:other"); assert.equal(requests[2].body.mode, "interrupt");
+  await run("bash", [script, "send", "--code", "demo-code", "--mode", "steer", "--", "Hot update"], { env });
+  assert.equal(requests[3].body.code, "demo-code"); assert.equal(requests[3].body.mode, "steer");
+  await assert.rejects(run("bash", [script, "send", "--code", "demo-code", "--mode", "bogus", "--", "Bad"], { env }));
   await assert.rejects(run("bash", [script, "send", "--code", "demo-code", "--to", "demo:other", "--", "Bad"], { env }));
-  assert.equal(requests.length, 3);
-  await run("bash", [script, "wake", "--help"], { env }); assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
+  await run("bash", [script, "wake", "--help"], { env }); assert.equal(requests.length, 4);
 });
 
 test("deck-api wake watch and poll spawn discovered workers and notify with the chosen mode", { skip: process.platform === "win32" }, async (t) => {

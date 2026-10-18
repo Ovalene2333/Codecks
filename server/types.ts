@@ -190,13 +190,22 @@ export interface TurnExtensionItem {
   payload?: unknown;
 }
 
+/**
+ * deck 侧投递意图：queue 等对方空闲；steer 若对方正在运行则直接追加到
+ * 当前回合（codex turn/steer，不打断），空闲时直接发送；interrupt 先打断
+ * 对方当前回合再发送。
+ */
+export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
+
 export interface AskSession {
   sentCount?: number;
   id: string;
+  /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
+  alias?: string;
   sourceAgentId: AgentId;
   sourceThreadId: string;
   sourceProviderId?: string;
-  returnMode: "queue" | "interrupt";
+  returnMode: DeckDeliveryMode;
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
   error?: string;
 }
@@ -382,7 +391,7 @@ export interface LostWakeWatcher extends WakeWatcher {
  * 等人在首页处理（重试或移除）。preview 是 prompt 详情的截断摘要。
  */
 export interface WakeDelivery {
-  mode?: "queue" | "interrupt";
+  mode?: DeckDeliveryMode;
   id: string;
   code: string;
   status: "pending" | "delivered" | "dead";

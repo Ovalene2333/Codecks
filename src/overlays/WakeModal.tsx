@@ -13,12 +13,13 @@ import { Modal } from "../ui";
 
 type AskItem = {
   id: string;
+  alias?: string;
   sourceAgentId: string;
   sourceThreadId: string;
   targetAgentId: string;
   targetThreadId?: string;
   targetProviderId?: string;
-  returnMode: "queue" | "interrupt";
+  returnMode: "queue" | "steer" | "interrupt";
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
   sentCount: number;
   updatedAt: number;
@@ -300,7 +301,7 @@ export function WakeModal({
                   <div className="wake-ask-main">
                     {target ? (
                       <a href={sessionPath(target)}>
-                        {agentShortName(item.targetAgentId)} · {item.targetThreadId!.slice(0, 8)}
+                        {agentShortName(item.targetAgentId)} · @{item.alias || item.targetThreadId!.slice(0, 8)}
                       </a>
                     ) : (
                       <span>{agentShortName(item.targetAgentId)}</span>
@@ -320,7 +321,7 @@ export function WakeModal({
                     </Button>
                   </div>
                   <small className="wake-ask-meta">
-                    累计回传 {item.sentCount} 条 · {item.returnMode === "interrupt" ? "打断回传" : "Queue 回传"} · {relativeTime(item.updatedAt)}
+                    累计回传 {item.sentCount} 条 · {item.returnMode === "interrupt" ? "打断回传" : item.returnMode === "steer" ? "即时追加回传" : "Queue 回传"} · {relativeTime(item.updatedAt)}
                   </small>
                   {item.error && <small className="wake-ask-error">{item.error}</small>}
                 </li>

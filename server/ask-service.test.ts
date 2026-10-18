@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AskService } from "./ask-service.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
-import { WakeOutbox } from "./wake-outbox.js";
 import type { AgentRegistry } from "./agents/registry.js";
 import type { ThreadSummary } from "./types.js";
+
+const askReplies = (messages: MessageDeliveryQueue) =>
+  messages.list().filter((entry) => entry.text?.startsWith("[ask:"));
 
 class Agents extends EventEmitter {
   threads = new Map<string, ThreadSummary>();
@@ -59,22 +61,15 @@ async function fixture(t: any) {
   const agents = fake as unknown as AgentRegistry;
   const messages = new MessageDeliveryQueue({ file: path.join(dir, "messages.json"), agents, timer: false });
   await messages.load();
-  const wake = new WakeOutbox({ file: path.join(dir, "wake.json"), timer: false,
-    resolve: () => ({ agentId: "demo", threadId: "source" }),
-    send: async (agentId, threadId, text, delivery) => messages.enqueue(agentId, threadId,
-      delivery.mode === "interrupt" ? "feedback" : "queue", { text },
-      { id: `wake:${delivery.id}`, forceInterrupt: delivery.mode === "interrupt" }),
-  });
-  await wake.load();
-  const options = { file: path.join(dir, "asks.json"), agents, messages, wake, timer: false as const };
+  const options = { file: path.join(dir, "asks.json"), agents, messages, timer: false as const };
   const service = new AskService(options); await service.load();
-  t.after(async () => { service.close(); messages.close(); wake.close(); await rm(dir, { recursive: true, force: true }); });
-  const create = (returnMode: "queue" | "interrupt" = "queue") => service.create({
+  t.after(async () => { service.close(); messages.close(); await rm(dir, { recursive: true, force: true }); });
+  const create = (returnMode: "queue" | "steer" | "interrupt" = "queue") => service.create({
     sourceAgentId: "demo", sourceThreadId: "source", targetAgentId: "demo-review",
-    question: 'Review "demo"\nwith context', wakeCode: "demo-wake", returnMode,
+    question: 'Review "demo"\nwith context', returnMode,
     settings: { cwd: "/work/demo", providerId: "acme" },
   });
-  return { fake, service, messages, wake, create, options };
+  return { fake, service, messages, create, options };
 }
 
 test("each ask creates a distinct native session and persists its source association", async (t) => {
@@ -88,79 +83,106 @@ test("each ask creates a distinct native session and persists its source associa
 });
 
 test("completion without send stays silent toward the source", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick();
   assert.equal(service.list()[0].status, "running");
   fake.finish(thread.id);
-  await service.tick(); await wake.tick(); await messages.tick();
+  await service.tick(); await messages.tick();
   assert.equal(service.list()[0].status, "completed");
   // 纯双向通信：只有最初的问题送达，完成本身不产生任何通知。
   assert.equal(fake.sends.length, 1);
   assert.equal(fake.interrupts.length, 0);
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
   assert.doesNotMatch(fake.sends[0].text, /demo answer/);
 });
 
 test("interrupt return stops even a steer-capable source and starts a new turn", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create("interrupt");
   await messages.tick(); await service.tick();
   await service.sendFrom("demo-review", thread.id, "Interrupting update");
-  await wake.tick(); await messages.tick();
+  await messages.tick();
   assert.deepEqual(fake.interrupts, ["source"]);
   assert.equal(fake.sends[1].mode, "start");
 });
 
+test("steer return appends to the running source turn without interrupting", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread } = await create("steer");
+  await messages.tick(); await service.tick();
+  await service.sendFrom("demo-review", thread.id, "Steered update");
+  await messages.tick();
+  assert.deepEqual(fake.interrupts, []);
+  assert.equal(fake.sends[1].mode, "append");
+});
+
+test("steer override is rejected when the source cannot steer", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread } = await create();
+  await messages.tick(); await service.tick();
+  const original = fake.messageState.bind(fake);
+  fake.messageState = (_agentId: string, id: string) => {
+    const state = original(_agentId, id);
+    return { ...state, capabilities: { interrupt: false, messages: { busyBehavior: "reject", interruptScope: "session", deliveryModes: ["queue"] } } };
+  };
+  try {
+    await assert.rejects(service.sendFrom("demo-review", thread.id, "X", "steer"), /不支持即时追加/);
+  } finally {
+    fake.messageState = original;
+  }
+});
+
 test("restart recovers completed target history without asking or replying twice", async (t) => {
-  const { create, fake, service, messages, wake, options } = await fixture(t);
+  const { create, fake, service, messages, options } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick(); service.close();
   fake.finish(thread.id);
   const restored = new AskService(options); await restored.load();
   await restored.tick(); await restored.tick();
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
   assert.equal(messages.list().length, 1);
   assert.equal(restored.list()[0].status, "completed");
   restored.close();
 });
 
 test("failed target turn returns a failure message, rather than a successful answer", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick(); fake.finish(thread.id, "", "failed");
-  await service.tick(); await wake.tick(); fake.finish("source"); await messages.tick();
+  await service.tick(); fake.finish("source"); await messages.tick();
   assert.equal(service.list()[0].status, "failed");
   assert.match(fake.sends[1].text, /询问失败/);
 });
 
 test("cancelled question is reported through the same callback path", async (t) => {
-  const { create, service, messages, wake } = await fixture(t);
+  const { create, service, messages } = await fixture(t);
   const { item, thread } = await create();
   await messages.cancel(item.deliveryId!, "demo-review", thread.id);
   await service.tick();
   assert.equal(service.list()[0].status, "failed");
-  assert.equal(wake.list().length, 1);
-  assert.match(wake.list()[0].preview, /已被取消/);
+  const replies = askReplies(messages);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].text!, /已被取消/);
 });
 
 test("completion forwards neither final answer nor commentary", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick(); fake.finish(thread.id);
   fake.turns.get(thread.id)![0].items = [
     { type: "agentMessage", phase: "commentary", text: "intermediate-only" },
     { type: "agentMessage", phase: "final_answer", text: "final conclusion" },
   ];
-  await service.tick(); await wake.tick(); await messages.tick();
+  await service.tick(); await messages.tick();
   // 没有隐式转发路径：完成后的会话内容（包括最终回答）不会到达来源。
   assert.equal(fake.sends.length, 1);
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
 });
 
 
 test("launch failure without a transcript returns its error even after backend goes offline", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick();
   const turnId = fake.threads.get(thread.id)!.activeTurnId;
@@ -170,36 +192,36 @@ test("launch failure without a transcript returns its error even after backend g
   await new Promise<void>((resolve) => setTimeout(resolve, 30));
   await service.tick();
   assert.equal(service.list()[0].status, "failed");
-  assert.match(wake.list()[0].preview, /Demo native executable not found/);
+  assert.match(askReplies(messages)[0].text!, /Demo native executable not found/);
   assert.equal(fake.turns.has(thread.id), false);
-  await service.tick(); assert.equal(wake.list().length, 1);
+  await service.tick(); assert.equal(askReplies(messages).length, 1);
 });
 
 test("error summary without a persisted turn is terminal, even when not ready", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick();
   Object.assign(fake.threads.get(thread.id)!, { status: "error", activeTurnId: undefined, lastError: "Demo launcher failed" });
   await service.tick();
   assert.equal(service.list()[0].status, "failed");
-  assert.match(wake.list()[0].preview, /Demo launcher failed/);
+  assert.match(askReplies(messages)[0].text!, /Demo launcher failed/);
 });
 
 test("disabling the target records failure without waking the source", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   await create(); await messages.tick(); await service.tick();
   fake.enabled = false; fake.online = false;
   await service.tick();
   assert.equal(service.list()[0].status, "failed");
   assert.match(service.list()[0].error!, /已停用/);
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
   await service.tick();
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
 });
 
 
 test("bound send supports multiple messages and completion never dumps final text", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create("interrupt");
   await messages.tick(); await service.tick();
   const first = await service.sendFrom("demo-review", thread.id, "Need clarification", undefined, "progress");
@@ -212,27 +234,27 @@ test("bound send supports multiple messages and completion never dumps final tex
   fake.finish(thread.id, "Very long private analysis that must stay in target history");
   await service.tick();
   assert.equal(service.list()[0].status, "answered");
-  assert.equal(wake.list().length, 2);
-  await wake.tick(); await messages.tick();
+  assert.equal(askReplies(messages).length, 2);
+  await messages.tick();
   assert.match(fake.sends[1].text, /Need clarification/);
   assert.doesNotMatch(fake.sends[1].text, /private analysis/);
 });
 
 test("bound send retry is idempotent across reload and rejects conflicting request IDs", async (t) => {
-  const { create, service, wake, options } = await fixture(t);
+  const { create, service, messages, options } = await fixture(t);
   const { thread } = await create();
   const first = await service.sendFrom("demo-review", thread.id, "Result", undefined, "same-id");
   service.close();
   const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
   const again = await restored.sendFrom("demo-review", thread.id, "Result", undefined, "same-id");
   assert.equal(first.deliveryId, again.deliveryId);
-  assert.equal(wake.list().length, 1);
+  assert.equal(askReplies(messages).length, 1);
   await assert.rejects(restored.sendFrom("demo-review", thread.id, "Changed", undefined, "same-id"), /不同内容/);
   await assert.rejects(restored.sendFrom("demo", "source", "Wrong default target"), /没有绑定来源/);
 });
 
 test("late send is allowed after a no-message completion and failures still notify after progress", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create(); await messages.tick(); await service.tick(); fake.finish(thread.id);
   await service.tick(); assert.equal(service.list()[0].status, "completed");
   await service.sendFrom("demo-review", thread.id, "Late result");
@@ -243,15 +265,16 @@ test("late send is allowed after a no-message completion and failures still noti
   await service.tick();
   assert.equal(service.list()[1].status, "failed");
   // 完成（无通知）→ 迟到的 send → 进度 send → 失败通知：共 3 条投递。
-  assert.equal(wake.list().length, 3);
-  const failure = wake.list().find((entry) => /询问失败/.test(entry.preview));
+  const replies = askReplies(messages);
+  assert.equal(replies.length, 3);
+  const failure = replies.find((entry) => /询问失败/.test(entry.text || ""));
   assert.ok(failure);
-  assert.doesNotMatch(failure.preview, /Secret partial transcript/);
+  assert.doesNotMatch(failure.text!, /Secret partial transcript/);
 });
 
 
 test("completion events work without history and follow-up turns are tracked", async (t) => {
-  const { create, fake, service, messages, wake } = await fixture(t);
+  const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create(); await messages.tick(); await service.tick();
   const emit = (method: string, id: string, status: string) => fake.emit("event", {
     type: "agent.event", data: { agentId: "demo-review", method, params: { threadId: thread.id, turn: { id, status } } },
@@ -260,47 +283,94 @@ test("completion events work without history and follow-up turns are tracked", a
   await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
   assert.equal(service.list()[0].status, "completed");
   assert.equal(fake.turns.has(thread.id), false);
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
   emit("turn/started", "follow-up", "inProgress");
   assert.equal(service.list()[0].status, "running");
   await service.sendFrom("demo-review", thread.id, "Follow-up result");
   emit("turn/completed", "follow-up", "completed");
   await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
   assert.equal(service.list()[0].status, "answered");
-  assert.equal(wake.list().length, 1);
+  assert.equal(askReplies(messages).length, 1);
   emit("turn/started", "third-turn", "inProgress");
   emit("turn/completed", "third-turn", "failed");
   await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
   assert.equal(service.list()[0].status, "failed");
-  assert.equal(wake.list().length, 2);
+  assert.equal(askReplies(messages).length, 2);
 });
 
 
-test("a persisted message awaiting outbox acceptance is recovered after restart", async (t) => {
-  const { create, service, wake, options } = await fixture(t);
+test("a persisted message awaiting queue acceptance is recovered after restart", async (t) => {
+  const { create, service, messages, options } = await fixture(t);
   const { thread } = await create();
-  const enqueue = wake.enqueue.bind(wake);
-  wake.enqueue = async () => { throw new Error("Demo transient write failure"); };
+  const enqueue = messages.enqueue.bind(messages);
+  messages.enqueue = async () => { throw new Error("Demo transient write failure"); };
   await assert.rejects(service.sendFrom("demo-review", thread.id, "Durable result", undefined, "durable"), /transient/);
-  service.close(); wake.enqueue = enqueue;
+  service.close(); messages.enqueue = enqueue;
   const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
   await restored.tick();
   const retry = await restored.sendFrom("demo-review", thread.id, "Durable result", undefined, "durable");
-  assert.ok(retry.deliveryId); assert.equal(wake.list().length, 1);
+  assert.ok(retry.deliveryId); assert.equal(askReplies(messages).length, 1);
   assert.equal(restored.list()[0].sentCount, 1);
 });
 
 
 test("synchronous creation rejection is returned once and remains silent after reload", async (t) => {
-  const { create, fake, service, wake, options } = await fixture(t);
+  const { create, fake, service, messages, options } = await fixture(t);
   fake.createThread = async () => { throw new Error("Demo synchronous startup failure"); };
   await assert.rejects(create(), /Demo synchronous startup failure/);
   assert.equal(service.list()[0].status, "failed");
   await service.tick();
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
   service.close();
   const restored = new AskService(options);
   t.after(() => restored.close());
   await restored.load(); await restored.tick();
-  assert.equal(wake.list().length, 0);
+  assert.equal(askReplies(messages).length, 0);
+});
+
+test("ask alias is derived once, persisted across reload and collision-safe", async (t) => {
+  const { create, service, options } = await fixture(t);
+  const first = await create();
+  const alias = first.item.alias!;
+  assert.match(alias, /^[a-z0-9]{8,32}$/);
+  assert.equal(service.findByAlias(alias)?.target.threadId, first.thread.id);
+  service.close();
+
+  // 模拟旧台账：删掉别名，并加入一个前 8 位相同、同样缺别名的记录。
+  const raw = JSON.parse(await readFile(options.file, "utf8"));
+  const original = raw.items[0];
+  const base = String(original.id).replace(/-/g, "").slice(0, 8);
+  delete original.alias;
+  const colliding = { ...original, id: `${base}-0000-4000-8000-000000000001`, alias: undefined };
+  raw.items = [original, colliding];
+  await writeFile(options.file, JSON.stringify(raw));
+
+  const restored = new AskService(options); await restored.load();
+  const aliases = restored.list().map((item) => item.alias);
+  assert.equal(aliases[0], base);
+  assert.ok(aliases[1]!.startsWith(base));
+  assert.notEqual(aliases[0], aliases[1]);
+  restored.close();
+
+  const reloaded = new AskService(options); await reloaded.load();
+  t.after(() => reloaded.close());
+  assert.deepEqual(reloaded.list().map((item) => item.alias), aliases);
+});
+
+test("ask messages use the stable alias and never the wake lane or full ids", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  assert.match(fake.sends[0].text, new RegExp(`^\\[deck-api:create:${item.alias}\\]`));
+  assert.doesNotMatch(fake.sends[0].text, new RegExp(item.id));
+  assert.doesNotMatch(fake.sends[0].text, /\[wake:/);
+
+  await service.sendFrom("demo-review", thread.id, "Concise result");
+  fake.finish("source");
+  await messages.tick();
+  assert.match(fake.sends[1].text, new RegExp(`^\\[ask:${item.alias}\\]`));
+  assert.doesNotMatch(fake.sends[1].text, new RegExp(item.id));
+  assert.doesNotMatch(fake.sends[1].text, new RegExp(thread.id));
+  assert.doesNotMatch(fake.sends[1].text, /\[wake:|\[message:/);
+  assert.equal((item as any).wakeCode, undefined);
 });

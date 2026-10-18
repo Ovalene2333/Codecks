@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { RotateCcw, UserRound, X, Zap } from "lucide-react";
 import type { MessageDelivery } from "../types";
 import { Button } from "../kit";
+import { DECK_PUSH_LABEL, deckPushKind } from "./user-message";
 
 type Action = (id: string) => Promise<void>;
 
@@ -29,17 +30,19 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     : item.status === "interrupting" ? "正在停止当前任务"
     : item.status === "sending" ? "正在发送"
     : item.status === "failed" ? "发送未完成"
-    : item.mode === "queue" ? "已追加，等待当前任务结束" : "即时反馈，等待处理";
+    : item.mode === "queue" ? "已排队，等待当前任务结束" : "即时反馈，等待处理";
   const label = item.status === "delivered" ? "已发送"
     : item.status === "interrupting" ? "停止中"
     : item.status === "sending" ? "发送中"
     : item.status === "failed" ? "失败"
-    : item.mode === "queue" ? "已追加" : "反馈";
+    : item.mode === "queue" ? "已排队" : "反馈";
+  // 排队中的 Deck 注入消息（send / 唤醒）不是人手打的，说话人直接标推送类型。
+  const push = deckPushKind(item.text ?? item.preview ?? "");
   return (
-    <div className={`message-block message-block--user user-message-wrap session-message-queue-item ${item.status}`} data-message-id={item.id}>
+    <div className={`message-block message-block--user user-message-wrap session-message-queue-item ${item.status}${push ? " is-deck-push" : ""}`} data-message-id={item.id}>
       <div className="rail-row message-block__head">
         <UserRound aria-hidden="true" />
-        <span className="message-block__who">你</span>
+        <span className="message-block__who">{push ? DECK_PUSH_LABEL[push] : "你"}</span>
         <span className="rail-row__meta" role="status" aria-label={status} title={status}>{label}</span>
       </div>
       <div className="message-block__body">
@@ -58,7 +61,7 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
             onClick={() => void act(onRetry)}><RotateCcw aria-hidden="true" /></Button>}
           {item.status !== "sending" && item.status !== "delivered" && onCancel && <Button variant="ghost" iconOnly size="sm" busy={acting}
             aria-label={item.status === "failed" ? "移除记录" : "取消"}
-            title={item.status === "failed" ? "移除记录" : "取消追加"}
+            title={item.status === "failed" ? "移除记录" : "取消排队"}
             onClick={() => void act(onCancel)}><X aria-hidden="true" /></Button>}
         </span>
       </div>

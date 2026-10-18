@@ -4,7 +4,16 @@ import type { ModelInfo, ThreadSummary } from "../types";
 import { Button } from "../kit";
 
 type Configuration = { providerId?: string; model?: string; reasoningEffort?: string };
-type Target = { id: string; name: string; online: boolean; configuration: Configuration; profiles: { id: string; name: string; current?: boolean }[] };
+type Target = { id: string; name: string; online: boolean; steer?: boolean; configuration: Configuration; profiles: { id: string; name: string; current?: boolean }[] };
+
+type ReturnMode = "queue" | "steer" | "interrupt";
+
+/** 目标支持 steer（codex 这类）时默认推荐即时追加；用户手动选过则尊重选择；切到不支持的目标会把 steer 落回 queue。 */
+export function resolveReturnMode(current: ReturnMode, touched: boolean, steer?: boolean): ReturnMode {
+  if (steer && !touched) return "steer";
+  if (!steer && current === "steer") return "queue";
+  return current;
+}
 
 export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreated: () => void }) {
   const [targets, setTargets] = useState<Target[]>([]);
@@ -17,7 +26,8 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelError, setModelError] = useState("");
   const [question, setQuestion] = useState("");
-  const [mode, setMode] = useState<"queue" | "interrupt">("queue");
+  const [mode, setMode] = useState<ReturnMode>("queue");
+  const [modeTouched, setModeTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
@@ -42,6 +52,13 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
       .finally(() => { if (!cancelled) setModelsLoading(false); });
     return () => { cancelled = true; };
   }, [manual, target, provider, thread.cwd]);
+  // 目标支持 steer（codex 这类）时默认推荐即时追加；不支持时自动落回 queue。
+  // 用户手动选过模式后不再自动改，但切到不支持的目标会把已选的 steer 清掉。
+  useEffect(() => {
+    const selected = targets.find((item) => item.id === target);
+    if (!selected) return;
+    setMode((current) => resolveReturnMode(current, modeTouched, selected.steer));
+  }, [target, targets, modeTouched]);
   if (thread.ask) return null;
   const selectedTarget = targets.find((item) => item.id === target);
   const selectedModel = models.find((item) => model ? item.id === model || item.model === model : item.isDefault);
@@ -102,10 +119,13 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
         }}>保存为此 Agent 的询问默认</Button>
         <p className="form-hint">空项交给目标 Agent 的原生默认处理。切换模型会清空推理强度；保存默认会应用到之后的询问。</p>
       </>}
-      <label>消息回传方式<select aria-label="消息回传方式" value={mode} disabled={busy} onChange={(event) => setMode(event.target.value as typeof mode)}>
+      <label>消息回传方式<select aria-label="消息回传方式" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value as typeof mode); setModeTouched(true); }}>
         <option value="queue">Queue：等待当前回合结束</option>
+        <option value="steer" disabled={!!selectedTarget && !selectedTarget.steer}>即时追加：对方运行时直接塞进当前回合，不打断（codex 推荐；仅可转向会话支持）</option>
         <option value="interrupt">打断：停止当前回合后发送</option>
       </select></label>
+      {selectedTarget?.steer && mode !== "steer" && <p className="form-hint">该目标支持即时追加（codex 推荐）：运行时直接追加、不打断，比 Queue 更快看到回传。</p>}
+      {mode === "steer" && <p className="form-hint">运行时直接追加、不打断；空闲时直接发送；对方回合变化时需重试。</p>}
       <label>问题<textarea aria-label="问题" rows={5} maxLength={80_000} value={question} disabled={busy} required onChange={(event) => setQuestion(event.target.value)} /></label>
       {error && <p className="error-text" role="alert">{error}</p>}
       {result && <p className="form-hint" role="status">{result}</p>}

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { draftFromUserMessage, userMessageText } from "./user-message.ts";
+import { deckPushKind, draftFromUserMessage, userMessageText } from "./user-message.ts";
 
 test("user message text joins text parts and ignores images", () => {
   const item = {
@@ -101,4 +101,22 @@ test("history drafts only reuse safe inline images", () => {
     },
     skippedImages: 1,
   });
+});
+
+test("deck-injected user messages are distinguished from human-typed ones", () => {
+  assert.equal(deckPushKind("帮我看看这段代码"), undefined);
+  assert.equal(deckPushKind("[wake:abc123] [label] watcher 已失联：oops"), "wake");
+  assert.equal(deckPushKind("[ask:7f3a2c] 结论：用 B"), "ask");
+  assert.equal(deckPushKind("[send:abcd1234] 补充上下文"), "send");
+  assert.equal(
+    deckPushKind("[wake:abc123] [ask:1] [message:2] demo:t\n\n结论：用 B"),
+    "ask",
+  );
+  assert.equal(
+    deckPushKind("[deck-api:create:1] 来自 demo:source 的询问。\n\n问题正文"),
+    "ask-create",
+  );
+  // 前缀不完整的不算，避免人手输入 [wake:xxx] 被误标。
+  assert.equal(deckPushKind("[wake:] 空代号"), undefined);
+  assert.equal(deckPushKind("  [wake:abc123] 前导空格也认"), "wake");
 });

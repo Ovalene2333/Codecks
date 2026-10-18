@@ -50,7 +50,7 @@ import {
   mergeTurnItems,
   streamsCoveredByHistory,
 } from "./streaming";
-import { userMessageText } from "./user-message";
+import { DECK_PUSH_LABEL, deckPushKind, userMessageText } from "./user-message";
 import type { PendingUserMessage } from "./optimistic";
 import {
   collabAgentStateLabel,
@@ -248,9 +248,15 @@ function TurnItemInner({
     const text = userText(item);
     // 整条都是注入上下文/控制回显的消息剥净后为空，不渲染空气泡。
     if (!text && !images.length) return null;
+    // 带 [ask:…] / [send:…] / [wake:…] / [deck-api:create:…] 前缀的是 Deck
+    // 经消息队列或唤醒注入的，说话人直接标推送类型，不再叫“你”；正文原样保留。
+    const push = deckPushKind(text);
+    const who = push ? DECK_PUSH_LABEL[push] : undefined;
     return (
       <MessageRow
         role="user"
+        className={push ? "is-deck-push" : ""}
+        who={who}
         actions={
           onEditUserMessage || onRetryUserMessage || onRevertUserMessage ? (
             <div className="message-actions" aria-label="消息操作">
@@ -628,6 +634,7 @@ function MessageRow({
   actions,
   continued = false,
   className = "",
+  who,
   children,
 }: {
   role: "user" | "agent";
@@ -636,6 +643,8 @@ function MessageRow({
   /** 同一轮里助手的后续段落：不再重复「助手」头行，统计挪到段尾弱显示。 */
   continued?: boolean;
   className?: string;
+  /** 覆盖默认说话人名（如 Deck 注入消息标推送类型，不再叫“你”）。 */
+  who?: string;
   children: ReactNode;
 }) {
   if (continued)
@@ -659,7 +668,7 @@ function MessageRow({
       <div className="rail-row message-block__head">
         <Icon aria-hidden="true" />
         <span className="message-block__who">
-          {role === "user" ? "你" : "助手"}
+          {who ?? (role === "user" ? "你" : "助手")}
         </span>
         {meta || actions ? (
           <div className="rail-row__head-right">

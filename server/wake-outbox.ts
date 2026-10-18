@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentId, WakeDelivery } from "./types.js";
+import type { AgentId, DeckDeliveryMode, WakeDelivery } from "./types.js";
 
 /**
  * 唤醒投递发件箱：`POST /api/wake/:code` 先落盘再应答，之后由这里负责把
@@ -130,7 +130,7 @@ export class WakeOutbox {
    * - 不带 key（外部 wake 事件）：仅同内容的 pending/在途返回同一条
    *   （挡 HTTP 超时后的重发）；已投递/已 dead 后再次 POST 按新事件入队。
    */
-  async enqueue(input: WakeTarget & { code: string; prompt: string; mode?: "queue" | "interrupt"; dedupeKey?: string }) {
+  async enqueue(input: WakeTarget & { code: string; prompt: string; mode?: DeckDeliveryMode; dedupeKey?: string }) {
     const now = this.now();
     const existing = input.dedupeKey
       ? this.items.find(

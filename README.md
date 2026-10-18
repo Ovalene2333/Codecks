@@ -8,9 +8,21 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
+> **本地优先的 AI 编程 Agent 控制台。** 在浏览器里看会话、批审批、接管任务，电脑和手机都能用；登录、会话和历史都留在你自己的机器上。
+
 [Codecks](https://github.com/Ovalene2333/Codecks) 是一个跑在你自己电脑上的网页控制台，用浏览器（电脑或手机都行）盯着、指挥 AI 编程 Agent 干活。主要接 [Codex CLI](https://github.com/openai/codex)，也能接 Claude Code、OpenCode，以及通过 [ACP](https://agentclientprotocol.com) 接入的 Devin、Kimi CLI、Goose、Copilot CLI 等。
 
 它直接用本机已有的登录状态、`~/.codex` 里的会话和你的项目目录，不另存一套历史。人不在电脑前，可以用手机看任务跑到哪了、批一下命令、接着往下聊。
+
+**它能做什么**
+
+- **一个控制台管多种 Agent**：Codex、Claude Code、OpenCode 和 ACP Agent 的会话、审批、任务和用量放在一起看。
+- **离开电脑也能值守**：手机打开同一个控制台，看进度、批命令、继续对话；也可以接远程访问。
+- **每个会话独立选供应商**：同一台机器上并行跑多家中转/模型，不用来回切「当前项」。
+- **Agent 之间能协作**：用 `deck-api` 创建子会话、主动回传结论、监督 SSH/GPU/Slurm 长任务，任务结束再唤醒。
+- **本地数据不搬家**：复用原生会话、登录态和项目目录，不复制一份 Deck 私有的历史。
+
+适合把 Codex / Claude Code 等 Agent CLI 跑在本机或服务器上、又想离开电脑后继续盯着的人；也适合同时使用多家供应商或多个 Agent 的开发者。
 
 CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。Codex 和 Claude 都可以使用本机 CLI 登录，或在「设置 → 供应商」直接添加自定义中转；无头 Linux 也能用配置文件管理。如果你已经在 [CC Switch](https://github.com/farion1231/cc-switch) 里配置了供应商，Codecks 会兼容只读读取，让每个会话各选各的供应商和模型，不用来回切「当前项」。会话列表、任务和审批里都会标出实际用的是哪个 Agent。
 
@@ -21,7 +33,10 @@ CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。C
   - [特性](#特性)
     - [总览首页](#总览首页) · [手机上用](#手机上用) · [真实会话](#真实会话) · [审批和提醒](#审批和提醒)
     - [对话和时间线](#对话和时间线) · [任务与用量](#任务与用量) · [工具](#工具) · [设置](#设置)
-    - [远程值守](#远程值守) · [远程唤醒](#远程唤醒) · [多家中转同时在线](#多家中转同时在线)
+    - [Agent 协作与远程唤醒（deck-api）](#deck-api) · [远程值守](#远程值守) · [多家中转同时在线](#多家中转同时在线)
+- **深入阅读**
+  - [deck-api：创建会话、主动消息与远程唤醒](docs/deck-api.md)
+  - [Agent 适配说明](docs/agent-adapters.md) · [消息输送与普通对话](docs/message-transport.md)
 - **开始使用**
   - [快速开始](#快速开始)
   - [Claude Code 后端适配（实验性）](#claude-code-后端适配)
@@ -254,79 +269,29 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 - 「切换供应商」会 `thread/fork`：把历史完整复制到新分支，原分支留着，想回退随时可以
 - 用普通 `codex` 创建的旧 Session 还是会出现在历史里，但不会假装成实时受管的状态
 
-### deck-api：创建会话、主动消息与任务监督
+<a id="deck-api"></a>
+### deck-api：Agent 协作与远程唤醒
 
-`deck-api` 是统一调用入口：`create` 建立独立 Agent 会话及来源关系，`send` 传递消息，`wake` 连接外部任务。脚本在 Deck 启动时安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`；项目也可通过 `skills/deck-api` 使用，无需在命令中写服务地址或令牌。
+`deck-api` 是 Deck 的本地 Agent 通信入口：`create` 创建独立子会话，`send` 主动回传/补充消息，`wake` 监督外部长任务。脚本随 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目里也可直接用 `skills/deck-api`。
+
+- **send 与 wake 分开**：`send` 只进已知会话的持久消息队列；新写法（绑定来源、`--to`、`@alias`）不读取或创建唤醒代号，`--code` 仅保留兼容定位。只有 watcher 结束等外部事件才走唤醒 outbox。消息头分别是 `[ask:<alias>]` / `[send:<id>]` 和 `[wake:<code>]`。
+- **稳定短别名**：每次询问自动分配一个短标识（如 `@7f3a2c`），首先生成后写入台账、永不重算；完整 ID 留在服务端和 UI，用 `send --to @<alias>` 继续追问，不用复制长 UUID。
+- **主动回传**：目标自己决定何时 `send` 结论、进度或澄清问题；正常结束不自动转发最终回复，启动/执行失败会自动通知。
+- **可观测**：雷达面板查看询问和 watcher，总览首页显示正在监督的任务；失联 watcher 进入「需要处理」。
 
 ```bash
 DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"
-bash "$DA" help
-bash "$DA" create <agentId> --name '方案复核' -- '请根据以下代码提供第二意见：…'
-bash "$DA" create <agentId> --mode interrupt --file ./question.txt
-
-# 被创建的会话：默认给来源发消息，无需查来源 ID 或代号
-bash "$DA" send -- '建议采用方案 B，依据是……。实现位置：src/example.ts。'
-bash "$DA" send --file ./result.txt
-
-# 向已知已有会话补充信息
-bash "$DA" send --to <agentId:threadId> -- '补充约束：……'
-# 监督外部任务，结束后通知当前会话
+bash "$DA" create codex --name '方案复核' -- '请根据以下代码提供第二意见：…'
+bash "$DA" send -- '结论：建议方案 B，依据是……。'
+bash "$DA" send --to @<alias> -- '补充约束：……'
 bash "$DA" wake -- ssh demo-box 'wait-for-job'
-bash "$DA" wake poll -i 120 -- ssh demo-box 'query-job-state'
 ```
 
-**会话与主动回传**
+#### 远程唤醒
 
-创建或提交时已同步返回的错误不再重复回传；受理后才发生的启动失败、运行异常仍会通知来源。主动停用目标 Agent 只记录询问失败状态，不再唤醒来源会话。
+在远端启动长任务后，用 `deck-api wake` 在本机挂一个后台 watcher；任务结束时 Deck 向绑定会话注入一条 `[wake:<code>]` 消息。唤醒请求先落盘再返回 202，Deck 短暂重启不会丢；watcher 没有发出唤醒就消失时，会作为「失联」进入总览的「需要处理」。
 
-- `create` 每次新建独立会话，正常保存在目标 Agent 原生历史中。目标看不到来源聊天历史，问题需提供必要上下文；来源自动识别（进程树找不到 Deck 托管 agent 时环境变量身份不再自动采信，需显式 `--session`），有歧义时拒绝猜测，已知来源可用 `--session <agentId:threadId>`。
-- **create 是异步受理。** 返回 202 只表示目标会话已创建、初始问题已持久入队，不代表目标已经开始执行。受理后来源应结束本回合，不要 sleep、tail、ps 或轮询等待；回传会以新的 `[wake:…]` 回合到达。来源的回复也不会自动回到目标会话，要继续对话需用回执里的目标 ID 执行 `send --to`。
-- **最终回复不再自动转发。** 目标 Agent 自己决定何时用 `send` 发送结论、进度或澄清问题，可多次发送。完整分析、工具日志与讨论留在目标会话，发送内容自动附完整会话链接；不额外调用模型生成摘要，也不要求固定摘要格式。
-- 目标会话的初始提示要求它即使没有新结论、或不需要来源行动，也在结束前 `send` 一条简短状态（如“已完成，无新增结论”），避免来源完全不知道目标已经结束。
-- `send` 不结束会话，也不等待来源回复。**正常结束不产生任何自动通知**：来源只会收到目标主动 `send` 的内容，目标没有 send 就不会有任何提示（可自行打开目标会话查看）。启动失败、执行失败、被中断或目标被停用时仍自动通知，即使此前发送过进度；没有原生回合历史的启动错误也能通知。
-- 目标的回复默认用绑定关系识别来源；在多会话、Claude 或跨平台场景建议显式写 `send --session <本会话 agentId:threadId> -- '…'`。回执 2xx 只表示 Deck 已持久受理，不表示来源已读或已经送达。
-- 不传目标的 `send` 仅适用于有 create 来源绑定的会话；否则需 `--to <agentId:threadId>` 或 `--code <已知代号>`。两者互斥，`--session` 是发送方而非收件人。来源可用 create 回执的目标 ID 向同一会话补充问题；目标会话不能再次 create，避免递归。
-- 默认来源消息可用 `--request-id <唯一ID>` 重试同一次发送，内容与 mode 须一致；不同消息使用不同 ID。显式目标不支持该参数。单条消息上限 80000 字符，超限拒绝，避免静默截断结果。
-- `create` 的 `--mode queue|interrupt` 设置回传默认方式；目标 `send` 可按次覆盖。queue 等来源空闲，interrupt 停止来源当前回合再发送。显式收件人的 send 和 wake 默认 queue。2xx 表示持久受理，不表示消息已读；提交后结束当前回合，无需自行轮询。
-
-**用户控制配置**
-
-默认使用 Deck 中为目标 Agent 保存的询问配置，未配置项走目标原生默认，不继承发起会话的供应商。雷达面板可选「使用默认」或手调供应商、模型、effort，手调仅本次生效，也可保存为目标 Agent 的默认。切换模型清空 effort，不支持的值不会自动补齐。CLI 保留 `--provider <id>`、`--model <id>`、`--effort <值>` 供用户或脚本显式使用；skill 要求 Agent 默认只提供问题，不获取或选择模型配置。
-
-**界面与持久化**
-
-雷达按钮的「deck-api · 任务回传」面板列出 Agent 通过接口发起的询问（不提供人工提问表单）：目标会话、状态、累计回传条数、queue/interrupt 和最近更新时间。完成但一条都没回传的询问会标红，点目标可打开子会话核对。会话正常归入工作目录所在项目，侧栏显示询问标记；会话页显示来源链接、执行状态、累计提交回传条数、模型与 effort，未知配置显示「原生默认」。正常结束的询问不占用总览的「新回复／最近会话」，审批和异常仍正常显示。
-
-会话关联、待发送消息与唤醒投递队列持久化，服务重启后继续处理；失败投递出现在「需要处理」。发送期间重启导致受理结果不确定时应先检查会话，再用 `--request-id` 重试同一消息或新建会话。`agents` 查看可用 Agent，`sessions` 查看创建记录和初始投递 ID；向绑定来源 send 的回执包含消息 ID、投递 ID、目标和 mode。
-
-**Windows 与 WSL**
-
-- Windows 原生（含 Git Bash）会通过 Windows 进程树识别来源；Git Bash 的 `$$` 会转换成 Windows pid 再发送给 Deck。
-- Windows 上使用 `--wsl` 时，Deck 会把 `url`/`token` 和三个调用脚本安装到 WSL 用户的 `~/.codex-deck/`，并扫描 WSL 里的 watcher；WSL 会话标识（`CODEX_DECK_SESSION` / `CODEX_THREAD_ID`）被当作来源依据。没有会话标识的 Agent（如部分 ACP/OpenCode 调用）仍需显式 `--session`。
-- WSL 与 Windows 默认不共享 `127.0.0.1`。如果 WSL 里的 `deck-api` 报无法连接 Deck，请启用 WSL 镜像网络，或用 `--host 0.0.0.0` / 具体 LAN IP 启动；Deck 会据此把 WSL 发现文件写成 WSL 可访问的地址，并在仍只有回环地址时给出提示。
-
-**兼容与升级**
-
-重启升级后的 Deck 才会安装新版脚本并加载新服务逻辑。`deck-send` 和 `deck-wake` 保留兼容入口，`ask` → `create`，`watch/poll` → `wake watch/poll`，旧 `send <code> <消息>` 由兼容入口转换。旧 HTTP `/api/send/*`、`/api/wake/*` 保留；新入口使用 `/api/deck/create`、`/api/deck/send` 等路由。旧命令新建的会话同样改为主动发送；已落盘的旧回传继续投递，升级后尚在执行且未生成回传的会话同样不再发结束通知。已运行的旧 watcher 无需重挂。
-
-项目使用整个目录的相对软链接同步 `deck-api` skill，`.claude/skills/deck-api` 可链接 `.agents/skills/deck-api`；兼容 skill 也需与新版 `deck-api` 相邻。不要只复制脚本或维护多份正文。
-
-### 远程唤醒
-
-Agent 在远端（SSH、GPU 机器、Slurm 之类）启动了一个要跑几小时的任务，不用让它干等，你也不用自己反复去看。在本机挂一个后台 watcher，任务一结束，Deck 就往对应会话里注入一条 `[wake:<代号>] ...` 消息，Agent 从这里接着干。
-
-- 会话头部的雷达图标打开「deck-api · 任务回传」：可以开启或关闭、自定义代号，能看到这个会话正被哪些 watcher 盯着，也能复制调用示例。运行中的监督进程可停止或隐藏记录，询问记录也可隐藏；隐藏只影响当前浏览器的列表并持久保存，不会停止任务，可用「恢复隐藏记录」重新显示
-- 总览首页的「deck-api 监督中」列出本机上正在跑的 deck-api watcher；watcher 没发出唤醒就消失了（被 kill、机器重启），会作为「失联」出现在「需要处理」里，由你决定要不要通知会话
-- 唤醒请求 Deck 一收到就先落盘再返回 202，之后在后台重试到送达，所以 Agent 闪断、会话正忙或者 Deck 重启后队列仍会继续处理。局域网/配对模式下未固定 `--token` 时，重启会轮换访问令牌，旧 watcher 可能因此无法再投递；需要跨重启保持时应固定 token，或重新挂载 watcher。实在送不到的会出现在「需要处理」里
-- 外部脚本也可以直接调接口，不必用 watcher：
-
-```bash
-curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
-  -H "Authorization: Bearer $(cat ~/.codex-deck/token)" \
-  -H "Content-Type: application/json" -d '{"text":"任务已完成"}'
-```
-
-`~/.codex-deck/url` 和 `token` 是 Deck 启动时写下的，权限 600，方便本机脚本读取而不用把令牌贴进命令或会话；目录可以用 `CODEX_DECK_HOME` 改。Windows 上使用 `--wsl` 时，同一份发现文件和脚本也会写入 WSL 用户的 `~/.codex-deck/`，WSL 内默认不需要再设路径。
+完整用法、消息头、投递模式、Windows/WSL、升级和排障见 **[docs/deck-api.md](docs/deck-api.md)**。
 
 ### 多家中转同时在线
 

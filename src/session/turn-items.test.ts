@@ -690,3 +690,38 @@ test("TurnBlock collapses consecutive OpenCode edits and hides trivial output", 
   );
   assert.match(failing, /conflict in docs\/HANDOVER\.md/);
 });
+
+test("TurnBlock marks deck-injected user messages apart from human-typed ones", () => {
+  const thread: ThreadSummary = {
+    id: "thread",
+    providerId: "provider",
+    name: "QA",
+    preview: "",
+    cwd: "/work",
+    model: "gpt",
+    status: "idle",
+    updatedAt: 1,
+  };
+  const render = (text: string) =>
+    renderToStaticMarkup(
+      createElement(TurnBlock, {
+        index: 1,
+        thread,
+        streamed: [],
+        turn: {
+          id: "turn",
+          status: "completed",
+          items: [{ id: "u", type: "userMessage", text }],
+        },
+      }),
+    );
+  const pushed = render("[wake:abc123] [ask:1] [message:2] demo:t\n\n结论：用 B");
+  assert.match(pushed, /is-deck-push/);
+  assert.match(pushed, /message-block__who">询问回传</);
+  assert.doesNotMatch(pushed, /message-block__who">你</);
+  const sent = render("[send:abcd1234] 补充上下文");
+  assert.match(sent, /message-block__who">消息推送</);
+  const human = render("帮我看看这段代码");
+  assert.match(human, /message-block__who">你</);
+  assert.doesNotMatch(human, /is-deck-push/);
+});

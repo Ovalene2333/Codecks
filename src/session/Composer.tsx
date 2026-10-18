@@ -7,9 +7,8 @@ import type {
   ModelInfo,
   SandboxMode,
   ThreadSummary,
-  MessageDeliveryMode,
 } from "../types";
-import { messageControls } from "./message-controls";
+import { type ComposerSendMode, messageControls } from "./message-controls";
 import { composerEnterAction, useDeckSettings } from "../deck-settings";
 import {
   APPROVAL_OPTIONS,
@@ -107,7 +106,7 @@ export function Composer({
   extraCommands?: Array<{ name: string; hint?: string }>;
   onChange: (value: string) => void;
   onImages: (images: ComposerImage[]) => void;
-  onSend: (mode?: MessageDeliveryMode) => void;
+  onSend: (mode?: ComposerSendMode) => void;
   onCommand: (command: string) => void;
   onStop: () => void;
   onError?: (message: string) => void;
@@ -129,6 +128,12 @@ export function Composer({
   const mode = modes?.includes("queue") ? "queue" : modes?.[0];
   const controls = messageControls(thread, capabilities, mode);
   const running = controls.busy;
+  // 运行中且可转向时，允许把这条消息即时追加进当前回合（不打断）；
+  // 默认仍排队，保持现有行为。
+  const [direct, setDirect] = useState(false);
+  const canSteer = capabilities?.messages?.busyBehavior === "steer" && modes?.includes("feedback");
+  const sendMode: ComposerSendMode | undefined = running && canSteer && direct ? "append" : mode;
+  const sendControls = sendMode === mode ? controls : messageControls(thread, capabilities, sendMode);
   const composerAgentId = thread.agentId || "codex";
   // 输入框底部中间的当前配置：四个固定槽位（模型/推理强度/沙箱/审批），
   // 渲染成 kit ui-badge 同款语言的 chip，只显示当前值，空槽隐藏占位，
@@ -311,7 +316,7 @@ export function Composer({
     else onQuickSetting({ permissionMode: value as ClaudePermissionMode });
   };
   const sendBlocked =
-    controls.blocked && !parseComposerCommand(text.trim(), composerAgentId);
+    sendControls.blocked && !parseComposerCommand(text.trim(), composerAgentId);
   const suggestions = matchingSlashCommands(
     text,
     composerAgentId,
@@ -474,6 +479,7 @@ export function Composer({
             value={text}
             aria-label="消息"
             disabled={compacting}
+            placeholder={sendControls.placeholder}
             onChange={(event) => onChange(event.target.value)}
             onCompositionStart={() => {
               composing.current = true;
@@ -527,14 +533,36 @@ export function Composer({
               if (composerEnterAction(event, sendKey) === "send") {
                 event.preventDefault();
                 if (!compacting && !sendBlocked && canSend && !sending)
-                  onSend(mode);
+                  onSend(sendMode);
               }
             }}
-            placeholder={controls.placeholder}
           />
         </div>
         <PromptInputFooter>
           <PromptInputTools>
+            {/* 运行中且可转向时：排队等本轮结束，或即时追加进当前回合（不打断）。默认排队。 */}
+            {running && canSteer && (
+              <div className="composer-sendmode" role="group" aria-label="发送方式">
+                <button
+                  type="button"
+                  className={!direct ? "is-active" : ""}
+                  aria-pressed={!direct}
+                  title="排队：等当前任务结束后再处理"
+                  onClick={() => setDirect(false)}
+                >
+                  排队
+                </button>
+                <button
+                  type="button"
+                  className={direct ? "is-active" : ""}
+                  aria-pressed={direct}
+                  title="即时追加：直接塞进当前任务，不打断"
+                  onClick={() => setDirect(true)}
+                >
+                  即时追加
+                </button>
+              </div>
+            )}
             <PromptInputButton
               className="attach icon-only"
               title="添加图片"
@@ -656,9 +684,9 @@ export function Composer({
             ) : null}
             <PromptInputButton
               className="send"
-              title={controls.label}
-              aria-label={controls.label}
-              onClick={() => onSend(mode)}
+              title={sendControls.label}
+              aria-label={sendControls.label}
+              onClick={() => onSend(sendMode)}
               disabled={compacting || sendBlocked || !canSend || sending}
             >
               <ArrowUp />

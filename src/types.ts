@@ -189,13 +189,18 @@ export interface ModelInfo {
   defaultServiceTier?: string | null;
 }
 
+/** deck 侧投递意图：queue 等对方空闲；steer 即时追加到当前回合（不打断）；interrupt 先打断再发送。 */
+export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
+
 export interface AskSession {
   sentCount?: number;
   id: string;
+  /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
+  alias?: string;
   sourceAgentId: AgentId;
   sourceThreadId: string;
   sourceProviderId?: string;
-  returnMode: "queue" | "interrupt";
+  returnMode: DeckDeliveryMode;
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
   error?: string;
 }
@@ -373,7 +378,7 @@ export type SessionWakeState = "watching" | "lost";
  * dead 投递无望、在首页「需要处理」里等人重试或移除。
  */
 export interface WakeDelivery {
-  mode?: "queue" | "interrupt";
+  mode?: DeckDeliveryMode;
   id: string;
   code: string;
   status: "pending" | "delivered" | "dead";

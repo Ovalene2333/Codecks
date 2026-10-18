@@ -2,7 +2,16 @@
   "name": "codex-deck",
   "version": "0.2.0",
   "private": true,
-  "description": "A mobile-first remote console for Codex CLI.",
+  "description": "Local-first web console for Codex, Claude Code, OpenCode and ACP agents: remote chat, approvals, multi-provider sessions, agent collaboration and task wake-ups.",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "opencode",
+    "acp",
+    "ai-agents",
+    "remote-console",
+    "self-hosted"
+  ],
   "license": "MIT",
   "repository": "https://github.com/Ovalene2333/Codecks",
   "type": "module",

@@ -3,24 +3,26 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentRegistry } from "./agents/registry.js";
 import type { AgentCreateThreadInput } from "./agents/types.js";
-import type { AgentId, AskSession, ThreadSummary } from "./types.js";
+import type { AgentId, AskSession, DeckDeliveryMode, ThreadSummary } from "./types.js";
 import type { MessageDeliveryQueue } from "./message-delivery.js";
-import type { WakeOutbox } from "./wake-outbox.js";
 
 export interface AskRecord extends AskSession {
   targetAgentId: AgentId;
   targetThreadId?: string;
   targetProviderId?: string;
   question: string;
-  wakeCode: string;
+  /** 旧版询问回传使用的唤醒代号；仅用于兼容旧记录，新流程不再使用。 */
+  wakeCode?: string;
   createdAt: number;
   updatedAt: number;
   deliveryId?: string;
   turnId?: string;
   response?: string;
+  /** 旧版回传投递 ID；只作为“已回传”标记，新流程使用 replyDeliveryId。 */
   wakeDeliveryId?: string;
+  replyDeliveryId?: string;
   suppressFailureReply?: boolean;
-  sentMessages?: { id: string; text: string; mode: "queue" | "interrupt"; deliveryId?: string }[];
+  sentMessages?: { id: string; text: string; mode: DeckDeliveryMode; deliveryId?: string }[];
   turnSentOffset?: number;
   executionCompletion?: { turnId: string; status: string };
   executionFailure?: { turnId: string; message: string };
@@ -30,7 +32,6 @@ interface Options {
   file: string;
   agents: AgentRegistry;
   messages: MessageDeliveryQueue;
-  wake: WakeOutbox;
   onChanged?: () => void;
   timer?: boolean;
 }
@@ -59,6 +60,7 @@ export class AskService {
       delete item.executionCompletion;
       delete item.executionFailure;
       delete item.response;
+      delete item.replyDeliveryId;
       delete item.wakeDeliveryId;
       delete item.error;
       void this.save().catch((error) => console.error("会话回合状态保存失败:", error.message));
@@ -86,25 +88,44 @@ export class AskService {
     try {
       const data = JSON.parse(await readFile(this.options.file, "utf8"));
       if (data.version !== 1 || !Array.isArray(data.items)) throw new Error("询问台账格式无效");
+      let changed = false;
       this.items = data.items.filter((item: any) =>
         typeof item?.id === "string" && typeof item.sourceAgentId === "string" &&
         typeof item.sourceThreadId === "string" && typeof item.targetAgentId === "string" &&
-        typeof item.question === "string" && typeof item.wakeCode === "string" &&
-        ["queue", "interrupt"].includes(item.returnMode) &&
+        typeof item.question === "string" &&
+        (item.wakeCode === undefined || typeof item.wakeCode === "string") &&
+        ["queue", "steer", "interrupt"].includes(item.returnMode) &&
         ["creating", "queued", "running", "answered", "completed", "failed"].includes(item.status),
       );
+      const used = new Set<string>();
       for (const item of this.items) {
         if (item.sentMessages !== undefined && (!Array.isArray(item.sentMessages) || item.sentMessages.some((message) =>
           !message || typeof message.id !== "string" || typeof message.text !== "string" ||
-          !["queue", "interrupt"].includes(message.mode) ||
+          !["queue", "steer", "interrupt"].includes(message.mode) ||
           (message.deliveryId !== undefined && typeof message.deliveryId !== "string"))))
           throw new Error("主动消息台账格式无效");
         if (item.status === "creating") {
           item.status = "failed";
           item.updatedAt = Date.now();
           item.error = "创建期间服务重启，请检查目标会话后重新发起询问";
+          changed = true;
         }
+        // 旧记录的 wakeDeliveryId 仅视为“已回传”标记，避免升级后重复回复。
+        if (item.wakeDeliveryId && !item.replyDeliveryId) {
+          item.replyDeliveryId = item.wakeDeliveryId;
+          changed = true;
+        }
+        // 别名落盘后永不重算；旧记录缺别名时按 id 补一次并保存。
+        const stored = typeof item.alias === "string" && /^[a-z0-9]{8,32}$/.test(item.alias)
+          ? item.alias : undefined;
+        const alias = stored && !used.has(stored) ? stored : this.uniqueAlias(item.id, used);
+        if (alias !== item.alias) {
+          item.alias = alias;
+          changed = true;
+        }
+        used.add(alias);
       }
+      if (changed) await this.save();
     } catch (error: any) {
       if (error?.code !== "ENOENT") {
         this.loadError = `询问台账不可用：${error.message || error}，请修复后重启 Deck`;
@@ -119,6 +140,31 @@ export class AskService {
     }
   }
 
+  /** 由 ask id 派生、在现有别名集合里唯一的短标识；长度不足时逐步加长。 */
+  private uniqueAlias(id: string, used: Set<string>) {
+    const base = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    for (let length = 8; length <= base.length; length += 2) {
+      const candidate = base.slice(0, length);
+      if (!used.has(candidate)) return candidate;
+    }
+    for (let i = 0; i < 1000; i += 1) {
+      const candidate = `${base.slice(0, 8)}${i.toString(36).padStart(2, "0")}`;
+      if (!used.has(candidate)) return candidate;
+    }
+    return randomUUID().replace(/[^a-z0-9]/gi, "").slice(0, 12);
+  }
+
+  /** `send --to @alias` 的目标解析；别名只在询问台账内生效。 */
+  findByAlias(alias: string) {
+    const item = this.items.find((entry) => entry.alias === alias);
+    if (!item?.targetThreadId) return undefined;
+    return {
+      alias,
+      item,
+      target: { agentId: item.targetAgentId, threadId: item.targetThreadId },
+    };
+  }
+
   list() {
     return this.items.map(({ response: _response, sentMessages, question: _question, ...item }) => ({ ...item, sentCount: sentMessages?.length || 0 }));
   }
@@ -127,21 +173,23 @@ export class AskService {
     const item = this.items.find((item) => item.targetAgentId === (thread.agentId || "codex") && item.targetThreadId === thread.id);
     if (!item) return thread;
     return { ...thread, ask: {
-      id: item.id, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
+      id: item.id, alias: item.alias, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
       returnMode: item.returnMode, status: item.status, error: item.error, sentCount: item.sentMessages?.length || 0,
     } };
   }
 
   async create(input: {
     sourceAgentId: AgentId; sourceThreadId: string; targetAgentId: AgentId;
-    question: string; wakeCode: string; returnMode: "queue" | "interrupt";
+    question: string; returnMode: DeckDeliveryMode;
     settings: AgentCreateThreadInput;
   }) {
     if (this.loadError) throw new Error(this.loadError);
+    const id = randomUUID();
     const item: AskRecord = {
-      id: randomUUID(), sourceAgentId: input.sourceAgentId, sourceThreadId: input.sourceThreadId,
+      id, alias: this.uniqueAlias(id, new Set(this.items.map((entry) => entry.alias).filter(Boolean) as string[])),
+      sourceAgentId: input.sourceAgentId, sourceThreadId: input.sourceThreadId,
       sourceProviderId: this.options.agents.messageState(input.sourceAgentId, input.sourceThreadId).thread.providerId,
-      targetAgentId: input.targetAgentId, question: input.question, wakeCode: input.wakeCode,
+      targetAgentId: input.targetAgentId, question: input.question,
       returnMode: input.returnMode, status: "creating", createdAt: Date.now(), updatedAt: Date.now(),
     };
     this.items.push(item);
@@ -166,10 +214,10 @@ export class AskService {
   private async start(item: AskRecord) {
     const delivery = await this.options.messages.enqueue(item.targetAgentId, item.targetThreadId!, "queue", {
       text: [
-        `[deck-api:create:${item.id}] 来自 ${item.sourceAgentId}:${item.sourceThreadId} 的询问。`,
+        `[deck-api:create:${item.alias}] 来自发起会话的询问。`,
         "这是独立会话：你看不到发起会话的历史，需要的背景都在下面的问题里。",
         "用 deck-api send 主动回传；可以多次发送进度、澄清问题或结果。默认收件人已绑定为发起会话，不需要查询代号。",
-        `本会话身份是 ${item.targetAgentId}:${item.targetThreadId}。推荐回传：用下一条的入口执行 send --session ${item.targetAgentId}:${item.targetThreadId} -- '<要回传的内容>'；显式身份可避免多会话或跨平台时自动识别失败。不要查询或猜测其他会话。`,
+        `本会话询问别名是 ${item.alias}，身份是 ${item.targetAgentId}:${item.targetThreadId}。回传默认直接 send；自动识别失败时把该身份传给 --session，不要查询或猜测其他会话。`,
         "执行入口优先使用 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api；项目内也可读取 deck-api skill。没有该入口时说明失败，不要借用其他会话身份。",
         "结束前必须 send 一条最终结论（关键依据、文件或产物位置）。即使没有新结论、或不需要来源采取行动，也请 send 一条简短状态（如“已完成，无新增结论”）；不要静默结束。",
         "正常结束不会自动转发最终回复，也不会自动通知来源；来源只会看到你 send 的内容。启动或执行失败会由 Deck 自动通知。",
@@ -193,7 +241,7 @@ export class AskService {
             if (!message.deliveryId) await this.deliverMessage(item, message);
           }
           if (item.status === "failed" && !item.suppressFailureReply && !item.response && item.error) await this.fail(item, item.error);
-          if (item.response && !item.wakeDeliveryId) await this.reply(item);
+          if (item.response && !item.replyDeliveryId) await this.reply(item);
           if (!["queued", "running"].includes(item.status)) continue;
           if (item.executionFailure) { await this.fail(item, item.executionFailure.message); continue; }
           if (item.executionCompletion?.status === "completed") { await this.complete(item); continue; }
@@ -244,10 +292,12 @@ export class AskService {
   }
 
   /** Bound source is resolved on the server, never from an agent-supplied wake code. */
-  async sendFrom(agentId: AgentId, threadId: string, text: string, mode?: "queue" | "interrupt", requestId?: string) {
+  async sendFrom(agentId: AgentId, threadId: string, text: string, mode?: DeckDeliveryMode, requestId?: string) {
     if (this.loadError) throw new Error(this.loadError);
     const item = this.items.find((entry) => entry.targetAgentId === agentId && entry.targetThreadId === threadId);
     if (!item) throw new Error("当前会话没有绑定来源，请使用 --to <agentId:threadId> 或 --code <代号> 指定目标");
+    if (mode === "steer") this.assertSteerSupported(item.sourceAgentId, item.sourceThreadId);
+    if (mode === "interrupt") this.assertInterruptSupported(item.sourceAgentId, item.sourceThreadId);
     text = text.trim();
     if (!text || text.length > 80_000) throw new Error("消息须为 1 至 80000 字符；请精简消息并将完整内容留在会话中");
     const messages = item.sentMessages ||= [];
@@ -262,22 +312,47 @@ export class AskService {
       await this.save();
     }
     if (!message.deliveryId) await this.deliverMessage(item, message);
-    return { askId: item.id, target: { agentId: item.sourceAgentId, threadId: item.sourceThreadId },
+    return { askId: item.id, alias: item.alias, target: { agentId: item.sourceAgentId, threadId: item.sourceThreadId },
       messageId: message.id, deliveryId: message.deliveryId, mode: message.mode };
   }
 
+  /** steer 要求收件会话能把消息转向进当前回合（codex turn/steer）；不支持就明确拒绝，不静默降级。 */
+  private assertSteerSupported(agentId: AgentId, threadId: string) {
+    let capabilities;
+    try {
+      capabilities = this.options.agents.messageState(agentId, threadId).capabilities;
+    } catch {
+      return;
+    }
+    if (capabilities.messages?.busyBehavior !== "steer" ||
+      !capabilities.messages?.deliveryModes?.includes("feedback"))
+      throw new Error("对方会话不支持即时追加（需要 Codex 这类支持转向当前回合的会话）；空闲时用 queue 会立即发送，运行时想打断请用 interrupt");
+  }
+
+  /** interrupt 需要收件会话支持打断；不支持就拒绝，避免消息队列反复失败。 */
+  private assertInterruptSupported(agentId: AgentId, threadId: string) {
+    let capabilities;
+    try {
+      capabilities = this.options.agents.messageState(agentId, threadId).capabilities;
+    } catch {
+      return;
+    }
+    if (!capabilities.interrupt)
+      throw new Error("对方会话不支持打断当前回合；请改用 queue（空闲时立即发送）或 steer（对方支持时）");
+  }
+
   private reference(item: AskRecord) {
-    const key = `${item.targetAgentId}:${item.targetProviderId || ""}:${item.targetThreadId}`;
-    return `[查看完整会话](/session/${encodeURIComponent(key)})`;
+    return item.alias ? `[查看完整会话](/s/${item.alias})` : "";
   }
 
   private async deliverMessage(item: AskRecord, message: NonNullable<AskRecord["sentMessages"]>[number]) {
-    const delivery = await this.options.wake.enqueue({
-      code: item.wakeCode, agentId: item.sourceAgentId, threadId: item.sourceThreadId, mode: message.mode,
+    const delivery = await this.options.messages.enqueue(
+      item.sourceAgentId, item.sourceThreadId,
+      message.mode === "queue" ? "queue" : "feedback",
+      { text: `[ask:${item.alias}] ${this.reference(item)}\n\n${message.text}` },
       // 以消息 id 幂等：同一条消息的重复投递（重启恢复、重试）只入队一次。
-      dedupeKey: message.id,
-      prompt: `[wake:${item.wakeCode}] [ask:${item.id}] [message:${message.id}] ${item.targetAgentId}:${item.targetThreadId}\n${this.reference(item)}\n\n${message.text}`,
-    });
+      { id: `ask:${item.id}:${message.id}`, forceInterrupt: message.mode === "interrupt" },
+    );
     message.deliveryId = delivery.id;
     item.updatedAt = Date.now();
     await this.save();
@@ -302,14 +377,16 @@ export class AskService {
   }
 
   private async reply(item: AskRecord) {
-    const prefix = `[wake:${item.wakeCode}] [ask:${item.id}] [turn:${item.turnId || "creating"}] ${item.targetAgentId}:${item.targetThreadId || "unknown"}\n`;
-    const body = `${this.reference(item)}\n\n${item.response}`;
-    const prompt = prefix + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
-    const delivery = await this.options.wake.enqueue({
-      code: item.wakeCode, agentId: item.sourceAgentId, threadId: item.sourceThreadId,
-      mode: item.returnMode, prompt,
-    });
-    item.wakeDeliveryId = delivery.id;
+    if (item.replyDeliveryId) return;
+    const body = `${this.reference(item)}\n\n${item.response || ""}`;
+    const prompt = `[ask:${item.alias}] ` + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
+    const delivery = await this.options.messages.enqueue(
+      item.sourceAgentId, item.sourceThreadId,
+      item.returnMode === "queue" ? "queue" : "feedback",
+      { text: prompt },
+      { id: `ask:${item.id}:reply:${item.turnId || "creating"}`, forceInterrupt: item.returnMode === "interrupt" },
+    );
+    item.replyDeliveryId = delivery.id;
     item.updatedAt = Date.now();
     await this.save();
   }

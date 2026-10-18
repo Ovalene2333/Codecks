@@ -299,8 +299,10 @@ const wakeOutbox = new WakeOutbox({
   resolve: (code) => threadSettings.findByWakeCode(code),
   send: async (agentId, threadId, prompt, delivery) => {
     if (!delivery.mode) return agents.sendTurn(agentId, threadId, prompt);
+    // steer 走 feedback 但不强制打断：对方运行时转向追加（codex turn/steer），
+    // 空闲时直接发送；interrupt 才强制打断当前回合。
     const receipt = await messageDeliveries.enqueue(agentId, threadId,
-      delivery.mode === "interrupt" ? "feedback" : "queue", { text: prompt },
+      delivery.mode === "queue" ? "queue" : "feedback", { text: prompt },
       { id: `wake:${delivery.id}`, forceInterrupt: delivery.mode === "interrupt" });
     if (receipt.status === "failed") throw new Error(receipt.error || "唤醒消息投递失败");
     // Delivered here means durably accepted by Deck's message queue, just as a native send receipt.
@@ -310,7 +312,7 @@ const wakeOutbox = new WakeOutbox({
 });
 await wakeOutbox.load();
 const askService = new AskService({
-  file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries, wake: wakeOutbox,
+  file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries,
   onChanged: routingChanged,
 });
 await askService.load();
@@ -599,6 +601,9 @@ app.get(["/api/deck/sessions", "/api/send/asks"], route(async () => ({ items: as
 app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
   items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
     id: agent.id, name: agent.name, online: agent.online,
+    // 调用方据此判断目标是否支持 steer（即时追加到当前回合，不打断）。
+    steer: agent.capabilities.messages?.busyBehavior === "steer" &&
+      agent.capabilities.messages?.deliveryModes?.includes("feedback"),
     configuration: askSettings.get(agent.id),
     profiles: agents.profiles(agent.id).map((profile) => ({ id: profile.id, name: profile.name, current: profile.current })),
   })),
@@ -611,7 +616,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
     targetAgentId: agentIdSchema,
     question: z.string().trim().min(1).max(80_000),
-    returnMode: z.enum(["queue", "interrupt"]).default("queue"),
+    returnMode: z.enum(["queue", "steer", "interrupt"]).default("queue"),
     providerId: z.string().max(200).optional(),
     model: z.string().max(300).optional(),
     reasoningEffort: z.string().max(100).optional(),
@@ -624,8 +629,10 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
   if (resolution.thread.archived) throw new Error("发起会话已归档");
   const sourceCapabilities = agents.messageState(resolution.agentId, resolution.threadId).capabilities;
-  if (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "interrupt" ? "feedback" : "queue") ||
+  if (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "queue" ? "queue" : "feedback") ||
     (input.returnMode === "interrupt" && !sourceCapabilities.interrupt)) throw new Error("发起 agent 不支持所选回传方式");
+  if (input.returnMode === "steer" && sourceCapabilities.messages?.busyBehavior !== "steer")
+    throw new Error("发起会话不支持即时追加（需要 Codex 这类支持转向当前回合的会话）；空闲时用 queue 会立即发送，运行时想打断请用 interrupt");
   if (!descriptor.capabilities.messages?.deliveryModes?.includes("queue")) throw new Error("目标 agent 不支持询问消息投递");
   if (askService.decorate(resolution.thread).ask) throw new Error("询问会话不能再次发起询问，请由原会话发起，避免循环调用");
   const profiles = agents.profiles(input.targetAgentId);
@@ -644,20 +651,41 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     if (!model?.supportedReasoningEfforts?.some((effort) => effort.reasoningEffort === configuration.reasoningEffort))
       throw new Error("所选模型不支持该 effort，请在 Deck 询问面板中重新选择");
   }
-  const wakeCode = await threadSettings.ensureWakeCode(resolution.agentId, resolution.threadId);
   const result = await askService.create({
     sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
-    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, wakeCode,
+    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode,
     settings: { ...configuration, cwd: resolution.thread.cwd, providerId, name: input.name },
   });
   broadcastSnapshotSoon();
   res.status(202).json(result);
 }));
+/** steer 要求目标能把消息转向进当前回合；不支持就明确拒绝，不静默降级为打断或排队。 */
+const assertSteerTarget = (agentId: AgentId, threadId: string) => {
+  let capabilities;
+  try {
+    capabilities = agents.messageState(agentId, threadId).capabilities;
+  } catch {
+    return;
+  }
+  if (capabilities.messages?.busyBehavior !== "steer" ||
+    !capabilities.messages?.deliveryModes?.includes("feedback"))
+    throw new Error("目标会话不支持即时追加（需要 Codex 这类支持转向当前回合的会话）；空闲时用 queue 会立即发送，运行时想打断请用 interrupt");
+};
+const assertInterruptTarget = (agentId: AgentId, threadId: string) => {
+  let capabilities;
+  try {
+    capabilities = agents.messageState(agentId, threadId).capabilities;
+  } catch {
+    return;
+  }
+  if (!capabilities.interrupt)
+    throw new Error("目标会话不支持打断当前回合；请改用 queue（空闲时立即发送）或 steer（目标支持时）");
+};
 /** send uses the bound source unless a destination is explicitly supplied. */
 app.post("/api/deck/send", route(async (req, res) => {
   const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
     text: z.string().trim().min(1).max(80_000),
-    mode: z.enum(["queue", "interrupt"]).optional(),
+    mode: z.enum(["queue", "steer", "interrupt"]).optional(),
     to: z.string().trim().min(1).max(500).optional(),
     code: z.string().regex(/^[a-z0-9][a-z0-9-]{1,30}$/).optional(),
     requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
@@ -672,22 +700,36 @@ app.post("/api/deck/send", route(async (req, res) => {
   }
   if (input.requestId) throw new Error("--request-id 仅用于默认向绑定来源发送消息");
   let target: { agentId: AgentId; threadId: string };
-  let code = input.code;
-  if (code) {
-    const found = threadSettings.findByWakeCode(code);
-    if (!found) throw new Error(`wake code ${code} 不存在`);
+  let alias: string | undefined;
+  if (input.code) {
+    const found = threadSettings.findByWakeCode(input.code);
+    if (!found) throw new Error(`wake code ${input.code} 不存在`);
     target = found;
+  } else if (input.to!.startsWith("@")) {
+    const found = askService.findByAlias(input.to!.slice(1));
+    if (!found) throw new Error(`询问别名 ${input.to} 不存在或尚未创建完成`);
+    target = found.target;
+    alias = found.alias;
   } else {
     const separator = input.to!.indexOf(":");
     if (separator < 1 || separator === input.to!.length - 1) throw new Error("--to 格式应为 agentId:threadId");
     target = { agentId: agentIdSchema.parse(input.to!.slice(0, separator)), threadId: input.to!.slice(separator + 1) };
     const state = agents.messageState(target.agentId, target.threadId);
     if (state.thread.archived) throw new Error("目标会话已归档");
-    code = await threadSettings.ensureWakeCode(target.agentId, target.threadId);
   }
   const mode = input.mode || "queue";
-  const delivery = await wakeOutbox.enqueue({ ...target, code, mode, prompt: `[wake:${code}] ${input.text}` });
-  res.status(202).json({ target, code, mode, delivery });
+  if (mode === "steer") assertSteerTarget(target.agentId, target.threadId);
+  if (mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);
+  // send 与 wake 隔离：目标已确定，直接进入会话消息队列，不解析/创建唤醒代号。
+  const id = randomBytes(8).toString("hex");
+  const prompt = alias ? `[ask:${alias}] ${input.text}` : `[send:${id.slice(0, 8)}] ${input.text}`;
+  const delivery = await messageDeliveries.enqueue(
+    target.agentId, target.threadId,
+    mode === "queue" ? "queue" : "feedback",
+    { text: prompt },
+    { id: `send:${id}`, forceInterrupt: mode === "interrupt" },
+  );
+  res.status(202).json({ target, alias, mode, delivery });
 }));
 /**
  * deck-api wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
@@ -1699,7 +1741,8 @@ app.post(
       req.body && typeof req.body === "object" ? req.body : {}
     ) as Record<string, unknown>;
     const { text, mode: rawMode, ...rest } = body;
-    const mode = rawMode === undefined ? undefined : z.enum(["queue", "interrupt"]).parse(rawMode);
+    const mode = rawMode === undefined ? undefined : z.enum(["queue", "steer", "interrupt"]).parse(rawMode);
+    if (mode === "steer") assertSteerTarget(target.agentId, target.threadId);
     const trimmed = typeof text === "string" ? text.trim() : "";
     const detail =
       trimmed || (Object.keys(rest).length ? JSON.stringify(rest) : "");
@@ -2486,6 +2529,18 @@ app.post(
   "/api/runtime/rate-limits",
   route(async (req) => manager.loadOfficialUsage(Boolean(req.query?.force))),
 );
+
+// 短别名只做导航重定向：消息正文里不再携带完整会话 key。
+app.get("/s/:alias", (req, res) => {
+  const found = askService.findByAlias(param(req.params.alias));
+  if (!found?.item.targetThreadId) {
+    res.status(404).send("会话不存在或尚未创建完成");
+    return;
+  }
+  const key = `${found.item.targetAgentId}:${found.item.targetProviderId || ""}:${found.item.targetThreadId}`;
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(302, `/session/${encodeURIComponent(key)}`);
+});
 
 const webDir = path.join(projectRoot, "dist-web");
 // vite 产物文件名自带 hash：长缓存一年 + immutable，二次打开只下 index.html。
