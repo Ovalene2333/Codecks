@@ -23,7 +23,11 @@ import { stalledFor } from "./activity";
 import { activityKey, useActivities, useNow } from "./activity-store";
 import { healthIssueCount } from "./health";
 import { DEFAULT_LAYOUT, isDefaultLayout, useMonitorLayout } from "./layout";
-import { ASIDE_PANEL_META, LayoutEditor, MAIN_PANEL_META } from "./LayoutEditor";
+import {
+  ASIDE_PANEL_META,
+  LayoutEditor,
+  MAIN_PANEL_META,
+} from "./LayoutEditor";
 import { MonitorApprovals } from "./MonitorApprovals";
 import { MonitorBoard } from "./MonitorBoard";
 import { MonitorHealth } from "./MonitorHealth";
@@ -36,7 +40,9 @@ const activityOf = (
 ) => activities.get(activityKey(thread.agentId, thread.id));
 
 function scrollToPanel(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document
+    .getElementById(id)
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 interface StatusCounts {
@@ -56,6 +62,7 @@ function StatusStrip({
   activities,
   hasApprovals,
   live,
+  syncError,
 }: {
   counts: StatusCounts;
   threads: ThreadSummary[];
@@ -63,14 +70,25 @@ function StatusStrip({
   hasApprovals: boolean;
   /** 本轮快照是否已落地：运行中 / 卡住计数不能拿缓存冒充实时状态。 */
   live: boolean;
+  syncError?: string;
 }) {
   const now = useNow(5_000);
   const stalled = threads.filter(
     (thread) => stalledFor(thread, activityOf(activities, thread), now) != null,
   ).length;
+  if (!live && syncError)
+    return (
+      <div className="monitor-strip" role="status">
+        实时状态暂不可用
+      </div>
+    );
   if (!live)
     return (
-      <div className="monitor-strip" aria-label="正在同步会话状态" aria-busy="true">
+      <div
+        className="monitor-strip"
+        aria-label="正在同步会话状态"
+        aria-busy="true"
+      >
         <span className="monitor-strip-skeleton" aria-hidden="true" />
         <span className="monitor-strip-skeleton short" aria-hidden="true" />
       </div>
@@ -82,10 +100,30 @@ function StatusStrip({
       count: counts.waiting,
       target: hasApprovals ? "monitor-approvals" : "home-attention",
     },
-    { key: "error", label: "异常", count: counts.error, target: "home-attention" },
-    { key: "unseen", label: "新回复", count: counts.unseen, target: "home-unseen" },
-    { key: "running", label: "运行中", count: counts.running, target: "home-running" },
-    { key: "stalled", label: "疑似卡住", count: stalled, target: "home-running" },
+    {
+      key: "error",
+      label: "异常",
+      count: counts.error,
+      target: "home-attention",
+    },
+    {
+      key: "unseen",
+      label: "新回复",
+      count: counts.unseen,
+      target: "home-unseen",
+    },
+    {
+      key: "running",
+      label: "运行中",
+      count: counts.running,
+      target: "home-running",
+    },
+    {
+      key: "stalled",
+      label: "疑似卡住",
+      count: stalled,
+      target: "home-running",
+    },
   ].filter((item) => item.count > 0);
   return (
     <div className="monitor-strip" aria-label="会话状态">
@@ -103,7 +141,9 @@ function StatusStrip({
           </button>
         ))
       ) : (
-        <span className="monitor-strip-idle">没有需要你处理的事，也没有正在运行的任务</span>
+        <span className="monitor-strip-idle">
+          没有需要你处理的事，也没有正在运行的任务
+        </span>
       )}
     </div>
   );
@@ -126,6 +166,9 @@ export function MonitorPanel({
   query,
   loading,
   live = true,
+  syncing = false,
+  syncError,
+  onRetry,
   notificationPermission,
   onSelect,
   onOpenThread,
@@ -162,8 +205,11 @@ export function MonitorPanel({
   searchMatches: ReadonlyMap<string, SessionSearchMatch>;
   query: string;
   loading: boolean;
-  /** 本轮实时快照是否已落地；false 时首页运行中/最近会话显示骨架。 */
+  /** 本轮实时快照是否已落地；最近会话可先显示缓存，运行状态等待同步。 */
   live?: boolean;
+  syncError?: string;
+  onRetry?: () => void;
+  syncing?: boolean;
   notificationPermission: DeckNotificationPermission;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onOpenThread: (thread: ThreadSummary) => void;
@@ -175,7 +221,10 @@ export function MonitorPanel({
   onMarkAllSeen: () => void;
   onSessionMenu: (thread: ThreadSummary) => void;
   onHistory: (thread: ThreadSummary) => void;
-  onResolveApproval: (id: string, body: ApprovalResolveBody) => void | Promise<void>;
+  onResolveApproval: (
+    id: string,
+    body: ApprovalResolveBody,
+  ) => void | Promise<void>;
   onRequestNotifications: () => void;
   onRefreshLimits: (force?: boolean) => Promise<void>;
   onOpenUsage: (view: UsageView) => void;
@@ -188,7 +237,12 @@ export function MonitorPanel({
     const all: ThreadSummary[] = [];
     const projects = new Map<string, ProjectGroup>();
     const pending = new Map<string, Approval[]>();
-    const counts: StatusCounts = { running: 0, waiting: 0, error: 0, unseen: 0 };
+    const counts: StatusCounts = {
+      running: 0,
+      waiting: 0,
+      error: 0,
+      unseen: 0,
+    };
     for (const group of groups) {
       for (const thread of group.sessions) {
         const key = sessionKey(thread);
@@ -200,7 +254,8 @@ export function MonitorPanel({
         if (requests.length) pending.set(key, requests);
         if (requests.length || thread.status === "waiting") counts.waiting++;
         else if (thread.status === "error") counts.error++;
-        else if (thread.status === "running" || thread.compacting) counts.running++;
+        else if (thread.status === "running" || thread.compacting)
+          counts.running++;
         else if (unseenSessions.has(key)) counts.unseen++;
       }
     }
@@ -213,7 +268,10 @@ export function MonitorPanel({
     [all, searching],
   );
   const issues = healthIssueCount(agents, providers);
-  const openThread = useCallback((thread: ThreadSummary) => onSelect(thread), [onSelect]);
+  const openThread = useCallback(
+    (thread: ThreadSummary) => onSelect(thread),
+    [onSelect],
+  );
   const [layout, setLayout] = useMonitorLayout();
   // 「调整布局」编辑态只是页内临时状态：刷新/返回后回到正常首页即可，不进 URL。
   const [editing, setEditing] = useState(false);
@@ -228,18 +286,37 @@ export function MonitorPanel({
 
   return (
     <main className="monitor-view">
+      {syncError && (
+        <div className="error-banner" role="alert">
+          <span>{syncError}。正在自动重试；当前内容可能不是最新状态。</span>
+          <Button onClick={onRetry} disabled={syncing}>
+            重新同步
+          </Button>
+        </div>
+      )}
       <header className="monitor-header">
         <h1>总览</h1>
         <button
           type="button"
-          className={`monitor-health-chip ${issues ? "warn" : ""}`}
+          className={`monitor-health-chip ${issues || syncError ? "warn" : ""}`}
           onClick={() => scrollToPanel("monitor-health")}
           title="查看运行健康"
         >
           <i aria-hidden="true" />
-          {issues ? `${issues} 项异常` : "运行正常"}
+          {syncError
+            ? "同步异常"
+            : !live
+              ? "正在同步"
+              : issues
+                ? `${issues} 项异常`
+                : "运行正常"}
         </button>
-        <Button variant="primary" size="sm" className="monitor-new" onClick={onNew}>
+        <Button
+          variant="primary"
+          size="sm"
+          className="monitor-new"
+          onClick={onNew}
+        >
           <Plus aria-hidden="true" />
           <span>新建</span>
         </Button>
@@ -279,7 +356,11 @@ export function MonitorPanel({
                 >
                   恢复默认
                 </Button>
-                <Button size="sm" variant="primary" onClick={() => setEditing(false)}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => setEditing(false)}
+                >
                   完成
                 </Button>
               </div>
@@ -291,6 +372,7 @@ export function MonitorPanel({
               activities={activities}
               hasApprovals={approvals.length > 0}
               live={live}
+              syncError={syncError}
             />
           )}
           <div className="monitor-layout">
@@ -355,6 +437,7 @@ export function MonitorPanel({
                       watchers={watchers}
                       lostWatchers={lostWatchers}
                       live={live}
+                      syncError={syncError}
                       projectOf={projectOf}
                       onOpen={openThread}
                       onMarkSeen={onMarkSeen}

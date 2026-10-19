@@ -187,6 +187,8 @@ export function App() {
     return cached || empty;
   });
   const [snapshotLive, setSnapshotLive] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string>();
+  const snapshotVersionRef = useRef(0);
   const [loading, setLoading] = useState(
     () => !hasSidebarData(readSnapshotCache()),
   );
@@ -437,6 +439,7 @@ export function App() {
     setLoading(true);
     const seq = ++refreshSeqRef.current;
     const startClock = wsClockRef.current;
+    const startVersion = snapshotVersionRef.current;
     return getSnapshot()
       .then((next) => {
         // 已有更新的刷新在途：旧响应直接丢弃，避免回退新状态。
@@ -444,7 +447,9 @@ export function App() {
         // 期间收到过 WS 消息时，响应里的活动可能比已推送的旧，交给 WS 为准。
         if (wsClockRef.current === startClock && next.activities)
           resetActivities(next.activities);
+        snapshotVersionRef.current += 1;
         setSnapshotLive(true);
+        setSnapshotError(undefined);
         setSnapshot((current) => {
           const reconciled =
             wsClockRef.current === startClock
@@ -456,12 +461,25 @@ export function App() {
         setAuthError(false);
       })
       .catch((error) => {
+        if (
+          seq !== refreshSeqRef.current ||
+          snapshotVersionRef.current !== startVersion
+        )
+          return;
         if (error.message.includes("令牌")) setAuthError(true);
+        else setSnapshotError(error?.message || "会话同步失败，请重试");
       })
       .finally(() => {
         if (seq === refreshSeqRef.current) setLoading(false);
       });
   }, []);
+
+  // 无需用户刷新整页；HTTP 或 WS 任一同步成功后立即停止重试。
+  useEffect(() => {
+    if (!snapshotError || loading || authError) return;
+    const timer = window.setTimeout(() => void refresh(), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [snapshotError, loading, authError, refresh]);
 
   useEffect(() => {
     if (!authError) return;
@@ -693,7 +711,10 @@ export function App() {
         // 让 refresh 响应落地时能选择保守合并而非整体覆盖。
         wsClockRef.current += 1;
         if (message.type === "snapshot") {
+          snapshotVersionRef.current += 1;
           setSnapshotLive(true);
+          setSnapshotError(undefined);
+          setLoading(false);
           if (message.data.activities) resetActivities(message.data.activities);
           setSnapshot((current) => reconcileSnapshot(current, message.data));
         } else if (message.type === "activity.updated")
@@ -1591,6 +1612,9 @@ export function App() {
             query={query}
             loading={loading || historySyncing}
             live={snapshotLive}
+            syncError={snapshotError}
+            syncing={loading}
+            onRetry={() => void refresh()}
             notificationPermission={notificationPermission}
             onSelect={selectThread}
             onOpenThread={openSession}

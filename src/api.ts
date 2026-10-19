@@ -30,7 +30,30 @@ export async function api<T = any>(
   return data;
 }
 
-export const getSnapshot = () => api<Snapshot>("/snapshot");
+// 首次同步失败时不能无限挂着；超时覆盖响应正文读取，而不只等响应头。
+export async function getSnapshot(timeoutMs = 8_000): Promise<Snapshot> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await rawApi("/snapshot", { signal: controller.signal });
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(data.error || `请求失败 (${response.status})`);
+    if (
+      !Array.isArray(data.threads) ||
+      !Array.isArray(data.providers) ||
+      !Array.isArray(data.approvals)
+    )
+      throw new Error("服务未返回有效会话快照，请检查访问地址或代理配置");
+    return data as Snapshot;
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error("会话同步超时，请检查服务连接后重试");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 export const post = <T = any>(url: string, body?: any) =>
   api<T>(url, {
     method: "POST",

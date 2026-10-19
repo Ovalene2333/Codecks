@@ -1,4 +1,11 @@
-import { createContext, Fragment, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   BookOpenText,
   Bot,
@@ -72,17 +79,24 @@ const STEP_ICONS: Record<StepKind, typeof Command> = {
   reply: MessageSquareText,
   compact: Minimize2,
 };
-const RESULT_ICONS = { ok: CircleCheck, fail: CircleX, stop: OctagonMinus } as const;
+const RESULT_ICONS = {
+  ok: CircleCheck,
+  fail: CircleX,
+  stop: OctagonMinus,
+} as const;
 const UNSEEN_LIMIT = 8;
 const RECENT_LIMIT = 5;
 
 /** 行尾「···」会话菜单（重命名、归档、在此项目新建…）；各面板共用，免得逐层透传。 */
-const RowMenuContext = createContext<((thread: ThreadSummary) => void) | undefined>(
-  undefined,
-);
+const RowMenuContext = createContext<
+  ((thread: ThreadSummary) => void) | undefined
+>(undefined);
 
 const firstLine = (text?: string) =>
-  (text || "").split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+  (text || "")
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.trim() || "";
 
 /** “已等 12 分钟”“已盯 3 小时”：分钟级就够，不做秒表，避免列表每秒跳动。 */
 function roughly(prefix: string, ms: number) {
@@ -90,7 +104,9 @@ function roughly(prefix: string, ms: number) {
   if (minutes < 1) return "刚刚";
   if (minutes < 60) return `${prefix} ${minutes} 分钟`;
   const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${prefix} ${hours} 小时` : `${prefix} ${Math.floor(hours / 24)} 天`;
+  return hours < 24
+    ? `${prefix} ${hours} 小时`
+    : `${prefix} ${Math.floor(hours / 24)} 天`;
 }
 
 const everyLabel = (seconds: number) =>
@@ -149,7 +165,9 @@ function Row({
         <span className="home-row-head">
           <b>{label}</b>
           {agentId ? (
-            <small className={`agent-badge agent-${agentId}`}>{agentShortName(agentId)}</small>
+            <small className={`agent-badge agent-${agentId}`}>
+              {agentShortName(agentId)}
+            </small>
           ) : null}
           {thread ? (
             <span className="home-row-project">
@@ -233,7 +251,11 @@ function PanelSkeleton({
   return (
     <Panel id={id} tone={tone} title={title} busy>
       {Array.from({ length: rows }, (_, index) => (
-        <li className="home-row home-row-skeleton" key={index} aria-hidden="true">
+        <li
+          className="home-row home-row-skeleton"
+          key={index}
+          aria-hidden="true"
+        >
           <span className="home-skeleton-dot" />
           <span className="home-skeleton-head" />
           <span className="home-skeleton-time" />
@@ -435,7 +457,8 @@ function AttentionPanel({
       {items.map((item) => {
         const { thread } = item;
         const failed = thread.status === "error";
-        const error = firstLine(thread.lastError) || thread.errorCode || "任务失败";
+        const error =
+          firstLine(thread.lastError) || thread.errorCode || "任务失败";
         const since = item.activity?.lastEventAt ?? thread.updatedAt;
         return (
           <Row
@@ -444,9 +467,17 @@ function AttentionPanel({
             project={projectOf.get(item.key)}
             tone={failed ? "error" : "wait"}
             lead={failed ? <CircleAlert /> : <Hourglass />}
-            time={failed ? relativeTime(thread.updatedAt) : roughly("已等", now - since)}
+            time={
+              failed
+                ? relativeTime(thread.updatedAt)
+                : roughly("已等", now - since)
+            }
             detail={failed ? error : "待确认"}
-            title={failed ? `${thread.name}\n${thread.lastError || error}` : undefined}
+            title={
+              failed
+                ? `${thread.name}\n${thread.lastError || error}`
+                : undefined
+            }
             onOpen={() => onOpen(thread)}
           />
         );
@@ -509,7 +540,11 @@ function UnseenPanel({
       }
       footer={
         items.length > UNSEEN_LIMIT ? (
-          <button type="button" className="home-more" onClick={() => setExpanded(!expanded)}>
+          <button
+            type="button"
+            className="home-more"
+            onClick={() => setExpanded(!expanded)}
+          >
             {hidden > 0 ? `展开其余 ${hidden} 个` : "收起"}
           </button>
         ) : null
@@ -519,7 +554,9 @@ function UnseenPanel({
         const { thread } = item;
         const turn = item.activity?.lastTurn;
         const tone = turn ? turnTone(turn.status) : "info";
-        const Icon = turn ? RESULT_ICONS[turnTone(turn.status)] : MessageSquareText;
+        const Icon = turn
+          ? RESULT_ICONS[turnTone(turn.status)]
+          : MessageSquareText;
         const detail = unseenDetail(item);
         return (
           <Row
@@ -553,17 +590,30 @@ function UnseenPanel({
 function RunningPanel({
   items,
   loading,
+  syncError,
   projectOf,
   onOpen,
 }: {
   items: RunningItem[];
   loading?: boolean;
+  syncError?: string;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
 }) {
   const now = useNow(1_000);
+  if (syncError)
+    return (
+      <Panel id="home-running" tone="running" title="运行中">
+        <li className="home-empty">
+          <b>实时状态暂不可用</b>
+          <span>同步恢复后显示正在运行的会话。</span>
+        </li>
+      </Panel>
+    );
   if (loading)
-    return <PanelSkeleton id="home-running" tone="running" title="运行中" rows={2} />;
+    return (
+      <PanelSkeleton id="home-running" tone="running" title="运行中" rows={2} />
+    );
   return (
     <Panel id="home-running" tone="running" title="运行中" count={items.length}>
       {items.map((item) => {
@@ -593,7 +643,9 @@ function RunningPanel({
               <StepIcon aria-hidden="true" />
               <b>{described.label}</b>
               {described.target ? <code>{described.target}</code> : null}
-              <span className="home-step-time">{formatElapsed(now - step.startedAt)}</span>
+              <span className="home-step-time">
+                {formatElapsed(now - step.startedAt)}
+              </span>
             </>
           );
         } else
@@ -624,29 +676,38 @@ function RunningPanel({
 function RecentPanel({
   items,
   loading,
+  stale,
   projectOf,
   onOpen,
   onShowAll,
 }: {
   items: HomeItem[];
   loading?: boolean;
+  stale?: boolean;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
   onShowAll: () => void;
 }) {
   if (loading)
-    return <PanelSkeleton id="home-recent" tone="recent" title="最近会话" rows={3} />;
+    return (
+      <PanelSkeleton id="home-recent" tone="recent" title="最近会话" rows={3} />
+    );
   return (
     <Panel
       id="home-recent"
       tone="recent"
-      title="最近会话"
+      title={stale ? "最近会话（上次同步）" : "最近会话"}
       footer={
-        <button type="button" className="home-more home-more-all" onClick={onShowAll}>
+        <button
+          type="button"
+          className="home-more home-more-all"
+          onClick={onShowAll}
+        >
           查看全部会话
         </button>
       }
     >
+      {!items.length && <li className="home-empty">暂无可显示的最近会话</li>}
       {items.map((item) => {
         const { thread } = item;
         // 只在知道上一轮回复时多一行；preview 多是标题或占位文案，不重复展示。
@@ -659,7 +720,11 @@ function RecentPanel({
             tone="idle"
             lead={<i className="home-dot" />}
             time={relativeTime(thread.updatedAt)}
-            detail={detail ? <span className="home-row-reply">{detail}</span> : undefined}
+            detail={
+              detail ? (
+                <span className="home-row-reply">{detail}</span>
+              ) : undefined
+            }
             onOpen={() => onOpen(thread)}
           />
         );
@@ -705,11 +770,19 @@ function WatchPanel({
   );
   return (
     <>
-      <Panel id="home-watch" tone="watch" title="deck-api 监督中" count={watchers.length}>
+      <Panel
+        id="home-watch"
+        tone="watch"
+        title="deck-api 监督中"
+        count={watchers.length}
+      >
         {sorted.length ? null : (
           <li className="home-empty">
             <b>没有正在监督的远端任务</b>
-            <span>让 agent 用 deck-api wake 挂上监督进程，远端任务结束时会自动唤醒会话。</span>
+            <span>
+              让 agent 用 deck-api wake
+              挂上监督进程，远端任务结束时会自动唤醒会话。
+            </span>
           </li>
         )}
         {sorted.map((watcher) => {
@@ -760,7 +833,8 @@ function WatchPanel({
           title="停止监督进程"
           body={
             <p>
-              停止「{stopping.label}」？远端任务不受影响，但结束时不会再唤醒会话。
+              停止「{stopping.label}
+              」？远端任务不受影响，但结束时不会再唤醒会话。
             </p>
           }
           confirmLabel="停止"
@@ -792,6 +866,7 @@ export function MonitorBoard({
   watchers,
   lostWatchers = [],
   live = true,
+  syncError,
   projectOf,
   onOpen,
   onMarkSeen,
@@ -813,6 +888,7 @@ export function MonitorBoard({
   lostWatchers?: LostWakeWatcher[];
   /** 本轮实时快照是否已落地：运行中 / 最近会话此时才改用实时数据。 */
   live?: boolean;
+  syncError?: string;
   projectOf: ReadonlyMap<string, ProjectGroup>;
   onOpen: (thread: ThreadSummary) => void;
   onMarkSeen: (key: string) => void;
@@ -824,7 +900,13 @@ export function MonitorBoard({
   const now = useNow(5_000);
   const watched = useWakeWatchers(watchers);
   const threadOf = useMemo(
-    () => new Map(threads.map((thread) => [activityKey(thread.agentId, thread.id), thread])),
+    () =>
+      new Map(
+        threads.map((thread) => [
+          activityKey(thread.agentId, thread.id),
+          thread,
+        ]),
+      ),
     [threads],
   );
   const visibleDeliveries = useMemo(
@@ -840,7 +922,9 @@ export function MonitorBoard({
     () =>
       new Set(
         watched.flatMap((watcher) =>
-          watcher.threadId ? [activityKey(watcher.agentId, watcher.threadId)] : [],
+          watcher.threadId
+            ? [activityKey(watcher.agentId, watcher.threadId)]
+            : [],
         ),
       ),
     [watched],
@@ -888,6 +972,7 @@ export function MonitorBoard({
           <RunningPanel
             items={live ? board.running : []}
             loading={!live}
+            syncError={!live ? syncError : undefined}
             projectOf={projectOf}
             onOpen={onOpen}
           />
@@ -895,8 +980,9 @@ export function MonitorBoard({
       case "recent":
         return !live || board.recent.length ? (
           <RecentPanel
-            items={live ? board.recent : []}
-            loading={!live}
+            items={board.recent}
+            stale={!live}
+            loading={!live && !syncError && !board.recent.length}
             projectOf={projectOf}
             onOpen={onOpen}
             onShowAll={onShowAll}
