@@ -314,13 +314,87 @@ const wakeOutbox = new WakeOutbox({
   onChanged: routingChanged,
 });
 await wakeOutbox.load();
+const reservedSessionAliases = () => new Set<string>([
+  ...threadSettings.listSessionAliases().map((entry) => entry.alias),
+  ...threadSettings.listWakeCodes().map((entry) => entry.code),
+]);
+/** 会话引用既可以是 ThreadSummary（`id`），也可以是已解构的 `threadId`。 */
+type ThreadAliasTarget = {
+  agentId?: AgentId;
+  id?: string;
+  threadId?: string;
+};
+const ensureThreadAliases = async (
+  threads: Iterable<ThreadAliasTarget>,
+) => {
+  const targets: { agentId: AgentId; threadId: string }[] = [];
+  for (const thread of threads) {
+    const threadId = thread?.id || thread?.threadId;
+    if (!threadId) continue;
+    targets.push({ agentId: thread.agentId || "codex", threadId });
+  }
+  if (!targets.length) return { aliases: new Map<string, string>(), changed: false };
+  const result = await threadSettings.ensureSessionAliases(targets, reservedSessionAliases());
+  if (result.changed) broadcastSnapshotSoon();
+  return result;
+};
+
 const askService = new AskService({
   file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries,
+  reservedAliases: reservedSessionAliases,
+  sessionAliases: {
+    ensure: (targets) => ensureThreadAliases(targets).then(({ aliases }) => aliases),
+  },
   onChanged: routingChanged,
 });
 await askService.load();
 const askSettings = new AskSettingsStore(path.join(dataDir, "ask-settings.json"));
 await askSettings.load();
+
+const reservedAliasIdentifiers = () => {
+  const reserved = new Set<string>();
+  for (const item of askService.list()) {
+    if (typeof item.alias === "string" && item.alias) reserved.add(item.alias);
+  }
+  for (const entry of threadSettings.listSessionAliases()) reserved.add(entry.alias);
+  for (const entry of threadSettings.listWakeCodes()) reserved.add(entry.code);
+  return reserved;
+};
+
+let sessionAliasSync: Promise<{ aliases: Map<string, string>; changed: boolean }> = Promise.resolve({
+  aliases: new Map(),
+  changed: false,
+});
+const scheduleThreadAliases = (
+  threads: Iterable<ThreadAliasTarget>,
+) => {
+  sessionAliasSync = sessionAliasSync
+    .then(() => ensureThreadAliases(threads))
+    .catch((error) => {
+      console.error("会话别名同步失败:", error?.message || error);
+      return { aliases: new Map<string, string>(), changed: false };
+    });
+  return sessionAliasSync;
+};
+
+await scheduleThreadAliases(initialThreads);
+
+  const reservedWakeAliases = () => {
+    const reserved = reservedAliasIdentifiers();
+    for (const entry of threadSettings.listWakeCodes()) reserved.add(entry.code);
+    return reserved;
+  };
+
+async function withSessionAlias<T>(agentId: AgentId, thread: T): Promise<T> {
+  if (!thread || typeof thread !== "object" || Array.isArray(thread)) return thread;
+  const candidate = thread as { id?: unknown; alias?: unknown };
+  if (typeof candidate.id !== "string" || !candidate.id) return thread;
+  const { aliases } = await ensureThreadAliases([{ agentId, id: candidate.id }]);
+  const assigned = aliases.get(JSON.stringify([agentId, candidate.id]));
+  const alias = assigned ?? (typeof candidate.alias === "string" ? candidate.alias : undefined);
+  if (!alias || alias === candidate.alias) return thread;
+  return { ...thread, alias };
+}
 
 // watcher 列表走 TTL 缓存：/proc 全量扫描不进每次快照构建，接口轮询、
 // 快照与启动预热共用同一份结果；内容变化时补发快照，让首页和会话页
@@ -376,7 +450,9 @@ const snapshotWithDeferredSettings = () => {
   const display = (thread: ThreadSummary) => {
     const agentId = thread.agentId || "codex";
     const pending = threadSettings.deferred(agentId, thread.id);
-    return askService.decorate(pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread);
+    const decorated = askService.decorate(pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread);
+    const alias = threadSettings.sessionAlias(agentId, thread.id) ?? decorated.alias;
+    return alias && alias !== decorated.alias ? { ...decorated, alias } : decorated;
   };
   return {
     ...snapshot,
@@ -393,6 +469,7 @@ const fullSnapshotRaw = () => ({
   wakeDeliveries: wakeOutbox.list(),
   messageDeliveries: messageDeliveries.list(),
   wakeCodes: threadSettings.listWakeCodes(),
+  sessionAliases: threadSettings.listSessionAliases(),
   wakeWatchers: watcherCache.current(),
   wakeLost: watcherLedger.lost(),
   // 工具列表是静态的几条描述：随快照下发 + 前端缓存，工具页（桌面端是新标签页）
@@ -681,6 +758,9 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, detached: input.detached,
     settings: { ...configuration, cwd: resolution.thread.cwd, providerId, name: input.name },
   });
+  if (result.item.targetThreadId) {
+    result.thread = await withSessionAlias(result.item.targetAgentId, result.thread);
+  }
   broadcastSnapshotSoon();
   res.status(202).json(result);
 }));
@@ -726,35 +806,55 @@ app.post("/api/deck/send", route(async (req, res) => {
   if (input.requestId) throw new Error("--request-id 仅用于默认向绑定来源发送消息");
   let target: { agentId: AgentId; threadId: string };
   let alias: string | undefined;
+  let kind: "ask" | "session" | undefined;
   if (input.code) {
     const found = threadSettings.findByWakeCode(input.code);
     if (!found) throw new Error(`wake code ${input.code} 不存在`);
     target = found;
   } else if (input.to!.startsWith("@")) {
-    const found = askService.findByAlias(input.to!.slice(1));
-    if (!found) throw new Error(`询问别名 ${input.to} 不存在或尚未创建完成`);
-    target = found.target;
-    alias = found.alias;
+    const reference = input.to!.slice(1);
+    if (reference.startsWith("s-")) {
+      const found = threadSettings.findSessionByAlias(reference);
+      if (!found) throw new Error(`会话别名 ${input.to} 不存在`);
+      target = found;
+      alias = reference;
+      kind = "session";
+    } else {
+      const found = askService.findByAlias(reference);
+      if (!found) throw new Error(`询问别名 ${input.to} 不存在或尚未创建完成`);
+      target = found.target;
+      alias = found.alias;
+      kind = "ask";
+    }
+    const state = agents.messageState(target.agentId, target.threadId);
+    if (state.thread.archived) throw new Error("目标会话已归档");
   } else {
     const separator = input.to!.indexOf(":");
     if (separator < 1 || separator === input.to!.length - 1) throw new Error("--to 格式应为 agentId:threadId");
     target = { agentId: agentIdSchema.parse(input.to!.slice(0, separator)), threadId: input.to!.slice(separator + 1) };
     const state = agents.messageState(target.agentId, target.threadId);
     if (state.thread.archived) throw new Error("目标会话已归档");
+    const assigned = await ensureThreadAliases([target]);
+    alias = assigned.aliases.get(JSON.stringify([target.agentId, target.threadId]));
+    kind = "session";
   }
   const mode = input.mode || "queue";
   if (mode === "steer") assertSteerTarget(target.agentId, target.threadId);
   if (mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);
   // send 与 wake 隔离：目标已确定，直接进入会话消息队列，不解析/创建唤醒代号。
   const id = randomBytes(8).toString("hex");
-  const prompt = alias ? `[ask:${alias}] ${input.text}` : `[send:${id.slice(0, 8)}] ${input.text}`;
+  const prompt = kind === "ask" && alias
+    ? `[ask:${alias}] ${input.text}`
+    : kind === "session" && alias
+      ? `[send:${alias}] ${input.text}`
+      : `[send:${id.slice(0, 8)}] ${input.text}`;
   const delivery = await messageDeliveries.enqueue(
     target.agentId, target.threadId,
     mode === "queue" ? "queue" : "feedback",
     { text: prompt },
     { id: `send:${id}`, forceInterrupt: mode === "interrupt" },
   );
-  res.status(202).json({ target, alias, mode, delivery });
+  res.status(202).json({ target, alias, kind, mode, delivery });
 }));
 /**
  * deck-api wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
@@ -808,6 +908,8 @@ app.post(
         code = await threadSettings.ensureWakeCode(
           target.agentId,
           target.threadId,
+          undefined,
+          reservedWakeAliases(),
         );
         created = !existing;
         if (created) broadcastSnapshotSoon();
@@ -1416,7 +1518,7 @@ app.post(
       .parse(req.body);
     if (id === "codex" && !input.providerId)
       throw new Error("Codex 会话必须指定供应商");
-    const thread = await agents.createThread(id, input);
+    const thread = await withSessionAlias(id, await agents.createThread(id, input));
     await projects.rememberCreate({
       agentId: id,
       cwd: input.cwd,
@@ -1681,7 +1783,7 @@ app.post(
         notify: z.boolean().optional(),
       })
       .parse(req.body || {});
-    const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code);
+    const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code, reservedWakeAliases());
     broadcastSnapshotSoon();
     const wakePath = `/api/deck/events/${wakeCode}`;
     const localUrl = `${localBase}${wakePath}`;
@@ -1852,7 +1954,7 @@ app.post(
         lastTurnId: z.string().min(1).max(200).optional(),
       })
       .parse(req.body || {});
-    return agents.forkThread(id, param(req.params.threadId), input);
+    return withSessionAlias(id, await agents.forkThread(id, param(req.params.threadId), input));
   }),
 );
 app.post(
@@ -1874,13 +1976,13 @@ app.post(
           .optional(),
       })
       .parse(req.body || {});
-    return agents.retryFromTurn(
+    return withSessionAlias(id, await agents.retryFromTurn(
       id,
       param(req.params.threadId),
       input.turnId,
       input.text,
       input.images,
-    );
+    ));
   }),
 );
 app.post(
@@ -2198,7 +2300,7 @@ app.post(
           .optional(),
       })
       .parse(req.body);
-    const thread = await manager.createThread(input.providerId, input);
+    const thread = await withSessionAlias("codex", await manager.createThread(input.providerId, input));
     await projects.rememberCreate({
       agentId: "codex",
       cwd: input.cwd,
@@ -2207,7 +2309,6 @@ app.post(
       reasoningEffort: input.reasoningEffort,
       sandbox: input.sandbox,
       approvalPolicy: input.approvalPolicy,
-      approvalsReviewer: input.approvalsReviewer,
     });
     return thread;
   }),
@@ -2352,11 +2453,11 @@ app.post(
     const input = z
       .object({ lastTurnId: z.string().optional() })
       .parse(req.body || {});
-    return manager.forkThread(
+    return withSessionAlias("codex", await manager.forkThread(
       param(req.params.providerId),
       param(req.params.threadId),
       input,
-    );
+    ));
   }),
 );
 app.post(
@@ -2377,13 +2478,13 @@ app.post(
           .optional(),
       })
       .parse(req.body || {});
-    return manager.retryFromTurn(
+    return withSessionAlias("codex", await manager.retryFromTurn(
       param(req.params.providerId),
       param(req.params.threadId),
       input.turnId,
       input.text,
       input.images,
-    );
+    ));
   }),
 );
 app.post(
@@ -2552,7 +2653,26 @@ app.post(
 
 // 短别名只做导航重定向：消息正文里不再携带完整会话 key。
 app.get("/s/:alias", (req, res) => {
-  const found = askService.findByAlias(param(req.params.alias));
+  const reference = param(req.params.alias);
+  if (reference.startsWith("s-")) {
+    const found = threadSettings.findSessionByAlias(reference);
+    if (!found) {
+      res.status(404).send("会话别名不存在");
+      return;
+    }
+    let providerId: string;
+    try {
+      providerId = agents.messageState(found.agentId, found.threadId).thread.providerId;
+    } catch {
+      res.status(404).send("会话不存在或尚未创建完成");
+      return;
+    }
+    const key = `${found.agentId}:${providerId}:${found.threadId}`;
+    res.setHeader("Cache-Control", "no-store");
+    res.redirect(302, `/session/${encodeURIComponent(key)}`);
+    return;
+  }
+  const found = askService.findByAlias(reference);
   if (!found?.item.targetThreadId) {
     res.status(404).send("会话不存在或尚未创建完成");
     return;
@@ -2703,6 +2823,7 @@ agents.on("event", (event) => {
       );
     if (cache.threads.length || cache.archivedThreads.length || historiesReady)
       threadSummaries.schedule(cache.threads, cache.archivedThreads);
+    void scheduleThreadAliases([...cache.threads, ...(cache.archivedThreads || [])]);
     sessionSearch.reconcileSoon();
   }
   // snapshot 走合并窗口；thread.updated/deleted 与 codex.event 本就是增量小包，
@@ -2711,7 +2832,20 @@ agents.on("event", (event) => {
     broadcastSnapshotSoon();
     return;
   }
-  broadcast(JSON.stringify(event.type === "thread.updated" ? { ...event, data: askService.decorate(event.data) } : event));
+  if (event.type === "thread.updated" && event.data?.id) {
+    const agentId = event.data.agentId || "codex";
+    const alias = threadSettings.sessionAlias(agentId, event.data.id);
+    broadcast(
+      JSON.stringify({
+        ...event,
+        data: alias && alias !== event.data.alias
+          ? { ...askService.decorate(event.data), alias }
+          : askService.decorate(event.data),
+      }),
+    );
+    return;
+  }
+  broadcast(JSON.stringify(event));
 });
 
 let lock = acquireRuntimeLock(dataDir, {

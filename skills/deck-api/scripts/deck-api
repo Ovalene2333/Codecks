@@ -63,7 +63,8 @@ EOF
 deck-api send [--mode queue|steer|interrupt] [--to agent:thread|@alias | --code code] [--file path|-] -- <消息>
     不指定目标时发给 create 绑定的来源；默认沿用创建时的 mode。
     消息必须放在 -- 之后；旧式 `send <代号> <消息>` 不接受。
-    --to @alias 是询问回执里的稳定短标识，优先用它回复子会话；不需要完整 thread ID。
+    --to @alias 指向询问回执；--to @s-xxxxxxx 指向会话本身（由 Deck 在创建时默认分配）。
+    两者都不需要完整 thread ID；回执给哪个就用哪个，跨会话协作通常用 @s-…。
     steer 即时追加到对方当前回合（运行时直接可见，不打断；codex 支持，需要时可用 agents 确认 steer 字段）；
     对方空闲时与直接发送相同，回合已变化时会失败（用 --request-id 重试）。
     --to/--code 显式指定其他目标时默认 queue；send 直接进消息队列，不读取/创建唤醒代号。
@@ -94,8 +95,8 @@ deck-api result @alias / inspect @alias        按需领取结果 / 查看执行
 deck-api send …                               向来源或指定会话发消息（help send 看详情）
 deck-api wake …                               监督外部任务（help wake 看详情）
 
-deck-api agents / sessions（或 tasks）         查看可用 Agent / 创建记录（不是消息正文）
-deck-api whoami / list                        确认当前会话 / 查看唤醒代号
+deck-api agents / sessions（或 tasks）         查看可用 Agent / 创建记录与会话短别名（不是消息正文）
+deck-api whoami / list                        确认当前会话 / 查看会话别名与唤醒代号
 deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
 
 queue 等目标空闲；steer 即时追加到目标当前回合（不打断，仅 codex 这类可转向会话支持）；interrupt 停止目标当前回合再发送。
@@ -148,6 +149,15 @@ api() {
 
 check_code() {
   [[ ${1-} =~ $CODE_RE ]] || die "无效代号：${1-}"
+}
+
+# ask_of_session ALIAS —— 找出指向该会话的询问记录 ID（没有则输出空）。
+# 会话别名与会话一一对应，询问回执仍以询问为粒度；两者不能混用。
+ask_of_session() {
+  local alias=$1 out
+  out=$(api GET /api/deck/asks 2>/dev/null) || return 1
+  printf '%s\n' "$out" | tr '{' '\n' | grep -F "\"targetAlias\":\"$alias\"" | head -n1 |
+    grep -oE '"id":"[^"]+"' | head -n1 | sed -E 's/^"id":"//; s/"$//'
 }
 
 # prepare CODE COMMAND FORCE DRY —— 让 Deck 确认/识别目标会话。
@@ -336,6 +346,13 @@ case "$cmd" in
     ;;
   result|inspect)
     reference=${1-}; reference=${reference#@}
+    # `s-` 前缀是会话本身，不是询问：先查明它的询问回执，再按询问 ID 查询。
+    if [ "${reference:0:2}" = s- ]; then
+      [[ $reference =~ ^s-[a-z0-9]{7}$ ]] || die "无效会话别名：@$reference"
+      ask=$(ask_of_session "$reference") || exit 1
+      [ -n "$ask" ] || die "会话 @$reference 没有关联的询问记录"
+      reference=$ask
+    fi
     [[ $reference =~ ^[a-z0-9-]{8,64}$ ]] || die "用法：deck-api $cmd @alias（或完整询问 ID）"
     shift
     tail=40
@@ -356,9 +373,12 @@ case "$cmd" in
     json_field "$out" summary
     ;;
   list)
-    out=$(api GET /api/deck/targets) || exit 1
+    # 列出会话别名（send/result 可直接用 @s-xxxxxxx）与唤醒代号两条通道。
+    out=$(api GET /api/deck/sessions) || exit 1
     if command -v jq >/dev/null 2>&1; then
-      printf '%s' "$out" | jq -r '.items[] | [.code, .agentId, (.status // "-"), (.name // "-"), (.cwd // "-")] | @tsv'
+      printf '%s' "$out" | jq -r '.items[] | [.alias, (.targetAlias // "-"), .targetAgentId, .status] | @tsv'
+      out=$(api GET /api/deck/targets) || exit 1
+      printf '%s' "$out" | jq -r '.items[] | [.code, "-", .agentId, (.status // "-")] | @tsv'
     else
       printf '%s\n' "$out"
     fi
@@ -383,6 +403,10 @@ case "$cmd" in
     done
     [ -z "$mode" ] || case "$mode" in queue|steer|interrupt) ;; *) die "mode 应为 queue、steer 或 interrupt" ;; esac
     [ -z "$to" ] || [ -z "$code" ] || die "--to 与 --code 不能同时使用"
+    if [ "${to:0:3}" = @s- ]; then
+      # 会话别名直接交给服务端解析；这里只做格式校验，避免把打错的别名当收件人。
+      [[ $to =~ ^@s-[a-z0-9]{7}$ ]] || die "无效会话别名：$to"
+    fi
     text=$*
     if [ -n "$file" ]; then
       [ -z "$text" ] || die "--file 与消息参数不能同时使用"

@@ -15,10 +15,10 @@
 
 | | `send` | `wake` |
 | --- | --- | --- |
-| 目标 | 已知会话 / 询问短别名 | 唤醒代号 |
-| 入口 | `create` 的绑定关系、`--to`、`@alias` | `wake watch/poll`、外部 HTTP |
+| 目标 | 已知会话 / 会话别名 / 询问短别名 | 唤醒代号 |
+| 入口 | `create` 的绑定关系、`--to`、`@s-…`、`@alias` | `wake watch/poll`、外部 HTTP |
 | 持久层 | 会话消息队列 | 唤醒 outbox |
-| 消息头 | `[ask:<alias>]`、`[send:<id>]` | `[wake:<code>]` |
+| 消息头 | `[ask:<alias>]`、`[send:<session 别名或 id>]` | `[wake:<code>]` |
 | 失败展示 | 会话的待发送列表 | 总览「需要处理」 |
 | 典型用途 | Agent 回传、补充上下文 | 长任务结束后继续处理 |
 
@@ -40,6 +40,18 @@
 ```
 
 完整 ask ID、message ID 和 session key 保存在服务端台账和 UI 里，不会反复注入会话上下文。
+
+## 三种标识：会话别名、询问别名、唤醒代号
+
+| 标识 | 形如 | 指什么 | 什么时候有 |
+| --- | --- | --- | --- |
+| 会话别名 | `s-3f9kq2pz` | 一个会话本身 | 会话创建时默认分配，所有会话都有 |
+| 询问别名 | `7f3a2c90` | 一次 `create` 产生的询问关系 | `create` 后才有 |
+| 唤醒代号 | `2c6ffbc0`（可自定义） | `wake` 的投递通道 | 显式开启远程唤醒后才有 |
+
+`--to @s-…` 直接定位会话；`--to @<询问别名>` 定位询问，它会解析到询问的目标会话；`--code` 按唤醒代号定位会话。
+`result` / `inspect @s-…` 会先找到该会话对应的询问回执再查询，所以会话别名也能直接领取 detached 交付。
+三个命名空间互不复用：会话别名分配时会避开已有询问别名和唤醒代号，反之亦然。
 
 ## 安装与入口
 
@@ -222,14 +234,33 @@ bash "$DA" wake poll -l job-4821 -i 120 -- \
 - 明确未发送的失败会出现在会话的待发送列表，可取消或重试。
 - 不会进入唤醒 outbox，也不会出现在总览的「需要处理」里；后者只处理 `wake` 投递失败。
 
-## 短别名与稳定性
+## 会话别名（默认开启）
 
-每次 `create` 会生成一个稳定短别名，例如 `7f3a2c`：
+每个会话——不论由 UI 新建、由 `create` 询问创建，还是 fork/重试产生——都会自动分配一个
+`@s-xxxxxxx` 形式的会话别名，不需要任何开关：
 
-- 由 ask UUID 派生，默认 8 位，必要时逐级加长以避免冲突。
+- 固定 7 位小写字母数字，前缀 `s-`，与会话一一对应。
+- 首次生成后落盘，之后**永不重算**；服务重启、会话归档都不会改变。
+- 会话删除后别名仍保留在台账里，不会被新会话复用，旧链接不会指向错的对象。
+- 快照的 `sessionAliases` 字段和 `session.threads[].alias` 会下发当前映射；`GET /s/s-…` 直接跳转到会话。
+- 完整 session key 仍是唯一真源，只用于台账、API 和调试。
+
+用法：
+
+```bash
+bash "$DA" sessions                       # 看到询问和它们的 targetAlias
+bash "$DA" send --to @s-3f9kq2pz -- '补充约束……'
+bash "$DA" inspect @s-3f9kq2pz --tail 30
+bash "$DA" result @s-3f9kq2pz
+```
+
+## 询问别名
+
+每次 `create` 还会生成一个询问别名，例如 `7f3a2c90`：
+
+- 由 ask UUID 派生，默认 8 位，必要时逐级加长以避免冲突（10、12……）。
 - 首次生成后写入询问台账，之后**永不重算**；服务重启、会话归档、再次追问都不会改变。
 - 旧台账没有别名时，在加载时补齐一次并立即保存。
-- 完整 UUID 仍是唯一真源，只用于台账、API 和调试。
 - 消息正文只使用 `[ask:<alias>]` 和 `/s/<alias>` 短链接；不会再重复携带完整 ask ID、message ID 和 session key。
 
 来源可以用 `send --to @<alias>` 回复同一个子会话；不需要复制完整 thread ID。
@@ -334,7 +365,7 @@ curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
 | `GET` | `/api/deck/sessions/:reference/inspect?tail=40` | 查看原生会话近期输出 |
 | `GET` | `/api/deck/targets` | 唤醒代号绑定 |
 | `POST` | `/api/deck/events/:code` | 兼容的唤醒事件入口 |
-| `GET` | `/s/:alias` | 短别名跳转到子会话 |
+| `GET` | `/s/:alias` | `s-…` 跳转到会话；询问别名跳转到询问子会话 |
 | `POST` | `/api/monitor/watchers/:pid/stop` | 停止 watcher |
 | `POST` | `/api/monitor/lost-watchers/:id/notify` | 通知失联 watcher 的会话 |
 

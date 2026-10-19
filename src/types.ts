@@ -210,6 +210,8 @@ export interface AskSession {
 
 export interface ThreadSummary {
   ask?: AskSession;
+  /** 每个可见会话自动分配的稳定短别名，例如 `@s-3f9kq2pz`。 */
+  alias?: string;
   agentId?: AgentId;
   id: string;
   providerId: string;
@@ -244,6 +246,8 @@ export interface ThreadSummary {
   sessionMode?: string;
   sessionModes?: { id: string; name?: string; description?: string }[];
   tokenUsage?: TokenUsage;
+  /** 供应商原生会话累计用量；用量统计/费用估算优先用它。 */
+  tokenUsageTotal?: TokenUsage;
   /** Turn that was in progress when the Codex runtime process died. */
   interruptedTurnId?: string;
   compacting?: boolean;
@@ -604,6 +608,8 @@ export interface Snapshot {
   wakeDeliveries?: WakeDelivery[];
   /** 已开启远程唤醒的会话及其代号。 */
   wakeCodes?: { code: string; agentId: AgentId; threadId: string }[];
+  /** 已分配的会话短别名（含已删除会话的台账，用于避免别名复用）。 */
+  sessionAliases?: { alias: string; agentId: AgentId; threadId: string }[];
   /** 本机 deck-wake watcher 列表（服务端 TTL 缓存，滞后数秒属正常）。 */
   wakeWatchers?: WakeWatcher[];
   /** 失联待处理的 watcher（服务端台账，旧服务端没有该字段）。 */
