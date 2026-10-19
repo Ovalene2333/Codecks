@@ -109,6 +109,8 @@ export function processRssBytes(pid: number): number | undefined {
   try {
     const out = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
       encoding: "utf8",
+      timeout: 2_000,
+      maxBuffer: 64 * 1024,
     });
     const kb = Number(String(out.stdout || "").trim());
     if (Number.isFinite(kb) && kb > 0) return kb * 1024;

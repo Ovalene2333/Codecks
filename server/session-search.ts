@@ -44,7 +44,7 @@ function normalizedText(value: unknown) {
 export function sessionSearchDocuments(full: any) {
   const documents: SearchDocument[] = [];
   let remaining = MAX_THREAD_CHARS;
-  let truncated = false;
+  let truncated = Boolean(full?.__searchTruncated);
   const turns = Array.isArray(full?.turns) ? full.turns : [];
   for (
     let turnIndex = 0;
@@ -161,6 +161,10 @@ export class SessionSearchStore {
   }
 
   upsert(thread: ThreadSummary, full: unknown) {
+    const current = this.db.prepare(
+      "SELECT source_updated_at FROM session_search_thread WHERE agent_id = ? AND thread_id = ?",
+    ).get(agentId(thread), thread.id);
+    if (Number(current?.source_updated_at) > Number(thread.updatedAt)) return;
     const extracted = sessionSearchDocuments(full);
     const id = agentId(thread);
     this.db.exec("BEGIN IMMEDIATE");

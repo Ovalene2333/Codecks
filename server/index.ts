@@ -1,3 +1,5 @@
+import { closeCliProbes } from "./cli-probe-work.js";
+import { startEventLoopHealth } from "./event-loop-health.js";
 import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
@@ -56,12 +58,12 @@ import {
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ActivityTracker } from "./activity.js";
-import { backgroundWork } from "./background-work.js";
+import { backgroundWork, closeBackgroundWork, BackgroundWorkError } from "./background-work.js";
 import type { HostStats as BackgroundHostStats } from "./types.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
 import { ModelAffinityStore } from "./model-affinity.js";
 import { AgentSettingsStore } from "./agent-settings.js";
-import { SessionSearchStore } from "./session-search.js";
+import { BackgroundSearchStore } from "./session-search-background.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { WakeOutbox } from "./wake-outbox.js";
 import { AskSettingsStore, askConfigurationSchema, resolveAskConfiguration } from "./ask-settings.js";
@@ -270,7 +272,7 @@ const acpHost = new AcpAgentHost({
 });
 await acpHost.sync();
 const sessionSearch = new SessionSearchIndexer(
-  new SessionSearchStore(dataDir),
+  new BackgroundSearchStore(dataDir),
   agents,
 );
 const tools = new ToolRegistry([
@@ -533,7 +535,7 @@ const route =
       const result = await handler(req, res);
       if (!res.headersSent) res.json(result ?? { ok: true });
     } catch (error: any) {
-      res.status(400).json({ error: error.message || "请求失败" });
+      if (!res.headersSent && !res.destroyed) res.status(error instanceof BackgroundWorkError ? error.statusCode : 400).json({ error: error.message || "请求失败" });
     }
   };
 const param = (value: string | string[]) =>
@@ -565,10 +567,25 @@ app.get(
     })),
   })),
 );
+// Coalesce tabs/clients polling together; no accumulation of identical OS probes.
+let hostPending: Promise<BackgroundHostStats> | undefined;
+let hostCached: { at: number; value: BackgroundHostStats } | undefined;
+async function readHostStats() {
+  const memory = process.memoryUsage();
+  const deck = {
+    pid: process.pid, rss: memory.rss, heapUsed: memory.heapUsed,
+    uptimeSec: Math.round(process.uptime()), node: process.version, clients: wss.clients.size,
+  };
+  if (hostCached && Date.now() - hostCached.at < 1_000) return { ...hostCached.value, deck };
+  hostPending ??= backgroundWork<BackgroundHostStats>("host", [wss.clients.size, agents.runtimePids(), deck])
+    .then((value) => { hostCached = { at: Date.now(), value }; return value; })
+    .finally(() => { hostPending = undefined; });
+  return { ...await hostPending, deck };
+}
 app.get(
   "/api/monitor/host",
   route(async () =>
-    backgroundWork<BackgroundHostStats>("host", [wss.clients.size, agents.runtimePids()]),
+    readHostStats(),
   ),
 );
 // 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒代号，会与 /api/wake/:code 冲突。
@@ -906,8 +923,8 @@ app.post(
       threads.map((thread) => `${thread.agentId || "codex"}:${thread.id}`),
     );
     return {
-      results: sessionSearch.store.search(input.query, allowed, input.limit),
-      ...sessionSearch.progress(threads),
+      results: await sessionSearch.store.search(input.query, allowed, input.limit),
+      ...await sessionSearch.progress(threads),
     };
   }),
 );
@@ -2843,6 +2860,7 @@ setInterval(async () => {
   }
 }, 5_000).unref();
 
+const stopEventLoopHealth = startEventLoopHealth();
 let shuttingDown = false;
 const shutdown = (signal: string) => {
   if (shuttingDown) {
@@ -2851,6 +2869,7 @@ const shutdown = (signal: string) => {
     process.exit(1);
   }
   shuttingDown = true;
+  stopEventLoopHealth();
   // 先断全部 WS：否则 server.close 会等浏览器长连接，process.exit 永远到不了。
   for (const client of wss.clients) {
     try {
@@ -2875,6 +2894,8 @@ const shutdown = (signal: string) => {
   agents.stopAll();
   tools.close();
   sessionSearch.close();
+  closeCliProbes();
+  closeBackgroundWork();
   askService.close();
   wakeOutbox.close();
   // 硬退出兜底：5 秒后无论如何结束进程。
@@ -2883,8 +2904,7 @@ const shutdown = (signal: string) => {
     .flush()
     .catch(() => undefined)
     .finally(() => {
-      clearTimeout(hardExit);
-      server.close(() => process.exit(0));
+      server.close(() => { clearTimeout(hardExit); process.exit(0); });
     });
 };
 process.on("SIGINT", () => shutdown("SIGINT"));

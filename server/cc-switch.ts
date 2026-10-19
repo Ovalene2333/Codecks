@@ -48,7 +48,7 @@ export async function findCcSwitchDb(explicit?: string) {
 }
 
 export class CcSwitchSource {
-  constructor(readonly dbPath: string) {}
+  constructor(readonly dbPath: string, private strict = false) {}
 
   readProviders(): Provider[] {
     // SQL 层失败（表结构变化、库文件损坏）时降级为空列表：调用方只做内存同步，
@@ -97,6 +97,7 @@ export class CcSwitchSource {
         db.close();
       }
     } catch (error) {
+      if (this.strict) throw new Error("CC Switch database could not be read");
       console.error(
         "CC Switch 供应商读取失败，已跳过:",
         (error as Error)?.message || error,
@@ -150,6 +151,7 @@ export class CcSwitchSource {
         db.close();
       }
     } catch (error) {
+      if (this.strict) throw new Error("CC Switch database could not be read");
       console.error(
         "CC Switch Claude 配置读取失败，已跳过:",
         (error as Error)?.message || error,

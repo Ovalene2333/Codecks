@@ -8,20 +8,19 @@ import { spawn } from "node:child_process";
  * `pid` 只接受数字并以参数数组形式传递，不经过 shell。
  * 非 Windows 上直接返回，调用方随后仍会杀直接子进程。
  */
-export function killProcessTree(pid: number): void {
-  if (!Number.isInteger(pid) || pid <= 0) return;
-  if (process.platform !== "win32") return;
-  try {
-    const killer = spawn(
-      process.env.ComSpec || "cmd.exe",
-      ["/d", "/s", "/c", `taskkill /PID ${pid} /T /F`],
-      { windowsHide: true, stdio: "ignore", timeout: 5_000 },
-    );
-    killer.on("error", () => {});
-    killer.unref();
-  } catch {
-    // taskkill 失败也不要紧：调用方随后还会尝试直接 kill。
-  }
+export function killProcessTree(pid: number): Promise<void> | void {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "win32") return;
+  return new Promise((resolve) => {
+    try {
+      const killer = spawn(
+        process.env.ComSpec || "cmd.exe",
+        ["/d", "/s", "/c", `taskkill /PID ${pid} /T /F`],
+        { windowsHide: true, stdio: "ignore", timeout: 5_000, killSignal: "SIGKILL" },
+      );
+      killer.once("error", () => resolve());
+      killer.once("exit", () => resolve());
+    } catch { resolve(); }
+  });
 }
 
 export interface KillableChild {
@@ -35,19 +34,20 @@ export interface KillableChild {
  */
 export function stopChildProcess(
   child: KillableChild | undefined | null,
-  killTree: (pid: number) => void = killProcessTree,
+  killTree: (pid: number) => void | Promise<void> = killProcessTree,
 ): void {
   if (!child) return;
+  const killDirectly = () => {
+    try { child.kill(); } catch { /* The process may already have exited. */ }
+  };
   if (typeof child.pid === "number") {
     try {
-      killTree(child.pid);
-    } catch {
-      // 忽略，继续尝试直接 kill。
-    }
+      const pending = killTree(child.pid);
+      if (pending) {
+        void pending.then(killDirectly, killDirectly);
+        return;
+      }
+    } catch { /* Continue with the direct child. */ }
   }
-  try {
-    child.kill();
-  } catch {
-    // 忽略：进程可能已经退出。
-  }
+  killDirectly();
 }

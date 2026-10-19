@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { backgroundWork } from "./background-work.js";
+import { cliProbeWork } from "./cli-probe-work.js";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -152,7 +153,7 @@ export function probeCodexVersion(
   bin: string,
   timeoutMs = 5_000,
 ): Promise<string | undefined> {
-  return new Promise((resolve) => {
+  return cliProbeWork(() => new Promise<string | undefined>((resolve) => {
     let done = false;
     const finish = (value: string | undefined) => {
       if (done) return;
@@ -162,7 +163,7 @@ export function probeCodexVersion(
     const timer = setTimeout(() => finish(undefined), timeoutMs);
     timer.unref?.();
     try {
-      execFile(bin, ["--version"], { timeout: timeoutMs }, (error, stdout, stderr) => {
+      execFile(bin, ["--version"], { timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
         clearTimeout(timer);
         if (error) return finish(undefined);
         finish(parseCodexVersion(`${stdout}\n${stderr}`));
@@ -171,7 +172,7 @@ export function probeCodexVersion(
       clearTimeout(timer);
       finish(undefined);
     }
-  });
+  }));
 }
 
 export async function listCodexBinCandidates(
@@ -179,8 +180,9 @@ export async function listCodexBinCandidates(
   useWsl = false,
   savedBin?: string,
 ): Promise<CodexBinCandidate[]> {
-  if (isMainThread) return backgroundWork<CodexBinCandidate[]>("codexBins", [env, useWsl, savedBin]);
-  const collected = collectCodexBinCandidates(env, useWsl);
+  const collected = isMainThread
+    ? await backgroundWork<ReturnType<typeof collectCodexBinCandidates>>("codexBins", [env, useWsl])
+    : collectCodexBinCandidates(env, useWsl);
   if (savedBin?.trim() && !collected.some((item) => item.bin === savedBin.trim()))
     collected.push({ bin: savedBin.trim(), source: "saved" });
   const probed = await Promise.all(

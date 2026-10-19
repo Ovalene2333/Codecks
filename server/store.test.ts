@@ -216,3 +216,39 @@ test('old standalone OpenCode V2 selection falls back to the unified runtime', a
   await store.updateRuntimeAgentBin('opencode', '')
   assert.equal(store.runtimeAgentBin('opencode'), '')
 })
+
+test('concurrent runtime updates preserve each independent setting', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-runtime-concurrent-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const store = new ProviderStore(dir)
+  await store.load()
+  await Promise.all([
+    store.updateRuntimeCodexBin('/opt/demo/bin/codex'),
+    store.updateRuntimeAgentBin('claude', '/opt/demo/bin/claude'),
+    store.updateRuntimeModelConfig({ modelContextWindow: 500_000 }),
+  ])
+  const reloaded = new ProviderStore(dir)
+  await reloaded.load()
+  assert.equal(reloaded.runtimeCodexBin(), '/opt/demo/bin/codex')
+  assert.equal(reloaded.runtimeAgentBin('claude'), '/opt/demo/bin/claude')
+  assert.equal(reloaded.runtimeModelConfig().modelContextWindow, 500_000)
+})
+
+test('a CC Switch read failure preserves the last successful provider snapshot', async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'deck-cc-recovery-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const file = path.join(dir, 'cc-switch.db')
+  seedCcSwitchDb(file, [{ id: 'demo', name: 'Demo gateway', current: 1 }])
+  await withCcSwitchDb(file, async () => {
+    const store = new ProviderStore(dir)
+    await store.load()
+    const previous = store.listPublic()
+    await writeFile(file, 'invalid database')
+    await assert.rejects(store.syncCcSwitch(), /could not be read/)
+    assert.deepEqual(store.listPublic(), previous)
+    await unlink(file)
+    seedCcSwitchDb(file, [{ id: 'demo', name: 'Recovered gateway', current: 1 }])
+    await store.syncCcSwitch()
+    assert.equal(store.listPublic().find((p) => p.id === 'cc-demo')?.name, 'Recovered gateway')
+  })
+})

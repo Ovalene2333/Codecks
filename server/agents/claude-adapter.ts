@@ -48,12 +48,11 @@ import type {
 } from "../types.js";
 import type { ThreadSettingsStore } from "../thread-settings.js";
 import {
-  branchClaudeHistory,
+  createClaudeHistoryBranch,
+  type HistoryBranchOptions,
   claudeToolItem,
   readClaudeHistory,
   readClaudeHistoryCached,
-  rewindAnchorUuid,
-  turnEndUuid,
   type ClaudeHistoryThread,
 } from "./claude-history.js";
 import type {
@@ -1112,14 +1111,7 @@ export class ClaudeAdapter extends EventEmitter {
       throw new Error("Claude Code 会话正在运行，无法分支");
     const file = this.history.get(threadId);
     if (!file) throw new Error("会话还没有写入历史记录，无法分支");
-    const content = await readFile(file, "utf8");
-    let anchor: string | undefined;
-    if (options.lastTurnId) {
-      anchor = turnEndUuid(content, options.lastTurnId);
-      if (!anchor)
-        throw new Error("找不到这条消息，它可能已被回退或不在当前分支上");
-    }
-    return this.branchThread(source, content, file, anchor);
+    return this.branchThread(source, file, { endTurnId: options.lastTurnId });
   }
 
   /**
@@ -1143,19 +1135,7 @@ export class ClaudeAdapter extends EventEmitter {
     if (!value && !images?.length) throw new Error("请输入重试内容");
     const file = this.history.get(threadId);
     if (!file) throw new Error("会话还没有写入历史记录，无法回退重试");
-    const content = await readFile(file, "utf8");
-    const anchor = rewindAnchorUuid(content, turnId);
-    if (anchor === undefined)
-      throw new Error("找不到这条消息，它可能已被回退或不在当前分支上");
-    const branch =
-      anchor === null
-        ? await this.createThread(source.providerId, {
-            cwd: source.cwd,
-            name: `${source.name || "Claude 会话"} · 分支`,
-            model: source.model,
-            permissionMode: source.permissionMode,
-          })
-        : await this.branchThread(source, content, file, anchor);
+    const branch = await this.branchThread(source, file, { rewindTurnId: turnId });
     if (!branch.forkedFromId) {
       branch.forkedFromId = threadId;
       this.broadcast("thread.updated", branch);
@@ -1166,15 +1146,15 @@ export class ClaudeAdapter extends EventEmitter {
 
   private async branchThread(
     source: ThreadSummary,
-    content: string,
     file: string,
-    anchor?: string,
+    options: HistoryBranchOptions,
   ) {
     const id = randomUUID();
-    const branched = branchClaudeHistory(content, id, anchor);
-    if (branched === undefined) throw new Error("无法定位分支点");
-    const branchFile = path.join(path.dirname(file), `${id}.jsonl`);
-    await writeFile(branchFile, branched);
+    const branchFile = await createClaudeHistoryBranch(file, id, options);
+    if (!branchFile) return this.createThread(source.providerId, {
+      cwd: source.cwd, name: `${source.name || "Claude 会话"} · 分支`,
+      model: source.model, permissionMode: source.permissionMode,
+    });
     const branch: ThreadSummary = {
       ...source,
       id,

@@ -1,6 +1,6 @@
 import type { AgentRegistry } from "./agents/registry.js";
 import type { ThreadSummary } from "./types.js";
-import { SessionSearchStore } from "./session-search.js";
+import type { BackgroundSearchStore } from "./session-search-background.js";
 
 const INDEX_INTERVAL_MS = 750;
 
@@ -15,9 +15,12 @@ export class SessionSearchIndexer {
   private activeKey?: string;
   private reconciling = false;
   private closed = false;
+  private reconcilePending = false;
+  private reconcileRetry?: NodeJS.Timeout;
+  private captures = new Set<string>();
 
   constructor(
-    readonly store: SessionSearchStore,
+    readonly store: BackgroundSearchStore,
     private agents: AgentRegistry,
   ) {}
 
@@ -35,39 +38,57 @@ export class SessionSearchIndexer {
   }
 
   reconcile() {
-    if (this.closed) return;
-    const snapshot = this.agents.snapshot();
-    const threads = [...snapshot.threads, ...(snapshot.archivedThreads || [])];
-    this.store.removeAbsent(threads);
-    this.queue = threads
-      .filter((thread) => this.store.needsIndex(thread))
-      .sort((left, right) => right.updatedAt - left.updatedAt);
-    this.schedule(0);
+    void this.reconcileAsync().catch(() => {
+      if (this.closed || this.reconcileRetry) return;
+      console.error("会话搜索索引暂时不可用，5 秒后重试");
+      this.reconcileRetry = setTimeout(() => {
+        this.reconcileRetry = undefined;
+        this.reconcile();
+      }, 5_000);
+      this.reconcileRetry.unref();
+    });
+  }
+
+  private async reconcileAsync() {
+    if (this.closed || this.reconcilePending) return;
+    this.reconcilePending = true;
+    try {
+      const snapshot = this.agents.snapshot();
+      const threads = [...snapshot.threads, ...(snapshot.archivedThreads || [])];
+      const pending = await this.store.reconcile(threads);
+      if (this.closed) return;
+      this.queue = pending.filter((thread) => key(thread) !== this.activeKey)
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+      if (this.reconcileRetry) clearTimeout(this.reconcileRetry);
+      this.reconcileRetry = undefined;
+      this.schedule(0);
+    } finally { this.reconcilePending = false; }
   }
 
   capture(thread: ThreadSummary, full: unknown) {
-    if (this.closed || this.agents.busyThreads().length > 0 ||
+    if (this.closed || this.captures.size >= 8 || this.captures.has(key(thread)) || this.agents.busyThreads().length > 0 ||
         (full as any)?.__cachedTailOmitted) return;
     // HTTP folding/paging replaces the outer turns reference after capture.
     // Keep the full reference without copying large tool outputs.
     const transcript = full && typeof full === "object" ? { ...full } : full;
-    const timer = setTimeout(() => {
+    this.captures.add(key(thread));
+    const timer = setTimeout(async () => {
       this.auxiliaryTimers.delete(timer);
-      if (this.closed) return;
+      if (this.closed) { this.captures.delete(key(thread)); return; }
       try {
-        this.store.upsert(thread, transcript);
+        await this.store.upsert(thread, transcript);
         this.queue = this.queue.filter((item) => key(item) !== key(thread));
       } catch (error) {
-        this.store.markFailure(thread, error);
-      }
+        await this.store.markFailure(thread, error).catch(() => {});
+      } finally { this.captures.delete(key(thread)); }
     }, 0);
     this.auxiliaryTimers.add(timer);
     timer.unref();
   }
 
-  progress(threads: ThreadSummary[]) {
+  async progress(threads: ThreadSummary[]) {
     const allowed = new Set(threads.map(key));
-    const indexed = this.store.indexedCount(allowed);
+    const indexed = await this.store.indexedCount(allowed);
     return {
       indexed,
       total: threads.length,
@@ -87,6 +108,7 @@ export class SessionSearchIndexer {
   }
 
   private async processOne() {
+    if (this.closed || this.activeKey) return;
     if (this.agents.busyThreads().length > 0 || this.agents.historyInteractionActive?.()) {
       this.schedule(2_000);
       return;
@@ -101,10 +123,10 @@ export class SessionSearchIndexer {
         { background: true },
       );
       if (this.closed) return;
-      this.store.upsert(thread, full);
+      await this.store.upsert(thread, full);
     } catch (error) {
       if (this.closed) return;
-      this.store.markFailure(thread, error);
+      await this.store.markFailure(thread, error).catch(() => {});
     } finally {
       this.activeKey = undefined;
     }
@@ -114,8 +136,10 @@ export class SessionSearchIndexer {
   close() {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.reconcileRetry) clearTimeout(this.reconcileRetry);
     for (const timer of this.auxiliaryTimers) clearTimeout(timer);
     this.auxiliaryTimers.clear();
+    this.captures.clear();
     this.store.close();
   }
 }

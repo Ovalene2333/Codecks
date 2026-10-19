@@ -1,6 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { backgroundWork } from "../background-work.js";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile, link, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { ThreadSummary, TokenUsage } from "../types.js";
 import { visibleUserText } from "./injected-context.js";
@@ -539,12 +539,39 @@ export function parseClaudeHistory(
   };
 }
 
+export interface HistoryBranchOptions { endTurnId?: string; rewindTurnId?: string }
+/** Parse and write in the worker; large transcripts never round-trip through the HTTP thread. */
+export async function createClaudeHistoryBranch(
+  file: string, id: string, options: HistoryBranchOptions,
+): Promise<string | undefined> {
+  if (isMainThread) return backgroundWork("historyBranch", [file, id, options]);
+  const info = await stat(file);
+  if (info.size > 128 * 1024 * 1024) throw new Error("Session history exceeds the 128 MiB parsing limit");
+  const source = await readFile(file, "utf8");
+  let anchor: string | null | undefined;
+  if (options.rewindTurnId) {
+    anchor = rewindAnchorUuid(source, options.rewindTurnId);
+    if (anchor === null) return undefined;
+  } else if (options.endTurnId) anchor = turnEndUuid(source, options.endTurnId);
+  if ((options.rewindTurnId || options.endTurnId) && anchor === undefined)
+    throw new Error("找不到这条消息，它可能已被回退或不在当前分支上");
+  const branched = branchClaudeHistory(source, id, anchor ?? undefined);
+  if (branched === undefined) throw new Error("无法定位分支点");
+  const target = path.join(path.dirname(file), `${id}.jsonl`);
+  const temporary = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(temporary, branched, { flag: "wx", mode: 0o600 });
+    // Publish only a complete transcript, without replacing an existing session.
+    await link(temporary, target);
+  } finally { await unlink(temporary).catch(() => {}); }
+  return target;
+}
+
 export async function readClaudeHistory(filePath: string): Promise<ClaudeHistoryThread | undefined> {
   if (isMainThread) return backgroundWork("history", [filePath]);
-  const [source, info] = await Promise.all([
-    readFile(filePath, "utf8"),
-    stat(filePath),
-  ]);
+  const info = await stat(filePath);
+  if (info.size > 128 * 1024 * 1024) throw new Error("Session history exceeds the 128 MiB parsing limit");
+  const source = await readFile(filePath, "utf8");
   return parseClaudeHistory(source, filePath, info.mtimeMs);
 }
 
@@ -588,13 +615,23 @@ function cloneHistory(
   };
 }
 
+const historyPending = new Map<string, Promise<ClaudeHistoryThread | undefined>>();
 export async function readClaudeHistoryCached(filePath: string) {
+  let pending = historyPending.get(filePath);
+  if (!pending) {
+    pending = readCachedHistoryOnce(filePath).finally(() => historyPending.delete(filePath));
+    historyPending.set(filePath, pending);
+  }
+  return cloneHistory(await pending);
+}
+
+async function readCachedHistoryOnce(filePath: string) {
   const info = await stat(filePath);
   const hit = historyCache.get(filePath);
   if (hit && hit.size === info.size && hit.mtimeMs === info.mtimeMs) {
     historyCache.delete(filePath);
     historyCache.set(filePath, hit);
-    return cloneHistory(hit.parsed);
+    return hit.parsed;
   }
   forgetHistory(filePath);
   const parsed = await readClaudeHistory(filePath);
@@ -611,7 +648,7 @@ export async function readClaudeHistoryCached(filePath: string) {
       forgetHistory(oldest);
     }
   }
-  return cloneHistory(parsed);
+  return parsed;
 }
 
 export function resetClaudeHistoryCacheForTests() {

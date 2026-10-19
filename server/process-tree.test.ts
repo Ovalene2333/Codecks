@@ -70,3 +70,16 @@ test("stopChildProcess survives throwing killers", () => {
     ),
   );
 });
+
+test("async tree termination finishes before the direct child is killed", async () => {
+  const order: string[] = [];
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  stopChildProcess({ pid: 4242, kill: () => { order.push("direct"); } }, () => {
+    order.push("tree"); return pending;
+  });
+  assert.deepEqual(order, ["tree"]);
+  finish();
+  await pending;
+  assert.deepEqual(order, ["tree", "direct"]);
+});

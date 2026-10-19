@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { backgroundWork } from "./background-work.js";
+import { cliProbeWork } from "./cli-probe-work.js";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
@@ -154,7 +155,7 @@ export function probeLocalAgentBin(
   timeout = 5_000,
   platform: NodeJS.Platform = process.platform,
 ): Promise<string | undefined> {
-  return new Promise((resolve) => {
+  return cliProbeWork(() => new Promise<string | undefined>((resolve) => {
     // Windows 的 npm shim 是 .cmd：execFile 不能直接执行批处理文件。
     const batch = platform === "win32" && /\.(?:cmd|bat)$/i.test(bin);
     if (batch && /[\r\n"%!]/.test(bin)) return resolve(undefined);
@@ -165,7 +166,7 @@ export function probeLocalAgentBin(
     execFile(
       command,
       args,
-      { timeout, windowsHide: true },
+      { timeout, windowsHide: true, killSignal: "SIGKILL", maxBuffer: 64 * 1024 },
       (error, stdout, stderr) => {
         if (error) return resolve(undefined);
         // OpenCode 某些版本在版本号前输出日志；仅提取正常版本格式。
@@ -176,12 +177,13 @@ export function probeLocalAgentBin(
         );
       },
     );
-  });
+  }));
 }
 
 export async function listLocalAgentBins(agent: LocalAgent, saved = "") {
-  if (isMainThread) return backgroundWork<LocalAgentBin[]>("agentBins", [agent, saved]);
-  const candidates = collectLocalAgentBins(agent, saved);
+  const candidates = isMainThread
+    ? await backgroundWork<ReturnType<typeof collectLocalAgentBins>>("agentBins", [agent, saved])
+    : collectLocalAgentBins(agent, saved);
   const results = await Promise.all(
     candidates.map(async ({ bin, source }) => {
       const version = await probeLocalAgentBin(bin);

@@ -1,7 +1,6 @@
 import { backgroundWork } from "./background-work.js";
 import type { ClaudeProfile } from "./claude-profiles.js";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -16,6 +15,9 @@ export class ProviderStore {
   private file: string;
   private runtimeConfigFile: string;
   private modelConfig: RuntimeModelConfig = {};
+  private runtimeExtra: Record<string, any> = {};
+  private runtimeWrite: Promise<unknown> = Promise.resolve();
+  private providerWrite: Promise<unknown> = Promise.resolve();
   private cc?: CcSwitchSource;
   private ccSignature = "";
   private ccProfiles: ClaudeProfile[] = [];
@@ -33,9 +35,8 @@ export class ProviderStore {
   async load() {
     await mkdir(this.dataDir, { recursive: true });
     try {
-      this.modelConfig = normalizeRuntimeModelConfig(
-        JSON.parse(await readFile(this.runtimeConfigFile, "utf8")),
-      );
+      this.runtimeExtra = await this.readRuntimeConfigExtra();
+      this.modelConfig = normalizeRuntimeModelConfig(this.runtimeExtra);
     } catch (error: any) {
       if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
         throw error;
@@ -82,7 +83,7 @@ export class ProviderStore {
     const db = await findCcSwitchDb(process.env.CC_SWITCH_DB);
     if (db) {
       this.cc = new CcSwitchSource(db);
-      await this.syncCcSwitch(true);
+      await this.syncCcSwitch(true).catch(() => console.error("CC Switch 暂时不可用，稍后自动重试"));
     }
     await this.addExistingCodexHomes();
   }
@@ -130,7 +131,7 @@ export class ProviderStore {
     if (this.cc !== source) return false;
     this.ccProfiles = result.profiles;
     const synced = result.providers;
-    const signature = JSON.stringify(synced);
+    const signature = JSON.stringify([synced, result.profiles]);
     if (!force && signature === this.ccSignature) return false;
     this.ccSignature = signature;
     this.providers = [
@@ -149,7 +150,7 @@ export class ProviderStore {
       return { connected: false, changed: removed };
     }
     const pathChanged = this.cc?.dbPath !== db;
-    this.cc = new CcSwitchSource(db);
+    if (pathChanged) this.cc = new CcSwitchSource(db);
     const changed = await this.syncCcSwitch(pathChanged);
     return { connected: true, changed, path: db };
   }
@@ -241,25 +242,17 @@ export class ProviderStore {
   }
 
   async updateRuntimeModelConfig(config: RuntimeModelConfig) {
-    const merged = {
-      ...this.readRuntimeConfigExtra(),
-      ...normalizeRuntimeModelConfig(config),
-    };
-    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(merged, null, 2)}\n`);
-    this.modelConfig = normalizeRuntimeModelConfig(merged);
+    await this.updateRuntimeConfig({ ...normalizeRuntimeModelConfig(config) });
     return this.runtimeModelConfig();
   }
 
   /** 已保存的后端选择（`codexBin` 为空表示跟随 PATH/CODEX_BIN，见 codex-bins）。 */
   runtimeCodexBin(): string {
-    return this.readRuntimeConfigExtra().codexBin || "";
+    return typeof this.runtimeExtra.codexBin === "string" ? this.runtimeExtra.codexBin : "";
   }
 
   async updateRuntimeCodexBin(bin: string) {
-    const extra = this.readRuntimeConfigExtra();
-    const next = { ...extra, codexBin: (bin || "").trim() };
-    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
-    this.modelConfig = normalizeRuntimeModelConfig(next);
+    await this.updateRuntimeConfig({ codexBin: (bin || "").trim() });
     return this.runtimeCodexBin();
   }
 
@@ -267,7 +260,7 @@ export class ProviderStore {
   runtimeAgentBin(agent: "claude" | "opencode" | "opencode-v2"): string {
     const key =
       agent === "claude" ? "claudeBin" : agent === "opencode" ? "opencodeBin" : "opencodeV2Bin";
-    const config = this.readRuntimeConfigExtra();
+    const config = this.runtimeExtra;
     const value = config[key] ?? (agent === "opencode" ? config.opencodeV2Bin : undefined);
     return typeof value === "string" ? value : "";
   }
@@ -275,21 +268,31 @@ export class ProviderStore {
   async updateRuntimeAgentBin(agent: "claude" | "opencode" | "opencode-v2", bin: string) {
     const key =
       agent === "claude" ? "claudeBin" : agent === "opencode" ? "opencodeBin" : "opencodeV2Bin";
-    const next = {
-      ...this.readRuntimeConfigExtra(),
-      [key]: bin.trim(),
-    };
-    await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
+    await this.updateRuntimeConfig({ [key]: bin.trim() });
     return this.runtimeAgentBin(agent);
   }
 
-  private readRuntimeConfigExtra(): Record<string, any> {
+  private updateRuntimeConfig(patch: Record<string, unknown>) {
+    const operation = this.runtimeWrite.then(async () => {
+      const next = { ...await this.readRuntimeConfigExtra(), ...patch };
+      await writeJsonAtomic(this.runtimeConfigFile, `${JSON.stringify(next, null, 2)}\n`);
+      this.runtimeExtra = next;
+      this.modelConfig = normalizeRuntimeModelConfig(next);
+    });
+    this.runtimeWrite = operation.catch(() => {});
+    return operation;
+  }
+
+  private async readRuntimeConfigExtra(): Promise<Record<string, any>> {
     try {
-      const raw = readFileSync(this.runtimeConfigFile, "utf8");
+      const raw = await readFile(this.runtimeConfigFile, "utf8");
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") return { ...(parsed as object) };
-    } catch {}
-    return {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { ...(parsed as object) };
+      throw new SyntaxError("Runtime configuration must be an object");
+    } catch (error: any) {
+      if (error?.code === "ENOENT") return {};
+      throw error;
+    }
   }
 
   async upsert(
@@ -334,11 +337,15 @@ export class ProviderStore {
     await this.save();
   }
 
-  private async save() {
-    await writeJsonAtomic(this.file, JSON.stringify(
+  private save() {
+    const content = JSON.stringify(
       this.providers.filter((provider) => provider.kind !== "cc-switch"), null, 2,
-    ));
+    );
+    const operation = this.providerWrite.then(() => writeJsonAtomic(this.file, content));
+    this.providerWrite = operation.catch(() => {});
+    return operation;
   }
+
 }
 
 /** 原子写 JSON：先落临时文件再 rename，避免崩溃写一半产生脏文件。 */
