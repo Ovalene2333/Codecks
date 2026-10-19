@@ -6,6 +6,7 @@ import type { AgentId, HostStats } from "./types.js";
 interface CpuTimes {
   idle: number;
   total: number;
+  cpuCount?: number;
 }
 
 function cpuTimes(cpus: os.CpuInfo[] = os.cpus()): CpuTimes {
@@ -16,7 +17,35 @@ function cpuTimes(cpus: os.CpuInfo[] = os.cpus()): CpuTimes {
     idle += free;
     total += user + nice + sys + irq + free;
   }
-  return { idle, total };
+  return { idle, total, cpuCount: cpus.length };
+}
+
+/** /proc/stat 已有整机累计 tick；不读取每核频率，避免 os.cpus() 的同步慢调用。 */
+export function parseProcStatCpu(stat: string): CpuTimes {
+  const line = /^cpu\s+(.+)$/m.exec(stat)?.[1];
+  const times = line?.trim().split(/\s+/).slice(0, 8).map(Number);
+  if (
+    !times ||
+    times.length < 4 ||
+    times.some((time) => !Number.isFinite(time) || time < 0)
+  )
+    throw new Error("Invalid CPU counters");
+  // guest/guest_nice 已包含在 user/nice，不能重复计入 total。
+  return {
+    idle: times[3] + (times[4] || 0),
+    total: times.reduce((sum, time) => sum + time, 0),
+    cpuCount: (stat.match(/^cpu\d+\s/gm) || []).length || undefined,
+  };
+}
+
+function readCpuTimes(): CpuTimes {
+  if (process.platform !== "linux") return cpuTimes();
+  try {
+    return parseProcStatCpu(readFileSync("/proc/stat", "utf8"));
+  } catch {
+    // 容器限制 /proc 时保留上一份采样；不要回退到会阻塞服务的每核频率读取。
+    return { idle: 0, total: 0 };
+  }
 }
 
 /** 两次调用之间的整机 CPU 占用；间隔太短（无新 tick）时沿用上一次结果。 */
@@ -24,8 +53,12 @@ export class CpuSampler {
   private last: CpuTimes;
   private percent?: number;
 
-  constructor(private read: () => CpuTimes = () => cpuTimes()) {
+  constructor(private read: () => CpuTimes = readCpuTimes) {
     this.last = read();
+  }
+
+  get cpuCount() {
+    return this.last.cpuCount || os.availableParallelism();
   }
 
   sample() {
@@ -91,11 +124,12 @@ export function hostStats(
   servers: { agentId: AgentId; pid: number }[] = [],
 ): HostStats {
   const memory = process.memoryUsage();
+  const cpuPercent = sampler.sample();
   return {
     platform: process.platform,
     arch: process.arch,
-    cpuCount: os.cpus().length,
-    cpuPercent: sampler.sample(),
+    cpuCount: sampler.cpuCount,
+    cpuPercent,
     loadavg: os.loadavg(),
     memTotal: os.totalmem(),
     memAvailable: availableMemory(),
