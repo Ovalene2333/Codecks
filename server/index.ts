@@ -26,6 +26,7 @@ import {
   sameConnectionOverlay,
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
+import { resolveExplicitRecipient } from "./deck-recipients.js";
 import { GitContextProbe } from "./git-context.js";
 import { parseWorktreePorcelain, WorktreeStore } from "./worktrees.js";
 import { execFile } from "node:child_process";
@@ -736,7 +737,9 @@ const route =
       const result = await handler(req, res);
       if (!res.headersSent) res.json(result ?? { ok: true });
     } catch (error: any) {
-      if (!res.headersSent && !res.destroyed) res.status(error instanceof BackgroundWorkError ? error.statusCode : 400).json({ error: error.message || "请求失败" });
+      const status = error instanceof BackgroundWorkError || typeof error?.statusCode === "number"
+        ? error.statusCode : 400;
+      if (!res.headersSent && !res.destroyed) res.status(status).json({ error: error.message || "请求失败" });
     }
   };
 const param = (value: string | string[]) =>
@@ -951,40 +954,21 @@ app.post("/api/deck/send", route(async (req, res) => {
     return;
   }
   if (input.requestId) throw new Error("--request-id 仅用于默认向绑定来源发送消息");
-  let target: { agentId: AgentId; threadId: string };
-  let alias: string | undefined;
-  let kind: "ask" | "session" | undefined;
-  if (input.code) {
-    const found = threadSettings.findByWakeCode(input.code);
-    if (!found) throw new Error(`wake code ${input.code} 不存在`);
-    target = found;
-  } else if (input.to!.startsWith("@")) {
-    const reference = input.to!.slice(1);
-    if (reference.startsWith("s-")) {
-      const found = threadSettings.findSessionByAlias(reference);
-      if (!found) throw new Error(`会话别名 ${input.to} 不存在`);
-      target = found;
-      alias = reference;
-      kind = "session";
-    } else {
-      const found = askService.findByAlias(reference);
-      if (!found) throw new Error(`询问别名 ${input.to} 不存在或尚未创建完成`);
-      target = found.target;
-      alias = found.alias;
-      kind = "ask";
-    }
-    const state = agents.messageState(target.agentId, target.threadId);
-    if (state.thread.archived) throw new Error("目标会话已归档");
-  } else {
-    const separator = input.to!.indexOf(":");
-    if (separator < 1 || separator === input.to!.length - 1) throw new Error("--to 格式应为 agentId:threadId");
-    target = { agentId: agentIdSchema.parse(input.to!.slice(0, separator)), threadId: input.to!.slice(separator + 1) };
-    const state = agents.messageState(target.agentId, target.threadId);
-    if (state.thread.archived) throw new Error("目标会话已归档");
-    const assigned = await ensureThreadAliases([target]);
-    alias = assigned.aliases.get(JSON.stringify([target.agentId, target.threadId]));
-    kind = "session";
-  }
+  // 四通道收件人解析统一走 deck-recipients：错误分类与 404/409 在一处定义。
+  const recipient = await resolveExplicitRecipient(input, {
+    findSessionByAlias: (alias) => threadSettings.findSessionByAlias(alias),
+    findAskByAlias: (alias) => askService.findByAlias(alias),
+    findByWakeCode: (code) => threadSettings.findByWakeCode(code),
+    isArchived: (target) => {
+      try { return agents.messageState(target.agentId, target.threadId).thread.archived === true; }
+      catch { return false; }
+    },
+    ensureAlias: async (target) =>
+      (await ensureThreadAliases([target])).aliases.get(JSON.stringify([target.agentId, target.threadId])),
+  });
+  const target = recipient.target;
+  const alias = recipient.alias;
+  const kind = recipient.kind;
   const mode = input.mode || "queue";
   if (mode === "steer") assertSteerTarget(target.agentId, target.threadId);
   if (mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);

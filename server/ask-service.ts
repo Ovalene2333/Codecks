@@ -6,6 +6,7 @@ import type { AgentCreateThreadInput } from "./agents/types.js";
 import type { AgentId, AskSession, DeckDeliveryMode, ThreadSummary } from "./types.js";
 import type { MessageDeliveryQueue } from "./message-delivery.js";
 import { ASK_OUTPUT_LIMIT, finalAnswer, inspectOutput, type AskResult } from "./ask-output.js";
+import { DeckRecipientError } from "./deck-recipients.js";
 
 export interface AskRecord extends AskSession {
   targetAgentId: AgentId;
@@ -30,6 +31,13 @@ export interface AskRecord extends AskSession {
   turnSentOffset?: number;
   executionCompletion?: { turnId: string; status: string };
   executionFailure?: { turnId: string; message: string };
+  /** detached 交付同步失败的最近一次原因；成功捕获后清除，供 UI 与排查使用。 */
+  lastCaptureError?: string;
+  captureAttempts?: number;
+  /** 来源最后一次领取交付对应的 turnId；仅供 done 通知抑制已读，不影响重复领取。 */
+  lastReadTurnId?: string;
+  /** detached 完成/失败通知的投递记录 ID；幂等 id 派生自 turnId，新回合重新通知。 */
+  doneDeliveryId?: string;
 }
 
 interface SessionAliasProvision {
@@ -49,9 +57,21 @@ interface Options {
   timer?: boolean;
 }
 
+/**
+ * 把错误压成单行并脱敏（key/token/bearer/URL 查询串），供 [done] 通知使用；
+ * 通知可能被转发到远端客户端，不能携带凭据或完整 baseURL。
+ */
+export function sanitizeInline(text: string | undefined, limit = 160) {
+  const single = String(text || "").replace(/\s+/g, " ").trim()
+    .replace(/\b(?:Bearer|bearer)\s+\S+/g, "Bearer [已脱敏]")
+    .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]{8,}/g, "[已脱敏]")
+    .replace(/\b(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, "$1=[已脱敏]")
+    .replace(/([?&])(?:key|token|api[_-]?key|access[_-]?token|sig|signature)=([^&\s]*)/gi, "$1$2=[已脱敏]");
+  return single.slice(0, limit);
+}
+
 /** 完整对话留在原生历史；台账仅保存路由、状态与 detached 最新交付快照。 */
-export class AskService {
-  private items: AskRecord[] = [];
+export class AskService {  private items: AskRecord[] = [];
   private writes = Promise.resolve();
   private timer?: NodeJS.Timeout;
   private ticking = false;
@@ -77,6 +97,9 @@ export class AskService {
       delete item.wakeDeliveryId;
       delete item.error;
       delete item.result;
+      delete item.lastCaptureError;
+      delete item.doneDeliveryId;
+      item.captureAttempts = 0;
       void this.save().catch((error) => console.error("会话回合状态保存失败:", error.message));
       return;
     }
@@ -129,6 +152,14 @@ export class AskService {
           !["queue", "steer", "interrupt"].includes(message.mode) ||
           (message.deliveryId !== undefined && typeof message.deliveryId !== "string"))))
           throw new Error("主动消息台账格式无效");
+        for (const [field, valid] of [
+          ["lastCaptureError", (value: any) => typeof value === "string"],
+          ["lastReadTurnId", (value: any) => typeof value === "string"],
+          ["doneDeliveryId", (value: any) => typeof value === "string"],
+          ["captureAttempts", (value: any) => Number.isInteger(value) && value >= 0],
+        ] as const) {
+          if (item[field] !== undefined && !valid(item[field])) throw new Error(`询问台账 ${field} 字段无效`);
+        }
         if (item.status === "creating") {
           item.status = "failed";
           item.updatedAt = Date.now();
@@ -213,9 +244,9 @@ export class AskService {
   }
 
   list() {
-    return this.items.map(({ response: _response, result, sentMessages, question: _question, ...item }) => ({
+    return this.items.map(({ response: _response, result, sentMessages, question: _question, lastCaptureError, ...item }) => ({
       ...item, detached: item.detached === true, resultAvailable: !!result && result.turnId === item.turnId,
-      sentCount: sentMessages?.length || 0,
+      sentCount: sentMessages?.length || 0, captureError: lastCaptureError,
     }));
   }
 
@@ -227,13 +258,17 @@ export class AskService {
     return item;
   }
 
-  /** 查询不投递消息、不标记已读，可重复领取；离线时也能返回已保存的交付。 */
+  /** 查询不投递消息、可重复领取；领取动作只推进 done 通知用的已读指针。 */
   async readResult(reference: string) {
     const item = this.lookup(reference);
     if (item.detached && ["completed", "answered"].includes(item.status) && !item.result) {
-      try { await this.captureResult(item); } catch { /* 原生历史暂不可用，保留待同步状态。 */ }
+      try { await this.captureResult(item); } catch { /* captureResult 已落态，保留待同步。 */ }
     }
     const result = item.result?.turnId === item.turnId ? item.result : undefined;
+    if (result && item.lastReadTurnId !== item.turnId) {
+      item.lastReadTurnId = item.turnId;
+      await this.save();
+    }
     return { item: this.list().find((entry) => entry.id === item.id)!, result: result || null,
       pending: item.detached === true && ["completed", "answered"].includes(item.status) && !result };
   }
@@ -387,8 +422,25 @@ export class AskService {
   /** Bound source is resolved on the server, never from an agent-supplied wake code. */
   async sendFrom(agentId: AgentId, threadId: string, text: string, mode?: DeckDeliveryMode, requestId?: string) {
     if (this.loadError) throw new Error(this.loadError);
-    const item = this.items.find((entry) => entry.targetAgentId === agentId && entry.targetThreadId === threadId);
-    if (!item) throw new Error("当前会话没有绑定来源，请使用 --to <agentId:threadId> 或 --code <代号> 指定目标");
+    const bound = this.items.filter((entry) =>
+      entry.targetAgentId === agentId && entry.targetThreadId === threadId && entry.sourceThreadId);
+    if (!bound.length)
+      throw new Error("当前会话没有绑定来源，请使用 --to <agentId:threadId> 或 --code <代号> 指定目标");
+    // fork/重试会让同一目标挂多条询问；来源一致时投递无歧义，否则明确报错
+    // 带候选，不再静默取第一条把结论投给错误的来源。
+    const distinctSources = new Map<string, AskRecord>();
+    for (const entry of bound) {
+      const key = `${entry.sourceAgentId}:${entry.sourceThreadId}`;
+      if (!distinctSources.has(key)) distinctSources.set(key, entry);
+    }
+    if (distinctSources.size > 1)
+      throw new DeckRecipientError("AMBIGUOUS", 409,
+        "当前会话绑定了多个不同来源的询问，无法确定回传目标；请用 --to <agentId:threadId> 显式指定来源",
+        [...distinctSources.values()].map((entry) => ({
+          agentId: entry.sourceAgentId, threadId: entry.sourceThreadId,
+          alias: entry.alias, status: entry.status,
+        })));
+    const item = bound[0];
     const effectiveMode = mode || item.returnMode;
     if (effectiveMode === "steer") this.assertSteerSupported(item.sourceAgentId, item.sourceThreadId);
     if (effectiveMode === "interrupt") this.assertInterruptSupported(item.sourceAgentId, item.sourceThreadId);
@@ -457,8 +509,16 @@ export class AskService {
       !["completed", "answered"].includes(item.status)) return;
     const turnId = item.turnId;
     if (!turn) {
-      const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId, { background: true });
-      turn = (full?.turns || full?.thread?.turns || []).find((entry: any) => entry.id === turnId);
+      try {
+        const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId, { background: true });
+        turn = (full?.turns || full?.thread?.turns || []).find((entry: any) => entry.id === turnId);
+      } catch (error: any) {
+        // 落态不吞错：来源查询能看到明确的同步失败原因，而不是把 pending 误判成任务失败。
+        item.captureAttempts = (item.captureAttempts || 0) + 1;
+        item.lastCaptureError = `交付同步失败（第 ${item.captureAttempts} 次）：${error?.message || error}`.slice(0, 300);
+        await this.save();
+        return;
+      }
     }
     // 完成事件可能早于原生历史落盘；后续调度/查询继续同步，不把旧回合当成新结果。
     if (!turn || turn.id !== turnId || turn.status !== "completed" || !Array.isArray(turn.items) ||
@@ -466,9 +526,14 @@ export class AskService {
     const text = finalAnswer(turn);
     const result = { turnId, text: text.slice(0, ASK_OUTPUT_LIMIT), completedAt: Date.now(), truncated: text.length > ASK_OUTPUT_LIMIT };
     item.result = result;
+    delete item.lastCaptureError;
+    item.captureAttempts = 0;
     try { await this.save(); }
     catch (error) {
-      if (item.result === result) delete item.result;
+      if (item.result === result) {
+        delete item.result;
+        item.captureAttempts = undefined;
+      }
       throw error;
     }
   }
@@ -480,6 +545,7 @@ export class AskService {
     item.updatedAt = Date.now();
     await this.save();
     try { await this.captureResult(item, turn); } catch { /* 状态已保存；历史恢复后再同步结果。 */ }
+    await this.notifyDone(item);
   }
 
   private async fail(item: AskRecord, message: string, notify = true) {
@@ -491,6 +557,29 @@ export class AskService {
     item.response = notify ? `询问失败：${item.error}` : undefined;
     await this.save();
     if (notify) await this.reply(item);
+    else await this.notifyDone(item);
+  }
+
+  /**
+   * detached 完成/失败的一行通知（queue-only，绝不 steer/interrupt）。
+   * 正文留在 result/inspect 快照里；通知只带指针，丢失走会话待发送列表兜底。
+   */
+  private async notifyDone(item: AskRecord) {
+    if (!item.detached || !item.targetThreadId || item.doneDeliveryId) return;
+    // 来源已领取本回合交付时不再打扰；领取早于完成事件时通知直接省略。
+    if (item.status !== "failed" && item.lastReadTurnId && item.lastReadTurnId === item.turnId) return;
+    const headline = item.status === "failed"
+      ? `[done:${item.alias}] detached 已失败：${sanitizeInline(item.error) || "原因未知"}，详情 inspect @${item.alias}`
+      : `[done:${item.alias}] detached 已完成，用 result @${item.alias} 领取（/s/${item.alias}）`;
+    const delivery = await this.options.messages.enqueue(
+      item.sourceAgentId, item.sourceThreadId, "queue",
+      { text: headline },
+      // 幂等 id 含 turnId：同回合重复投递（重启恢复）只入队一次，新回合重新通知。
+      { id: `ask:${item.id}:done:${item.turnId || "creating"}` },
+    );
+    item.doneDeliveryId = delivery.id;
+    item.updatedAt = Date.now();
+    await this.save();
   }
 
   private async reply(item: AskRecord) {
