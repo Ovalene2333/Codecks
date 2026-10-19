@@ -656,10 +656,15 @@
 .timeline .tool-item summary,
 .timeline .tool-row summary {
   display: flex;
-  align-items: center;
+  /* 文本按基线对齐：CJK 标签（雅黑等）与等宽命令字体重心不同，
+     按盒居中在 Windows 上会差 1-2px；基线对齐在任何平台都严格共线。
+     行高由 19.8px 的标签行盒决定，用对称内边距撑到 26px 触控高度、
+     行内不留空隙：单行 flex 的 align-content 不生效，若用 min-height
+     留空隙，baseline 组会贴行顶、图标仍居中，文字明显偏高（移动端
+     38px 行上差 7px，见 rail-row 对齐探针）。 */
+  align-items: baseline;
   gap: 8px;
-  min-height: 26px;
-  padding: 2px 0 2px 8px;
+  padding: 3.1px 0 3.1px 8px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -669,6 +674,12 @@
 .timeline .tool-row summary::-webkit-details-marker {
   display: none;
 }
+.timeline .tool-item summary > :is(span, code, strong),
+.timeline .tool-row summary > :is(span, code, strong) {
+  /* 基线对齐后 CJK 墨迹重心仍略偏高：文本行整体下移 0.6px 光学微调
+     （实测，探针同款）。transform 只动绘制，不影响行高与省略号。 */
+  transform: translateY(0.6px);
+}
 .timeline .tool-item svg,
 .timeline .tool-row svg {
   width: 13px;
@@ -676,7 +687,9 @@
   flex: none;
   color: var(--text-faint);
   /* CJK 标签墨迹重心比盒中心高 ~1px，图标几何居中会显得偏低：
-     上移半像素做光学补偿（实测量得，见 harness）。 */
+     上移半像素做光学补偿（实测量得，见 harness）。
+     summary 文本改为基线对齐后，图标退出基线组、按行居中保持原位。 */
+  align-self: center;
   transform: translateY(-0.5px);
 }
 .timeline .tool-item pre,
@@ -1045,10 +1058,10 @@
 }
 .file-diff-card summary {
   display: flex;
-  align-items: center;
+  /* 与工具行 summary 同款：文本基线对齐 + 对称内边距撑行高（见上）。 */
+  align-items: baseline;
   gap: 8px;
-  min-height: 28px;
-  padding: 3px 8px;
+  padding: 4.1px 8px;
   cursor: pointer;
   font-size: var(--fs-meta);
 }
@@ -1057,6 +1070,7 @@
   height: 13px;
   color: var(--text-faint);
   flex: none;
+  align-self: center;
 }
 .file-diff-card .kind {
   flex: none;
@@ -2432,7 +2446,9 @@ button.composer-context-seg:focus-visible {
   .timeline .tool-item summary,
   .timeline .tool-row summary,
   .file-diff-card summary {
-    min-height: 38px;
+    /* 触控行高改用对称内边距撑出（见工具行 summary 注释），
+       不用 min-height，避免 baseline 组贴行顶。 */
+    padding-block: 9.1px;
   }
   .timeline .file-change-group > .file-change-group-content {
     padding-left: 7px;
