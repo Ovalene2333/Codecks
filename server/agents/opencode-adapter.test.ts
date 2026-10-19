@@ -1022,15 +1022,19 @@ test("OpenCode prefers session-level cumulative tokens over the latest reply", a
   (adapter as any).baseUrl = "http://127.0.0.1:4096";
   await adapter.refreshAll();
   const listed: any = adapter.listThreads().find((item) => item.id === "s1");
-  assert.equal(listed.tokenUsage.output, 58_280);
-  assert.equal(listed.tokenUsage.cachedInput, 12_462_431);
+  assert.equal(listed.tokenUsageTotal.output, 58_280);
+  assert.equal(listed.tokenUsageTotal.cachedInput, 12_462_431);
+  // 上下文占位必须仍是“最新一条回复”，不能被累计值污染。
+  // （refreshAll 只带会话级数据，上下文留给 readThread 从消息里算。）
+  assert.equal(listed.tokenUsage, undefined);
   const loaded: any = await adapter.readThread("p", "s1");
-  assert.equal(loaded.tokenUsage.output, 58_280);
-  assert.equal(loaded.tokenUsage.input, 921_385);
+  assert.equal(loaded.tokenUsageTotal.output, 58_280);
+  assert.equal(loaded.tokenUsageTotal.input, 921_385);
   assert.equal(
-    loaded.tokenUsage.used,
+    loaded.tokenUsageTotal.used,
     921_385 + 58_280 + 12_462_431,
   );
+  assert.equal(loaded.tokenUsage.used, 394_163);
 });
 
 test("OpenCode compaction renders one marker and waits for a new reply before reporting context", async () => {

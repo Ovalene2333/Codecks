@@ -34,6 +34,8 @@ export interface AskRecord extends AskSession {
 
 interface SessionAliasProvision {
   ensure(targets: { agentId: AgentId; threadId: string }[]): Promise<Map<string, string>>;
+  /** 只读查已有别名；加载台账时用于回填，不触发分配。 */
+  peek(agentId: AgentId, threadId: string): string | undefined;
 }
 
 interface Options {
@@ -147,6 +149,17 @@ export class AskService {
           changed = true;
         }
         used.add(alias);
+        // 旧记录在会话别名功能上线前创建，没有 targetAlias。会话别名的权威
+        // 来源是 ThreadSettingsStore 台账，这里补一次并落盘，避免询问卡片
+        // 退回读取会随事件变化的 thread.alias 而显示成别的值。
+        if (!item.targetAlias && item.targetThreadId) {
+          const targetAlias = this.options.sessionAliases
+            ?.peek(item.targetAgentId, item.targetThreadId);
+          if (targetAlias) {
+            item.targetAlias = targetAlias;
+            changed = true;
+          }
+        }
       }
       if (changed) await this.save();
     } catch (error: any) {
@@ -238,7 +251,7 @@ export class AskService {
     const item = this.items.find((item) => item.targetAgentId === (thread.agentId || "codex") && item.targetThreadId === thread.id);
     if (!item) return thread;
     return { ...thread, ask: {
-      id: item.id, alias: item.alias, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
+      id: item.id, alias: item.alias, targetAlias: item.targetAlias, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
       returnMode: item.returnMode, status: item.status, error: item.error, sentCount: item.sentMessages?.length || 0,
       detached: item.detached === true, resultAvailable: !!item.result && item.result.turnId === item.turnId,
     } };

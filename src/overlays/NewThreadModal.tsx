@@ -1,8 +1,8 @@
 import { Select } from "../kit/Select";
 import { Field, Seg } from "../kit";
 import { Button } from "../kit";
-import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FolderOpen, GitBranch, Sparkles } from "lucide-react";
 import { api, post } from "../api";
 import { DirBrowser } from "../DirBrowser";
 import { ModelPicker } from "../ModelPicker";
@@ -17,6 +17,7 @@ import type {
   Provider,
   SandboxMode,
   Snapshot,
+  ThreadSummary,
 } from "../types";
 import { Modal } from "../ui";
 import {
@@ -147,6 +148,16 @@ export function NewThreadModal({
   const [emptyWslPathMode, setEmptyWslPathMode] = useState(runtimeWsl);
   const wslPathMode = form.cwd.trim() ? isWslCwd(form.cwd) : emptyWslPathMode;
   const [browse, setBrowse] = useState(false);
+  // Git：默认直接在当前 checkout 里开工；勾选后才在独立 worktree 中创建。
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [worktreeBase, setWorktreeBase] = useState("");
+  const [gitInfo, setGitInfo] = useState<{
+    context?: ThreadSummary["git"];
+    root?: string;
+    branch?: string;
+    branches: string[];
+    worktrees: { path: string; branch?: string; detached: boolean; managed: boolean }[];
+  }>();
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
@@ -189,6 +200,31 @@ export function NewThreadModal({
       cancelled = true;
     };
   }, [agentId]);
+
+  // 选目录后读取仓库状态：没有 git 仓库就完全不显示 worktree 选项。
+  const cwd = form.cwd.trim();
+  useEffect(() => {
+    if (!cwd || runtimeWsl) {
+      setGitInfo(undefined);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api<NonNullable<typeof gitInfo>>(`/deck/git?cwd=${encodeURIComponent(cwd)}`)
+        .then((result) => {
+          if (cancelled) return;
+          setGitInfo(result);
+          if (!result.context?.available) setWorktreeEnabled(false);
+        })
+        .catch(() => {
+          if (!cancelled) setGitInfo(undefined);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [cwd, runtimeWsl]);
 
   const selectProtocol = (next: AgentProtocol) => {
     setProtocolTab(next);
@@ -237,6 +273,10 @@ export function NewThreadModal({
         ...form,
         model: codexModel,
         providerId: form.providerId || undefined,
+        // 只在用户显式勾选且仓库可用时创建 worktree；base 为空表示当前 HEAD。
+        ...(worktreeEnabled && gitInfo?.context?.available
+          ? { worktree: { base: worktreeBase || undefined } }
+          : {}),
         ...(agentId === "codex"
           ? { permissionMode: undefined }
           : {
@@ -530,6 +570,45 @@ export function NewThreadModal({
             </button>
           </div>
         </label>
+        {gitInfo?.context?.available ? (
+          <fieldset className="git-worktree-field">
+            <legend>Git</legend>
+            <p className="git-worktree-current">
+              <GitBranch aria-hidden="true" />
+              当前分支
+              <code>{gitInfo.context.branch || "detached"}</code>
+              {gitInfo.context.linked ? <em>（独立 worktree）</em> : null}
+            </p>
+            <label className="git-worktree-toggle">
+              <input
+                type="checkbox"
+                checked={worktreeEnabled}
+                onChange={(e) => setWorktreeEnabled(e.target.checked)}
+              />
+              在独立 worktree 中创建
+            </label>
+            {worktreeEnabled ? (
+              <label>
+                基于
+                <Select
+                  value={worktreeBase}
+                  onValueChange={setWorktreeBase}
+                >
+                  <option value="">当前提交（detached HEAD）</option>
+                  {gitInfo.branches.map((branch) => (
+                    <option key={branch} value={branch}>
+                      {branch}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            ) : (
+              <p className="git-worktree-hint">
+                会话直接使用这个 checkout；同一目录下的其他会话会共享文件与分支。
+              </p>
+            )}
+          </fieldset>
+        ) : null}
         <label>
           会话名称（可选）
           <input

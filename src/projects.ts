@@ -110,6 +110,9 @@ export function mergeProjectGroups(
     if (!group.cwd || group.cwd === "未指定路径") group.cwd = thread.cwd;
     groups.set(key, group);
   }
+  // 会话先按状态稳定排序：两个都在跑的会话不会因为 tool-call 刷新而互换位置。
+  for (const group of groups.values())
+    group.sessions = sortProjectSessions(group.sessions);
   return [...groups.values()]
     .filter((group) => !group.hidden || group.sessions.length > 0)
     .sort((a, b) => {
@@ -198,6 +201,86 @@ export function previewSessions(
   const keep = new Set([...active, ...recent.slice(0, room)]);
   // Filter instead of concatenating so the preview keeps the caller's order.
   return sessions.filter((thread) => keep.has(thread));
+}
+
+export interface SidebarLayout {
+  /** 用户手动排过的项目路径（已归一化），顺序即展示顺序。 */
+  projects: string[];
+  /** 用户手动排过的会话：归一化项目路径 → 会话键顺序。 */
+  sessions: Record<string, string[]>;
+}
+
+export const EMPTY_SIDEBAR_LAYOUT: SidebarLayout = { projects: [], sessions: {} };
+
+/**
+ * 手动排序落位：先按用户给的键顺序，再按原来的自动排序。
+ * 只认仍在列表里出现过的键；用户没排过的项保持自动排序，
+ * 新出现的项目/会话排在最后，不会因为一次活动就插到手动项前面。
+ */
+export function applyOrder<T>(
+  items: T[],
+  order: readonly string[] | undefined,
+  keyOf: (item: T) => string,
+): T[] {
+  if (!order?.length || items.length < 2) return items;
+  const rank = new Map<string, number>();
+  order.forEach((key, index) => rank.set(key, index));
+  const known: T[] = [];
+  const rest: T[] = [];
+  for (const item of items)
+    (rank.has(keyOf(item)) ? known : rest).push(item);
+  if (!known.length) return items;
+  known.sort((a, b) => (rank.get(keyOf(a)) ?? 0) - (rank.get(keyOf(b)) ?? 0));
+  return [...known, ...rest];
+}
+
+/**
+ * 会话排序：自己或同项目的另一会话正在跑（而不是反复变化的 updatedAt），
+ * 所以两个同时运行的会话不会每条 tool-call 就争夺第一位；都没在跑时
+ * 回到「最近活动」。
+ */
+export function sortProjectSessions(sessions: ThreadSummary[]): ThreadSummary[] {
+  const pinned = (thread: ThreadSummary) =>
+    thread.status !== "idle" || Boolean(thread.compacting) ? 1 : 0;
+  return [...sessions].sort((a, b) => {
+    const byPinned = pinned(b) - pinned(a);
+    return byPinned || b.updatedAt - a.updatedAt;
+  });
+}
+
+/**
+ * 侧栏项目的最终顺序：置顶永远在最前；其余按用户手动顺序，没排过的
+ * 接在后面（有会话在跑的先来）。只看会话 status，不看 updatedAt 抖动。
+ */
+export function sortProjectsForSidebar(
+  groups: ProjectGroup[],
+  order: readonly string[] | undefined,
+  liveKeys: ReadonlySet<string>,
+): ProjectGroup[] {
+  const ordered = applyOrder(groups, order, (group) => group.key);
+  const manualKeys = new Set(order || []);
+  const manual = ordered.filter((group) => manualKeys.has(group.key));
+  const rest = ordered
+    .filter((group) => !manualKeys.has(group.key))
+    .sort(
+      (a, b) => Number(liveKeys.has(b.key)) - Number(liveKeys.has(a.key)),
+    );
+  return [...manual, ...rest].sort(
+    (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)),
+  );
+}
+
+/** 按给定键顺序重排，只影响列出的键；用于拖动后的新顺序落盘。 */
+export function reorderKeys(
+  all: readonly string[],
+  moving: string,
+  before: string | null,
+): string[] {
+  const rest = all.filter((key) => key !== moving);
+  if (!before) return [...rest, moving];
+  const index = rest.indexOf(before);
+  if (index < 0) return [...rest, moving];
+  return [...rest.slice(0, index), moving, ...rest.slice(index)];
 }
 
 export function filterProjectGroups(

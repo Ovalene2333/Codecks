@@ -1352,7 +1352,9 @@
   width: 100%;
   max-width: none;
 }
-.composer-session-controls .toolbar-select :is(select, .ui-select-trigger):focus-visible,
+.composer-session-controls
+  .toolbar-select
+  :is(select, .ui-select-trigger):focus-visible,
 .composer-session-controls .toolbar-select input:focus-visible {
   outline: 0;
 }
@@ -1616,28 +1618,42 @@ button.composer-context-seg:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -1px;
 }
-/* 输入行右侧 ghost 模型 ID（仅移动端显示）：空输入时和 placeholder
-   同行右对齐，一打字就消失；桌面端模型名在格子带里，不重复。 */
+/* 输入与分支分列，长分支截断，不覆盖输入文字。 */
 .composer-input-root {
-  position: relative;
+  display: flex;
+  align-items: flex-start;
   min-width: 0;
 }
-.composer-model-ghost {
-  display: none;
-  position: absolute;
-  top: var(--composer-text-inset);
-  inset-inline-end: var(--composer-text-inset);
+.composer-input-root > textarea {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+.composer-git-branch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+  margin: var(--composer-text-inset) var(--composer-text-inset) 0 0;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: 24px;
+}
+.composer-git-branch svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.composer-git-branch span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-faint);
-  font-family: var(--font-sans);
-  font-size: var(--fs-meta);
-  line-height: var(--lh-ui);
-  pointer-events: none;
 }
-/* 移动端格子带中部只保留 effort/沙箱/审批 三段（模型列隐藏，
-   模型 ID 走输入行 ghost），列宽比例改 1 : 1.5 : 1.5。 */
+.composer-model-id {
+  display: none;
+}
 .composer-mobile-meta {
   display: none;
 }
@@ -2641,33 +2657,23 @@ button.composer-context-seg:focus-visible {
   .composer-box {
     border-radius: var(--radius-md);
   }
-  /* 配置信息进格子带与输入行：ghost 模型 ID + 中部 meta 段。 */
   .prompt-input__textarea {
-    /* 与桌面共用四边留白，保留移动端 24px 行高。 */
     line-height: 24px;
   }
-  .composer-model-ghost {
-    display: block;
-    /* 定宽右对齐，超长截断；字号与输入行一致（16px 例外规则）。 */
-    width: min(8em, 40%);
-    text-align: right;
-    font-size: 16px;
-    line-height: 24px;
-    color: var(--text-faint);
-  }
-  /* 三格分段直接进格子带中段：值都是两字，三列等宽；字号放大到
-     body 一档，跟两侧 icon 同一视觉高度。 */
   .composer-context {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(32px, auto);
     font-size: var(--fs-body);
   }
   .composer-context-seg {
     padding: 0 4px;
     align-self: stretch;
   }
-  .composer-context-seg.is-model {
+  .composer-context-seg.is-desktop-only,
+  .composer-model-name {
     display: none;
+  }
+  .composer-model-id {
+    display: inline;
   }
   .prompt-input__footer {
     height: var(--touch-h);
@@ -2872,7 +2878,8 @@ button.composer-context-seg:focus-visible {
   min-width: 320px;
 }
 .message.agent .markdown :is(th, td) {
-  padding: var(--message-table-padding, 6px) calc(var(--message-table-padding, 6px) + 2px);
+  padding: var(--message-table-padding, 6px)
+    calc(var(--message-table-padding, 6px) + 2px);
   border-color: var(--message-table-border, var(--line));
   border-bottom-color: var(--line);
   overflow-wrap: normal;
@@ -3092,7 +3099,9 @@ button.composer-context-seg:focus-visible {
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .question-option .question-check {
@@ -3162,7 +3171,11 @@ button.composer-context-seg:focus-visible {
   border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: none;
-  transition: border-color var(--ease), background-color var(--ease), box-shadow var(--ease), transform var(--ease);
+  transition:
+    border-color var(--ease),
+    background-color var(--ease),
+    box-shadow var(--ease),
+    transform var(--ease);
 }
 
 .recent-projects > button:hover {

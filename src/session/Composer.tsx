@@ -1,5 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Check, ImagePlus, Square, SlidersHorizontal, X } from "lucide-react";
+import {
+  ArrowUp,
+  Check,
+  GitBranch,
+  ImagePlus,
+  Square,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import type {
   AgentCapabilities,
   ApprovalMode,
@@ -67,7 +75,9 @@ function composerCatalogEnabled(thread: {
   const agentId = thread.agentId || "codex";
   return agentId === "codex"
     ? Boolean(thread.providerId)
-    : agentId === "opencode" || agentId === "opencode-v2" || Boolean(thread.providerId);
+    : agentId === "opencode" ||
+        agentId === "opencode-v2" ||
+        Boolean(thread.providerId);
 }
 
 const CONTEXT_FIELD_LABELS: Record<ContextField, string> = {
@@ -131,13 +141,20 @@ export function Composer({
   // 运行中且可转向时，允许把这条消息即时追加进当前回合（不打断）；
   // 默认仍排队，保持现有行为。
   const [direct, setDirect] = useState(false);
-  const canSteer = capabilities?.messages?.busyBehavior === "steer" && modes?.includes("feedback");
-  const sendMode: ComposerSendMode | undefined = running && canSteer && direct ? "append" : mode;
-  const sendControls = sendMode === mode ? controls : messageControls(thread, capabilities, sendMode);
+  const canSteer =
+    capabilities?.messages?.busyBehavior === "steer" &&
+    modes?.includes("feedback");
+  const sendMode: ComposerSendMode | undefined =
+    running && canSteer && direct ? "append" : mode;
+  const sendControls =
+    sendMode === mode
+      ? controls
+      : messageControls(thread, capabilities, sendMode);
   const composerAgentId = thread.agentId || "codex";
-  // 输入框底部中间的当前配置：四个固定槽位（模型/推理强度/沙箱/审批），
-  // 渲染成 kit ui-badge 同款语言的 chip，只显示当前值，空槽隐藏占位，
-  // 仅桌面端显示。
+  // 桌面显示完整配置；移动端只显示模型 ID 和推理强度。
+  const gitBranch = thread.git?.available
+    ? thread.git.branch || (thread.git.detached ? "detached HEAD" : "")
+    : "";
   // 显示优先用会话的 model 设置值；只有空值/`default` 占位时才回退到上轮
   // 实际跑的 resolvedModel。之前直接 `resolvedModel || model`，设置里换了
   // 模型但还没跑下一轮时，底栏会一直显示旧模型，和设置面板对不上。
@@ -241,7 +258,7 @@ export function Composer({
     short: slot.name === "模型" ? slot.value : contextShortLabel(slot.value),
   }));
   const contextSegClass = (slot: { name: string; value: string }) =>
-    `composer-context-seg${slot.name === "模型" ? " is-model" : ""}${slot.value ? "" : " is-empty"}`;
+    `composer-context-seg${slot.name === "模型" ? " is-model" : slot.name === "推理强度" ? " is-effort" : " is-desktop-only"}${slot.value ? "" : " is-empty"}`;
   // 段快捷菜单：点值直接弹该槽位候选，少一次进设置面板；模型段仍走面板。
   // 推理强度候选只在模型目录里声明过的档位里选（空值 = 跟随默认）。
   // 目录未加载 / 未命中 / 模型声明为空时不再展开全局 fallback 大全：
@@ -435,8 +452,6 @@ export function Composer({
           )}
         </div>
       )}
-      {/* 移动端格子带中部：effort/沙箱/审批 的当前值，居中一段，
-          点按打开会话设置；桌面端有完整格子带，这里恒隐藏。 */}
       <PromptInput className="composer-box">
         {images.length > 0 && (
           <PromptInputHeader>
@@ -465,14 +480,8 @@ export function Composer({
             )}
           </PromptInputHeader>
         )}
-        {/* 输入行右侧的 ghost 模型 ID：只在空输入、无图片头时出现，
-            跟 placeholder 同行右对齐；点按输入区落在 textarea 上。 */}
+        {/* 分支独立占据输入行右侧，输入文字与附件不会遮挡它。 */}
         <div className="composer-input-root">
-          {!compacting && !text && !images.length && (
-            <div className="composer-model-ghost" aria-hidden="true">
-              {contextModel}
-            </div>
-          )}
           <PromptInputTextarea
             ref={area}
             rows={1}
@@ -537,12 +546,25 @@ export function Composer({
               }
             }}
           />
+          {gitBranch && (
+            <div
+              className="composer-git-branch"
+              title={`Git 分支：${gitBranch}`}
+            >
+              <GitBranch aria-hidden="true" />
+              <span>{gitBranch}</span>
+            </div>
+          )}
         </div>
         <PromptInputFooter>
           <PromptInputTools>
             {/* 运行中且可转向时：排队等本轮结束，或即时追加进当前回合（不打断）。默认排队。 */}
             {running && canSteer && (
-              <div className="composer-sendmode" role="group" aria-label="发送方式">
+              <div
+                className="composer-sendmode"
+                role="group"
+                aria-label="发送方式"
+              >
                 <button
                   type="button"
                   className={!direct ? "is-active" : ""}
@@ -604,7 +626,18 @@ export function Composer({
                             aria-label={`${slot.name}：${slot.full ?? slot.value}`}
                           >
                             <span className="composer-context-seg__value">
-                              {slot.short}
+                              {slot.name === "模型" ? (
+                                <>
+                                  <span className="composer-model-name">
+                                    {slot.short}
+                                  </span>
+                                  <span className="composer-model-id">
+                                    {contextModelRaw}
+                                  </span>
+                                </>
+                              ) : (
+                                slot.short
+                              )}
                             </span>
                           </button>
                         }
@@ -644,7 +677,18 @@ export function Composer({
                       onClick={field ? undefined : onSessionSettings}
                     >
                       <span className="composer-context-seg__value">
-                        {slot.short}
+                        {slot.name === "模型" ? (
+                          <>
+                            <span className="composer-model-name">
+                              {slot.short}
+                            </span>
+                            <span className="composer-model-id">
+                              {contextModelRaw}
+                            </span>
+                          </>
+                        ) : (
+                          slot.short
+                        )}
                       </span>
                     </button>
                   );
@@ -659,10 +703,23 @@ export function Composer({
                   <span
                     key={slot.name}
                     className={contextSegClass(slot)}
-                    title={slot.value ? `${slot.name}：${slot.value}` : undefined}
+                    title={
+                      slot.value ? `${slot.name}：${slot.value}` : undefined
+                    }
                   >
                     <span className="composer-context-seg__value">
-                      {slot.short}
+                      {slot.name === "模型" ? (
+                        <>
+                          <span className="composer-model-name">
+                            {slot.short}
+                          </span>
+                          <span className="composer-model-id">
+                            {contextModelRaw}
+                          </span>
+                        </>
+                      ) : (
+                        slot.short
+                      )}
                     </span>
                   </span>
                 ))}

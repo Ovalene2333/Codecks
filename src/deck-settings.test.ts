@@ -53,6 +53,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
     toolOpenTarget: "inline",
     sidebarWidth: 260,
     initialTurns: 10,
+    sidebarLayout: DEFAULT_DECK_SETTINGS.sidebarLayout,
   });
 
   const mixed = normalizeDeckSettings({

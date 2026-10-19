@@ -1728,13 +1728,11 @@ export class OpenCodeAdapter extends EventEmitter {
     // 旧版本会把“仅有上下文上限、没有 token 记录”的用量也存进缓存，
     // 刷新时清掉这种 used=0 残留，避免侧栏一直显示 0/xxx。
     if (!merged.tokenUsage?.used) delete merged.tokenUsage;
-    // 会话级累计用量优先于按最新回复估的上下文档位：后者只是单步 tokens，
-    // 当累计值时不成立（侧栏/用量统计会显示成几百）。
+    // 会话级累计用量放在 tokenUsageTotal，供用量统计/费用使用。绝不能写进
+    // tokenUsage：那是上下文占位口径（最新一条回复），写成累计值会让上下文
+    // chip 直接显示成几十 M。
     const totalUsage = sessionTotalUsage(session);
-    if (totalUsage) {
-      const limit = merged.tokenUsage?.limit;
-      merged.tokenUsage = limit ? { ...totalUsage, limit } : totalUsage;
-    }
+    if (totalUsage) merged.tokenUsageTotal = totalUsage;
     return merged;
   }
 
@@ -2162,14 +2160,12 @@ export class OpenCodeAdapter extends EventEmitter {
         : undefined;
     // 只有拿到真实 token 记录才生成用量；仅有上限没有用量时会显示成
     // 误导性的 “0/xxx”，不如不显示。
-    // 会话级累计用量（老版本没有该字段）优先：消息级 tokens 只是最新一步，
-    // 当会话总量会显示成几百。
-    const sessionUpload = thread.tokenUsageTotal;
-    const tokenUsage: TokenUsage | undefined = sessionUpload
-      ? { ...sessionUpload, ...(limit || sessionUpload.limit ? { limit: limit ?? sessionUpload.limit } : {}) }
-      : used > 0
-        ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit }
-        : undefined;
+    //
+    // 注意：tokenUsage 是**上下文占位**口径（最新一条回复的 tokens + 上限），
+    // 会话累计值不能写进来，否则上下文 chip 会显示成几十 M。累计值单独放
+    // tokenUsageTotal，由用量统计使用。
+    const tokenUsage: TokenUsage | undefined =
+      used > 0 ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit } : undefined;
     const sameUsage =
       thread.tokenUsage?.used === tokenUsage?.used &&
       thread.tokenUsage?.limit === tokenUsage?.limit;
@@ -2399,8 +2395,7 @@ export class OpenCodeAdapter extends EventEmitter {
     // 命名/用量必须基于现行对象合并，否则会把新字段顶回旧值。
     const base = this.threads.get(threadId) || thread;
     const renamed = page.partial ? base : this.applyFirstMessageNaming(base, records);
-    // 会话级累计用量必须是 applyThreadUsage 的输入，否则它会用最新一步的
-    // 消息级 tokens 把累计值覆盖掉。
+    // 会话级累计用量（统计/费用用）与 tokenUsage（上下文占位）分开存放。
     if (sessionUsage) renamed.tokenUsageTotal = sessionUsage;
     const current = this.applyThreadUsage(renamed, records);
     const usageAt = current.updatedAt;
@@ -2431,6 +2426,7 @@ export class OpenCodeAdapter extends EventEmitter {
         ? { resolvedModel: current.resolvedModel }
         : {}),
       ...(current.tokenUsage ? { tokenUsage: current.tokenUsage } : {}),
+      ...(current.tokenUsageTotal ? { tokenUsageTotal: current.tokenUsageTotal } : {}),
     };
   }
 
@@ -2650,6 +2646,9 @@ export class OpenCodeAdapter extends EventEmitter {
       if (index < 0) throw new Error("找不到分支所选的消息");
       boundary = userIds[index + 1] || "";
     }
+    // 分支的累计用量会包含复制来的历史：在 fork 前记下父会话当时的
+    // 累计值作为基线，统计时扣除它才是这个分支自己的消耗。
+    const forkBaseline = this.threads.get(threadId)?.tokenUsageTotal;
     let forked: OpenCodeSession;
     try {
       forked = await this.request<OpenCodeSession>(
@@ -2703,6 +2702,7 @@ export class OpenCodeAdapter extends EventEmitter {
       activeTurnId: undefined,
       lastError: undefined,
       forkedFromId: threadId,
+      ...(forkBaseline ? { forkUsageBaseline: forkBaseline } : {}),
       updatedAt: Date.now(),
     };
     // 先落内存（并发事件/refreshAll 靠 forkChildren 认分支），再落盘；
@@ -2817,6 +2817,9 @@ export class OpenCodeAdapter extends EventEmitter {
       activeTurnId: undefined,
       lastError: undefined,
       forkedFromId: source.id,
+      ...(source.tokenUsageTotal
+        ? { forkUsageBaseline: { ...source.tokenUsageTotal } }
+        : {}),
       updatedAt: Date.now(),
     };
     // 同 forkThread：先落内存再落盘，落盘失败回滚原生会话。

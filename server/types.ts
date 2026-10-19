@@ -205,11 +205,38 @@ export interface AskSession {
   id: string;
   /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
   alias?: string;
+  /**
+   * 目标会话自己的稳定短别名（`s-…`）。与会话摘要上的 `thread.alias`
+   * 取同一份台账，询问卡片用它显示「会话别名」，避免两条通道显示不一致。
+   */
+  targetAlias?: string;
   sourceAgentId: AgentId;
   sourceThreadId: string;
   sourceProviderId?: string;
   returnMode: DeckDeliveryMode;
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  error?: string;
+}
+
+/**
+ * 会话所在工作区的 Git 状态（只读）。Deck 不管理分支，只把「当前在哪条
+ * 分支 / 是不是独立 worktree」暴露出来，避免多个会话在同一 checkout 上
+ * 互不知情地互相踩。
+ */
+export interface GitContext {
+  available: boolean;
+  /** 当前分支名；detached HEAD 时为空。 */
+  branch?: string;
+  /** 是否处于 detached HEAD（Codex/Claude worktree 的默认形态）。 */
+  detached?: boolean;
+  /** 仓库根目录。 */
+  root?: string;
+  /** 当前目录对应的 worktree 路径。 */
+  worktree?: string;
+  /** 是否为 linked worktree（不是主 checkout）。 */
+  linked?: boolean;
+  /** 不可用原因：not-repository / no-cwd / error / disabled。 */
+  reason?: "not-repository" | "no-cwd" | "error" | "disabled";
   error?: string;
 }
 
@@ -239,6 +266,14 @@ export interface ThreadSummary {
   permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
   forkedFromId?: string;
+  /**
+   * 分支创建那一刻的累计用量基线（父会话当时的原生累计值）。分支会话的
+   * 累计值包含复制来的历史，统计时用「本会话累计 - 基线」得到它自己新增
+   * 的部分，多个分支同时活动也不会重复计费。旧分支没有基线，沿用估算。
+   */
+  forkUsageBaseline?: TokenUsage;
+  /** 会话所在工作区的 Git 状态（只读展示用，服务端探测后下发）。 */
+  git?: GitContext;
   sessionId?: string;
   tokenUsage?: TokenUsage;
   /**

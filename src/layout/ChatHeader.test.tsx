@@ -35,7 +35,7 @@ test("Claude header shows its relay and exposes provider switching", () => {
   );
 
   assert.match(html, /Private relay/);
-  assert.match(html, /为此 Session 切换供应商/);
+  assert.match(html, /为此会话切换供应商/);
   assert.doesNotMatch(html, />Claude 中转</);
 });
 

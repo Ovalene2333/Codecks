@@ -47,10 +47,13 @@ import type {
   ThreadSummary,
 } from "./types";
 import {
+  applyOrder,
   filterProjectGroups,
   mergeProjectGroups,
   normalizeProjectPath,
   quickNewProjects,
+  reorderKeys,
+  sortProjectsForSidebar,
   threadsForProject,
   type ProjectGroup,
 } from "./projects";
@@ -141,7 +144,11 @@ import {
 } from "./notifications";
 import { useDeckShortcuts } from "./shortcuts";
 import { branchInfo, branchRelations } from "./session-branch";
-import { getDeckSettings, useDeckSettings } from "./deck-settings";
+import {
+  getDeckSettings,
+  updateDeckSettings,
+  useDeckSettings,
+} from "./deck-settings";
 
 const ChatWorkspace = lazy(() =>
   import("./session/ChatWorkspace").then((module) => ({
@@ -179,7 +186,7 @@ const readDeckHistoryState = () => readDeckState(window.history.state);
 
 export function App() {
   const appearance = useAppearance();
-  const { hiddenTools } = useDeckSettings();
+  const { hiddenTools, sidebarLayout } = useDeckSettings();
   const [snapshot, setSnapshot] = useState(() => {
     const cached = readSnapshotCache();
     // “新回复 / 最近会话”的预览靠活动数据：用缓存先画出来，实时快照到了再替换。
@@ -858,13 +865,43 @@ export function App() {
     () => mergeProjectGroups(snapshot.projects || [], libraryThreads),
     [snapshot.projects, libraryThreads],
   );
-  // Welcome 页的最近项目永远看 active 库；切到归档库时才需另算一份。
+  // 有会话在跑的优先；只看 status，不看随 tool-call 抖动的 updatedAt。
+  const liveProjectKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const thread of libraryThreads)
+      if (thread.status !== "idle" || thread.compacting)
+        keys.add(normalizeProjectPath(thread.cwd || "未指定路径"));
+    return keys;
+  }, [libraryThreads]);
+  const sidebarProjectOrder = sidebarLayout.projects;
+  const orderedGroups = useMemo(
+    () =>
+      sortProjectsForSidebar(
+        baseGroups,
+        sidebarProjectOrder,
+        liveProjectKeys,
+      ),
+    [baseGroups, sidebarProjectOrder, liveProjectKeys],
+  );
+  // Welcome 页的最近项目永远看 active 库；切到归档库时才需另算一份，
+  // 并沿用同一份手动顺序与「运行中优先」。
   const activeGroups = useMemo(
     () =>
       library === "active"
-        ? baseGroups
-        : mergeProjectGroups(snapshot.projects || [], snapshot.threads),
-    [library, baseGroups, snapshot.projects, snapshot.threads],
+        ? orderedGroups
+        : sortProjectsForSidebar(
+            mergeProjectGroups(snapshot.projects || [], snapshot.threads),
+            sidebarProjectOrder,
+            liveProjectKeys,
+          ),
+    [
+      library,
+      orderedGroups,
+      snapshot.projects,
+      snapshot.threads,
+      sidebarProjectOrder,
+      liveProjectKeys,
+    ],
   );
 
   const projects = useMemo(() => {
@@ -873,7 +910,7 @@ export function App() {
         (match) => `${match.agentId}:${match.threadId}`,
       ),
     );
-    const groups = baseGroups;
+    const groups = orderedGroups;
     const statusThreads = (threads: ThreadSummary[]) =>
       statusFilter === "active"
         ? threads.filter(
@@ -891,7 +928,11 @@ export function App() {
     return filterProjectGroups(
       groups.map((group) => ({
         ...group,
-        sessions: statusThreads(group.sessions),
+        sessions: applyOrder(
+          statusThreads(group.sessions),
+          sidebarLayout.sessions[group.key],
+          sessionKey,
+        ),
       })),
       query,
       {
@@ -902,12 +943,13 @@ export function App() {
       },
     ).filter((group) => group.sessions.length > 0);
   }, [
-    baseGroups,
+    orderedGroups,
     snapshot.providers,
     query,
     statusFilter,
     unseenSessions,
     contentSearch,
+    sidebarLayout.sessions,
   ]);
 
   const contentMatches = useMemo(() => {
@@ -1211,6 +1253,43 @@ export function App() {
       },
     });
   };
+
+  /** 侧栏拖动落位：把整列当前顺序写进设备偏好，兼容没手动排过的项。 */
+  const moveSidebarProject = useCallback(
+    (from: string, before: string | null) => {
+      const all = projects.map((group) => group.key);
+      const next = reorderKeys(all, from, before);
+      const layout = getDeckSettings().sidebarLayout;
+      updateDeckSettings({
+        sidebarLayout: { ...layout, projects: next },
+      });
+      // 拖完顺手把项目展开，免得拖到折叠项目上时看着没变化。
+      setExpandedProjects((currentSet) => new Set(currentSet).add(from));
+    },
+    [projects],
+  );
+  const moveSidebarSession = useCallback(
+    (projectKey: string, from: string, before: string | null) => {
+      const group = projects.find((item) => item.key === projectKey);
+      if (!group) return;
+      const next = reorderKeys(group.sessions.map(sessionKey), from, before);
+      const layout = getDeckSettings().sidebarLayout;
+      updateDeckSettings({
+        sidebarLayout: {
+          ...layout,
+          sessions: { ...layout.sessions, [projectKey]: next },
+        },
+      });
+    },
+    [projects],
+  );
+  const resetSidebarOrder = useCallback(
+    () =>
+      updateDeckSettings({
+        sidebarLayout: { projects: [], sessions: {} },
+      }),
+    [],
+  );
 
   const selectThread = (thread: ThreadSummary, match?: SessionSearchMatch) => {
     setSearchTarget(
@@ -1554,6 +1633,9 @@ export function App() {
             return next;
           })
         }
+        onMoveProject={moveSidebarProject}
+        onMoveSession={moveSidebarSession}
+        onResetOrder={resetSidebarOrder}
         onSelect={selectThread}
         onAddInProject={(project) =>
           openThreadModalFromSidebar({
@@ -1964,6 +2046,30 @@ export function App() {
               label: "远程唤醒",
               onClick: () => setWakeThread(sheet),
             },
+            ...(sheet.git?.available && sheet.git.linked
+              ? [
+                  {
+                    label: "移除该 worktree",
+                    danger: true,
+                    onClick: () => {
+                      // 这里是真的删目录：有未提交内容时服务端会拒绝。
+                      remove(`${threadPath(sheet)}/worktree`)
+                        .then((result: any) => {
+                          if (result?.removed) {
+                            pushToast("worktree 已移除");
+                            refresh();
+                          } else if (result?.reason === "dirty")
+                            pushToast("worktree 还有未提交改动，未移除；请先提交或手动清理");
+                          else
+                            pushToast("这个目录不是 Deck 创建的 worktree，未处理");
+                        })
+                        .catch((error: any) =>
+                          pushToast(error?.message || "移除 worktree 失败"),
+                        );
+                    },
+                  },
+                ]
+              : []),
             {
               label: "压缩上下文",
               disabled:
@@ -2106,7 +2212,16 @@ export function App() {
                     setSelected((current) =>
                       current === sessionKey(sheet) ? undefined : current,
                     );
-                    pushToast("会话已删除");
+                    // worktree 是 Deck 创建的独立 checkout：删除会话时可能保留，
+                    // 必须明确告诉用户目录在哪，避免以为文件也被删了。
+                    const kept = result?.worktree;
+                    if (kept && kept.removed === false && kept.reason === "dirty")
+                      pushToast("会话已删除；worktree 还有未提交改动，已保留在磁盘");
+                    else if (kept && kept.removed === false && kept.reason === "not-managed")
+                      pushToast("会话已删除；目录不是 Deck 创建的 worktree，未做改动");
+                    else if (kept && kept.removed)
+                      pushToast("会话与它独占的 worktree 已删除");
+                    else pushToast("会话已删除");
                   },
                 }),
             },

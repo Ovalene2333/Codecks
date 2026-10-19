@@ -231,6 +231,17 @@ export class ThreadSettingsStore {
     return next;
   }
 
+  /** 快照与流式增量使用同一份待生效设置，避免旧运行状态覆盖用户选择。 */
+  withDeferredSettings(thread: ThreadSummary): ThreadSummary {
+    const agentId = thread.agentId || "codex";
+    const pending = this.deferred(agentId, thread.id);
+    return pending
+      ? { ...thread, ...this.get(agentId, thread.id),
+          ...(pending.reasoningEffort !== undefined ? { reasoningEffort: pending.reasoningEffort } : {}),
+          settingsDeferred: true }
+      : thread;
+  }
+
   async update(
     agentId: AgentId,
     threadId: string,

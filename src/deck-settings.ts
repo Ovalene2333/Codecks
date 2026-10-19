@@ -7,6 +7,7 @@ import {
   type MessageTemplate,
   type MessageTypography,
 } from "./message-typography";
+import { EMPTY_SIDEBAR_LAYOUT, type SidebarLayout } from "./projects";
 
 /**
  * 本设备偏好（localStorage）：只影响当前浏览器，不进服务端快照。
@@ -40,6 +41,8 @@ export interface DeckLocalSettings {
   sidebarWidth: number;
   /** 打开会话时加载的最新轮数（更早的点按钮再加载），本设备偏好。 */
   initialTurns: number;
+  /** 侧栏手动排序：项目路径顺序与会话键顺序。 */
+  sidebarLayout: SidebarLayout;
 }
 
 export const DECK_SETTINGS_KEY = "codex-deck:settings:v1";
@@ -56,6 +59,7 @@ export const DEFAULT_DECK_SETTINGS: DeckLocalSettings = {
   toolOpenTarget: "tab",
   sidebarWidth: 0,
   initialTurns: 10,
+  sidebarLayout: EMPTY_SIDEBAR_LAYOUT,
 };
 
 const oneOf = <T extends string>(value: unknown, options: T[], fallback: T) =>
@@ -130,7 +134,31 @@ export function normalizeDeckSettings(value: unknown): DeckLocalSettings {
     ),
     sidebarWidth: normalizeSidebarWidth(input.sidebarWidth),
     initialTurns: normalizeInitialTurns(input.initialTurns),
+    sidebarLayout: normalizeSidebarLayout(input.sidebarLayout),
   };
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((item): item is string => typeof item === "string"))]
+    : [];
+}
+
+/** 手动排序合法化：去掉重复/非字符串；旧设置没有这个字段时为空。 */
+export function normalizeSidebarLayout(value: unknown): SidebarLayout {
+  const input =
+    value && typeof value === "object"
+      ? (value as Partial<SidebarLayout>)
+      : {};
+  const sessions: Record<string, string[]> = {};
+  const raw = input.sessions;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [project, keys] of Object.entries(raw)) {
+      const list = stringList(keys);
+      if (list.length) sessions[project] = list;
+    }
+  }
+  return { projects: stringList(input.projects), sessions };
 }
 
 function storage(): Storage | null {

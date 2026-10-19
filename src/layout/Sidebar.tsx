@@ -1,12 +1,17 @@
 import {
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
+  useState,
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createSidebarDrag } from "./sidebar-drag";
 import {
   Activity,
+  ArrowDownUp,
   BarChart3,
   BellRing,
   Bot,
@@ -16,6 +21,7 @@ import {
   House,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Terminal,
@@ -84,6 +90,9 @@ export function Sidebar({
   homeActive,
   onHome,
   onToggleProject,
+  onMoveProject,
+  onMoveSession,
+  onResetOrder,
   onSelect,
   onAddInProject,
   onPin,
@@ -137,6 +146,12 @@ export function Sidebar({
   homeActive: boolean;
   onHome: () => void;
   onToggleProject: (key: string) => void;
+  /** 侧栏拖动：把项目拖到某个项目之前（null = 末尾）。 */
+  onMoveProject: (from: string, before: string | null) => void;
+  /** 侧栏拖动：把会话拖到同项目某个会话之前（null = 末尾）。 */
+  onMoveSession: (projectKey: string, from: string, before: string | null) => void;
+  /** 清除所有手动排序，恢复自动排序。 */
+  onResetOrder: () => void;
   onSelect: (thread: ThreadSummary, match?: SessionSearchMatch) => void;
   onAddInProject: (project: ProjectGroup) => void;
   onPin: (project: ProjectGroup) => void;
@@ -152,9 +167,44 @@ export function Sidebar({
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const asideRef = useRef<HTMLElement>(null);
-  const { hiddenTools, sidebarWidth } = useDeckSettings();
+  const { hiddenTools, sidebarWidth, sidebarLayout } = useDeckSettings();
+  const [reorderMode, setReorderMode] = useState(false);
+  // 排序手柄只在「调整顺序」模式下出现；回调变化时重建控制器，避免闭包持有旧列表。
+  const drag = useMemo(
+    () =>
+      createSidebarDrag({
+        onProjectMove: onMoveProject,
+        onSessionMove: onMoveSession,
+      }),
+    [onMoveProject, onMoveSession],
+  );
+  useEffect(() => () => drag.dispose(), [drag]);
+  const startProjectDrag = useCallback(
+    (event: ReactPointerEvent<HTMLElement>, key: string) =>
+      drag.startDrag(event, { kind: "project", id: key }),
+    [drag],
+  );
+  const startSessionDrag = useCallback(
+    (event: ReactPointerEvent<HTMLElement>, projectKey: string, key: string) =>
+      drag.startDrag(event, { kind: "session", id: key, projectKey }),
+    [drag],
+  );
+  const registerProjectRow = useCallback(
+    (key: string, node: HTMLElement | null) =>
+      node ? drag.registerRow("project", key, node) : undefined,
+    [drag],
+  );
+  const registerSessionRow = useCallback(
+    (key: string, node: HTMLElement | null) =>
+      node ? drag.registerRow("session", key, node) : undefined,
+    [drag],
+  );
   /* 拖拽中的临时状态：跟随鼠标时直接改 DOM，不经过 React，避免每次移动都重渲染整个会话列表。 */
-  const drag = useRef<{ startX: number; startWidth: number; pointerId: number } | null>(null);
+  const resizeDrag = useRef<{
+    startX: number;
+    startWidth: number;
+    pointerId: number;
+  } | null>(null);
 
   const commitWidth = (width: number) => {
     const next = normalizeSidebarWidth(width);
@@ -167,9 +217,9 @@ export function Sidebar({
   };
 
   const endResize = (event: ReactPointerEvent<HTMLDivElement>, commit: boolean) => {
-    const session = drag.current;
+    const session = resizeDrag.current;
     if (!session || event.pointerId !== session.pointerId) return;
-    drag.current = null;
+    resizeDrag.current = null;
     asideRef.current?.classList.remove("is-resizing");
     if (document.body.style.cursor === "col-resize")
       document.body.style.cursor = "";
@@ -188,7 +238,7 @@ export function Sidebar({
     const aside = asideRef.current;
     if (!aside) return;
     event.preventDefault();
-    drag.current = {
+    resizeDrag.current = {
       startX: event.clientX,
       startWidth: aside.getBoundingClientRect().width,
       pointerId: event.pointerId,
@@ -200,7 +250,7 @@ export function Sidebar({
   };
 
   const onResizePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const session = drag.current;
+    const session = resizeDrag.current;
     const aside = asideRef.current;
     if (!session || !aside || event.pointerId !== session.pointerId) return;
     const width = Math.min(
@@ -351,6 +401,29 @@ export function Sidebar({
           ]}
         />
         <button
+          type="button"
+          className={`icon-btn reorder-toggle ${reorderMode ? "active" : ""}`}
+          onClick={() => setReorderMode((value) => !value)}
+          aria-pressed={reorderMode}
+          title={reorderMode ? "完成调整顺序" : "拖动调整项目和会话顺序"}
+          aria-label={reorderMode ? "完成调整顺序" : "调整顺序"}
+        >
+          <ArrowDownUp />
+        </button>
+        {reorderMode &&
+          (sidebarLayout.projects.length > 0 ||
+            Object.keys(sidebarLayout.sessions).length > 0) && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onResetOrder}
+              title="恢复自动排序"
+              aria-label="恢复自动排序"
+            >
+              <RotateCcw />
+            </button>
+          )}
+        <button
           className={`icon-btn ${loading ? "refreshing" : ""}`}
           onClick={onRefresh}
           title={loading ? "正在读取项目…" : "刷新"}
@@ -436,7 +509,12 @@ export function Sidebar({
       {archiveError && library === "archived" && (
         <p className="error-banner archive-error">{archiveError}</p>
       )}
-      <div className="thread-list">
+      {reorderMode && (
+        <p className="sidebar-reorder-hint" role="status">
+          拖动项目或会话左上角的手柄调整顺序；该顺序只保存在当前设备。
+        </p>
+      )}
+      <div className={`thread-list ${reorderMode ? "is-reordering" : ""}`}>
         {projects.map((project) => (
           <ProjectGroupView
             key={project.key}
@@ -450,6 +528,11 @@ export function Sidebar({
             searchQuery={query}
             searchMatches={searchMatches}
             onToggle={() => onToggleProject(project.key)}
+            reorderMode={reorderMode}
+            onProjectDragStart={startProjectDrag}
+            onSessionDragStart={startSessionDrag}
+            registerProjectRow={registerProjectRow}
+            registerSessionRow={registerSessionRow}
             onSelect={onSelect}
             onAdd={() => onAddInProject(project)}
             onPin={() => onPin(project)}

@@ -754,6 +754,7 @@ export class ClaudeAdapter extends EventEmitter {
           model: existing?.model || parsed.summary.model,
           permissionMode: existing?.permissionMode || "default",
           forkedFromId: existing?.forkedFromId,
+          forkUsageBaseline: existing?.forkUsageBaseline,
           resolvedModel:
             live || busyTurnId
               ? existing?.resolvedModel || parsed.summary.resolvedModel
@@ -1166,6 +1167,8 @@ export class ClaudeAdapter extends EventEmitter {
       claudeConnected: false,
       lastError: undefined,
       forkedFromId: source.id,
+      // 分支 JSONL 复制了父会话历史，用量从父会话当时的累计值起算。
+      ...(source.tokenUsage ? { forkUsageBaseline: { ...source.tokenUsage } } : {}),
       updatedAt: Date.now(),
     };
     this.threads.set(id, branch);
@@ -2526,6 +2529,7 @@ export class ClaudeAdapter extends EventEmitter {
           ? current?.tokenUsage || diskUsage
           : diskUsage || current?.tokenUsage,
       forkedFromId: current?.forkedFromId,
+      forkUsageBaseline: current?.forkUsageBaseline,
       permissionMode: current?.permissionMode || "default",
       controlMode: "managed",
       claudeConnected: Boolean(this.active.get(threadId)),

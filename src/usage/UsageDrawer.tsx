@@ -96,12 +96,12 @@ function UsageStats({
   );
   const rows = level === "projects" ? stats.projects : stats.sessions;
   const max = rows[0]?.totals.total || 0;
-  const cost = stats.sessions.reduce(
-    (sum, row) =>
-      sum +
-      estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
-    0,
-  );
+  const cost = stats.sessions.reduce((sum, row) => {
+    const model = row.thread.resolvedModel || row.thread.model;
+    // 分支复制来的历史不是新消耗，费用里扣掉，否则一次分支账单翻倍。
+    const duplicated = estimateCost(row.duplicated, model);
+    return sum + Math.max(0, estimateCost(row.totals, model) - duplicated);
+  }, 0);
 
   return (
     <div className="usage-stats">
@@ -151,7 +151,9 @@ function UsageStats({
                   key={row.key}
                   icon={<Folder />}
                   title={row.name}
-                  subtitle={`${row.sessionCount} 个会话，${row.cwd}`}
+                  subtitle={`${row.sessionCount} 个会话${
+                    row.forkCount ? `（另 ${row.forkCount} 个分支已并入）` : ""
+                  }，${row.cwd}`}
                   totals={row.totals}
                   max={max}
                 />
@@ -179,6 +181,11 @@ function UsageStats({
       {stats.totals.reasoningOutput > 0 ? (
         <p className="usage-note">
           {`推理输出 ${formatTokens(stats.totals.reasoningOutput)}，已包含在输出或总量中。`}
+        </p>
+      ) : null}
+      {stats.sessions.some((row) => row.thread.forkedFromId) ? (
+        <p className="usage-note">
+          分支会话复制了父会话的历史，累计 Token 只按同源分支中最新的一个计，避免重复。
         </p>
       ) : null}
     </div>

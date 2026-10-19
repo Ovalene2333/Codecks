@@ -60,7 +60,8 @@ export function forkSession(thread: ThreadSummary, lastTurnId?: string) {
 
 export function deleteSession(thread: ThreadSummary) {
   return run(thread, "delete", () => remove(
-    threadPath(thread) + (thread.agentId === "opencode" ? "?ack=1" : ""),
+    // 一律带 ack：需要拿到 worktree 清理结果（保留还是删除）给用户提示。
+    threadPath(thread) + "?ack=1",
     thread.agentId === "claude" && thread.claudeConnected ? { closeConnection: true } : undefined,
   ));
 }

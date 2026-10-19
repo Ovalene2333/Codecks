@@ -1,4 +1,4 @@
-import type { AgentId } from "./types";
+import type { AgentId, TokenUsage } from "./types";
 
 export const fmtTime = (time: number) => {
   if (!Number.isFinite(time)) return "";
@@ -99,6 +99,24 @@ export function formatTokens(value?: number) {
   }
   const unit = TOKEN_UNITS[unitIndex];
   return `${TOKEN_NUMBER_FORMAT.format(value / unit.divisor)}${unit.suffix}`;
+}
+
+/**
+ * 统计口径：优先用供应商原生会话累计值（tokenUsageTotal），否则退回
+ * thread.tokenUsage（最新一步/上下文档位）。只把后者当累计值会导致
+ * OpenCode 会话显示成几百 token。
+ */
+export function threadUsage(thread?: {
+  tokenUsage?: TokenUsage;
+  tokenUsageTotal?: TokenUsage;
+}): TokenUsage | undefined {
+  if (!thread) return undefined;
+  const total = thread.tokenUsageTotal;
+  const usage = thread.tokenUsage;
+  // 分支的基线都按 threadUsage 记，所以 total 缺失时要补上占位字段，
+  // 否则新建分支的用量会被当成 0。
+  if (total) return usage ? { ...usage, ...total } : total;
+  return usage;
 }
 
 export function sessionKey(thread: {

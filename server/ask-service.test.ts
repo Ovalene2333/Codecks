@@ -511,3 +511,21 @@ test("detached results explicitly report truncation and do not treat commentary 
   assert.equal((await service.readResult(second.item.id)).result?.text, "");
   assert.equal(askReplies(messages).length, 0);
 });
+
+test("legacy asks without targetAlias borrow the session ledger instead of the mutable thread alias", async (t) => {
+  const { create, service, options } = await fixture(t);
+  const { item, thread } = await create();
+  const alias = "s-abc1234";
+  const sessionAliases = {
+    ensure: async () => new Map([[JSON.stringify(["demo-review", thread.id]), alias]]),
+    peek: () => alias,
+  };
+  await service.close();
+  // 模拟升级前的台账：只有询问别名与目标会话，没有 targetAlias。
+  const file = path.join(path.dirname(options.file), "legacy-asks.json");
+  await writeFile(file, JSON.stringify({ version: 1, items: [{ ...item, alias: undefined, targetAlias: undefined, question: "legacy question" }] }));
+  const restored = new AskService({ ...options, file, sessionAliases });
+  await restored.load();
+  t.after(() => restored.close());
+  assert.equal(restored.list()[0]?.targetAlias, alias);
+});

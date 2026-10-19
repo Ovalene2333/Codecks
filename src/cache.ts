@@ -202,6 +202,8 @@ function compactThread(thread: ThreadSummary): ThreadSummary {
     sessionId: thread.sessionId,
     interruptedTurnId: thread.interruptedTurnId,
     forkedFromId: thread.forkedFromId,
+    // 分支/worktree 标记只用于展示；断线重连后先显示缓存值，实时快照到了再更新。
+    git: thread.git,
     // 首页用量合计、上下文占比、“压缩上下文/失败”行都靠这几个小字段；
     // 不带上的话刷新后先显示“—”，等实时快照到了再跳成真实值。
     // lastError 可能带出模型/命令输出的原文，仍然不落盘，只留错误码。

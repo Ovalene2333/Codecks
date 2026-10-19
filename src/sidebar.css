@@ -631,3 +631,95 @@
 .skeleton-recent {
   height: 40px;
 }
+
+/* 侧栏拖动排序：手柄只在「调整顺序」模式下出现。 */
+.reorder-toggle.active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.sidebar-reorder-hint {
+  margin: 0 12px 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: var(--lh-body);
+}
+.sidebar-drag-handle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+.sidebar-drag-handle:hover {
+  background: var(--control-hover);
+  color: var(--text);
+}
+.sidebar-drag-handle svg {
+  width: 14px;
+  height: 14px;
+}
+.project-heading .sidebar-drag-handle {
+  width: 12px;
+  height: 20px;
+}
+.session-drag-handle {
+  width: 12px;
+  height: 18px;
+  margin-left: -4px;
+}
+.is-dragging-sidebar,
+.is-dragging-sidebar * {
+  cursor: grabbing !important;
+}
+.is-drag-container {
+  position: relative;
+}
+.sidebar-drop-indicator {
+  position: absolute;
+  z-index: 3;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  pointer-events: none;
+}
+.sidebar-drop-indicator::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -3px;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.project-group.is-dragging,
+.session-row.is-dragging {
+  opacity: 0.45;
+}
+.is-reordering .project-heading,
+.thread-list.is-reordering .session-row {
+  cursor: grab;
+  touch-action: pan-y;
+}
+/* 手机上也要有可点的拖动目标：手柄区域不小于 36px。 */
+@media (max-width: 760px) {
+  .sidebar-drag-handle {
+    width: 28px;
+    height: 32px;
+  }
+  .project-heading .sidebar-drag-handle,
+  .session-drag-handle {
+    width: 28px;
+    height: 30px;
+    margin-left: 0;
+  }
+}

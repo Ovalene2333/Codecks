@@ -1353,6 +1353,7 @@ export class CodexAdapter extends EventEmitter {
         ...result.thread,
         name: branchName,
         forkedFromId: threadId,
+        ...(this.forkUsageBaseline(source) ?? {}),
         sessionId:
           result.thread.sessionId ||
           result.thread.session_id ||
@@ -1389,6 +1390,26 @@ export class CodexAdapter extends EventEmitter {
    * fork/迁移产生的新会话：把实际生效的设置记进 thread-settings。
    * 不记的话下一次列表刷新后显示回落成服务端默认值（“fork 后重置”）。
    */
+  /**
+   * 分支创建时刻父会话的累计用量。分支的原生累计值包含复制来的历史，
+   * 统计时扣掉基线才是这条分支自己的消耗（多个分支同时活动也不重复）。
+   */
+  private forkUsageBaseline(source?: ThreadSummary) {
+    const usage = source?.tokenUsage;
+    if (!usage) return undefined;
+    return {
+      forkUsageBaseline: {
+        total: usage.total,
+        used: usage.used,
+        limit: usage.limit,
+        input: usage.input,
+        cachedInput: usage.cachedInput,
+        output: usage.output,
+        reasoningOutput: usage.reasoningOutput,
+      },
+    };
+  }
+
   private persistForkedSettings(newThreadId: string) {
     const branch = this.threads.get(newThreadId);
     if (!branch) return;
@@ -1559,6 +1580,7 @@ export class CodexAdapter extends EventEmitter {
         pickString(result.approvalsReviewer, source.approvalsReviewer) ||
         source.approvalsReviewer,
       forkedFromId: sourceThreadId,
+      ...(this.forkUsageBaseline(source) ?? {}),
       migratedFrom: { providerId: sourceProviderId, threadId: sourceThreadId },
     });
     this.persistForkedSettings(result.thread.id);

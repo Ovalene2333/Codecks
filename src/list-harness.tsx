@@ -226,6 +226,9 @@ function Harness() {
         onQuery={noop("搜索")}
         onStatusFilter={noop("筛选")}
         onHome={noop("总览")}
+        onMoveProject={() => {}}
+        onMoveSession={() => {}}
+        onResetOrder={() => {}}
         onToggleProject={(key) =>
           setExpanded((current) => {
             const next = new Set(current);

@@ -26,6 +26,9 @@ import {
   sameConnectionOverlay,
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
+import { GitContextProbe } from "./git-context.js";
+import { parseWorktreePorcelain, WorktreeStore } from "./worktrees.js";
+import { execFile } from "node:child_process";
 import { CodexAdapter } from "./agents/codex-adapter.js";
 import { ClaudeAdapter } from "./agents/claude-adapter.js";
 import { createOpenCodeRuntime } from "./opencode-runtime.js";
@@ -290,6 +293,40 @@ const activity = new ActivityTracker();
 // 唤醒发件箱：POST /api/wake/:code 落盘即 202，送达由它在后台重试到成；
 // 持久化在 .data/wake-outbox.json，Deck 重启不丢。
 let routingReady = false;
+const SNAPSHOT_WINDOW_MS = 50;
+// 慢客户端积压超过该阈值即跳过本次推送：单个手机弱网不应拖慢整机广播。
+const SLOW_CLIENT_BYTES = 1_000_000;
+let snapshotTimer: NodeJS.Timeout | undefined;
+let snapshotPending = false;
+// 这两个函数在加载阶段就会被 onChanged 回调触发（会话别名、watcher），
+// 而 wss/快照构建在文件后面才初始化，所以定义必须提前、调用仍由
+// routingReady 与快照缓存守住。
+function broadcast(payload: string) {
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (client.bufferedAmount > SLOW_CLIENT_BYTES) continue;
+    client.send(payload);
+  }
+}
+function broadcastSnapshotSoon() {
+  // 启动阶段（加载台账、预探测）也会触发 onChanged；此时快照构建函数
+  // 尚未初始化，直接跳过，真正的首个快照由监听就绪后的广播负责。
+  if (!routingReady) return;
+  if (snapshotTimer) {
+    snapshotPending = true;
+    return;
+  }
+  // 落地时刻才构建：窗口内后到的变更天然包含在内，比事件携带的旧快照更新鲜。
+  broadcast(JSON.stringify({ type: "snapshot", data: fullSnapshot() }));
+  snapshotTimer = setTimeout(() => {
+    snapshotTimer = undefined;
+    if (snapshotPending) {
+      snapshotPending = false;
+      broadcastSnapshotSoon();
+    }
+  }, SNAPSHOT_WINDOW_MS);
+  snapshotTimer.unref();
+}
 const routingChanged = () => { if (routingReady) broadcastSnapshotSoon(); };
 const messageDeliveries = new MessageDeliveryQueue({
   file: path.join(dataDir, "message-deliveries.json"),
@@ -344,6 +381,7 @@ const askService = new AskService({
   reservedAliases: reservedSessionAliases,
   sessionAliases: {
     ensure: (targets) => ensureThreadAliases(targets).then(({ aliases }) => aliases),
+    peek: (agentId, threadId) => threadSettings.sessionAlias(agentId, threadId),
   },
   onChanged: routingChanged,
 });
@@ -445,19 +483,105 @@ const serverInfo = {
   startedAt: Date.now(),
   dataDir,
 };
+// Git 上下文按 cwd 缓存几秒：同一项目下的几十个会话共享一次探测，
+// 快照高频构建时不会反复 fork `git`。WSL 运行时路径不属于当前进程，
+// 直接标记不可用，避免对不存在/跨系统的目录执行 git。
+//
+// Git 上下文是「上次探测结果」，同步贴到快照上；探测本身在后台跑，不阻塞
+// 快照构建。同一项目的 N 个会话共享一次探测。
+const GIT_CONTEXT_TTL_MS = 3_000;
+const gitContexts = new GitContextProbe({
+  enabled: !useWsl,
+  ttlMs: GIT_CONTEXT_TTL_MS,
+});
+// Deck 托管的 worktree 台账：只清理自己创建的目录（见 server/worktrees.ts）。
+const worktrees = new WorktreeStore(dataDir, { enabled: !useWsl });
+await worktrees.load();
+
+/** 只读 git 调用（分支列表、worktree 清单），失败原样抛出由路由归一。 */
+function runGitText(cwd: string, args: string[]): Promise<string> {
+  if (useWsl) return Promise.reject(new Error("WSL 运行时不读取本机 Git 信息"));
+  return new Promise((resolve, reject) => {
+    execFile(
+      "git",
+      args,
+      { cwd, encoding: "utf8", maxBuffer: 4 * 1024 * 1024, timeout: 4_000, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(String(stderr || stdout || error.message || "git 命令失败").trim()));
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
+}
+const gitByCwd = new Map<string, ThreadSummary["git"]>();
+const gitSeenAt = new Map<string, number>();
+let gitProbeRunning = false;
+let gitProbePending = false;
+
+function scheduleGitContext(threads: ThreadSummary[]) {
+  // 已有缓存且仍在 TTL 内的 cwd 不再触发探测；探针本身也带缓存，
+  // 这里只是避免“每个快照都排一次队”。新增 cwd 才会真正拉起 git。
+  const cwds = [...new Set(threads.map((thread) => thread.cwd).filter(Boolean))]
+    .filter((cwd) => !gitByCwd.has(cwd) || Date.now() - (gitSeenAt.get(cwd) || 0) >= GIT_CONTEXT_TTL_MS);
+  if (!cwds.length) return;
+  if (gitProbeRunning) {
+    gitProbePending = true;
+    return;
+  }
+  gitProbeRunning = true;
+  let changed = false;
+  void Promise.all(
+    cwds.map(async (cwd) => {
+      const next = await gitContexts.probe(cwd);
+      const previous = gitByCwd.get(cwd);
+      if (
+        !previous ||
+        previous.branch !== next.branch ||
+        previous.detached !== next.detached ||
+        previous.linked !== next.linked ||
+        previous.available !== next.available
+      )
+        changed = true;
+      gitByCwd.set(cwd, next);
+      gitSeenAt.set(cwd, Date.now());
+    }),
+  )
+    .catch((error) => console.error("Git 上下文探测失败:", error?.message || error))
+    .finally(() => {
+      gitProbeRunning = false;
+      if (gitProbePending) {
+        gitProbePending = false;
+        scheduleGitContext(threads);
+        return;
+      }
+      // 分支没变就不推送快照：否则每个 TTL 周期都会重绘一次列表。
+      if (changed) broadcastSnapshotSoon();
+    });
+}
+
+const decorateGit = (thread: ThreadSummary): ThreadSummary => {
+  const git = thread.cwd ? gitByCwd.get(thread.cwd) : undefined;
+  return git ? { ...thread, git } : thread;
+};
+
 const snapshotWithDeferredSettings = () => {
   const snapshot = agents.snapshot();
   const display = (thread: ThreadSummary) => {
     const agentId = thread.agentId || "codex";
-    const pending = threadSettings.deferred(agentId, thread.id);
-    const decorated = askService.decorate(pending ? { ...thread, ...threadSettings.get(agentId, thread.id), settingsDeferred: true } : thread);
+    const decorated = askService.decorate(threadSettings.withDeferredSettings(thread));
     const alias = threadSettings.sessionAlias(agentId, thread.id) ?? decorated.alias;
     return alias && alias !== decorated.alias ? { ...decorated, alias } : decorated;
   };
+  const threads = snapshot.threads.map(display);
+  const archivedThreads = snapshot.archivedThreads?.map(display);
+  scheduleGitContext([...threads, ...(archivedThreads || [])]);
   return {
     ...snapshot,
-    threads: snapshot.threads.map(display),
-    archivedThreads: snapshot.archivedThreads?.map(display),
+    threads: threads.map(decorateGit),
+    archivedThreads: archivedThreads?.map(decorateGit),
   };
 };
 const fullSnapshotRaw = () => ({
@@ -724,6 +848,13 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     reasoningEffort: z.string().max(100).optional(),
     configuration: askConfigurationSchema.optional(),
     name: z.string().max(200).optional(),
+    /** 委派到独立的 Git worktree，避免和来源会话共用同一个 checkout。 */
+    worktree: z
+      .object({
+        base: z.string().trim().max(240).optional(),
+        name: z.string().trim().max(64).optional(),
+      })
+      .optional(),
   }).parse(req.body);
   const resolution = await resolveWakeCaller(input);
   if (!resolution.ok) throw new Error(`${resolution.error}；请用 --session <agentId:threadId> 显式指定发起会话`);
@@ -753,11 +884,27 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     if (!model?.supportedReasoningEfforts?.some((effort) => effort.reasoningEffort === configuration.reasoningEffort))
       throw new Error("所选模型不支持该 effort，请在 Deck 询问面板中重新选择");
   }
-  const result = await askService.create({
-    sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
-    targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, detached: input.detached,
-    settings: { ...configuration, cwd: resolution.thread.cwd, providerId, name: input.name },
-  });
+  // 询问也可以落到独立 worktree：目标会话与来源共用 worktree 时，
+  // 两边的改动会互相覆盖。失败则回滚刚建的目录，不留下空壳。
+  const worktreeId = input.worktree ? randomBytes(6).toString("hex") : undefined;
+  const prepared = worktreeId
+    ? await worktrees.create(worktreeId, resolution.thread.cwd, input.worktree!)
+    : undefined;
+  let result: Awaited<ReturnType<typeof askService.create>>;
+  try {
+    result = await askService.create({
+      sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
+      targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, detached: input.detached,
+      settings: { ...configuration, cwd: prepared?.path || resolution.thread.cwd, providerId, name: input.name },
+    });
+  } catch (error) {
+    if (worktreeId) await worktrees.remove(worktreeId, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  if (worktreeId && result.item.targetThreadId)
+    await worktrees.rebind(worktreeId, result.item.targetThreadId).catch((error) =>
+      console.error("询问 worktree 台账绑定失败:", error),
+    );
   if (result.item.targetThreadId) {
     result.thread = await withSessionAlias(result.item.targetAgentId, result.thread);
   }
@@ -1514,14 +1661,40 @@ app.post(
           .enum(["read-only", "workspace-write", "danger-full-access"])
           .optional(),
         sessionMode: z.string().max(100).optional(),
+        /** 在 Deck 托管的独立 worktree 中创建会话；cwd 指向该目录。 */
+        worktree: z
+          .object({
+            /** 基准分支或提交；缺省用当前 HEAD。 */
+            base: z.string().trim().max(240).optional(),
+            /** worktree 目录名；缺省用会话 id。 */
+            name: z.string().trim().max(64).optional(),
+          })
+          .optional(),
       })
       .parse(req.body);
     if (id === "codex" && !input.providerId)
       throw new Error("Codex 会话必须指定供应商");
-    const thread = await withSessionAlias(id, await agents.createThread(id, input));
+    let thread: ThreadSummary;
+    if (input.worktree) {
+      // 先建 worktree 再建会话：会话创建失败时把刚建的 worktree 收掉，
+      // 成功则把台账从临时 id 改挂到真实会话 id（删除会话时据此清理）。
+      const temporaryId = randomBytes(6).toString("hex");
+      const prepared = await worktrees.create(temporaryId, input.cwd, input.worktree);
+      try {
+        thread = (await agents.createThread(id, { ...input, cwd: prepared.path })) as ThreadSummary;
+        await worktrees.rebind(temporaryId, thread.id);
+      } catch (error) {
+        await worktrees.remove(temporaryId, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    } else {
+      thread = (await agents.createThread(id, input)) as ThreadSummary;
+    }
+    thread = await withSessionAlias(id, thread);
     await projects.rememberCreate({
       agentId: id,
-      cwd: input.cwd,
+      // 记住 worktree 所在目录，下次新建时能直接选到它。
+      cwd: thread.cwd || input.cwd,
       providerId: input.providerId || `${id}-current`,
       model: input.model,
       reasoningEffort: input.reasoningEffort,
@@ -1668,7 +1841,15 @@ app.delete(
       .parse(req.body || {});
     await agents.deleteThread(id, threadId, options);
     await threadSettings.remove(id, threadId);
-    if (req.query.ack === "1") return { ok: true, agentId: id, threadId };
+    // 只清理 Deck 自己创建、且没有未提交内容的 worktree；
+    // 用户手动创建的目录和还有改动的目录一律保留。
+    let worktree: Awaited<ReturnType<typeof worktrees.remove>> | undefined;
+    try {
+      worktree = await worktrees.remove(threadId);
+    } catch (error: any) {
+      console.error("清理 worktree 失败:", error?.message || error);
+    }
+    if (req.query.ack === "1") return { ok: true, agentId: id, threadId, worktree };
     return fullSnapshot();
   }),
 );
@@ -2219,6 +2400,58 @@ app.get(
     ),
   ),
 );
+/**
+ * 新建会话时选择 Git 基准：返回仓库状态、已有分支和 worktree 选项。
+ * 只读，不创建任何东西；没有 git 时返回 repository:false。
+ */
+app.get(
+  "/api/deck/git",
+  route(async (req) => {
+    const cwd = z.string().trim().min(1).max(4_096).parse(req.query.cwd);
+    const context = await gitContexts.probe(cwd);
+    if (!context.available)
+      return { context, branches: [], worktrees: [], root: undefined };
+    const root = context.root || cwd;
+    const [branchList, current, list] = await Promise.all([
+      runGitText(root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]),
+      runGitText(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+      runGitText(root, ["worktree", "list", "--porcelain"]),
+    ]);
+    return {
+      context,
+      root,
+      branch: current.trim() || undefined,
+      branches: branchList
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right)),
+      worktrees: parseWorktreePorcelain(list)
+        .filter((entry) => entry.path)
+        .map((entry) => ({
+          path: entry.path,
+          branch: entry.branch,
+          detached: entry.detached,
+          managed: Boolean(worktrees.list().find((item) => item.path === entry.path)),
+        })),
+    };
+  }),
+);
+/**
+ * 单独移除某个会话独占的 worktree（会话仍保留时也可用）。
+ * 默认拒绝删除有未提交改动的目录，必须显式 force 才会丢弃。
+ */
+app.delete(
+  "/api/agents/:agentId/threads/:threadId/worktree",
+  route(async (req) => {
+    const threadId = param(req.params.threadId);
+    const force = z
+      .object({ force: z.boolean().optional() })
+      .parse(req.body || {}).force === true;
+    return worktrees.remove(threadId, { force });
+  }),
+);
+
 app.get(
   "/api/providers/:id/models",
   route(async (req) => manager.listModels(param(req.params.id))),
@@ -2755,35 +2988,8 @@ wss.on("connection", (ws) =>
 // 全量快照一次构建 + 序列化在 threads 上百时可达数十毫秒，而 snapshot 事件
 // 在刷新/批量操作时会连发。50ms 合并窗口内只保留最新一次，中间态直接跳过
 // （快照幂等，只关心最终态），上限 20 次/秒。
-const SNAPSHOT_WINDOW_MS = 50;
 // 慢客户端积压超过该阈值即跳过本次推送：单个手机弱网不应拖慢整机广播。
-const SLOW_CLIENT_BYTES = 1_000_000;
-let snapshotTimer: NodeJS.Timeout | undefined;
-let snapshotPending = false;
 routingReady = true;
-function broadcast(payload: string) {
-  for (const client of wss.clients) {
-    if (client.readyState !== WebSocket.OPEN) continue;
-    if (client.bufferedAmount > SLOW_CLIENT_BYTES) continue;
-    client.send(payload);
-  }
-}
-function broadcastSnapshotSoon() {
-  if (snapshotTimer) {
-    snapshotPending = true;
-    return;
-  }
-  // 落地时刻才构建：窗口内后到的变更天然包含在内，比事件携带的旧快照更新鲜。
-  broadcast(JSON.stringify({ type: "snapshot", data: fullSnapshot() }));
-  snapshotTimer = setTimeout(() => {
-    snapshotTimer = undefined;
-    if (snapshotPending) {
-      snapshotPending = false;
-      broadcastSnapshotSoon();
-    }
-  }, SNAPSHOT_WINDOW_MS);
-  snapshotTimer.unref();
-}
 agents.on("event", (event) => {
   if (event.type === "runtime.process") {
     // 关机流程中子进程退出事件不得重建已被清除的锁文件。
@@ -2835,12 +3041,13 @@ agents.on("event", (event) => {
   if (event.type === "thread.updated" && event.data?.id) {
     const agentId = event.data.agentId || "codex";
     const alias = threadSettings.sessionAlias(agentId, event.data.id);
+    // 单条 thread.updated 也要带上 git：否则前端先按无分支渲染，
+    // 等下一个快照才补出来，元信息行会跳一下。
+    const decorated = decorateGit(askService.decorate(threadSettings.withDeferredSettings(event.data)));
     broadcast(
       JSON.stringify({
         ...event,
-        data: alias && alias !== event.data.alias
-          ? { ...askService.decorate(event.data), alias }
-          : askService.decorate(event.data),
+        data: alias && alias !== decorated.alias ? { ...decorated, alias } : decorated,
       }),
     );
     return;
@@ -2887,6 +3094,14 @@ try {
 console.log(`Codex Deck: http://${formatHost(host)}:${port}`);
 // 启动先暖一轮 watcher 缓存：首个快照与首个接口调用直接命中，不用等扫描。
 void watcherCache.ready();
+// Git 分支同理：首个快照到达前先探测完，避免元信息行先渲染、再补出分支标签而闪动。
+void Promise.all(
+  [...new Set(initialThreads.map((thread) => thread.cwd).filter(Boolean))]
+    .map(async (cwd) => {
+      gitByCwd.set(cwd, await gitContexts.probe(cwd));
+      gitSeenAt.set(cwd, Date.now());
+    }),
+).catch(() => undefined);
 // 本机发现文件：deck-api 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
 try {
   mkdirSync(deckHome, { recursive: true, mode: 0o700 });

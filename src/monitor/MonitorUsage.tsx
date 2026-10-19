@@ -52,11 +52,11 @@ export function MonitorUsage({
   // 按会话排行的用量在「明细」抽屉里看，首页右栏只留总量、额度和需要处理的上下文。
   const { totals, cost, crowded } = useMemo(() => {
     const stats = buildUsageStats(threads);
-    const cost = stats.sessions.reduce(
-      (sum, row) =>
-        sum + estimateCost(row.totals, row.thread.resolvedModel || row.thread.model),
-      0,
-    );
+    const cost = stats.sessions.reduce((sum, row) => {
+      const model = row.thread.resolvedModel || row.thread.model;
+      const duplicated = estimateCost(row.duplicated, model);
+      return sum + Math.max(0, estimateCost(row.totals, model) - duplicated);
+    }, 0);
     const crowded = stats.sessions
       .map((row) => ({ thread: row.thread, percent: contextPercent(row.thread.tokenUsage) }))
       .filter((row) => row.percent != null && row.percent >= CONTEXT_ALERT)

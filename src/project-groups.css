@@ -673,3 +673,65 @@
   font-weight: var(--fw-strong);
   line-height: var(--lh-ui);
 }
+
+/* 新建会话的 Git 选项：默认收起在「当前 checkout」，勾选后才展开分支选择。 */
+.git-worktree-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+.git-worktree-field legend {
+  padding: 0 6px;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}
+.git-worktree-current {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
+.git-worktree-current svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.git-worktree-current code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.git-worktree-current em {
+  color: var(--accent);
+  font-style: normal;
+}
+.form .git-worktree-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  cursor: pointer;
+}
+.form .git-worktree-toggle input {
+  width: auto;
+  margin: 0;
+  flex: none;
+}
+.git-worktree-hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+@media (max-width: 760px) {
+  .form .git-worktree-toggle {
+    min-height: 40px;
+  }
+}

@@ -1,8 +1,9 @@
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type PointerEvent } from "react";
 import {
   ChevronDown,
   ChevronRight,
   Folder,
+  GripVertical,
   Lock,
   MoreHorizontal,
   Pin,
@@ -56,6 +57,11 @@ export function ProjectGroupView({
   onHistory,
   onSessionMenu,
   providers,
+  reorderMode,
+  onProjectDragStart,
+  onSessionDragStart,
+  registerProjectRow,
+  registerSessionRow,
 }: {
   project: ProjectGroupData;
   library: "active" | "archived";
@@ -81,6 +87,16 @@ export function ProjectGroupView({
   onHistory: (thread: ThreadSummary) => void;
   onSessionMenu: (thread: ThreadSummary) => void;
   providers: Provider[];
+  /** 拖动排序模式：显示手柄，点击手柄开始拖动。 */
+  reorderMode?: boolean;
+  onProjectDragStart?: (event: PointerEvent<HTMLElement>, key: string) => void;
+  onSessionDragStart?: (
+    event: PointerEvent<HTMLElement>,
+    projectKey: string,
+    key: string,
+  ) => void;
+  registerProjectRow?: (key: string, node: HTMLElement | null) => void;
+  registerSessionRow?: (key: string, node: HTMLElement | null) => void;
 }) {
   const [menu, setMenu] = useState(false);
   const visible = previewSessions(project.sessions, !collapsed, {
@@ -108,9 +124,23 @@ export function ProjectGroupView({
   );
   return (
     <div
-      className={`project-group ${project.pinned ? "pinned" : ""} ${visible.length > 0 ? "is-expanded" : ""}`}
+      className={`project-group ${project.pinned ? "pinned" : ""} ${visible.length > 0 ? "is-expanded" : ""} ${reorderMode ? "is-reordering" : ""}`}
     >
-      <div className="project-heading">
+      <div
+        className="project-heading"
+        ref={(node) => registerProjectRow?.(project.key, node)}
+      >
+        {reorderMode && (
+          <button
+            type="button"
+            className="sidebar-drag-handle"
+            title="拖动手柄调整项目顺序"
+            aria-label={`拖动 ${project.name} 调整顺序`}
+            onPointerDown={(event) => onProjectDragStart?.(event, project.key)}
+          >
+            <GripVertical aria-hidden="true" />
+          </button>
+        )}
         <button
           className="project-toggle"
           aria-expanded={!collapsed}
@@ -203,6 +233,8 @@ export function ProjectGroupView({
             return (
               <div
                 key={key}
+                ref={(node) => registerSessionRow?.(key, node)}
+                data-project-key={project.key}
                 role="button"
                 tabIndex={0}
                 className={[
@@ -234,6 +266,21 @@ export function ProjectGroupView({
                 }}
               >
                 <div className="session-row-top">
+                  {reorderMode && (
+                    <button
+                      type="button"
+                      className="sidebar-drag-handle session-drag-handle"
+                      title="拖动手柄调整会话顺序"
+                      aria-label={`拖动 ${thread.name} 调整顺序`}
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        onSessionDragStart?.(event, project.key, key);
+                      }}
+                    >
+                      <GripVertical aria-hidden="true" />
+                    </button>
+                  )}
                   <strong title={thread.name}>{thread.name}</strong>
                   <button
                     type="button"

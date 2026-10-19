@@ -200,11 +200,32 @@ export interface AskSession {
   id: string;
   /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
   alias?: string;
+  /**
+   * 目标会话自己的稳定短别名（`s-…`）。与会话摘要上的 `thread.alias`
+   * 取同一份台账，询问卡片用它显示「会话别名」，避免两条通道显示不一致。
+   */
+  targetAlias?: string;
   sourceAgentId: AgentId;
   sourceThreadId: string;
   sourceProviderId?: string;
   returnMode: DeckDeliveryMode;
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  error?: string;
+}
+
+/**
+ * 会话所在工作区的 Git 状态（只读）。Deck 不管理分支，只把「当前在哪条
+ * 分支 / 是不是独立 worktree」暴露出来，避免多个会话在同一 checkout 上
+ * 互不知情地互相踩。
+ */
+export interface GitContext {
+  available: boolean;
+  branch?: string;
+  detached?: boolean;
+  root?: string;
+  worktree?: string;
+  linked?: boolean;
+  reason?: "not-repository" | "no-cwd" | "error" | "disabled";
   error?: string;
 }
 
@@ -242,6 +263,10 @@ export interface ThreadSummary {
   permissionMode?: ClaudePermissionMode;
   serviceTier?: string;
   forkedFromId?: string;
+  /** 分支创建时刻的累计用量基线；统计时从分支累计值中扣除。 */
+  forkUsageBaseline?: TokenUsage;
+  /** 会话所在工作区的 Git 状态；旧服务端没有该字段。 */
+  git?: GitContext;
   sessionId?: string;
   sessionMode?: string;
   sessionModes?: { id: string; name?: string; description?: string }[];

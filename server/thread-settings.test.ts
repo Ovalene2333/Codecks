@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -341,4 +341,25 @@ test("turn stats persist, dedupe by turn id, and drop with the thread", async ()
 
   await restored.remove("codex", "t-1");
   assert.equal(restored.turnStats("codex", "t-1", "turn-1"), undefined);
+});
+
+
+test("streaming thread updates retain deferred effort including explicit default", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-deferred-display-"));
+  try {
+    const store = new ThreadSettingsStore(dir);
+    const thread = { agentId: "codex", id: "demo", reasoningEffort: "medium", status: "running" } as Parameters<ThreadSettingsStore["withDeferredSettings"]>[0];
+    assert.equal(store.withDeferredSettings(thread), thread);
+    await store.defer("codex", "demo", { reasoningEffort: "high" });
+    for (const reasoningEffort of [undefined, "medium", "high"]) {
+      const display = store.withDeferredSettings({ ...thread, reasoningEffort });
+      assert.equal(display.reasoningEffort, "high");
+      assert.equal(display.settingsDeferred, true);
+      assert.equal(display.status, "running");
+    }
+    await store.defer("codex", "demo", { reasoningEffort: "" });
+    assert.equal(store.withDeferredSettings(thread).reasoningEffort, "");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
