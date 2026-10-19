@@ -107,8 +107,36 @@ type OpenCodeSession = {
    * Deck threads instead of being hidden as subagent activity.
    */
   fork?: { sessionID?: string; boundary?: unknown } | unknown;
+  /**
+   * Cumulative usage for the whole session (newer OpenCode releases). Message
+   * level tokens only describe the newest step, so they cannot be used as a
+   * session total for the usage statistics.
+   */
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cache?: { read?: number; write?: number };
+  };
   time?: { created?: number; updated?: number };
 };
+
+/**
+ * Session-level cumulative usage. Older OpenCode releases do not expose it on
+ * the session payload; returning undefined keeps callers on the message-level
+ * (single reply) fallback instead of inventing numbers.
+ */
+function sessionTotalUsage(session?: OpenCodeSession): TokenUsage | undefined {
+  const tokens = session?.tokens;
+  if (!tokens || typeof tokens !== "object") return undefined;
+  const input = tokenNumber(tokens.input);
+  const output = tokenNumber(tokens.output);
+  const reasoning = tokenNumber(tokens.reasoning);
+  const cachedInput = tokenNumber(tokens.cache?.read) + tokenNumber(tokens.cache?.write);
+  const used = input + output + reasoning + cachedInput;
+  if (used <= 0) return undefined;
+  return { input, cachedInput, output, reasoningOutput: reasoning, used };
+}
 
 type OpenCodeProfile = {
   id: string;
@@ -1700,6 +1728,13 @@ export class OpenCodeAdapter extends EventEmitter {
     // 旧版本会把“仅有上下文上限、没有 token 记录”的用量也存进缓存，
     // 刷新时清掉这种 used=0 残留，避免侧栏一直显示 0/xxx。
     if (!merged.tokenUsage?.used) delete merged.tokenUsage;
+    // 会话级累计用量优先于按最新回复估的上下文档位：后者只是单步 tokens，
+    // 当累计值时不成立（侧栏/用量统计会显示成几百）。
+    const totalUsage = sessionTotalUsage(session);
+    if (totalUsage) {
+      const limit = merged.tokenUsage?.limit;
+      merged.tokenUsage = limit ? { ...totalUsage, limit } : totalUsage;
+    }
     return merged;
   }
 
@@ -2127,8 +2162,14 @@ export class OpenCodeAdapter extends EventEmitter {
         : undefined;
     // 只有拿到真实 token 记录才生成用量；仅有上限没有用量时会显示成
     // 误导性的 “0/xxx”，不如不显示。
-    const tokenUsage: TokenUsage | undefined =
-      used > 0 ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit } : undefined;
+    // 会话级累计用量（老版本没有该字段）优先：消息级 tokens 只是最新一步，
+    // 当会话总量会显示成几百。
+    const sessionUpload = thread.tokenUsageTotal;
+    const tokenUsage: TokenUsage | undefined = sessionUpload
+      ? { ...sessionUpload, ...(limit || sessionUpload.limit ? { limit: limit ?? sessionUpload.limit } : {}) }
+      : used > 0
+        ? { input, cachedInput, output, reasoningOutput: reasoning, used, limit }
+        : undefined;
     const sameUsage =
       thread.tokenUsage?.used === tokenUsage?.used &&
       thread.tokenUsage?.limit === tokenUsage?.limit;
@@ -2326,6 +2367,9 @@ export class OpenCodeAdapter extends EventEmitter {
       sessionRead,
     ]);
     if (!this.threads.has(threadId)) throw new Error("OpenCode 会话已删除");
+    // 会话级累计 tokens 跟着 session 读回来；它不受分页影响，必须覆盖
+    // 基于局部 records 估出的单轮用量。
+    const sessionUsage = sessionTotalUsage(session as OpenCodeSession);
     const allRecords = page.records;
     const updated = Number(session?.time?.updated);
     const liveStatus = this.threads.get(threadId)?.status;
@@ -2355,6 +2399,9 @@ export class OpenCodeAdapter extends EventEmitter {
     // 命名/用量必须基于现行对象合并，否则会把新字段顶回旧值。
     const base = this.threads.get(threadId) || thread;
     const renamed = page.partial ? base : this.applyFirstMessageNaming(base, records);
+    // 会话级累计用量必须是 applyThreadUsage 的输入，否则它会用最新一步的
+    // 消息级 tokens 把累计值覆盖掉。
+    if (sessionUsage) renamed.tokenUsageTotal = sessionUsage;
     const current = this.applyThreadUsage(renamed, records);
     const usageAt = current.updatedAt;
     const usageTurn = current.activeTurnId;
@@ -2963,7 +3010,9 @@ export class OpenCodeAdapter extends EventEmitter {
       const current = this.threads.get(thread.id) || thread;
       // The summary request reports its old input context. A new ordinary
       // reply is needed before there is a trustworthy post-compaction value.
+      // 累计总量是独立字段（压缩不改变历史累计），压缩后仍保留。
       delete current.tokenUsage;
+      delete current.tokenUsageTotal;
     } finally {
       const current = this.threads.get(thread.id);
       if (current) {

@@ -36,7 +36,23 @@ export function usageTotal(usage?: TokenUsage) {
   if (!usage) return 0;
   if (usage.total != null) return Math.max(0, usage.total);
   if (usage.used != null) return Math.max(0, usage.used);
-  return Math.max(0, usage.input || 0) + Math.max(0, usage.output || 0);
+  // 缓存输入同样是真实消耗的 token：只加 input+output 时，OpenCode 这类
+  // 会话会把 39 万缓存输入漏掉，只剩几百。
+  return (
+    Math.max(0, usage.input || 0) +
+    Math.max(0, usage.cachedInput || 0) +
+    Math.max(0, usage.output || 0) +
+    Math.max(0, usage.reasoningOutput || 0)
+  );
+}
+
+/**
+ * 统计口径：优先用供应商原生会话累计值（tokenUsageTotal），否则退回
+ * thread.tokenUsage（最新一步/上下文档位）。只把后者当累计值会导致
+ * OpenCode 会话显示成几百 token。
+ */
+export function threadUsage(thread: ThreadSummary): TokenUsage | undefined {
+  return thread.tokenUsageTotal || thread.tokenUsage;
 }
 
 export function usageTotals(usage?: TokenUsage): UsageTotals {
@@ -75,11 +91,11 @@ export function buildUsageStats(
 ) {
   const uniqueThreads = dedupeThreads(threads);
   const sessions = uniqueThreads
-    .filter((thread) => usageTotal(thread.tokenUsage) > 0)
+    .filter((thread) => usageTotal(threadUsage(thread)) > 0)
     .map((thread) => ({
       key: sessionKey(thread),
       thread,
-      totals: usageTotals(thread.tokenUsage),
+      totals: usageTotals(threadUsage(thread)),
     }))
     .sort(
       (left, right) =>

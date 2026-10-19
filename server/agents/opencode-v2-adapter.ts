@@ -341,17 +341,21 @@ function v2SessionSummary(
       ? `${session.model.providerID}/${session.model.id}`
       : undefined;
   const tokens = session.tokens;
-  const usage =
-    tokens &&
-    (Number(tokens.input) > 0 ||
-      Number(tokens.output) > 0 ||
-      Number(tokens.reasoning) > 0)
-      ? {
-          input: Number(tokens.input) || 0,
-          output: Number(tokens.output) || 0,
-          reasoningOutput: Number(tokens.reasoning) || 0,
-        }
-      : undefined;
+  // 会话级累计 tokens：用量统计与侧栏都按这个算，不能只看 output，
+  // 否则只有输入/缓存的会话会被当成“没有用量”。
+  const usage = tokens
+    ? (() => {
+        const input = Number(tokens.input) || 0;
+        const output = Number(tokens.output) || 0;
+        const reasoning = Number(tokens.reasoning) || 0;
+        const cachedInput =
+          (Number(tokens.cache?.read) || 0) + (Number(tokens.cache?.write) || 0);
+        const used = input + output + reasoning + cachedInput;
+        return used > 0
+          ? { input, cachedInput, output, reasoningOutput: reasoning, used }
+          : undefined;
+      })()
+    : undefined;
   return {
     agentId: OPENCODE_V2_AGENT_ID,
     id: session.id,
@@ -937,8 +941,18 @@ export class OpenCodeV2Adapter extends EventEmitter implements AgentAdapter {
         const input = Number(usage?.input ?? usage?.inputTokens ?? 0);
         const output = Number(usage?.output ?? usage?.outputTokens ?? 0);
         const reasoning = Number(usage?.reasoning ?? 0);
-        if (input > 0 || output > 0 || reasoning > 0) {
-          thread.tokenUsage = { input, output, reasoningOutput: reasoning };
+        const cachedInput =
+          Number(usage?.cache?.read ?? 0) + Number(usage?.cache?.write ?? 0);
+        const used = input + output + reasoning + cachedInput;
+        if (used > 0) {
+          thread.tokenUsage = {
+            ...(thread.tokenUsage?.limit ? { limit: thread.tokenUsage.limit } : {}),
+            input,
+            cachedInput,
+            output,
+            reasoningOutput: reasoning,
+            used,
+          };
           thread.updatedAt = Date.now();
           this.broadcast("thread.updated", thread);
         }

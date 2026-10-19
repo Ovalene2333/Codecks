@@ -966,6 +966,73 @@ test("OpenCode sessions without any token records show no context usage", async 
   assert.equal(loaded.tokenUsage, undefined);
 });
 
+test("OpenCode prefers session-level cumulative tokens over the latest reply", async () => {
+  const adapter = new OpenCodeAdapter({
+    fetcher: (async (url, init) => {
+      const value = String(url);
+      if (value.includes("/config")) return Response.json({});
+      if (value.includes("/provider")) return Response.json({ all: {} });
+      if (value.includes("/message"))
+        return Response.json([
+          {
+            info: { id: "m1", role: "user", time: { created: 1 } },
+            parts: [{ id: "p1", type: "text", text: "继续" }],
+          },
+          {
+            info: {
+              id: "m2",
+              role: "assistant",
+              providerID: "acme",
+              modelID: "opus",
+              tokens: { input: 623, output: 340, cache: { read: 393_200 } },
+            },
+            parts: [{ id: "p2", type: "text", text: "好" }],
+          },
+        ]);
+      if (value.includes("/session/s1")) {
+        return Response.json({
+          id: "s1",
+          directory: "/work",
+          tokens: {
+            input: 921_385,
+            output: 58_280,
+            reasoning: 0,
+            cache: { read: 12_462_431, write: 0 },
+          },
+          time: { updated: 5 },
+        });
+      }
+      void init;
+      return Response.json([
+        {
+          id: "s1",
+          directory: "/work",
+          // 原生会话级累计值比最新一条回复大，refreshAll 必须用它。
+          tokens: {
+            input: 921_385,
+            output: 58_280,
+            reasoning: 0,
+            cache: { read: 12_462_431, write: 0 },
+          },
+          time: { updated: 5 },
+        },
+      ]);
+    }) as typeof fetch,
+  });
+  (adapter as any).baseUrl = "http://127.0.0.1:4096";
+  await adapter.refreshAll();
+  const listed: any = adapter.listThreads().find((item) => item.id === "s1");
+  assert.equal(listed.tokenUsage.output, 58_280);
+  assert.equal(listed.tokenUsage.cachedInput, 12_462_431);
+  const loaded: any = await adapter.readThread("p", "s1");
+  assert.equal(loaded.tokenUsage.output, 58_280);
+  assert.equal(loaded.tokenUsage.input, 921_385);
+  assert.equal(
+    loaded.tokenUsage.used,
+    921_385 + 58_280 + 12_462_431,
+  );
+});
+
 test("OpenCode compaction renders one marker and waits for a new reply before reporting context", async () => {
   const records: any[] = [
     {

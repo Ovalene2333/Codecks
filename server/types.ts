@@ -215,6 +215,8 @@ export interface AskSession {
 
 export interface ThreadSummary {
   ask?: AskSession;
+  /** 每个可见会话自动分配的稳定短别名，例如 `@s-3f9kq2pz`。 */
+  alias?: string;
   agentId?: AgentId;
   id: string;
   providerId: string;
@@ -239,6 +241,11 @@ export interface ThreadSummary {
   forkedFromId?: string;
   sessionId?: string;
   tokenUsage?: TokenUsage;
+  /**
+   * 供应商原生上报的会话累计用量（例如 OpenCode session.tokens）。存在时
+   * 覆盖 tokenUsage 的“最新一步”口径，供用量统计与费用估算使用。
+   */
+  tokenUsageTotal?: TokenUsage;
   /**
    * Concrete model the agent actually ran with, resolved from its own history
    * when `model` is a placeholder such as OpenCode's `default`.
