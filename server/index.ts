@@ -339,6 +339,14 @@ const wakeOutbox = new WakeOutbox({
   file: path.join(dataDir, "wake-outbox.json"),
   resolve: (code) => threadSettings.findByWakeCode(code),
   send: async (agentId, threadId, prompt, delivery) => {
+    // 主从结构后门封堵：wake 同样不得向主会话注入回合，只入缓冲等自取；
+    // 落盘即视为已受理，outbox 不再重试。
+    if (askService.isMaster(agentId, threadId)) {
+      const buffered = await messageDeliveries.enqueue(agentId, threadId, "queue", { text: prompt },
+        { id: `wake:${delivery.id}`, buffered: true });
+      if (buffered.status === "failed") throw new Error(buffered.error || "唤醒消息投递失败");
+      return buffered;
+    }
     if (!delivery.mode) return agents.sendTurn(agentId, threadId, prompt);
     // steer 走 feedback 但不强制打断：对方运行时转向追加（codex turn/steer），
     // 空闲时直接发送；interrupt 才强制打断当前回合。
@@ -969,9 +977,12 @@ app.post("/api/deck/send", route(async (req, res) => {
   const target = recipient.target;
   const alias = recipient.alias;
   const kind = recipient.kind;
-  const mode = input.mode || "queue";
-  if (mode === "steer") assertSteerTarget(target.agentId, target.threadId);
-  if (mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);
+  // 主从结构：主会话永不接受注入。steer/interrupt 对主节点降级为缓冲，
+  // 202 受理并注明，不报错，避免调用方误判失败而升级重试。
+  const master = askService.isMaster(target.agentId, target.threadId);
+  const mode = master ? "queue" : input.mode || "queue";
+  if (!master && mode === "steer") assertSteerTarget(target.agentId, target.threadId);
+  if (!master && mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);
   // send 与 wake 隔离：目标已确定，直接进入会话消息队列，不解析/创建唤醒代号。
   const id = randomBytes(8).toString("hex");
   const prompt = kind === "ask" && alias
@@ -979,13 +990,18 @@ app.post("/api/deck/send", route(async (req, res) => {
     : kind === "session" && alias
       ? `[send:${alias}] ${input.text}`
       : `[send:${id.slice(0, 8)}] ${input.text}`;
-  const delivery = await messageDeliveries.enqueue(
-    target.agentId, target.threadId,
-    mode === "queue" ? "queue" : "feedback",
-    { text: prompt },
-    { id: `send:${id}`, forceInterrupt: mode === "interrupt" },
-  );
-  res.status(202).json({ target, alias, kind, mode, delivery });
+  const delivery = master
+    ? await messageDeliveries.enqueue(target.agentId, target.threadId, "queue",
+      { text: prompt }, { id: `send:${id}`, buffered: true })
+    : await messageDeliveries.enqueue(
+      target.agentId, target.threadId,
+      mode === "queue" ? "queue" : "feedback",
+      { text: prompt },
+      { id: `send:${id}`, forceInterrupt: mode === "interrupt" },
+    );
+  res.status(202).json(master
+    ? { target, alias, kind, mode, buffered: true, note: "目标为主会话，消息已入缓冲等待自取，未注入回合", delivery }
+    : { target, alias, kind, mode, delivery });
 }));
 /**
  * deck-api wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
@@ -1874,12 +1890,20 @@ app.post(
           .optional(),
       })
       .parse(req.body || {});
-    return agents.sendTurn(
-      agentId(req.params.agentId),
-      param(req.params.threadId),
-      input.text,
-      input.images,
-    );
+    const id = agentId(req.params.agentId);
+    const threadId = param(req.params.threadId);
+    // 主从搭车：主会话缓冲区的 agent 消息不抢占回合，只在用户下一次输入时
+    // 把摘要拼进本轮上下文并原子领取；发送失败则缓冲原样保留，下次再搭车。
+    const buffered = askService.isMaster(id, threadId) ? messageDeliveries.inbox(id, threadId) : [];
+    if (buffered.length && (input.text.trim() || input.images?.length)) {
+      const digest = buffered.slice(0, 5).map((item, index) =>
+        `${index + 1}. ${(item.text || item.preview || "").trim().slice(0, 200)}`).join("\n");
+      const text = `【deck-api 缓冲 ${buffered.length} 条，未注入回合，已随本轮输入搭车，请一并处理】\n${digest}\n---\n${input.text}`;
+      const receipt = await agents.sendTurn(id, threadId, text, input.images);
+      await messageDeliveries.claim(id, threadId);
+      return receipt;
+    }
+    return agents.sendTurn(id, threadId, input.text, input.images);
   }),
 );
 registerMessageRoutes(app, agents, messageDeliveries);

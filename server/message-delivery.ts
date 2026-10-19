@@ -84,7 +84,7 @@ export class MessageDeliveryQueue {
   }
 
   async enqueue(agentId: string, threadId: string, mode: MessageDeliveryMode, input: AgentMessageInput,
-    options?: { id: string; forceInterrupt?: boolean }) {
+    options?: { id: string; forceInterrupt?: boolean; buffered?: boolean }) {
     const existing = options && this.items.find((item) => item.id === options.id);
     if (existing) {
       await this.writes;
@@ -105,6 +105,8 @@ export class MessageDeliveryQueue {
     const item: StoredMessage = {
       id: options?.id ?? randomUUID(), agentId, threadId, mode, status: "queued",
       external: Boolean(options), forceInterrupt: options?.forceInterrupt,
+      // 主会话缓冲：落盘即受理，tick 永远跳过，只等自取（inbox/claim）。
+      buffered: options?.buffered === true ? true : undefined,
       preview: input.text.trim().slice(0, 300) || `[${input.images?.length ?? 0} 张图片]`,
       input: { text: input.text, images: input.images },
       originTurnId: mode === "feedback" ? state.thread.activeTurnId : undefined,
@@ -176,18 +178,46 @@ export class MessageDeliveryQueue {
     return this.list().find((entry) => entry.id === id)!;
   }
 
-  /** 每个会话一次只处理一条；即时反馈优先，普通追加保持 FIFO。 */
+  /** 每个会话一次只处理一条；即时反馈优先，普通追加保持 FIFO；缓冲只等自取。 */
   async tick() {
     if (this.closed) return;
     const targets = new Map<string, StoredMessage>();
     for (const item of this.items) {
-      if (item.status !== "queued" || !this.persisted.has(item.id)) continue;
+      if (item.status !== "queued" || !this.persisted.has(item.id) || item.buffered) continue;
       const key = JSON.stringify([item.agentId, item.threadId]);
       if (this.activeTargets.has(key)) continue;
       const previous = targets.get(key);
       if (!previous || (item.mode === "feedback" && previous.mode === "queue")) targets.set(key, item);
     }
     await Promise.all([...targets.values()].map((item) => this.deliver(item)));
+  }
+
+  /** 主会话缓冲区的只读视图：UI 徽标与搭车摘要的数据来源，不消耗缓冲。 */
+  inbox(agentId: string, threadId: string): MessageDelivery[] {
+    return this.list().filter((item) =>
+      item.agentId === agentId && item.threadId === threadId &&
+      item.buffered === true && item.status === "queued");
+  }
+
+  bufferedCount(agentId: string, threadId: string): number {
+    return this.inbox(agentId, threadId).length;
+  }
+
+  /**
+   * 原子领取：把目标会话缓冲区的消息取走并从队列移除，落盘后返回。
+   * 搭车进用户输入成功后调用；失败则缓冲原样保留，下次再领。
+   */
+  async claim(agentId: string, threadId: string, limit = 20): Promise<MessageDelivery[]> {
+    const claimed = this.inbox(agentId, threadId).slice(0, Math.max(1, limit));
+    if (!claimed.length) return [];
+    const ids = new Set(claimed.map((item) => item.id));
+    for (const item of this.items.filter((entry) => ids.has(entry.id))) {
+      this.inflight.get(item.id)?.abort();
+      this.items.splice(this.items.indexOf(item), 1);
+      this.persisted.delete(item.id);
+    }
+    await this.changed();
+    return claimed;
   }
 
   close() {

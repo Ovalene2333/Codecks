@@ -38,6 +38,8 @@ export interface AskRecord extends AskSession {
   lastReadTurnId?: string;
   /** detached 完成/失败通知的投递记录 ID；幂等 id 派生自 turnId，新回合重新通知。 */
   doneDeliveryId?: string;
+  /** done 通知已覆盖的 turnId；跟随新回合推进，避免同回合重复打扰、跨回合漏通知。 */
+  doneTurnId?: string;
 }
 
 interface SessionAliasProvision {
@@ -63,10 +65,11 @@ interface Options {
  */
 export function sanitizeInline(text: string | undefined, limit = 160) {
   const single = String(text || "").replace(/\s+/g, " ").trim()
+    // 先处理 URL 查询串（精确到参数边界），再处理裸 key=value（贪婪到空白）。
+    .replace(/([?&])(key|token|api[_-]?key|access[_-]?token|sig|signature)=([^&\s]*)/gi, "$1$2=[已脱敏]")
     .replace(/\b(?:Bearer|bearer)\s+\S+/g, "Bearer [已脱敏]")
-    .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]{8,}/g, "[已脱敏]")
-    .replace(/\b(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, "$1=[已脱敏]")
-    .replace(/([?&])(?:key|token|api[_-]?key|access[_-]?token|sig|signature)=([^&\s]*)/gi, "$1$2=[已脱敏]");
+    .replace(/\b(sk|rk)-[A-Za-z0-9_-]{8,}/g, "[已脱敏]")
+    .replace(/\b(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, "$1=[已脱敏]");
   return single.slice(0, limit);
 }
 
@@ -99,6 +102,7 @@ export class AskService {  private items: AskRecord[] = [];
       delete item.result;
       delete item.lastCaptureError;
       delete item.doneDeliveryId;
+      delete item.doneTurnId;
       item.captureAttempts = 0;
       void this.save().catch((error) => console.error("会话回合状态保存失败:", error.message));
       return;
@@ -156,6 +160,7 @@ export class AskService {  private items: AskRecord[] = [];
           ["lastCaptureError", (value: any) => typeof value === "string"],
           ["lastReadTurnId", (value: any) => typeof value === "string"],
           ["doneDeliveryId", (value: any) => typeof value === "string"],
+          ["doneTurnId", (value: any) => typeof value === "string"],
           ["captureAttempts", (value: any) => Number.isInteger(value) && value >= 0],
         ] as const) {
           if (item[field] !== undefined && !valid(item[field])) throw new Error(`询问台账 ${field} 字段无效`);
@@ -283,13 +288,24 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   decorate(thread: ThreadSummary): ThreadSummary {
+    const count = this.options.messages.bufferedCount?.(thread.agentId || "codex", thread.id) ?? 0;
+    const base = count > 0 ? { ...thread, bufferedCount: count } : thread;
     const item = this.items.find((item) => item.targetAgentId === (thread.agentId || "codex") && item.targetThreadId === thread.id);
-    if (!item) return thread;
-    return { ...thread, ask: {
+    if (!item) return base;
+    return { ...base, ask: {
       id: item.id, alias: item.alias, targetAlias: item.targetAlias, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
       returnMode: item.returnMode, status: item.status, error: item.error, sentCount: item.sentMessages?.length || 0,
       detached: item.detached === true, resultAvailable: !!item.result && item.result.turnId === item.turnId,
     } };
+  }
+
+  /**
+   * 主节点判定：人创建的会话（不是任何询问的目标）即主节点，主节点永不
+   * 接受 agent 消息注入。fork/retry 产生的新 id 没有询问标记，自然视为主节点。
+   */
+  isMaster(agentId: AgentId, threadId: string): boolean {
+    return !this.items.some((entry) =>
+      entry.targetAgentId === agentId && entry.targetThreadId === threadId);
   }
 
   async create(input: {
@@ -492,12 +508,14 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async deliverMessage(item: AskRecord, message: NonNullable<AskRecord["sentMessages"]>[number]) {
+    // 发往主会话：永不注入回合，只入缓冲等自取；落盘即视为已受理。
+    const buffered = this.isMaster(item.sourceAgentId, item.sourceThreadId);
     const delivery = await this.options.messages.enqueue(
       item.sourceAgentId, item.sourceThreadId,
       message.mode === "queue" ? "queue" : "feedback",
       { text: `[ask:${item.alias}] ${this.reference(item)}\n\n${message.text}` },
       // 以消息 id 幂等：同一条消息的重复投递（重启恢复、重试）只入队一次。
-      { id: `ask:${item.id}:${message.id}`, forceInterrupt: message.mode === "interrupt" },
+      { id: `ask:${item.id}:${message.id}`, forceInterrupt: buffered ? false : message.mode === "interrupt", buffered },
     );
     message.deliveryId = delivery.id;
     item.updatedAt = Date.now();
@@ -565,7 +583,9 @@ export class AskService {  private items: AskRecord[] = [];
    * 正文留在 result/inspect 快照里；通知只带指针，丢失走会话待发送列表兜底。
    */
   private async notifyDone(item: AskRecord) {
-    if (!item.detached || !item.targetThreadId || item.doneDeliveryId) return;
+    if (!item.detached || !item.targetThreadId) return;
+    // 同一回合只通知一次；新回合推进时重新通知。
+    if (item.doneTurnId === item.turnId) return;
     // 来源已领取本回合交付时不再打扰；领取早于完成事件时通知直接省略。
     if (item.status !== "failed" && item.lastReadTurnId && item.lastReadTurnId === item.turnId) return;
     const headline = item.status === "failed"
@@ -575,9 +595,10 @@ export class AskService {  private items: AskRecord[] = [];
       item.sourceAgentId, item.sourceThreadId, "queue",
       { text: headline },
       // 幂等 id 含 turnId：同回合重复投递（重启恢复）只入队一次，新回合重新通知。
-      { id: `ask:${item.id}:done:${item.turnId || "creating"}` },
+      { id: `ask:${item.id}:done:${item.turnId || "creating"}`, buffered: this.isMaster(item.sourceAgentId, item.sourceThreadId) },
     );
     item.doneDeliveryId = delivery.id;
+    item.doneTurnId = item.turnId;
     item.updatedAt = Date.now();
     await this.save();
   }
@@ -590,7 +611,7 @@ export class AskService {  private items: AskRecord[] = [];
       item.sourceAgentId, item.sourceThreadId,
       item.returnMode === "queue" ? "queue" : "feedback",
       { text: prompt },
-      { id: `ask:${item.id}:reply:${item.turnId || "creating"}`, forceInterrupt: item.returnMode === "interrupt" },
+      { id: `ask:${item.id}:reply:${item.turnId || "creating"}`, forceInterrupt: item.returnMode === "interrupt", buffered: this.isMaster(item.sourceAgentId, item.sourceThreadId) },
     );
     item.replyDeliveryId = delivery.id;
     item.updatedAt = Date.now();

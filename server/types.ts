@@ -244,6 +244,11 @@ export interface ThreadSummary {
   ask?: AskSession;
   /** 每个可见会话自动分配的稳定短别名，例如 `@s-3f9kq2pz`。 */
   alias?: string;
+  /**
+   * 主从缓冲区的未读计数：发往主会话且尚未自取的 agent 消息条数。
+   * 由服务端快照下发，供 UI 徽标与搭车摘要使用；普通会话恒为 0。
+   */
+  bufferedCount?: number;
   agentId?: AgentId;
   id: string;
   providerId: string;

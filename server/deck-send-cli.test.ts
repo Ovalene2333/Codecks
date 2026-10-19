@@ -105,7 +105,7 @@ test("deck-api detached creation and read-only result/inspect commands preserve 
   assert.equal(requests[0].body.detached, true);
   assert.equal(requests[0].body.sessionExplicit, true);
   assert.equal(requests[0].body.returnMode, "queue");
-  assert.match(stdout, /完成\/失败\/中断都不自动通知/);
+  assert.match(stdout, /完成\/失败\/中断只发一行 \[done:\] 指针通知/);
   assert.doesNotMatch(stdout, /本回合到此结束/);
   await run("bash", [script, "result", "@abcd1234"], { env });
   await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });
@@ -151,4 +151,104 @@ test("deck-api wake watch and poll spawn discovered workers and notify with the 
     assert.equal(events.at(-1).mode, "interrupt");
     assert.match(events.at(-1).text, mode === "watch" ? /demo-done/ : /DONE/);
   }
+});
+
+test("deck-api send preserves nasty characters identically via args and --file", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-nasty-"));
+  const bodies: string[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks).toString() || "{}").text);
+    res.writeHead(202, { "Content-Type": "application/json" }); res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  const text = '引号"反斜杠\\换行\n回车\r制表\t美元$反引`感叹!单引\'星*问?中括号[x]';
+  const file = path.join(dir, "nasty.txt"); await writeFile(file, text);
+  await run("bash", [script, "send", "--to", "demo:other", "--", text], { env });
+  await run("bash", [script, "send", "--to", "demo:other", "--file", file], { env });
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0], text);
+  assert.equal(bodies[1], text, "--file 与直接参数必须逐字节一致");
+});
+
+test("deck-api enforces the 80k contract and rejects empty input on both ends", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-limits-"));
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    // 模拟服务端 zod 上限：超限/空消息 400，脚本必须原样透出失败，绝不静默截断。
+    const text = body.text ?? body.question ?? "";
+    if (!String(text).trim() || String(text).length > 80_000) {
+      res.writeHead(400, { "Content-Type": "application/json" }); res.end('{"error":"消息须为 1 至 80000 字符"}');
+      return;
+    }
+    requests.push(req.url!);
+    res.writeHead(202, { "Content-Type": "application/json" }); res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  await run("bash", [script, "send", "--to", "demo:other", "--", "x".repeat(80_000)], { env });
+  await assert.rejects(run("bash", [script, "send", "--to", "demo:other", "--", "x".repeat(80_001)], { env }));
+  await assert.rejects(run("bash", [script, "send", "--to", "demo:other", "--", "   "], { env }));
+  await assert.rejects(run("bash", [script, "send", "--to", "demo:other", "--", ""], { env }), /缺少消息内容/);
+  await assert.rejects(run("bash", [script, "create", "demo-review", "--", "y".repeat(80_001)], { env }));
+  assert.equal(requests.length, 1, "只有恰好 80000 字符的那条到达服务端");
+});
+
+test("deck-api result resolves @s- aliases and refuses sessions without asks", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-alias-"));
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push(`${req.method} ${req.url}`);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(req.url === "/api/deck/sessions"
+      ? '{"items":[{"id":"q1abcdef-1234-5678-90ab-cdef12345678","alias":"q1abcdef","targetAlias":"s-abc1234"}]}'
+      : '{"item":{"alias":"q1abcdef"},"result":null,"pending":false}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  await run("bash", [script, "result", "@s-abc1234"], { env });
+  assert.deepEqual(requests, ["GET /api/deck/sessions", "GET /api/deck/sessions/q1abcdef-1234-5678-90ab-cdef12345678/result"]);
+  // execFile 的 rejection 不带文本：改从 stderr 断言。
+  const err = await run("bash", [script, "result", "@s-zzz9999"], { env }).then(
+    () => { throw new Error("should have failed"); }, (error: any) => error);
+  assert.match(String(err.stderr || ""), /没有关联的询问记录/);
+  assert.deepEqual(requests, ["GET /api/deck/sessions", "GET /api/deck/sessions/q1abcdef-1234-5678-90ab-cdef12345678/result", "GET /api/deck/sessions"],
+    "无关联询问时只查列表，不再取 result");
+});
+
+test("deck-api validates wake/send/create arguments client-side without requests", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-argv-"));
+  let count = 0;
+  const server = createServer(async (_req, res) => {
+    count++;
+    res.writeHead(202, { "Content-Type": "application/json" }); res.end('{"ok":true}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  for (const args of [
+    ["wake", "-i", "4", "--", "true"],
+    ["wake", "badcode!", "--", "true"],
+    ["wake", "--mode", "bogus", "--", "true"],
+    ["create", "demo-review", "--mode", "bogus", "--", "q"],
+    ["create", "demo-review", "--"],
+    ["create", "demo-review", "--file", path.join(dir, "missing.txt"), "--", "q"],
+    ["send", "--mode", "bogus", "--to", "demo:x", "--", "q"],
+    ["send", "--to", "demo:x", "--code", "wake1", "--", "q"],
+    ["send", "--to", "@s-bad", "--", "q"],
+    ["inspect", "@abcd1234", "--tail", "abc"],
+  ])
+    await assert.rejects(run("bash", [script, ...args], { env }), undefined, args.join(" "));
+  assert.equal(count, 0, "参数校验失败时一次请求都不该发");
 });

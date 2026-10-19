@@ -299,3 +299,38 @@ test("offline backends preserve the queue until they are online", async (t) => {
   await deliveries.tick();
   assert.equal(transport.sent.length, 1);
 });
+
+test("buffered messages wait for claim and never auto-deliver", async (t) => {
+  const { transport, deliveries, file } = await fixture(t, "reject");
+  await deliveries.enqueue("agent", "t", "queue", { text: "Buffered one" }, { id: "b1", buffered: true });
+  await deliveries.enqueue("agent", "t", "queue", { text: "Direct one" }, { id: "d1" });
+  assert.equal(deliveries.bufferedCount("agent", "t"), 1);
+  assert.equal(deliveries.bufferedCount("agent", "other"), 0);
+  assert.equal(deliveries.inbox("agent", "t").length, 1);
+  transport.finish();
+  await deliveries.tick();
+  assert.equal(transport.sent.length, 1, "tick 只投递非缓冲条目");
+  assert.equal(transport.sent[0].text, "Direct one");
+  assert.equal(deliveries.inbox("agent", "t").length, 1);
+  const claimed = await deliveries.claim("agent", "t");
+  assert.equal(claimed.length, 1);
+  assert.match(claimed[0].text!, /Buffered one/);
+  assert.equal(deliveries.inbox("agent", "t").length, 0);
+  const stored = JSON.parse(await readFile(file, "utf8"));
+  assert.ok(!stored.items.some((item: any) => item.id === "b1"), "领取即落盘移除");
+  assert.deepEqual(await deliveries.claim("agent", "t"), []);
+});
+
+test("buffered entries survive reload and stay out of auto-delivery", async (t) => {
+  const { transport, deliveries, file } = await fixture(t, "queue");
+  await deliveries.enqueue("agent", "t", "queue", { text: "Buffered" }, { id: "b2", buffered: true });
+  deliveries.close();
+  const restored = new MessageDeliveryQueue({ file, agents: transport as unknown as AgentRegistry, timer: false });
+  await restored.load();
+  t.after(() => restored.close());
+  assert.equal(restored.bufferedCount("agent", "t"), 1);
+  transport.finish();
+  await restored.tick();
+  assert.equal(transport.sent.length, 0);
+  assert.equal(restored.inbox("agent", "t").length, 1);
+});

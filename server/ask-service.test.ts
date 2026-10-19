@@ -5,7 +5,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AskService } from "./ask-service.js";
+import { AskService, sanitizeInline } from "./ask-service.js";
+import { DeckRecipientError } from "./deck-recipients.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentRegistry } from "./agents/registry.js";
 import type { ThreadSummary } from "./types.js";
@@ -65,8 +66,9 @@ async function fixture(t: any) {
   const options = { file: path.join(dir, "asks.json"), agents, messages, timer: false as const };
   const service = new AskService(options); await service.load();
   t.after(async () => { service.close(); messages.close(); await rm(dir, { recursive: true, force: true }); });
-  const create = (returnMode: "queue" | "steer" | "interrupt" = "queue", detached = false) => service.create({
-    sourceAgentId: "demo", sourceThreadId: "source", targetAgentId: "demo-review",
+  // 链式来源：第二个参数起依次是来源 agent、来源 thread，便于构造子会话链。
+  const create = (returnMode: "queue" | "steer" | "interrupt" = "queue", detached = false, sourceAgentId = "demo", sourceThreadId = "source") => service.create({
+    sourceAgentId, sourceThreadId, targetAgentId: "demo-review",
     question: 'Review "demo"\nwith context', returnMode, detached,
     settings: { cwd: "/work/demo", providerId: "acme" },
   });
@@ -98,24 +100,31 @@ test("completion without send stays silent toward the source", async (t) => {
   assert.doesNotMatch(fake.sends[0].text, /demo answer/);
 });
 
-test("interrupt return stops even a steer-capable source and starts a new turn", async (t) => {
+test("interrupt return stops even a steer-capable non-master source and starts a new turn", async (t) => {
+  // 主会话只收缓冲不接受注入；注入语义只对非主节点来源（子会话链）生效。
   const { create, fake, service, messages } = await fixture(t);
-  const { thread } = await create("interrupt");
+  const first = await create();
+  await messages.tick(); await service.tick();
+  const { thread } = await create("interrupt", false, "demo-review", first.thread.id);
   await messages.tick(); await service.tick();
   await service.sendFrom("demo-review", thread.id, "Interrupting update");
   await messages.tick();
-  assert.deepEqual(fake.interrupts, ["source"]);
-  assert.equal(fake.sends[1].mode, "start");
+  assert.equal(fake.interrupts.length, 1);
+  assert.equal(fake.sends[2].mode, "start");
+  assert.match(fake.sends[2].text, /Interrupting update/);
 });
 
-test("steer return appends to the running source turn without interrupting", async (t) => {
+test("steer return appends to the running non-master source turn without interrupting", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
-  const { thread } = await create("steer");
+  const first = await create();
+  await messages.tick(); await service.tick();
+  const { thread } = await create("steer", false, "demo-review", first.thread.id);
   await messages.tick(); await service.tick();
   await service.sendFrom("demo-review", thread.id, "Steered update");
   await messages.tick();
   assert.deepEqual(fake.interrupts, []);
-  assert.equal(fake.sends[1].mode, "append");
+  assert.equal(fake.sends[2].mode, "append");
+  assert.match(fake.sends[2].text, /Steered update/);
 });
 
 test("steer override is rejected when the source cannot steer", async (t) => {
@@ -147,13 +156,36 @@ test("restart recovers completed target history without asking or replying twice
   restored.close();
 });
 
-test("failed target turn returns a failure message, rather than a successful answer", async (t) => {
+test("failed target turn returns a failure message to a non-master source", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const first = await create();
+  await messages.tick(); await service.tick();
+  const { thread } = await create("queue", false, "demo-review", first.thread.id);
+  await messages.tick(); await service.tick(); fake.finish(thread.id, "", "failed");
+  await service.tick(); fake.finish(first.thread.id); await messages.tick();
+  assert.equal(service.list()[1].status, "failed");
+  assert.match(fake.sends[2].text, /询问失败/);
+});
+
+test("sends to a master source buffer instead of injecting a turn", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
-  await messages.tick(); await service.tick(); fake.finish(thread.id, "", "failed");
-  await service.tick(); fake.finish("source"); await messages.tick();
-  assert.equal(service.list()[0].status, "failed");
-  assert.match(fake.sends[1].text, /询问失败/);
+  await messages.tick(); await service.tick();
+  await service.sendFrom("demo-review", thread.id, "Buffered update", "interrupt");
+  await messages.tick();
+  // 主会话永不接受注入：interrupt 也只入缓冲，不打断、不开新回合。
+  assert.deepEqual(fake.interrupts, []);
+  assert.equal(fake.sends.length, 1);
+  const queued = messages.list().filter((entry) => entry.buffered === true);
+  assert.equal(queued.length, 1);
+  assert.match(queued[0].text!, /Buffered update/);
+  fake.finish("source");
+  await messages.tick();
+  assert.equal(fake.sends.length, 1, "tick 永远跳过缓冲");
+  assert.equal(messages.inbox("demo", "source").length, 1);
+  const claimed = await messages.claim("demo", "source");
+  assert.equal(claimed.length, 1);
+  assert.equal(messages.inbox("demo", "source").length, 0);
 });
 
 test("cancelled question is reported through the same callback path", async (t) => {
@@ -223,22 +255,29 @@ test("disabling the target records failure without waking the source", async (t)
 
 test("bound send supports multiple messages and completion never dumps final text", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
-  const { thread } = await create("interrupt");
+  const first = await create();
   await messages.tick(); await service.tick();
-  const first = await service.sendFrom("demo-review", thread.id, "Need clarification", undefined, "progress");
-  assert.equal(first.mode, "interrupt");
-  assert.deepEqual(first.target, { agentId: "demo", threadId: "source" });
+  const { thread } = await create("interrupt", false, "demo-review", first.thread.id);
+  await messages.tick(); await service.tick();
+  const firstSend = await service.sendFrom("demo-review", thread.id, "Need clarification", undefined, "progress");
+  assert.equal(firstSend.mode, "interrupt");
+  assert.deepEqual(firstSend.target, { agentId: "demo-review", threadId: first.thread.id });
   const second = await service.sendFrom("demo-review", thread.id, "Final concise result", "queue", "result");
   assert.equal(second.mode, "queue");
   assert.equal(service.decorate(fake.threads.get(thread.id)!).ask?.sentCount, 2);
-  assert.equal(service.list()[0].status, "running");
+  assert.equal(service.list()[1].status, "running");
   fake.finish(thread.id, "Very long private analysis that must stay in target history");
   await service.tick();
-  assert.equal(service.list()[0].status, "answered");
-  assert.equal(askReplies(messages).length, 2);
+  assert.equal(service.list()[1].status, "answered");
+  fake.finish(first.thread.id);
+  await messages.tick(); await messages.tick();
+  assert.match(fake.sends[2].text, /Need clarification/);
+  assert.doesNotMatch(fake.sends[2].text, /private analysis/);
+  // queue 投递在目标空闲时才发送：第一条已让目标进入新回合，需再次结束才轮到第二条。
+  fake.finish(first.thread.id);
   await messages.tick();
-  assert.match(fake.sends[1].text, /Need clarification/);
-  assert.doesNotMatch(fake.sends[1].text, /private analysis/);
+  assert.match(fake.sends[3].text, /Final concise result/);
+  assert.doesNotMatch(fake.sends[3].text, /private analysis/);
 });
 
 test("bound send retry is idempotent across reload and rejects conflicting request IDs", async (t) => {
@@ -364,19 +403,21 @@ test("ask alias is derived once, persisted across reload and collision-safe", as
 
 test("ask messages use the stable alias and never the wake lane or full ids", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
-  const { item, thread } = await create();
+  const first = await create();
   await messages.tick(); await service.tick();
-  assert.match(fake.sends[0].text, new RegExp(`^\\[deck-api:create:${item.alias}\\]`));
-  assert.doesNotMatch(fake.sends[0].text, new RegExp(item.id));
-  assert.doesNotMatch(fake.sends[0].text, /\[wake:/);
+  const { item, thread } = await create("queue", false, "demo-review", first.thread.id);
+  await messages.tick(); await service.tick();
+  assert.match(fake.sends[1].text, new RegExp(`^\\[deck-api:create:${item.alias}\\]`));
+  assert.doesNotMatch(fake.sends[1].text, new RegExp(item.id));
+  assert.doesNotMatch(fake.sends[1].text, /\[wake:/);
 
   await service.sendFrom("demo-review", thread.id, "Concise result");
-  fake.finish("source");
+  fake.finish(first.thread.id);
   await messages.tick();
-  assert.match(fake.sends[1].text, new RegExp(`^\\[ask:${item.alias}\\]`));
-  assert.doesNotMatch(fake.sends[1].text, new RegExp(item.id));
-  assert.doesNotMatch(fake.sends[1].text, new RegExp(thread.id));
-  assert.doesNotMatch(fake.sends[1].text, /\[wake:|\[message:/);
+  assert.match(fake.sends[2].text, new RegExp(`^\\[ask:${item.alias}\\]`));
+  assert.doesNotMatch(fake.sends[2].text, new RegExp(item.id));
+  assert.doesNotMatch(fake.sends[2].text, new RegExp(thread.id));
+  assert.doesNotMatch(fake.sends[2].text, /\[wake:|\[message:/);
   assert.equal((item as any).wakeCode, undefined);
 });
 
@@ -528,4 +569,122 @@ test("legacy asks without targetAlias borrow the session ledger instead of the m
   await restored.load();
   t.after(() => restored.close());
   assert.equal(restored.list()[0]?.targetAlias, alias);
+});
+
+test("sendFrom with one target bound to two sources reports AMBIGUOUS candidates", async (t) => {
+  const { create, fake, service } = await fixture(t);
+  fake.threads.set("other", { id: "other", agentId: "demo", providerId: "acme", cwd: "/work/demo", status: "idle", updatedAt: Date.now() });
+  const first = await create();
+  const second = await create("queue", false, "demo", "other");
+  // 模拟 fork/重试：同一目标挂第二条来源不同的询问。
+  (service as any).items.find((entry: any) => entry.id === second.item.id).targetThreadId = first.thread.id;
+  await assert.rejects(service.sendFrom("demo-review", first.thread.id, "Hi"), (error: any) => {
+    assert.ok(error instanceof DeckRecipientError);
+    assert.equal(error.code, "AMBIGUOUS");
+    assert.equal(error.statusCode, 409);
+    assert.equal(error.candidates.length, 2);
+    for (const candidate of error.candidates)
+      assert.deepEqual(Object.keys(candidate).sort(), ["agentId", "alias", "status", "threadId"]);
+    return true;
+  });
+});
+
+test("same-source follow-ups on one target stay unambiguous", async (t) => {
+  const { create, service, messages } = await fixture(t);
+  const first = await create();
+  const second = await create();
+  // 同一来源在同一目标上追问：不算歧义，投递到第一条。
+  (service as any).items.find((entry: any) => entry.id === second.item.id).targetThreadId = first.thread.id;
+  const ok = await service.sendFrom("demo-review", first.thread.id, "Same source");
+  assert.equal(ok.askId, first.item.id);
+  assert.equal(messages.list().filter((entry) => entry.text?.includes("Same source")).length, 1);
+});
+
+test("detached capture failure is recorded instead of mistaken for task failure", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  const turnId = fake.threads.get(thread.id)!.activeTurnId!;
+  fake.readThread = async () => { throw new Error("Demo history unavailable"); };
+  fake.emit("event", { type: "agent.event", data: { agentId: "demo-review", method: "turn/completed",
+    params: { threadId: thread.id, turn: { id: turnId, status: "completed" } } } });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  await service.tick();
+  const listed = service.list()[0] as any;
+  assert.equal(listed.status, "completed");
+  assert.equal(listed.resultAvailable, false);
+  assert.ok(listed.captureAttempts >= 1);
+  assert.match(listed.captureError, /交付同步失败/);
+  const read = await service.readResult(item.id);
+  assert.equal(read.result, null);
+  assert.equal(read.pending, true);
+  assert.ok((service as any).items[0].captureAttempts > listed.captureAttempts);
+  delete fake.readThread;
+  fake.turns.set(thread.id, [{ id: turnId, status: "completed", items: [{ type: "agentMessage", text: "Late result" }] }]);
+  await service.tick();
+  const done = await service.readResult(item.id);
+  assert.equal(done.result?.text, "Late result");
+  assert.equal(done.pending, false);
+  assert.equal((service.list()[0] as any).captureError, undefined);
+});
+
+test("done notification is idempotent per turn, skips read turns, recurs on new turns", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  fake.finish(thread.id, "Done work");
+  await service.tick();
+  const dones = () => messages.list().filter((entry) => entry.text?.startsWith(`[done:${item.alias}]`));
+  assert.equal(dones().length, 1);
+  assert.match(dones()[0].text!, /result @/);
+  await (service as any).notifyDone((service as any).items[0]);
+  assert.equal(dones().length, 1, "同回合重复完成事件不重复通知");
+  await service.readResult(item.id);
+  (service as any).items[0].doneTurnId = undefined;
+  await (service as any).notifyDone((service as any).items[0]);
+  assert.equal(dones().length, 1, "已读回合即使通知记录丢失也不补发");
+  (service as any).items[0].turnId = "turn-2";
+  (service as any).items[0].status = "completed";
+  await (service as any).notifyDone((service as any).items[0]);
+  assert.equal(dones().length, 2, "新回合完成重新通知");
+  assert.notEqual(dones()[0].id, dones()[1].id);
+});
+
+test("failed detached notification is single-line and redacts credentials", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  fake.threads.get(thread.id)!.lastError = "boom\napi_key=sk-abcdef1234567890\nBearer secrettoken\nurl=https://acme.example/?token=ABC&x=1";
+  fake.finish(thread.id, "", "failed");
+  await service.tick();
+  const dones = messages.list().filter((entry) => entry.text?.startsWith(`[done:${item.alias}]`));
+  assert.equal(dones.length, 1);
+  assert.doesNotMatch(dones[0].text!, /\n/);
+  assert.doesNotMatch(dones[0].text!, /sk-abcdef/);
+  assert.doesNotMatch(dones[0].text!, /secrettoken/);
+  assert.doesNotMatch(dones[0].text!, /token=ABC/);
+  assert.match(dones[0].text!, /\[已脱敏\]/);
+});
+
+test("sanitizeInline folds lines and redacts credentials", () => {
+  assert.equal(sanitizeInline("a\nb  c"), "a b c");
+  assert.match(sanitizeInline("key=sk-abcdef1234567890 rest")!, /\[已脱敏\]/);
+  assert.doesNotMatch(sanitizeInline("key=sk-abcdef1234567890")!, /sk-/);
+  assert.match(sanitizeInline("Bearer secrettoken123")!, /Bearer \[已脱敏\]/);
+  assert.match(sanitizeInline("url?api_key=ABC&x=1")!, /api_key=\[已脱敏\]/);
+  assert.equal(sanitizeInline("x".repeat(200), 10), "x".repeat(10));
+  assert.equal(sanitizeInline(undefined), "");
+});
+
+test("master detection follows ask targets and decorate exposes buffered count", async (t) => {
+  const { create, service, messages } = await fixture(t);
+  assert.equal(service.isMaster("demo", "source"), true);
+  assert.equal(service.isMaster("demo-review", "ghost"), true);
+  const { thread } = await create();
+  assert.equal(service.isMaster("demo-review", thread.id), false);
+  assert.equal(service.isMaster("demo", "source"), true);
+  assert.equal(service.decorate({ id: "source", agentId: "demo" } as any).bufferedCount, undefined);
+  await messages.enqueue("demo", "source", "queue", { text: "Buffered one" }, { id: "buf-1", buffered: true });
+  await messages.enqueue("demo", "source", "queue", { text: "Direct one" }, { id: "dir-1" });
+  assert.equal(service.decorate({ id: "source", agentId: "demo" } as any).bufferedCount, 1);
 });
