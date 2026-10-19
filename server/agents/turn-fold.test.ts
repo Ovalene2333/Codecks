@@ -5,6 +5,7 @@ import {
   TURN_SLICE_PARTIAL_KEY,
   foldItem,
   foldTurns,
+  prepareThreadResponse,
   sliceTurnsPage,
 } from "./turn-fold.js";
 
@@ -124,4 +125,42 @@ test("sliceTurnsPage pages before a turn and degrades when it is gone", () => {
   const all = sliceTurnsPage(turns, 10);
   assert.equal(all.hasMore, false);
   assert.equal(all.omitted, 0);
+});
+
+
+test("paged response never reads excluded tool output and preserves the original history", () => {
+  const excluded = { id: "old", status: "completed", get items(): any[] {
+    throw new Error("old history must not be inspected");
+  } };
+  const command = { id: "tool", type: "commandExecution", aggregatedOutput: big };
+  const recent = { id: "recent", status: "completed", items: [command] };
+  const full = Object.freeze({ turns: Object.freeze([excluded, recent]) });
+  const body = prepareThreadResponse(full, { turnLimit: 1 });
+  assert.equal(body.turns.length, 1);
+  assert.equal(body.turns[0].items[0].folded, true);
+  assert.equal(body.totalTurns, 2);
+  assert.equal(body.hasMoreTurns, true);
+  assert.equal(body[TURN_SLICE_PARTIAL_KEY], 1);
+  assert.equal(full.turns.length, 2);
+  assert.equal(recent.items[0].aggregatedOutput, big);
+  assert.equal("folded" in command, false);
+});
+
+test("native pages retain their cursor and active turn output; full=1 still pages", () => {
+  const turns = ["a", "b", "active"].map((id) => ({
+    id, status: "completed", items: [{ type: "commandExecution", aggregatedOutput: big }],
+  }));
+  const native = { turns, [TURN_SLICE_PARTIAL_KEY]: 1, hasMoreTurns: true };
+  const body = prepareThreadResponse(native, { turnLimit: 1 }, "active");
+  assert.equal(body.turns.length, 3);
+  assert.equal(body.hasMoreTurns, true);
+  assert.equal(body.totalTurns, undefined);
+  assert.equal(body.turns[2].items[0].aggregatedOutput, big);
+  assert.equal(body.turns[0].items[0].folded, true);
+  const raw = prepareThreadResponse({ turns }, { turnLimit: 1, full: "1" });
+  assert.equal(raw.turns[0], turns[2]);
+  assert.equal(raw.totalTurns, 3);
+  const before = prepareThreadResponse({ turns }, { turnLimit: 1, beforeTurn: "active" });
+  assert.equal(before.turns[0].id, "b");
+  assert.equal(before[TURN_SLICE_PARTIAL_KEY], 1);
 });

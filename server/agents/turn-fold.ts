@@ -166,3 +166,25 @@ export function sliceTurnsPage(
     omitted: start,
   };
 }
+
+/** Prepare only the requested page; never fold old turns or mutate adapter caches. */
+export function prepareThreadResponse(
+  full: any,
+  options: { turnLimit?: unknown; beforeTurn?: unknown; full?: unknown },
+  activeTurnId?: string,
+) {
+  if (!full || typeof full !== "object" || !Array.isArray(full.turns)) return full;
+  const body = { ...full };
+  const limit = Number(options.turnLimit);
+  // Native adapters may already have paged their history. Preserve that cursor
+  // and unknown total instead of paginating their partial result a second time.
+  if (!body[TURN_SLICE_PARTIAL_KEY] && Number.isFinite(limit) && limit > 0) {
+    const page = sliceTurnsPage(body.turns, limit, String(options.beforeTurn || ""));
+    body.turns = page.turns;
+    body.totalTurns = page.totalTurns;
+    body.hasMoreTurns = page.hasMore;
+    if (page.omitted > 0) body[TURN_SLICE_PARTIAL_KEY] = page.omitted;
+  }
+  if (options.full !== "1") body.turns = foldTurns(body.turns, activeTurnId);
+  return body;
+}

@@ -35,7 +35,7 @@ import {
 } from "./agents/acp-agents.js";
 import { AcpAgentHost } from "./agents/acp-host.js";
 import { AgentRegistry } from "./agents/registry.js";
-import { foldTurns, sliceTurnsPage, TURN_SLICE_PARTIAL_KEY } from "./agents/turn-fold.js";
+import { prepareThreadResponse, TURN_SLICE_PARTIAL_KEY } from "./agents/turn-fold.js";
 import { registerMessageRoutes } from "./message-api.js";
 import { installDevApi } from "./dev-api.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
@@ -1418,19 +1418,10 @@ app.post(
  * 的 N 轮），省首屏渲染；不传即全文（旧行为）。搜索索引吃的是切片前的全量。
  * 被截掉的老轮数记在 PARTIAL_KEY 上，前端据此展示“加载更早”。
  */
-function pageThreadTurns(body: any, query: any) {
-  const limit = Number(query?.turnLimit);
-  if (!Number.isFinite(limit) || limit <= 0 || !Array.isArray(body?.turns)) return;
-  const page = sliceTurnsPage(body.turns, limit, String(query?.beforeTurn || ""));
-  body.turns = page.turns;
-  body.totalTurns = page.totalTurns;
-  body.hasMoreTurns = page.hasMore;
-  if (page.omitted > 0) body[TURN_SLICE_PARTIAL_KEY] = page.omitted;
-}
-
 app.get(
   "/api/agents/:agentId/threads/:threadId",
-  route(async (req) => {
+  route(async (req, res) => {
+    const startedAt = performance.now();
     const id = agentId(req.params.agentId);
     const threadId = param(req.params.threadId);
     const limit = Number(req.query.turnLimit);
@@ -1438,18 +1429,20 @@ app.get(
       turnLimit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : undefined,
       beforeTurn: typeof req.query.beforeTurn === "string" ? req.query.beforeTurn : undefined,
     });
+    const readAt = performance.now();
     const snapshot = agents.get(id).snapshot();
     const thread = [
       ...snapshot.threads,
       ...(snapshot.archivedThreads || []),
     ].find((item) => item.id === threadId);
     if (thread && !(full as any)?.[TURN_SLICE_PARTIAL_KEY]) sessionSearch.capture(thread, full);
-    // 搜索索引吃全量；下发前折叠已完成回合的工具输出（?full=1 取全量）。
-    const body: any = full;
-    if (req.query.full !== "1" && Array.isArray(body?.turns))
-      body.turns = foldTurns(body.turns, thread?.activeTurnId);
-    if (!body?.[TURN_SLICE_PARTIAL_KEY]) pageThreadTurns(body, req.query);
-    return full;
+    // 搜索索引吃全量；仅处理当前页，避免整段旧历史拖慢首屏。
+    const body = prepareThreadResponse(full, req.query, thread?.activeTurnId);
+    res.setHeader(
+      "Server-Timing",
+      `thread-read;dur=${(readAt - startedAt).toFixed(1)}, thread-prepare;dur=${(performance.now() - readAt).toFixed(1)}`,
+    );
+    return body;
   }),
 );
 app.get(
@@ -2203,22 +2196,24 @@ app.post(
 );
 app.get(
   "/api/threads/:providerId/:threadId",
-  route(async (req) => {
+  route(async (req, res) => {
+    const startedAt = performance.now();
     const threadId = param(req.params.threadId);
     const full = await manager.readThread(
       param(req.params.providerId),
       threadId,
     );
-    const thread = [
-      ...manager.snapshot().threads,
-      ...(manager.snapshot().archivedThreads || []),
-    ].find((item) => item.id === threadId);
+    const readAt = performance.now();
+    const snapshot = manager.snapshot();
+    const thread = [...snapshot.threads, ...(snapshot.archivedThreads || [])]
+      .find((item) => item.id === threadId);
     if (thread) sessionSearch.capture(thread, full);
-    const legacyBody: any = full;
-    if (req.query.full !== "1" && Array.isArray(legacyBody?.turns))
-      legacyBody.turns = foldTurns(legacyBody.turns, thread?.activeTurnId);
-    pageThreadTurns(legacyBody, req.query);
-    return full;
+    const body = prepareThreadResponse(full, req.query, thread?.activeTurnId);
+    res.setHeader(
+      "Server-Timing",
+      `thread-read;dur=${(readAt - startedAt).toFixed(1)}, thread-prepare;dur=${(performance.now() - readAt).toFixed(1)}`,
+    );
+    return body;
   }),
 );
 app.post(
