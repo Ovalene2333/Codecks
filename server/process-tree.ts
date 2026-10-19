@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 
 /**
  * 整棵进程树结束（尽力而为，绝不抛错）。
@@ -12,11 +12,13 @@ export function killProcessTree(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform !== "win32") return;
   try {
-    spawnSync(
+    const killer = spawn(
       process.env.ComSpec || "cmd.exe",
       ["/d", "/s", "/c", `taskkill /PID ${pid} /T /F`],
-      { windowsHide: true, stdio: "ignore" },
+      { windowsHide: true, stdio: "ignore", timeout: 5_000 },
     );
+    killer.on("error", () => {});
+    killer.unref();
   } catch {
     // taskkill 失败也不要紧：调用方随后还会尝试直接 kill。
   }

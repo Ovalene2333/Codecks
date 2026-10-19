@@ -1,3 +1,5 @@
+import { backgroundWork } from "./background-work.js";
+import type { ClaudeProfile } from "./claude-profiles.js";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import os from "node:os";
@@ -16,6 +18,8 @@ export class ProviderStore {
   private modelConfig: RuntimeModelConfig = {};
   private cc?: CcSwitchSource;
   private ccSignature = "";
+  private ccProfiles: ClaudeProfile[] = [];
+  private ccSyncPending?: Promise<boolean>;
   private revisionValue = 0;
 
   constructor(
@@ -110,9 +114,22 @@ export class ProviderStore {
     this.providers = [...localProviders, ...retained];
   }
 
-  async syncCcSwitch(force = false) {
-    if (!this.cc) return false;
-    const synced = this.cc.readProviders();
+  async syncCcSwitch(force = false): Promise<boolean> {
+    if (this.ccSyncPending) {
+      await this.ccSyncPending;
+      return force ? this.syncCcSwitch(force) : false;
+    }
+    this.ccSyncPending = this.syncCcSwitchOnce(force);
+    try { return await this.ccSyncPending; } finally { this.ccSyncPending = undefined; }
+  }
+
+  private async syncCcSwitchOnce(force: boolean) {
+    const source = this.cc;
+    if (!source) return false;
+    const result = await backgroundWork<{ providers: Provider[]; profiles: ClaudeProfile[] }>("cc", [source.dbPath]);
+    if (this.cc !== source) return false;
+    this.ccProfiles = result.profiles;
+    const synced = result.providers;
     const signature = JSON.stringify(synced);
     if (!force && signature === this.ccSignature) return false;
     this.ccSignature = signature;
@@ -141,6 +158,7 @@ export class ProviderStore {
     const hadSource = Boolean(this.cc);
     const hadProviders = this.providers.some((p) => p.kind === "cc-switch");
     this.cc = undefined;
+    this.ccProfiles = [];
     this.ccSignature = "";
     if (hadProviders) {
       this.providers = this.providers.filter((p) => p.kind !== "cc-switch");
@@ -154,7 +172,7 @@ export class ProviderStore {
   }
 
   claudeProfiles() {
-    return this.cc?.readClaudeProfiles() || [];
+    return this.ccProfiles;
   }
 
   get revision() {

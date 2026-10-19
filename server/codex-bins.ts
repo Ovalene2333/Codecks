@@ -1,3 +1,5 @@
+import { isMainThread } from "node:worker_threads";
+import { backgroundWork } from "./background-work.js";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -177,6 +179,7 @@ export async function listCodexBinCandidates(
   useWsl = false,
   savedBin?: string,
 ): Promise<CodexBinCandidate[]> {
+  if (isMainThread) return backgroundWork<CodexBinCandidate[]>("codexBins", [env, useWsl, savedBin]);
   const collected = collectCodexBinCandidates(env, useWsl);
   if (savedBin?.trim() && !collected.some((item) => item.bin === savedBin.trim()))
     collected.push({ bin: savedBin.trim(), source: "saved" });

@@ -56,7 +56,8 @@ import {
 import { startPhase, writeLine } from "./startup-progress.js";
 import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ActivityTracker } from "./activity.js";
-import { CpuSampler, hostStats } from "./host-stats.js";
+import { backgroundWork } from "./background-work.js";
+import type { HostStats as BackgroundHostStats } from "./types.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
 import { ModelAffinityStore } from "./model-affinity.js";
 import { AgentSettingsStore } from "./agent-settings.js";
@@ -283,7 +284,7 @@ const tools = new ToolRegistry([
   }),
 ]);
 const activity = new ActivityTracker();
-const cpuSampler = new CpuSampler();
+
 // 唤醒发件箱：POST /api/wake/:code 落盘即 202，送达由它在后台重试到成；
 // 持久化在 .data/wake-outbox.json，Deck 重启不丢。
 let routingReady = false;
@@ -567,7 +568,7 @@ app.get(
 app.get(
   "/api/monitor/host",
   route(async () =>
-    hostStats(cpuSampler, wss.clients.size, agents.runtimePids()),
+    backgroundWork<BackgroundHostStats>("host", [wss.clients.size, agents.runtimePids()]),
   ),
 );
 // 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒代号，会与 /api/wake/:code 冲突。

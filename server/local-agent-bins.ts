@@ -1,3 +1,5 @@
+import { isMainThread } from "node:worker_threads";
+import { backgroundWork } from "./background-work.js";
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
@@ -178,6 +180,7 @@ export function probeLocalAgentBin(
 }
 
 export async function listLocalAgentBins(agent: LocalAgent, saved = "") {
+  if (isMainThread) return backgroundWork<LocalAgentBin[]>("agentBins", [agent, saved]);
   const candidates = collectLocalAgentBins(agent, saved);
   const results = await Promise.all(
     candidates.map(async ({ bin, source }) => {

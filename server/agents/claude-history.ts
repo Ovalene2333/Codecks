@@ -1,3 +1,5 @@
+import { isMainThread } from "node:worker_threads";
+import { backgroundWork } from "../background-work.js";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import type { ThreadSummary, TokenUsage } from "../types.js";
@@ -537,7 +539,8 @@ export function parseClaudeHistory(
   };
 }
 
-export async function readClaudeHistory(filePath: string) {
+export async function readClaudeHistory(filePath: string): Promise<ClaudeHistoryThread | undefined> {
+  if (isMainThread) return backgroundWork("history", [filePath]);
   const [source, info] = await Promise.all([
     readFile(filePath, "utf8"),
     stat(filePath),
@@ -594,8 +597,7 @@ export async function readClaudeHistoryCached(filePath: string) {
     return cloneHistory(hit.parsed);
   }
   forgetHistory(filePath);
-  const source = await readFile(filePath, "utf8");
-  const parsed = parseClaudeHistory(source, filePath, info.mtimeMs);
+  const parsed = await readClaudeHistory(filePath);
   if (info.size <= HISTORY_CACHE_MAX_FILE) {
     historyCache.set(filePath, { size: info.size, mtimeMs: info.mtimeMs, parsed });
     historyCacheBytes += info.size;
