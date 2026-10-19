@@ -72,6 +72,7 @@ import { draftFromUserMessage, userMessageText } from "./user-message";
 const EMPTY_TURNS: any[] = [];
 // 默认值必须是稳定引用：内联 `= []` 每次渲染都是新数组，会让依赖它的 effect 无限重跑。
 const EMPTY_DELIVERIES: MessageDelivery[] = [];
+const EMPTY_BRANCHES: ThreadSummary[] = [];
 /** 长会话分页：每次“加载更早”追加的轮数。初始值走本设备设置 initialTurns。 */
 const TURN_PAGE_SIZE = 60;
 
@@ -180,6 +181,9 @@ export function ChatWorkspace({
   approvals,
   events,
   origin,
+  branch,
+  childBranches = EMPTY_BRANCHES,
+  onOpenBranch,
   searchTarget,
   wake,
   onBack,
@@ -203,7 +207,18 @@ export function ChatWorkspace({
   messageDeliveries?: MessageDelivery[];
   approvals: Approval[];
   events: any[];
-  origin?: { name: string; turnLabel?: string; archived?: boolean };
+  origin?: {
+    name: string;
+    key?: string;
+    turnLabel?: string;
+    archived?: boolean;
+    missing?: boolean;
+  };
+  /** 当前会话的分支位置（是否分支、层级、直接子分支数）。 */
+  branch?: { isBranch: boolean; depth: number; childCount: number };
+  /** 当前会话的直接子分支，供会话内快速切换。 */
+  childBranches?: ThreadSummary[];
+  onOpenBranch?: (thread: ThreadSummary) => void;
   searchTarget?: {
     turnId?: string;
     itemId?: string;
@@ -1201,6 +1216,7 @@ export function ChatWorkspace({
         pendingCount={threadApprovals.length}
         locked={locked}
         wake={wake}
+        branch={branch}
         onBack={onBack}
         onMenu={onMenu}
         onSwitchProvider={onSwitchProvider}
@@ -1257,6 +1273,8 @@ export function ChatWorkspace({
             : undefined}
           feedbackInterrupts={capabilities.messages?.busyBehavior !== "steer"}
           origin={origin}
+          childBranches={childBranches}
+          onOpenBranch={onOpenBranch}
           onQuickPrompt={(text) => {
             updateDraft({ ...draft, text });
             setComposerFocusRequest((current) => current + 1);

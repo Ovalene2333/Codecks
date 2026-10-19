@@ -292,7 +292,34 @@
   color: var(--mark-text);
 }
 .session-row--fork {
+  /* 分支会话默认有一条左侧竖线；嵌套层级用深浅区分，最深到第 4 层。
+     竖线只是辅助，真正可读的信号是 meta 行里的「分支」徽标（不依赖 hover）。 */
   box-shadow: inset 2px 0 0 var(--line);
+}
+.session-row--fork[data-branch-depth="1"] {
+  padding-left: 10px;
+}
+.session-row--fork[data-branch-depth="2"] {
+  padding-left: 16px;
+}
+.session-row--fork[data-branch-depth="3"] {
+  padding-left: 22px;
+}
+.thread-list .thread-meta .branch-badge,
+.branch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-dim);
+}
+.branch-badge svg {
+  width: 10px;
+  height: 10px;
+  flex: none;
+}
+.thread-list .thread-meta .branch-count {
+  color: var(--text-dim);
+  opacity: 0.85;
 }
 .session-row-top {
   display: flex;
@@ -509,6 +536,16 @@
   .session-row {
     min-height: 48px;
     padding: 8px 8px 8px 10px;
+  }
+  /* 触控行更高，嵌套缩进相应缩小，保证标题仍有足够宽度点按。 */
+  .session-row--fork[data-branch-depth="1"] {
+    padding-left: 12px;
+  }
+  .session-row--fork[data-branch-depth="2"] {
+    padding-left: 16px;
+  }
+  .session-row--fork[data-branch-depth="3"] {
+    padding-left: 20px;
   }
   .session-row-more {
     opacity: 1;

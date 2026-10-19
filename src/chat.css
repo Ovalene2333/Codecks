@@ -34,6 +34,30 @@
 .chat-title-row .agent-badge {
   margin-top: 1px;
 }
+/* 分支状态：标题旁的常驻徽标，桌面与手机都显示（窄屏下仍不可省略）。 */
+.chat-branch-badge,
+.chat-branch-count {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-meta);
+  line-height: var(--lh-ui);
+  white-space: nowrap;
+}
+.chat-branch-badge {
+  color: var(--text-dim);
+}
+.chat-branch-badge svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.chat-branch-count {
+  color: var(--text-faint);
+  cursor: default;
+}
 .claude-connection {
   flex: none;
   align-self: center;
@@ -394,6 +418,67 @@
   width: 13px;
   height: 13px;
   flex: none;
+}
+.origin-chip:disabled {
+  cursor: default;
+  color: var(--text-faint);
+}
+/* 来源 + 子分支同一行排布，窄屏自动换行，不挤占会话内容宽度。 */
+.branch-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: -14px 0 18px;
+}
+.branch-links .origin-chip {
+  margin: 0;
+}
+.branch-children {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.branch-children-label {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+.branch-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.branch-child:hover,
+.branch-child:focus-visible {
+  border-color: var(--line-strong);
+  background: var(--control-hover);
+  color: var(--text);
+}
+.branch-child svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.branch-child-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.branch-child em {
+  flex: none;
+  color: var(--text-faint);
+  font-style: normal;
 }
 .turn-block {
   margin: 0 0 6px;
@@ -2480,6 +2565,10 @@ button.composer-context-seg:focus-visible {
     gap: 5px;
   }
   .chat-title-row > .claude-connection {
+    display: none;
+  }
+  /* 窄屏标题空间紧张：分支计数收起，保留「分支」徽标这一关键状态。 */
+  .chat-title-row > .chat-branch-count {
     display: none;
   }
   .chat-title h2 {

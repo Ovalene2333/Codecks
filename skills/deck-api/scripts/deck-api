@@ -155,7 +155,7 @@ check_code() {
 # 会话别名与会话一一对应，询问回执仍以询问为粒度；两者不能混用。
 ask_of_session() {
   local alias=$1 out
-  out=$(api GET /api/deck/asks 2>/dev/null) || return 1
+  out=$(api GET /api/deck/sessions 2>/dev/null) || return 1
   printf '%s\n' "$out" | tr '{' '\n' | grep -F "\"targetAlias\":\"$alias\"" | head -n1 |
     grep -oE '"id":"[^"]+"' | head -n1 | sed -E 's/^"id":"//; s/"$//'
 }

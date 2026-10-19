@@ -6,6 +6,7 @@ import {
   Lock,
   MoreHorizontal,
   Pin,
+  GitBranch,
   Plus,
   Radar,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import type {
   ThreadSummary,
 } from "../types";
 import { relativeTime, sessionKey } from "../format";
+import { branchInfo, type SessionBranchRelation } from "../session-branch";
 import { ProjectMenu } from "./ProjectMenu";
 
 const SESSION_STATUS_LABELS: Record<ThreadSummary["status"], string> = {
@@ -37,6 +39,7 @@ export function ProjectGroupView({
   selected,
   unseenSessions,
   wakeStates,
+  branches,
   collapsed,
   searchQuery,
   searchMatches,
@@ -60,6 +63,8 @@ export function ProjectGroupView({
   unseenSessions: ReadonlySet<string>;
   /** 会话的 deck-api 标记（键为 sessionKey）。 */
   wakeStates?: ReadonlyMap<string, SessionWakeState>;
+  /** 会话的分支关系（键为 sessionKey，覆盖 active + archived）。 */
+  branches?: ReadonlyMap<string, SessionBranchRelation>;
   collapsed: boolean;
   searchQuery: string;
   searchMatches: ReadonlyMap<string, SessionSearchMatch>;
@@ -164,6 +169,9 @@ export function ProjectGroupView({
             const key = sessionKey(thread);
             const unseen = unseenSessions.has(key);
             const wake = wakeStates?.get(key);
+            const branch = branches
+              ? branchInfo(key, branches)
+              : { isBranch: false, depth: 0, childCount: 0 };
             const provider = providerById.get(thread.providerId);
             const searchMatch = searchMatches.get(
               `${thread.agentId || "codex"}:${thread.id}`,
@@ -201,10 +209,22 @@ export function ProjectGroupView({
                   "session-row",
                   selected === key ? "selected" : "",
                   isAttention ? "is-attention" : "",
-                  thread.forkedFromId ? "session-row--fork" : "",
+                  branch.isBranch ? "session-row--fork" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                data-branch-depth={
+                  branch.isBranch
+                    ? String(Math.min(branch.depth, 3))
+                    : undefined
+                }
+                aria-label={[
+                  thread.name,
+                  branch.isBranch ? "分支会话" : "",
+                  branch.childCount ? `含 ${branch.childCount} 个分支` : "",
+                ]
+                  .filter(Boolean)
+                  .join("，")}
                 onClick={() => onSelect(thread, searchMatch)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
@@ -244,6 +264,27 @@ export function ProjectGroupView({
                   {thread.ask && (
                     <small className="ask-badge" title={`Agent 询问 · ${askStatusLabel(thread.ask)}`}>
                       询问
+                    </small>
+                  )}
+                  {branch.isBranch && (
+                    <small
+                      className="branch-badge"
+                      title={
+                        branch.depth > 0
+                          ? `分支会话 · 第 ${branch.depth + 1} 层`
+                          : "分支会话"
+                      }
+                    >
+                      <GitBranch aria-hidden="true" />
+                      分支
+                    </small>
+                  )}
+                  {branch.childCount > 0 && (
+                    <small
+                      className="branch-count"
+                      title={`${branch.childCount} 个直接分支`}
+                    >
+                      {branch.childCount} 分支
                     </small>
                   )}
                   {statusText ? (

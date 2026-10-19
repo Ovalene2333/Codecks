@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRightLeft,
+  GitBranch,
   Minimize2,
   MoreHorizontal,
   Radar,
@@ -31,6 +32,7 @@ export function ChatHeader({
   pendingCount,
   locked,
   wake,
+  branch,
   onBack,
   onMenu,
   onAppearance,
@@ -45,6 +47,8 @@ export function ChatHeader({
   locked?: boolean;
   /** deck-api 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
   wake?: { code?: string; watcher?: WakeWatcher; lost?: LostWakeWatcher[] };
+  /** 分支位置：isBranch=从别的会话分出；childCount=直接子分支数。 */
+  branch?: { isBranch: boolean; depth: number; childCount: number };
   onBack: () => void;
   onMenu: () => void;
   onAppearance: () => void;
@@ -91,6 +95,27 @@ export function ChatHeader({
               /
             </span>
             <h2 title={thread.name}>{thread.name}</h2>
+            {branch?.isBranch && (
+              <span
+                className="chat-branch-badge"
+                title={
+                  branch.depth > 0
+                    ? `分支会话 · 第 ${branch.depth + 1} 层`
+                    : "分支会话"
+                }
+              >
+                <GitBranch aria-hidden="true" />
+                分支
+              </span>
+            )}
+            {branch?.childCount ? (
+              <span
+                className="chat-branch-count"
+                title={`${branch.childCount} 个直接分支，可在会话底部切换`}
+              >
+                {branch.childCount} 分支
+              </span>
+            ) : null}
             {showStatus && (
               <Status
                 status={thread.compacting ? "running" : thread.status}

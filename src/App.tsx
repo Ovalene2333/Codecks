@@ -140,6 +140,7 @@ import {
   systemNotificationPermission,
 } from "./notifications";
 import { useDeckShortcuts } from "./shortcuts";
+import { branchInfo, branchRelations } from "./session-branch";
 import { getDeckSettings, useDeckSettings } from "./deck-settings";
 
 const ChatWorkspace = lazy(() =>
@@ -948,6 +949,9 @@ export function App() {
     [snapshot.threads, snapshot.archivedThreads],
   );
 
+  // 分支关系由全部会话（含归档）推导，侧栏、头部和会话页共用一份。
+  const branches = useMemo(() => branchRelations(allThreads), [allThreads]);
+
   const current = allThreads.find((thread) => sessionKey(thread) === selected);
 
   /** 会话的 deck-wake 状态：唤醒代号绑定（wakeCodes）+ 本机 watcher（wakeWatchers）。 */
@@ -1271,11 +1275,19 @@ export function App() {
         return source
           ? {
               name: source.name,
+              key: sessionKey(source),
               archived: Boolean(source.archived),
             }
-          : { name: "源会话" };
+          : { name: "源会话", archived: false, missing: true };
       })()
     : undefined;
+
+  const currentBranch = current ? branchInfo(sessionKey(current), branches) : undefined;
+  const childBranches = current
+    ? (branches.get(sessionKey(current))?.children || [])
+        .map((key) => allThreads.find((item) => sessionKey(item) === key))
+        .filter((item): item is ThreadSummary => Boolean(item))
+    : [];
 
   const chatWorkspace = current ? (
     <RenderErrorBoundary
@@ -1317,6 +1329,12 @@ export function App() {
           approvals={snapshot.approvals}
           events={events}
           origin={origin}
+          branch={currentBranch}
+          childBranches={childBranches}
+          onOpenBranch={(thread) => {
+            setLibrary(thread.archived ? "archived" : "active");
+            openSessionKey(sessionKey(thread));
+          }}
           searchTarget={
             searchTarget?.session === sessionKey(current)
               ? searchTarget
@@ -1509,6 +1527,7 @@ export function App() {
         counts={counts}
         projects={projects}
         wakeStates={wakeStates}
+        branches={branches}
         selected={selected}
         unseenSessions={unseenSessions}
         expandedProjects={expandedProjects}

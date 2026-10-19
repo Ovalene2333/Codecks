@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { Folder, GitBranch } from "lucide-react";
+import { CornerDownRight, Folder, GitBranch } from "lucide-react";
 import type { ThreadSummary, MessageDelivery } from "../types";
 import { Empty } from "../kit";
 import { RenderErrorBoundary } from "../ui";
@@ -22,6 +22,7 @@ const QUICK_PROMPTS = [
   { label: "Git 改动", text: "检查当前 git 状态和最近的改动" },
 ];
 const EMPTY_DELIVERIES: MessageDelivery[] = [];
+const EMPTY_BRANCHES: ThreadSummary[] = [];
 
 export function Timeline({
   thread,
@@ -41,6 +42,8 @@ export function Timeline({
   onDeliveryFeedback,
   feedbackInterrupts,
   origin,
+  childBranches = EMPTY_BRANCHES,
+  onOpenBranch,
   targetTurnId,
   targetItemId,
   targetRequest,
@@ -81,7 +84,16 @@ export function Timeline({
   onDeliveryRetry?: (id: string) => Promise<void>;
   onDeliveryFeedback?: (id: string) => Promise<void>;
   feedbackInterrupts?: boolean;
-  origin?: { name: string; turnLabel?: string; archived?: boolean };
+  origin?: {
+    name: string;
+    key?: string;
+    turnLabel?: string;
+    archived?: boolean;
+    missing?: boolean;
+  };
+  /** 本会话分出的直接分支：列在来源行旁，可直接切过去。 */
+  childBranches?: ThreadSummary[];
+  onOpenBranch?: (thread: ThreadSummary) => void;
   targetTurnId?: string;
   targetItemId?: string;
   targetRequest?: number;
@@ -329,12 +341,40 @@ export function Timeline({
           ) : null}
         </div>
       )}
-      {origin && (
-        <button type="button" className="origin-chip" onClick={onOpenOrigin}>
-          <GitBranch />
-          从《{origin.name}》{origin.turnLabel || "截取分支"}
-          {origin.archived ? "（已归档）" : ""}
-        </button>
+      {(origin || childBranches.length > 0) && (
+        <div className="branch-links">
+          {origin && (
+            <button
+              type="button"
+              className="origin-chip"
+              onClick={onOpenOrigin}
+              disabled={origin.missing}
+              title={origin.missing ? "源会话已不存在" : "打开源会话"}
+            >
+              <GitBranch aria-hidden="true" />
+              从《{origin.name}》{origin.turnLabel || "截取分支"}
+              {origin.archived ? "（已归档）" : ""}
+            </button>
+          )}
+          {childBranches.length > 0 && (
+            <div className="branch-children" aria-label="本会话的分支">
+              <span className="branch-children-label">分支</span>
+              {childBranches.map((branch) => (
+                <button
+                  key={`${branch.agentId || "codex"}:${branch.providerId}:${branch.id}`}
+                  type="button"
+                  className="branch-child"
+                  onClick={() => onOpenBranch?.(branch)}
+                  title={branch.preview || branch.name}
+                >
+                  <CornerDownRight aria-hidden="true" />
+                  <span className="branch-child-name">{branch.name}</span>
+                  {branch.archived && <em>已归档</em>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       <div className="timeline-turns">
         {(Array.isArray(turns) ? turns : []).map((turn, index) => {

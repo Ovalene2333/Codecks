@@ -38,3 +38,21 @@ test("Claude header shows its relay and exposes provider switching", () => {
   assert.match(html, /为此 Session 切换供应商/);
   assert.doesNotMatch(html, />Claude 中转</);
 });
+
+test("branch header shows a persistent branch badge and child count", () => {
+  const html = renderToStaticMarkup(
+    <ChatHeader
+      thread={{ ...thread, id: "branch", name: "Branch", forkedFromId: "root" }}
+      agentName="Claude Code"
+      pendingCount={0}
+      branch={{ isBranch: true, depth: 1, childCount: 2 }}
+      onBack={() => undefined}
+      onMenu={() => undefined}
+      onAppearance={() => undefined}
+      onSwitchProvider={() => undefined}
+    />,
+  );
+  assert.match(html, /chat-branch-badge/);
+  assert.match(html, /分支会话 · 第 2 层/);
+  assert.match(html, /2 分支/);
+});

@@ -43,6 +43,7 @@ import type {
   ThreadSummary,
 } from "../types";
 import { ProjectGroupView } from "../project/ProjectGroup";
+import type { SessionBranchRelation } from "../session-branch";
 import { UsageChip, type UsageView } from "../usage/UsageChip";
 
 export function Sidebar({
@@ -61,6 +62,7 @@ export function Sidebar({
   counts,
   projects,
   wakeStates,
+  branches,
   selected,
   unseenSessions,
   expandedProjects,
@@ -111,6 +113,8 @@ export function Sidebar({
   projects: ProjectGroup[];
   /** 会话的 deck-wake 标记（键为 sessionKey）。 */
   wakeStates?: ReadonlyMap<string, SessionWakeState>;
+  /** 会话的分支关系（含归档库），用于侧栏标出分支和子分支数。 */
+  branches?: ReadonlyMap<string, SessionBranchRelation>;
   selected?: string;
   unseenSessions: ReadonlySet<string>;
   expandedProjects: Set<string>;
@@ -441,6 +445,7 @@ export function Sidebar({
             selected={selected}
             unseenSessions={unseenSessions}
             wakeStates={wakeStates}
+            branches={branches}
             collapsed={!searching && !expandedProjects.has(project.key)}
             searchQuery={query}
             searchMatches={searchMatches}
