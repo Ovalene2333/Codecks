@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -339,8 +340,10 @@ test("ask alias is derived once, persisted across reload and collision-safe", as
   // 模拟旧台账：删掉别名，并加入一个前 8 位相同、同样缺别名的记录。
   const raw = JSON.parse(await readFile(options.file, "utf8"));
   const original = raw.items[0];
+  original.id = randomUUID();
   const base = String(original.id).replace(/-/g, "").slice(0, 8);
   delete original.alias;
+  // 换成同样前 8 位、但后续十六进制继续不同的 id，避免 8 位基名被整段包含。
   const colliding = { ...original, id: `${base}-0000-4000-8000-000000000001`, alias: undefined };
   raw.items = [original, colliding];
   await writeFile(options.file, JSON.stringify(raw));
@@ -348,8 +351,10 @@ test("ask alias is derived once, persisted across reload and collision-safe", as
   const restored = new AskService(options); await restored.load();
   const aliases = restored.list().map((item) => item.alias);
   assert.equal(aliases[0], base);
+  // 前 8 位撞车时按基名逐步加长，不能退化成随机后缀。
+  assert.match(aliases[1]!, /^[a-z0-9]{10,32}$/);
   assert.ok(aliases[1]!.startsWith(base));
-  assert.notEqual(aliases[0], aliases[1]);
+  assert.ok(aliases[1]!.slice(0, 9).includes("-") === false);
   restored.close();
 
   const reloaded = new AskService(options); await reloaded.load();

@@ -164,6 +164,48 @@ test("cached session summaries migrate without replacing an existing choice", as
   });
 });
 
+test("session aliases are assigned by default, persist, and survive thread removal", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-alias-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  const { aliases: assigned } = await store.ensureSessionAliases([
+    { agentId: "opencode", threadId: "session-2" },
+    { agentId: "codex", threadId: "thread-1" },
+  ]);
+  const first = assigned.get(JSON.stringify(["codex", "thread-1"]))!;
+  const second = assigned.get(JSON.stringify(["opencode", "session-2"]))!;
+  assert.match(first, /^s-[a-z0-9]{7}$/);
+  assert.match(second, /^s-[a-z0-9]{7}$/);
+  assert.notEqual(first, second);
+  assert.equal(store.sessionAlias("codex", "thread-1"), first);
+  assert.deepEqual(store.findSessionByAlias(second), { agentId: "opencode", threadId: "session-2" });
+
+  const restored = new ThreadSettingsStore(dir);
+  await restored.load();
+  assert.equal(restored.sessionAlias("codex", "thread-1"), first);
+  assert.deepEqual(restored.findSessionByAlias(first), { agentId: "codex", threadId: "thread-1" });
+  await restored.ensureSessionAliases([{ agentId: "codex", threadId: "thread-1" }]);
+  assert.equal(restored.sessionAlias("codex", "thread-1"), first);
+
+  await restored.remove("codex", "thread-1");
+  assert.equal(restored.get("codex", "thread-1"), undefined);
+  const reassigned = await restored.ensureSessionAliases([{ agentId: "codex", threadId: "thread-1" }]);
+  assert.equal(reassigned.aliases.get(JSON.stringify(["codex", "thread-1"])), first);
+});
+
+test("session aliases avoid reserved identifiers and wake codes", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-alias-reserved-"));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  const { aliases: assigned } = await store.ensureSessionAliases(
+    [{ agentId: "codex", threadId: "thread-1" }],
+    ["s-reserved", "s-0000000"],
+  );
+  const alias = assigned.get(JSON.stringify(["codex", "thread-1"]))!;
+  assert.notEqual(alias, "s-reserved");
+  await assert.rejects(store.ensureWakeCode("codex", "thread-2", alias), /已被占用/);
+});
+
 test("wake codes are generated, survive restarts, and resolve back to the thread", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake-"));
   const store = new ThreadSettingsStore(dir);

@@ -11,6 +11,8 @@ export interface AskRecord extends AskSession {
   targetAgentId: AgentId;
   targetThreadId?: string;
   targetProviderId?: string;
+  /** 目标会话本身的稳定短别名，与询问关系别名不同。 */
+  targetAlias?: string;
   question: string;
   result?: AskResult;
   /** 旧版询问回传使用的唤醒代号；仅用于兼容旧记录，新流程不再使用。 */
@@ -30,10 +32,17 @@ export interface AskRecord extends AskSession {
   executionFailure?: { turnId: string; message: string };
 }
 
+interface SessionAliasProvision {
+  ensure(targets: { agentId: AgentId; threadId: string }[]): Promise<Map<string, string>>;
+}
+
 interface Options {
   file: string;
   agents: AgentRegistry;
   messages: MessageDeliveryQueue;
+  /** 跨命名空间保留标识，避免与会话别名、唤醒代号逐字冲突。 */
+  reservedAliases?: () => Iterable<string>;
+  sessionAliases?: SessionAliasProvision;
   onChanged?: () => void;
   timer?: boolean;
 }
@@ -101,7 +110,12 @@ export class AskService {
         ["queue", "steer", "interrupt"].includes(item.returnMode) &&
         ["creating", "queued", "running", "answered", "completed", "failed"].includes(item.status),
       );
+      // 先收下记录自带的别名，再为缺别名的旧记录补齐：入参里的保留集合
+      // 可能包含本台账自己刚写入的别名，先补会把已落盘别名误判成撞车。
       const used = new Set<string>();
+      for (const item of this.items) {
+        if (typeof item.alias === "string" && /^[a-z0-9]{8,32}$/.test(item.alias)) used.add(item.alias);
+      }
       for (const item of this.items) {
         if (item.detached !== undefined && typeof item.detached !== "boolean") throw new Error("detached 模式无效");
         if (item.result !== undefined && (typeof item.result?.turnId !== "string" ||
@@ -127,7 +141,7 @@ export class AskService {
         // 别名落盘后永不重算；旧记录缺别名时按 id 补一次并保存。
         const stored = typeof item.alias === "string" && /^[a-z0-9]{8,32}$/.test(item.alias)
           ? item.alias : undefined;
-        const alias = stored && !used.has(stored) ? stored : this.uniqueAlias(item.id, used);
+        const alias = stored ?? this.uniqueAlias(item.id, used);
         if (alias !== item.alias) {
           item.alias = alias;
           changed = true;
@@ -147,6 +161,17 @@ export class AskService {
         console.error("询问调度失败:", error.message)), 2000);
       this.timer.unref();
     }
+  }
+
+  private usedAliases() {
+    const used = new Set<string>();
+    for (const item of this.items) {
+      if (typeof item.alias === "string" && item.alias) used.add(item.alias);
+    }
+    for (const reserved of this.options.reservedAliases?.() ?? []) {
+      if (typeof reserved === "string" && reserved) used.add(reserved);
+    }
+    return used;
   }
 
   /** 由 ask id 派生、在现有别名集合里唯一的短标识；长度不足时逐步加长。 */
@@ -228,7 +253,7 @@ export class AskService {
     if (this.loadError) throw new Error(this.loadError);
     const id = randomUUID();
     const item: AskRecord = {
-      id, alias: this.uniqueAlias(id, new Set(this.items.map((entry) => entry.alias).filter(Boolean) as string[])),
+      id, alias: this.uniqueAlias(id, this.usedAliases()),
       sourceAgentId: input.sourceAgentId, sourceThreadId: input.sourceThreadId,
       sourceProviderId: this.options.agents.messageState(input.sourceAgentId, input.sourceThreadId).thread.providerId,
       targetAgentId: input.targetAgentId, question: input.question,
@@ -243,11 +268,16 @@ export class AskService {
       }) as ThreadSummary;
       item.targetThreadId = thread.id;
       item.targetProviderId = thread.providerId;
+      const sessionAliases = this.options.sessionAliases
+        ? await this.options.sessionAliases.ensure([{ agentId: input.targetAgentId, threadId: thread.id }])
+        : new Map<string, string>();
+      item.targetAlias = sessionAliases.get(JSON.stringify([input.targetAgentId, thread.id]));
       item.status = "queued";
       item.updatedAt = Date.now();
       await this.save();
       await this.start(item);
-      return { item: this.list().find((entry) => entry.id === item.id)!, thread: this.decorate(thread) };
+      const decorated = this.decorate(thread);
+      return { item: this.list().find((entry) => entry.id === item.id)!, thread: { ...decorated, alias: item.targetAlias ?? decorated.alias } };
     } catch (error: any) {
       await this.fail(item, String(error.message || error), false);
       throw new Error(`询问 ${item.id} 创建或发送失败：${item.error}`);
@@ -262,7 +292,9 @@ export class AskService {
         item.detached
           ? "这是 detached 任务：来源会自行领取结果，不要主动 send 常规进度或完成通知。需要来源决定的阻塞问题、或用户明确要求时，仍可显式 send；默认收件人已绑定。"
           : "用 deck-api send 主动回传；可以多次发送进度、澄清问题或结果。默认收件人已绑定为发起会话，不需要查询代号。",
-        `本会话询问别名是 ${item.alias}，身份是 ${item.targetAgentId}:${item.targetThreadId}。需要主动联系来源时使用 send；自动识别失败时把该身份传给 --session，不要查询或猜测其他会话。`,
+        item.targetAlias
+          ? `本会话询问别名是 ${item.alias}，会话短别名是 ${item.targetAlias}，身份是 ${item.targetAgentId}:${item.targetThreadId}。需要主动联系来源时使用 send；自动识别失败时把该身份传给 --session，不要查询或猜测其他会话。`
+          : `本会话询问别名是 ${item.alias}，身份是 ${item.targetAgentId}:${item.targetThreadId}。需要主动联系来源时使用 send；自动识别失败时把该身份传给 --session，不要查询或猜测其他会话。`,
         "执行入口优先使用 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api；项目内也可读取 deck-api skill。没有该入口时说明失败，不要借用其他会话身份。",
         ...(item.detached ? [
           "结束时直接在本会话最终答复中交付：结论、关键依据、文件或产物位置、验证结果与未决问题。Deck 会保存最终答复供来源用 deck-api result @别名 领取；不需要另行 send。",

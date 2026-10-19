@@ -25,10 +25,12 @@ export interface ThreadSettings {
   sessionMode?: string;
   /** Deck 侧重命名（ACP 会话没有原生 rename 接口）。 */
   name?: string;
+  /** 每个会话自动分配的稳定短别名，例如 `s-3f9kq2pz`。不代表唤醒代号。 */
+  alias?: string;
   /**
    * Deck 发起的 fork 子会话指向父会话。重启后内存的 fork 映射清零，
    * 仅凭 serve 的 `fork` 字段（旧版 serve 没有）认不出分支；
-   * 落盘后 refreshAll/onEvent 仍能保留分支可见，不被当 subagent 隐藏。
+   * 落盘后 refreshAll/onEvent 仍能保持分支可见，不被当 subagent 隐藏。
    */
   forkedFromId?: string;
   /**
@@ -43,7 +45,7 @@ export interface ThreadSettings {
   wakeCode?: string;
 }
 
-type ThreadSettingsInput = Omit<ThreadSettings, "serviceTier" | "archived"> & {
+type ThreadSettingsInput = Omit<ThreadSettings, "serviceTier" | "archived" | "alias"> & {
   serviceTier?: string | null;
   archived?: boolean | null;
 };
@@ -83,6 +85,8 @@ const MAX_TURN_STATS = 1_000;
 interface StoredThreadSettings {
   version: 1;
   settings: Partial<Record<AgentId, Record<string, ThreadSettings>>>;
+  /** 已分配的会话别名台账；会话删除后仍保留，以避免别名复用。 */
+  sessionAliases?: Partial<Record<AgentId, Record<string, string>>>;
   turnModels?: Partial<Record<AgentId, Record<string, TurnModelStamp[]>>>;
   turnStats?: Partial<Record<AgentId, Record<string, TurnStatsStamp[]>>>;
   deferred?: Partial<Record<AgentId, Record<string, ThreadSettingsInput>>>;
@@ -193,7 +197,18 @@ export class ThreadSettingsStore {
             deferred[agentId] = group as Record<string, ThreadSettingsInput>;
         }
       }
-      this.data = { version: 1, settings, turnModels, turnStats, deferred };
+      const sessionAliases: NonNullable<StoredThreadSettings["sessionAliases"]> = {};
+      const rawSessionAliases = parsed.sessionAliases;
+      if (rawSessionAliases && typeof rawSessionAliases === "object") {
+        for (const [agentId, group] of Object.entries(rawSessionAliases)) {
+          if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+          for (const [threadId, alias] of Object.entries(group)) {
+            if (typeof alias === "string" && ThreadSettingsStore.SESSION_ALIAS_RE.test(alias))
+              (sessionAliases[agentId as AgentId] ||= {})[threadId] = alias;
+          }
+        }
+      }
+      this.data = { version: 1, settings, sessionAliases, turnModels, turnStats, deferred };
     } catch (error: any) {
       // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
       // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
@@ -376,11 +391,12 @@ export class ThreadSettingsStore {
   }
 
   async remove(agentId: AgentId, threadId: string) {
+    const alias = this.sessionAlias(agentId, threadId);
     const group = this.data.settings[agentId];
     const models = this.data.turnModels?.[agentId];
     const stats = this.data.turnStats?.[agentId];
     const deferred = this.data.deferred?.[agentId];
-    if (!group?.[threadId] && !models?.[threadId] && !stats?.[threadId] && !deferred?.[threadId]) return;
+    if (!group?.[threadId] && !models?.[threadId] && !stats?.[threadId] && !deferred?.[threadId] && !alias) return;
     if (group?.[threadId]) {
       delete group[threadId];
       if (!Object.keys(group).length) delete this.data.settings[agentId];
@@ -399,11 +415,130 @@ export class ThreadSettingsStore {
       delete deferred[threadId];
       if (!Object.keys(deferred).length) delete this.data.deferred![agentId];
     }
+    if (alias) ((this.data.sessionAliases ||= {})[agentId] ||= {})[threadId] = alias;
     await this.save();
   }
 
+  /** 会话别名强制使用 `s-` 前缀，避免与询问别名和完整问询 ID 在路由中混淆。 */
+  static readonly SESSION_ALIAS_RE = /^s-[a-z0-9]{7}$/;
+
   /** 自定义代号限定小写字母/数字/连字符，保证可以直接拼进 URL 路径。 */
   static readonly WAKE_CODE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
+  sessionAlias(agentId: AgentId, threadId: string): string | undefined {
+    const configured = this.data.settings[agentId]?.[threadId]?.alias;
+    if (typeof configured === "string" && ThreadSettingsStore.SESSION_ALIAS_RE.test(configured))
+      return configured;
+    const remembered = this.data.sessionAliases?.[agentId]?.[threadId];
+    if (typeof remembered === "string" && ThreadSettingsStore.SESSION_ALIAS_RE.test(remembered))
+      return remembered;
+    return undefined;
+  }
+
+  findSessionByAlias(
+    alias: string,
+  ): { agentId: AgentId; threadId: string } | undefined {
+    if (!ThreadSettingsStore.SESSION_ALIAS_RE.test(alias)) return undefined;
+    for (const mapping of this.sessionAliasMappings()) {
+      if (mapping.alias === alias) return { agentId: mapping.agentId, threadId: mapping.threadId };
+    }
+    return undefined;
+  }
+
+  listSessionAliases(): { agentId: AgentId; threadId: string; alias: string }[] {
+    return this.sessionAliasMappings();
+  }
+
+  async ensureSessionAliases(
+    targets: { agentId: AgentId; threadId: string }[],
+    reservedAliases: Iterable<string> = [],
+  ): Promise<{ aliases: Map<string, string>; changed: boolean }> {
+    const uniqueTargets = new Map<string, { agentId: AgentId; threadId: string }>();
+    for (const target of targets) {
+      if (!target?.agentId || !target?.threadId) continue;
+      uniqueTargets.set(JSON.stringify([target.agentId, target.threadId]), target);
+    }
+    const orderedTargets = [...uniqueTargets.values()].sort((left, right) =>
+      left.agentId === right.agentId
+        ? (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0)
+        : (left.agentId < right.agentId ? -1 : 1),
+    );
+    const mappings = this.sessionAliasMappings();
+    const owners = new Map<string, string>();
+    for (const mapping of mappings) {
+      if (!owners.has(mapping.alias))
+        owners.set(mapping.alias, JSON.stringify([mapping.agentId, mapping.threadId]));
+    }
+    const used = new Set<string>();
+    for (const reserved of reservedAliases) {
+      if (typeof reserved === "string" && reserved) used.add(reserved);
+    }
+    for (const code of this.listWakeCodes()) used.add(code.code);
+
+    let changed = false;
+    const assigned = new Map<string, string>();
+    for (const target of orderedTargets) {
+      const key = JSON.stringify([target.agentId, target.threadId]);
+      const current = this.sessionAlias(target.agentId, target.threadId);
+      if (current && owners.get(current) === key && !used.has(current)) {
+        assigned.set(key, current);
+        used.add(current);
+        continue;
+      }
+      const alias = this.generateSessionAlias(used);
+      const group = (this.data.settings[target.agentId] ||= {});
+      const settings = (group[target.threadId] ||= {});
+      if (settings.alias !== alias) {
+        settings.alias = alias;
+        changed = true;
+      }
+      const ledger = (this.data.sessionAliases ||= {});
+      const agentLedger = (ledger[target.agentId] ||= {});
+      if (agentLedger[target.threadId] !== alias) {
+        agentLedger[target.threadId] = alias;
+        changed = true;
+      }
+      owners.set(alias, key);
+      used.add(alias);
+      assigned.set(key, alias);
+    }
+    if (changed) await this.save();
+    return { aliases: assigned, changed };
+  }
+
+  private sessionAliasMappings(): { agentId: AgentId; threadId: string; alias: string }[] {
+    const agentIds = new Set<string>([
+      ...Object.keys(this.data.settings),
+      ...Object.keys(this.data.sessionAliases ?? {}),
+    ]);
+    const mappings: { agentId: AgentId; threadId: string; alias: string }[] = [];
+    for (const agentId of [...agentIds].sort()) {
+      const settingsGroup = this.data.settings[agentId as AgentId] ?? {};
+      const ledgerGroup = this.data.sessionAliases?.[agentId as AgentId] ?? {};
+      const threadIds = new Set([...Object.keys(settingsGroup), ...Object.keys(ledgerGroup)]);
+      for (const threadId of [...threadIds].sort()) {
+        const alias =
+          (typeof settingsGroup[threadId]?.alias === "string" &&
+          ThreadSettingsStore.SESSION_ALIAS_RE.test(settingsGroup[threadId].alias!)
+            ? settingsGroup[threadId].alias
+            : undefined) ??
+          (typeof ledgerGroup[threadId] === "string" &&
+          ThreadSettingsStore.SESSION_ALIAS_RE.test(ledgerGroup[threadId])
+            ? ledgerGroup[threadId]
+            : undefined);
+        if (alias) mappings.push({ agentId: agentId as AgentId, threadId, alias });
+      }
+    }
+    return mappings;
+  }
+
+  private generateSessionAlias(used: Set<string>): string {
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const alias = `s-${randomBytes(4).toString("hex").slice(0, 7)}`;
+      if (!used.has(alias)) return alias;
+    }
+    throw new Error("会话别名分配失败");
+  }
 
   findByWakeCode(
     code: string,
@@ -436,18 +571,28 @@ export class ThreadSettingsStore {
    * 取回已有代号，没有则生成（或认领 preferred）。preferred 与已有代号
    * 不同时直接忽略——改代号应先 clearWakeCode 再重新认领，避免误改。
    */
-  async ensureWakeCode(agentId: AgentId, threadId: string, preferred?: string) {
+  async ensureWakeCode(
+    agentId: AgentId,
+    threadId: string,
+    preferred?: string,
+    reservedAliases: Iterable<string> = [],
+  ) {
+    const reserved = new Set<string>();
+    for (const alias of reservedAliases) {
+      if (typeof alias === "string" && alias) reserved.add(alias);
+    }
+    for (const entry of this.listSessionAliases()) reserved.add(entry.alias);
     const existing = this.data.settings[agentId]?.[threadId]?.wakeCode;
     if (existing) return existing;
     let code: string;
     if (preferred) {
       if (!ThreadSettingsStore.WAKE_CODE_RE.test(preferred))
         throw new Error("wake code 需为 2-31 位小写字母、数字或连字符");
-      if (this.findByWakeCode(preferred))
+      if (this.findByWakeCode(preferred) || reserved.has(preferred))
         throw new Error(`wake code ${preferred} 已被占用`);
       code = preferred;
     } else {
-      code = this.generateWakeCode();
+      code = this.generateWakeCode(reserved);
     }
     await this.update(agentId, threadId, { wakeCode: code });
     return code;
@@ -462,10 +607,10 @@ export class ThreadSettingsStore {
     await this.save();
   }
 
-  private generateWakeCode() {
+  private generateWakeCode(reserved: Set<string>) {
     for (let attempt = 0; attempt < 32; attempt += 1) {
       const code = randomBytes(4).toString("hex");
-      if (!this.findByWakeCode(code)) return code;
+      if (!this.findByWakeCode(code) && !reserved.has(code)) return code;
     }
     throw new Error("wake code 分配失败");
   }
