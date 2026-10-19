@@ -397,8 +397,16 @@ case "$cmd" in
     [ -z "$code" ] || body+=",\"code\":$(json_str "$code")"
     [ -z "$request_id" ] || body+=",\"requestId\":$(json_str "$request_id")"
     body+="}"
-    api POST /api/deck/send "$body" || exit 1
-    echo '消息已持久受理，将按投递方式发送。'
+    resp=$(api POST /api/deck/send "$body") || exit 1
+    # 2xx 只代表持久受理。响应里的 messageId 是唯一可追溯凭据：重要消息发完后
+    # 用 sessions 查目标状态核实落地震，避免"受理≠送达"的静默失败（2026-10-19 两次实证）。
+    mid=$(json_field "$resp" messageId)
+    [ -n "$mid" ] || mid=$(json_field "$resp" id)
+    if [ -n "$mid" ]; then
+      echo "消息已持久受理：messageId $mid（受理≠送达，重要消息用 sessions 核实对方状态）"
+    else
+      echo '消息已持久受理，将按投递方式发送。'
+    fi
     ;;
   watch|poll)
     code=""
