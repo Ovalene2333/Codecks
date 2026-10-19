@@ -1,14 +1,31 @@
-import type { ComponentType } from "react";
+import { lazy, type ComponentType } from "react";
 import { FilePen, GitBranch, Puzzle, Terminal, Zap } from "lucide-react";
 import type { ToolDescriptor } from "./types";
-import { GitView } from "./git/GitView.client";
-import { TerminalView } from "./terminal/TerminalView.client";
-import { TextFilesView } from "./text-files/TextFilesView.client";
-import { QuickCommandView } from "./quick-command/QuickCommandView.client";
 import "./git/git.css";
 import "./terminal/terminal.css";
 import "./text-files/text-files.css";
 import "./quick-command/quick-command.css";
+
+const GitView = lazy(() =>
+  import("./git/GitView.client").then((module) => ({
+    default: module.GitView,
+  })),
+);
+const TerminalView = lazy(() =>
+  import("./terminal/TerminalView.client").then((module) => ({
+    default: module.TerminalView,
+  })),
+);
+const TextFilesView = lazy(() =>
+  import("./text-files/TextFilesView.client").then((module) => ({
+    default: module.TextFilesView,
+  })),
+);
+const QuickCommandView = lazy(() =>
+  import("./quick-command/QuickCommandView.client").then((module) => ({
+    default: module.QuickCommandView,
+  })),
+);
 
 export interface ToolViewProps {
   tool: ToolDescriptor;

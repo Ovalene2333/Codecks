@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../api";
 import { toolIcon, toolPath, toolView } from "../../plugin/client-registry";
@@ -106,15 +106,17 @@ export function ToolCenter({
         <div className="tool-view">
           {error ? <p className="error-banner">{error}</p> : null}
           {tool && View ? (
-            <View
-              tool={tool}
-              initialCwd={initialCwd || tool.defaultCwd}
-              directories={[tool.defaultCwd, ...directories].filter(
-                (value, index, values): value is string =>
-                  Boolean(value) && values.indexOf(value) === index,
-              )}
-              onToast={onToast}
-            />
+            <Suspense fallback={<p role="status">正在加载工具…</p>}>
+              <View
+                tool={tool}
+                initialCwd={initialCwd || tool.defaultCwd}
+                directories={[tool.defaultCwd, ...directories].filter(
+                  (value, index, values): value is string =>
+                    Boolean(value) && values.indexOf(value) === index,
+                )}
+                onToast={onToast}
+              />
+            </Suspense>
           ) : null}
         </div>
       </div>

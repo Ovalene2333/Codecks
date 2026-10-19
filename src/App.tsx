@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   ArrowLeft,
@@ -75,15 +83,14 @@ import {
   applyActivityUpdate,
   resetActivities,
 } from "./monitor/activity-store";
-import { ChatWorkspace } from "./session/ChatWorkspace";
 import { Welcome } from "./welcome/Welcome";
 import { NewThreadModal } from "./overlays/NewThreadModal";
-import { SettingsModal, type SettingsTab } from "./settings/SettingsModal";
+import type { SettingsTab } from "./settings/SettingsModal";
 import { ProviderSwitchModal } from "./overlays/ProviderSwitchModal";
 import { RenameModal } from "./overlays/RenameModal";
 import { WakeModal } from "./overlays/WakeModal";
 import { ProjectDefaultsModal } from "./overlays/ProjectDefaultsModal";
-import { UsageDrawer, type UsageView } from "./usage/UsageChip";
+import type { UsageView } from "./usage/UsageChip";
 import { SessionToolbar } from "./layout/SessionToolbar";
 import { Button } from "./kit";
 import { Modal } from "./ui";
@@ -98,8 +105,6 @@ import {
   threadRemovePath,
 } from "./agents";
 import { ApprovalInbox } from "./overlays/ApprovalInbox";
-import { TaskCenter } from "./tasks/TaskCenter";
-import { ToolCenter } from "./tools/ToolCenter";
 import { toolPath } from "../plugin/client-registry";
 import {
   canonicalDeckPath,
@@ -122,7 +127,12 @@ import {
 } from "./session/activity";
 import { approvalPreview, threadForApproval } from "./session/approvals";
 import { fetchThreadFull } from "./session/thread-load";
-import { deleteSession, forkSession, hasPendingSessionOperations, useSessionOperation } from "./session/operations";
+import {
+  deleteSession,
+  forkSession,
+  hasPendingSessionOperations,
+  useSessionOperation,
+} from "./session/operations";
 import { SessionOperationList } from "./session/OperationStatus";
 import {
   requestSystemNotifications,
@@ -131,6 +141,36 @@ import {
 } from "./notifications";
 import { useDeckShortcuts } from "./shortcuts";
 import { getDeckSettings, useDeckSettings } from "./deck-settings";
+
+const ChatWorkspace = lazy(() =>
+  import("./session/ChatWorkspace").then((module) => ({
+    default: module.ChatWorkspace,
+  })),
+);
+
+const SettingsModal = lazy(() =>
+  import("./settings/SettingsModal").then((module) => ({
+    default: module.SettingsModal,
+  })),
+);
+
+const UsageDrawer = lazy(() =>
+  import("./usage/UsageDrawer").then((module) => ({
+    default: module.UsageDrawer,
+  })),
+);
+
+const TaskCenter = lazy(() =>
+  import("./tasks/TaskCenter").then((module) => ({
+    default: module.TaskCenter,
+  })),
+);
+
+const ToolCenter = lazy(() =>
+  import("./tools/ToolCenter").then((module) => ({
+    default: module.ToolCenter,
+  })),
+);
 
 const empty: Snapshot = { providers: [], threads: [], approvals: [] };
 const isToolPath = (pathname: string) => Boolean(toolPath(pathname));
@@ -217,7 +257,7 @@ export function App() {
   const sheetOperation = useSessionOperation(sheet);
   const [wakeThread, setWakeThread] = useState<ThreadSummary | null>(null);
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
-    const [taskScope, setTaskScope] = useState<string | null>();
+  const [taskScope, setTaskScope] = useState<string | null>();
   const [page, setPage] = useState(() =>
     isToolPath(location.pathname) ? "tools" : "workspace",
   );
@@ -489,9 +529,13 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     const cachedKeys = cachedThreadKeys();
-    const threads = (snapshot.threads || []).filter((thread) =>
-      !cachedKeys.has(sessionKey(thread)) && !isThreadUncacheable(sessionKey(thread)),
-    ).slice(0, 8);
+    const threads = (snapshot.threads || [])
+      .filter(
+        (thread) =>
+          !cachedKeys.has(sessionKey(thread)) &&
+          !isThreadUncacheable(sessionKey(thread)),
+      )
+      .slice(0, 8);
     const timer = window.setTimeout(async () => {
       if (prefetchActive.current) return;
       prefetchActive.current = true;
@@ -500,13 +544,20 @@ export function App() {
           if (cancelled || hasPendingSessionOperations()) break;
           const key = sessionKey(thread);
           if (readThreadCache(key)) continue;
-          await dedupeThreadLoad(key, () => fetchThreadFull(thread, key, {
-            turnLimit: getDeckSettings().initialTurns,
-          })).catch(() => {});
+          await dedupeThreadLoad(key, () =>
+            fetchThreadFull(thread, key, {
+              turnLimit: getDeckSettings().initialTurns,
+            }),
+          ).catch(() => {});
         }
-      } finally { prefetchActive.current = false; }
+      } finally {
+        prefetchActive.current = false;
+      }
     }, 1_500);
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [snapshot.threads]);
 
   useEffect(() => {
@@ -898,7 +949,10 @@ export function App() {
     const byAgentKey = new Map<string, SessionWakeState>();
     for (const watcher of snapshot.wakeWatchers || [])
       if (watcher.threadId)
-        byAgentKey.set(activityKey(watcher.agentId, watcher.threadId), "watching");
+        byAgentKey.set(
+          activityKey(watcher.agentId, watcher.threadId),
+          "watching",
+        );
     for (const lost of snapshot.wakeLost || [])
       if (lost.threadId)
         byAgentKey.set(activityKey(lost.agentId, lost.threadId), "lost");
@@ -934,7 +988,13 @@ export function App() {
   // URL 指向的会话已不存在（过期/被删）：宽限期后退回工作区。
   // 宽限覆盖“新建会话尚未出现在 snapshot”的窗口。
   useEffect(() => {
-    if (loading || historySyncing || !selected || !sessionKeyFromPath(location.pathname)) return;
+    if (
+      loading ||
+      historySyncing ||
+      !selected ||
+      !sessionKeyFromPath(location.pathname)
+    )
+      return;
     if (allThreads.some((thread) => sessionKey(thread) === selected)) return;
     const grace = Math.max(500, 4000 - (Date.now() - selectedAtRef.current));
     const timer = window.setTimeout(() => {
@@ -1221,51 +1281,60 @@ export function App() {
         </main>
       }
     >
-      <ChatWorkspace
-        key={sessionKey(current)}
-        thread={current}
-        provider={providerForThread(
-          snapshot.providers,
-          snapshot.agentProfiles,
-          current,
-        )}
-        agentName={agentName(snapshot.agents, current)}
-        capabilities={capabilitiesFor(snapshot.agents, current)}
-        messageDeliveries={snapshot.messageDeliveries}
-        approvals={snapshot.approvals}
-        events={events}
-        origin={origin}
-        searchTarget={
-          searchTarget?.session === sessionKey(current)
-            ? searchTarget
-            : undefined
-        }
-        onBack={leaveToWorkspace}
-        onSnapshot={refresh}
-        onCreatedThread={(created) => setSnapshot((current) => ({
-          ...current,
-          threads: [created, ...current.threads.filter((item) => sessionKey(item) !== sessionKey(created))],
-        }))}
-        onSwitchProvider={() => setSwitchThread(current)}
-        onMenu={() => setSheet(current)}
-        onSelectThread={(providerId, threadId) =>
-          openSessionKey(
-            sessionKey({
-              agentId: current.agentId,
-              providerId,
-              id: threadId,
-            }),
-          )
-        }
-        onToast={pushToast}
-        onUsage={() => setUsageOpen("stats")}
-        onTasks={() => setTaskScope(current.id)}
-        onAppearance={() => setSettingsModal({ tab: "interface" })}
-        onSessionSettings={() => setSessionSettingsOpen(true)}
-        onOpenOrigin={() => openOrigin(current)}
-        wake={wakeFor(current)}
-        onWake={() => setWakeThread(current)}
-      />
+      <Suspense fallback={<p role="status">正在加载…</p>}>
+        <ChatWorkspace
+          key={sessionKey(current)}
+          thread={current}
+          provider={providerForThread(
+            snapshot.providers,
+            snapshot.agentProfiles,
+            current,
+          )}
+          agentName={agentName(snapshot.agents, current)}
+          capabilities={capabilitiesFor(snapshot.agents, current)}
+          messageDeliveries={snapshot.messageDeliveries}
+          approvals={snapshot.approvals}
+          events={events}
+          origin={origin}
+          searchTarget={
+            searchTarget?.session === sessionKey(current)
+              ? searchTarget
+              : undefined
+          }
+          onBack={leaveToWorkspace}
+          onSnapshot={refresh}
+          onCreatedThread={(created) =>
+            setSnapshot((current) => ({
+              ...current,
+              threads: [
+                created,
+                ...current.threads.filter(
+                  (item) => sessionKey(item) !== sessionKey(created),
+                ),
+              ],
+            }))
+          }
+          onSwitchProvider={() => setSwitchThread(current)}
+          onMenu={() => setSheet(current)}
+          onSelectThread={(providerId, threadId) =>
+            openSessionKey(
+              sessionKey({
+                agentId: current.agentId,
+                providerId,
+                id: threadId,
+              }),
+            )
+          }
+          onToast={pushToast}
+          onUsage={() => setUsageOpen("stats")}
+          onTasks={() => setTaskScope(current.id)}
+          onAppearance={() => setSettingsModal({ tab: "interface" })}
+          onSessionSettings={() => setSessionSettingsOpen(true)}
+          onOpenOrigin={() => openOrigin(current)}
+          wake={wakeFor(current)}
+          onWake={() => setWakeThread(current)}
+        />
+      </Suspense>
     </RenderErrorBoundary>
   ) : undefined;
 
@@ -1315,7 +1384,9 @@ export function App() {
                   pattern="\d{6}"
                   placeholder="6 位验证码"
                 />
-                <Button variant="primary" type="submit">验证并连接</Button>
+                <Button variant="primary" type="submit">
+                  验证并连接
+                </Button>
               </form>
               {pairMessage && <p className="auth-error">{pairMessage}</p>}
               <div className="auth-divider">或</div>
@@ -1333,7 +1404,9 @@ export function App() {
             }}
           >
             <input name="token" type="password" placeholder="访问令牌" />
-            <Button variant="primary" type="submit">连接</Button>
+            <Button variant="primary" type="submit">
+              连接
+            </Button>
           </form>
         </div>
       </div>
@@ -1342,21 +1415,23 @@ export function App() {
   if (page === "tools")
     return (
       <>
-        <ToolCenter
-          tools={snapshot.tools}
-          initialCwd={current?.cwd}
-          directories={[
-            ...(current?.cwd ? [current.cwd] : []),
-            ...(snapshot.preferences?.recentDirs || []),
-            ...(snapshot.projects || []).map((project) => project.cwd),
-            ...allThreads.map((thread) => thread.cwd),
-          ].filter(
-            (value, index, values) =>
-              Boolean(value) && values.indexOf(value) === index,
-          )}
-          onToast={pushToast}
-          onClose={leaveToWorkspace}
-        />
+        <Suspense fallback={<p role="status">正在加载…</p>}>
+          <ToolCenter
+            tools={snapshot.tools}
+            initialCwd={current?.cwd}
+            directories={[
+              ...(current?.cwd ? [current.cwd] : []),
+              ...(snapshot.preferences?.recentDirs || []),
+              ...(snapshot.projects || []).map((project) => project.cwd),
+              ...allThreads.map((thread) => thread.cwd),
+            ].filter(
+              (value, index, values) =>
+                Boolean(value) && values.indexOf(value) === index,
+            )}
+            onToast={pushToast}
+            onClose={leaveToWorkspace}
+          />
+        </Suspense>
         <ToastStack toasts={toasts} />
       </>
     );
@@ -1652,50 +1727,52 @@ export function App() {
         />
       )}
       {settingsModal && (
-        <SettingsModal
-          snapshot={snapshot}
-          appearance={appearance}
-          notificationPermission={notificationPermission}
-          defaultCwd={current?.cwd}
-          initialTab={settingsModal.tab}
-          onRequestNotifications={enableSystemNotifications}
-          onOpenTool={(path) => {
-            // 在当前页打开工具会切走整个工作区，设置一并收起。
-            if (mobile || getDeckSettings().toolOpenTarget === "inline")
-              setSettingsModal(false);
-            openTool(path);
-          }}
-          onClose={() => setSettingsModal(false)}
-          onSaved={setSnapshot}
-          onToast={pushToast}
-          onConfirm={(spec, run) => setConfirm({ ...spec, run })}
-          onConfirmDelete={(provider, run) =>
-            setConfirm({
-              title: "删除供应商",
-              body: (
-                <p>
-                  确定删除 <b>{provider.name}</b>？已有会话历史不会删除。
-                </p>
-              ),
-              danger: true,
-              confirmLabel: "删除",
-              run,
-            })
-          }
-          onConfirmRuntimeRestart={(run) =>
-            setConfirm({
-              title: "保存上下文设置并重启？",
-              body: (
-                <p>
-                  新设置需要重启共享的 <b>Codex 服务</b> 才能生效。
-                  已有历史不会删除；如果有任务正在运行或待确认，本次保存会被拒绝。
-                </p>
-              ),
-              confirmLabel: "保存并重启",
-              run,
-            })
-          }
-        />
+        <Suspense fallback={<p role="status">正在加载…</p>}>
+          <SettingsModal
+            snapshot={snapshot}
+            appearance={appearance}
+            notificationPermission={notificationPermission}
+            defaultCwd={current?.cwd}
+            initialTab={settingsModal.tab}
+            onRequestNotifications={enableSystemNotifications}
+            onOpenTool={(path) => {
+              // 在当前页打开工具会切走整个工作区，设置一并收起。
+              if (mobile || getDeckSettings().toolOpenTarget === "inline")
+                setSettingsModal(false);
+              openTool(path);
+            }}
+            onClose={() => setSettingsModal(false)}
+            onSaved={setSnapshot}
+            onToast={pushToast}
+            onConfirm={(spec, run) => setConfirm({ ...spec, run })}
+            onConfirmDelete={(provider, run) =>
+              setConfirm({
+                title: "删除供应商",
+                body: (
+                  <p>
+                    确定删除 <b>{provider.name}</b>？已有会话历史不会删除。
+                  </p>
+                ),
+                danger: true,
+                confirmLabel: "删除",
+                run,
+              })
+            }
+            onConfirmRuntimeRestart={(run) =>
+              setConfirm({
+                title: "保存上下文设置并重启？",
+                body: (
+                  <p>
+                    新设置需要重启共享的 <b>Codex 服务</b> 才能生效。
+                    已有历史不会删除；如果有任务正在运行或待确认，本次保存会被拒绝。
+                  </p>
+                ),
+                confirmLabel: "保存并重启",
+                run,
+              })
+            }
+          />
+        </Suspense>
       )}
       {threadModal && (
         <NewThreadModal
@@ -1787,8 +1864,8 @@ export function App() {
       {historyHelp && (
         <Modal title="历史会话" onClose={() => setHistoryHelp(null)}>
           <p>
-            这条记录来自已有 Codex 历史，可以查看内容；它是外部终端里的会话，Deck
-            只展示不接管。
+            这条记录来自已有 Codex
+            历史，可以查看内容；它是外部终端里的会话，Deck 只展示不接管。
           </p>
           <Button
             variant="primary"
@@ -1865,25 +1942,42 @@ export function App() {
                 ),
             },
             {
-              label: sheetOperation === "fork" ? "正在创建分支…" : "复制成独立分支",
+              label:
+                sheetOperation === "fork" ? "正在创建分支…" : "复制成独立分支",
               disabled:
-                Boolean(sheetOperation) || !capabilitiesFor(snapshot.agents, sheet).fork ||
-                sheet.archived || sheet.status === "running" || sheet.status === "waiting",
+                Boolean(sheetOperation) ||
+                !capabilitiesFor(snapshot.agents, sheet).fork ||
+                sheet.archived ||
+                sheet.status === "running" ||
+                sheet.status === "waiting",
               onClick: async () => {
                 const source = sheet;
                 const sourcePath = location.pathname;
                 try {
                   const created = await forkSession(source);
-                  setSnapshot((current) => ({ ...current,
-                    threads: [created, ...current.threads.filter((item) => sessionKey(item) !== sessionKey(created))],
+                  setSnapshot((current) => ({
+                    ...current,
+                    threads: [
+                      created,
+                      ...current.threads.filter(
+                        (item) => sessionKey(item) !== sessionKey(created),
+                      ),
+                    ],
                   }));
                   if (location.pathname === sourcePath) {
                     pushToast("分支已创建");
-                    openSessionKey(sessionKey({ ...created, agentId: created.agentId || source.agentId,
-                      providerId: created.providerId || source.providerId }));
+                    openSessionKey(
+                      sessionKey({
+                        ...created,
+                        agentId: created.agentId || source.agentId,
+                        providerId: created.providerId || source.providerId,
+                      }),
+                    );
                   } else pushToast("分支已创建，可在会话列表打开");
                   void refresh();
-                } catch (error: any) { pushToast(error?.message || "创建分支失败"); }
+                } catch (error: any) {
+                  pushToast(error?.message || "创建分支失败");
+                }
               },
             },
             {
@@ -1923,7 +2017,8 @@ export function App() {
               label: "永久删除",
               danger: true,
               disabled:
-                Boolean(sheetOperation) || !capabilitiesFor(snapshot.agents, sheet).delete ||
+                Boolean(sheetOperation) ||
+                !capabilitiesFor(snapshot.agents, sheet).delete ||
                 (["claude", "opencode"].includes(sheet.agentId || "codex") &&
                   (sheet.status === "running" || sheet.status === "waiting")),
               onClick: () =>
@@ -1950,15 +2045,24 @@ export function App() {
                     // Apply the successful DELETE response immediately, without
                     // keeping the dialog open for another full-snapshot request.
                     if (Array.isArray(result?.threads))
-                      setSnapshot((current) => reconcileSnapshot(current, result));
+                      setSnapshot((current) =>
+                        reconcileSnapshot(current, result),
+                      );
                     else {
-                      setSnapshot((current) => ({ ...current,
-                        threads: current.threads.filter((item) => sessionKey(item) !== sessionKey(sheet)),
-                        archivedThreads: current.archivedThreads?.filter((item) => sessionKey(item) !== sessionKey(sheet)),
+                      setSnapshot((current) => ({
+                        ...current,
+                        threads: current.threads.filter(
+                          (item) => sessionKey(item) !== sessionKey(sheet),
+                        ),
+                        archivedThreads: current.archivedThreads?.filter(
+                          (item) => sessionKey(item) !== sessionKey(sheet),
+                        ),
                       }));
                       if (!result?.ok) void refresh();
                     }
-                    setSelected((current) => current === sessionKey(sheet) ? undefined : current);
+                    setSelected((current) =>
+                      current === sessionKey(sheet) ? undefined : current,
+                    );
                     pushToast("会话已删除");
                   },
                 }),
@@ -1994,7 +2098,11 @@ export function App() {
                       body: JSON.stringify({ settings }),
                     });
                   } catch (error) {
-                    pushToast(error instanceof Error ? error.message : "保存会话设置失败");
+                    pushToast(
+                      error instanceof Error
+                        ? error.message
+                        : "保存会话设置失败",
+                    );
                   } finally {
                     void refresh();
                   }
@@ -2025,37 +2133,43 @@ export function App() {
           </Modal>
         )}
       {usageOpen && (
-        <UsageDrawer
-          runtime={snapshot.runtime}
-          threads={allThreads}
-          projects={snapshot.projects}
-          currentSessionKey={current ? sessionKey(current) : undefined}
-          initialView={usageOpen}
-          onRefreshLimits={refreshOfficialUsage}
-          onClose={() => setUsageOpen(null)}
-        />
+        <Suspense fallback={<p role="status">正在加载…</p>}>
+          <UsageDrawer
+            runtime={snapshot.runtime}
+            threads={allThreads}
+            projects={snapshot.projects}
+            currentSessionKey={current ? sessionKey(current) : undefined}
+            initialView={usageOpen}
+            onRefreshLimits={refreshOfficialUsage}
+            onClose={() => setUsageOpen(null)}
+          />
+        </Suspense>
       )}
       {taskScope !== undefined && (
-        <TaskCenter
-          scopeThreadId={taskScope || undefined}
-          statusVersion={snapshot.threads
-            .filter((thread) => ["running", "waiting"].includes(thread.status))
-            .map(
-              (thread) =>
-                `${thread.agentId || "codex"}:${thread.id}:${thread.status}:${thread.activeTurnId || ""}`,
-            )
-            .join("|")}
-          onOpenThread={(agentId, threadId) => {
-            const thread = allThreads.find(
-              (item) =>
-                (item.agentId || "codex") === agentId && item.id === threadId,
-            );
-            if (thread) openSession(thread);
-            setTaskScope(undefined);
-          }}
-          onToast={pushToast}
-          onClose={() => setTaskScope(undefined)}
-        />
+        <Suspense fallback={<p role="status">正在加载…</p>}>
+          <TaskCenter
+            scopeThreadId={taskScope || undefined}
+            statusVersion={snapshot.threads
+              .filter((thread) =>
+                ["running", "waiting"].includes(thread.status),
+              )
+              .map(
+                (thread) =>
+                  `${thread.agentId || "codex"}:${thread.id}:${thread.status}:${thread.activeTurnId || ""}`,
+              )
+              .join("|")}
+            onOpenThread={(agentId, threadId) => {
+              const thread = allThreads.find(
+                (item) =>
+                  (item.agentId || "codex") === agentId && item.id === threadId,
+              );
+              if (thread) openSession(thread);
+              setTaskScope(undefined);
+            }}
+            onToast={pushToast}
+            onClose={() => setTaskScope(undefined)}
+          />
+        </Suspense>
       )}
       {confirm && (
         <ConfirmDialog
@@ -2067,7 +2181,7 @@ export function App() {
           onConfirm={async () => {
             try {
               await confirm.run();
-              setConfirm((current) => current === confirm ? null : current);
+              setConfirm((current) => (current === confirm ? null : current));
             } catch (error: any) {
               pushToast(error?.message || "操作失败");
               throw error;

@@ -31,15 +31,15 @@ export default defineConfig({
     assetsInlineLimit: 8 * 1024,
     rollupOptions: {
       output: {
-        // react-markdown（含 remark-gfm）与 xterm 只在会话/终端页用到，
-        // 独立分包后首屏只下 react 主包，并行缓存利用率更高。
-        // lucide-react 留主包：图标散布各处，单独拆包反而多一次往返。
-        manualChunks: {
-          // 注意子路径也要显式列出：main.tsx 实际 import 的是 react-dom/client，
-          // 光写 'react-dom' 匹配不到，react-dom 会漏回主包。
-          'vendor-react': ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
-          'vendor-markdown': ['react-markdown', 'remark-gfm'],
-          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit'],
+        // React 的 CJS 实现与公共 helper 必须同包，避免被 Markdown
+        // 间接依赖吸走，导致首页反过来预加载整份 Markdown。
+        manualChunks(id) {
+          if (id.includes('commonjsHelpers') || /[/\\]node_modules[/\\](react|react-dom|scheduler)[/\\]/.test(id)) {
+            return 'vendor-react'
+          }
+          if (/[/\\]node_modules[/\\]@xterm[/\\]/.test(id)) {
+            return 'vendor-xterm'
+          }
         },
       },
     },
