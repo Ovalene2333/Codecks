@@ -1,8 +1,8 @@
 {
   "version": 1,
   "title": "deck-api 实际协作泳道",
-  "source": "从 .data 的询问台账与消息投递记录解析生成；路径、URL、IP 和令牌已脱敏。 当前只导出询问 f59a3b17。",
-  "generatedAt": 1792514989350,
+  "source": "从 .data 的询问台账与消息投递记录解析生成；路径、URL、IP 和令牌已脱敏。 当前只导出 f59a3b17。",
+  "generatedAt": 1792518429438,
   "scenarios": [
     {
       "id": "f59a3b17",
@@ -10,6 +10,12 @@
       "kicker": "OpenCode → OpenCode · queue · detached",
       "summary": "使用deck-api，开一个opencode，模型使用<provider>/<model> 于 10-19 22:33 发起，10-19 22:47 收口；目标共回传 8 条，来源/唤醒补充 7 条，其中 0 条投递失败。最终状态：answered。",
       "lanes": [
+        {
+          "id": "user",
+          "name": "用户",
+          "role": "目标、指令与追问",
+          "tone": "human"
+        },
         {
           "id": "source",
           "name": "使用deck-api，开一个o…",
@@ -31,6 +37,18 @@
       ],
       "steps": [
         {
+          "id": "user:f59a3b17-7b8f-4b99-ac6e-056173e29c11",
+          "from": "user",
+          "to": "source",
+          "kind": "message",
+          "title": "使用deck-api，开一个opencode，模型使用<provi…",
+          "detail": "使用deck-api，开一个opencode，模型使用<provider>/<model>",
+          "tag": "会话标题",
+          "atMs": 1792420425383,
+          "estimated": true,
+          "at": "10-19 22:33"
+        },
+        {
           "id": "question:f59a3b17-7b8f-4b99-ac6e-056173e29c11",
           "from": "source",
           "to": "target",
@@ -38,7 +56,7 @@
           "title": "发起询问",
           "detail": "我们在 codex-deck 仓库（当前工作目录 <path>）讨论如何优化 deck-api 并做完善的测试。请你先阅读 docs/deck-api.md、skills/deck-api/scripts/deck-api 以及 server/ 下 /api/deck/* 相关路由实现，然后给出你的第一轮观点：1) deck-api 当前设计中最值得优化的 3 个点（说明理由与风险）；2) 针对这些点你认为应该补哪些测试（单元/集成/…",
           "tag": "create",
-          "atMs": 1792420425384,
+          "atMs": 1792420425384.001,
           "at": "10-19 22:33"
         },
         {
@@ -49,8 +67,19 @@
           "title": "来源补充",
           "detail": "你的首轮观点我基本认同，几点回应：(1) 收件人解析收敛：同意把 @alias/显式 thread/--code 三通道统一到一个 resolver 模块，返回结构化结果和可分类错误，sendFrom 的多询问歧义建议改为返回候选列表让上层明确报错而不是取第一条。(2) detached 语义：captureResult 失败目前静默吞掉这点我同意要修，建议落一个 captureFailed 状态并重试一次 readThread；pe…",
           "tag": "queue",
-          "atMs": 1792420597626.001,
+          "atMs": 1792420597626.002,
           "at": "10-19 22:36"
+        },
+        {
+          "id": "send:0023bbf6a318d65c",
+          "from": "source",
+          "to": "target",
+          "kind": "send",
+          "title": "来源补充",
+          "detail": "错误码确认：四个码够用，补两点约定：(1) AMBIGUOUS 的 candidates 只带 alias/status/cwd 等安全字段，不带完整 threadId 之外的内容透传到 CLI 输出；(2) UNKNOWN_ALIAS 与 ARCHIVED 分开是对的，但 CLI 侧都要以非零退出并打印人类可读信息，服务端 HTTP 用 404/409 区分。你的分工采纳：你先做 P0-2+P0-3，完成后我再接 P0-1（reso…",
+          "tag": "queue",
+          "atMs": 1792420696580.003,
+          "at": "10-19 22:38"
         },
         {
           "id": "send:ea2c37ca3d2c3f86",
@@ -60,7 +89,18 @@
           "title": "来源补充",
           "detail": "来源用户新议题：send 回传的及时性不可控（绑死来源回合状态，queue 等空闲/steer 仅 codex/interrupt 打断），打断方式也不优雅。我的方案：把「通知」和「交付」拆两层——交付统一走 detached+result 快照（幂等可重复读）；通知走一行式 [done:@alias] push，只允许 queue 投递、复用 wake outbox 落盘重试与「需要处理」兜底，绝不 steer/interrupt，…",
           "tag": "queue",
-          "atMs": 1792420811823.003,
+          "atMs": 1792420811823.004,
+          "at": "10-19 22:40"
+        },
+        {
+          "id": "send:31b6bfb7bc72e03b",
+          "from": "source",
+          "to": "target",
+          "kind": "send",
+          "title": "来源补充",
+          "detail": "采纳你的修正：通知走 queue-only（ask-service.ts 一处，幂等 id ask:<id>:done:<turnId>），outbox 只借「需要处理」的展示概念不借投递路径，事件入口不复用。补两点细节进设计：(1) 投递前检查 resultAlreadyRead——来源若已通过 result 领取过本 turnId 交付，取消这条通知，避免「已领完通知才到」的噪音；(2) [done:<alias>] 失败分支的 …",
+          "tag": "queue",
+          "atMs": 1792420852505.005,
           "at": "10-19 22:40"
         },
         {
@@ -71,55 +111,19 @@
           "title": "来源补充",
           "detail": "用户升级了设计：主从结构。人创建的 agent 为主节点，主节点永不接受 send 注入（queue/steer/interrupt 对主节点全部退化为缓冲）；子会话/外部消息到达时主节点在跑就静默入缓冲，从忙转闲的瞬间发一次一行 done（多条合并、按批幂等、指针不带正文）；缓冲内容只自取（领取=读+推进 per-session 已读指针的原子操作）；缓冲复用消息队列持久化。目标：人的交互结构性优先，agent 消息永不抢占 tur…",
           "tag": "queue",
-          "atMs": 1792421117803.005,
+          "atMs": 1792421117803.006,
           "at": "10-19 22:45"
         },
         {
-          "id": "send:83ba5a973287ed53",
+          "id": "send:efaaecfcdaec22bd",
           "from": "source",
           "to": "target",
           "kind": "send",
           "title": "来源补充",
-          "detail": "讨论全部收束，感谢高质量协作。用户新指令：实现由来源侧独立完成，你不需要做任何实现，本次协作到此结束。你的观点已完整吸收进方案（done=徽标+搭车、顺序锁定的四项、isMaster helper、wake 堵后门等）。任务关系解除。",
+          "detail": "评估采纳，全部锁定：(1) done 形态改为纯徽标+搭车，不注入回合——你说服了我，idle 注入回合就是抢占，与目标矛盾；徽标落在会话快照未读计数+雷达面板，搭车落在 turn-input 拼缓冲摘要；AgentRegistry 静默写入通道你实现前顺手确认一下，有则升级为静默 done，无则维持徽标+搭车。(2) 顺序不重排：P0-2→P0-3→done 通知(MVP/回退形态)→P0-1 来源侧，缓冲列 P1-2 最后做。(3…",
           "tag": "queue",
-          "atMs": 1792421255255.007,
-          "at": "10-19 22:47"
-        },
-        {
-          "id": "reply:77e1a0cb-245f-4432-8c30-91c5973dda91",
-          "from": "target",
-          "to": "source",
-          "kind": "queue",
-          "title": "第二轮观点（s-693eb3c）：同意来源三点回应，收敛如下",
-          "detail": "第二轮观点（s-693eb3c）：同意来源三点回应，收敛如下。 A. P0/P1清单 P0-1 收件人解析收敛到单一resolver。改动：新建 server/deck-recipients.ts（@alias/@s-/显式thread/--code统一解析，返回{kind,target,alias}或分类错误{UNKNOWN_ALIAS|ARCHIVED|AMBIGUOUS|BAD_FORMAT,candidates}）；改 ser…",
-          "tag": "feedback",
-          "atMs": 1792420628028.009,
-          "estimated": false,
-          "at": "10-19 22:37"
-        },
-        {
-          "id": "reply:2c35aa72-1081-4188-ab46-ca4093b9840e",
-          "from": "target",
-          "to": "source",
-          "kind": "queue",
-          "title": "评估（s-693eb3c）：拆层方向认同，但“通知复用 wake …",
-          "detail": "评估（s-693eb3c）：拆层方向认同，但“通知复用 wake outbox”部分不建议，理由与替代如下。 1) 兼容成本 - 交付层现成：detached+result 快照即 captureResult/readResult（server/ask-service.ts、ask-output.ts），P0-2 修完 pending 落态后可直接当交付用，零新增。 - 通知若走 MessageDeliveryQueue queue-…",
-          "tag": "queue",
-          "atMs": 1792420843860.011,
-          "estimated": false,
-          "at": "10-19 22:40"
-        },
-        {
-          "id": "reply:788e36dc-20fc-4882-b28f-4bf917ad9bf9",
-          "from": "target",
-          "to": "source",
-          "kind": "queue",
-          "title": "评估（s-693eb3c）：主从方向与“结构性优先”认同，但 do…",
-          "detail": "评估（s-693eb3c）：主从方向与“结构性优先”认同，但 done 形态要换，否则字面目标达不成。 1) 落点 - MessageDeliveryQueue（server/message-delivery.ts）：加 buffered 形态成本小。现状 queue 在忙时本就 return 等待（deliver 215~216行），缺的只是三件事：enqueue 处强制降级（主节点+外部消息无视 mode/forceInterru…",
-          "tag": "queue",
-          "atMs": 1792421158016.013,
-          "estimated": false,
-          "at": "10-19 22:45"
+          "atMs": 1792421171751.007,
+          "at": "10-19 22:46"
         },
         {
           "id": "reply:a528e5a4-48e4-469b-964f-fd958abbc51a",
@@ -129,7 +133,7 @@
           "title": "收到，协作收束确认：实现由来源侧独立完成，我侧不做任何实现改动",
           "detail": "收到，协作收束确认：实现由来源侧独立完成，我侧不做任何实现改动。观点交付完毕，任务关系解除，感谢信任。",
           "tag": "queue",
-          "atMs": 1792421261904.015,
+          "atMs": 1792421261904.016,
           "estimated": false,
           "at": "10-19 22:47"
         },
@@ -141,7 +145,7 @@
           "title": "detached 完成，等待来源查询",
           "detail": "完成/失败不向来源推送；状态和正文由 result / tasks 主动查询。",
           "tag": "answered",
-          "atMs": 1792421272804.016,
+          "atMs": 1792421272804.017,
           "at": "10-19 22:47"
         }
       ],
@@ -150,7 +154,7 @@
         "所有补充消息都有对应投递记录；受理状态仍不等于目标已执行。",
         "detached 完成/失败不推送；结果只能由 result / tasks 主动查询。"
       ],
-      "omitted": 7,
+      "omitted": 8,
       "meta": {
         "askAlias": "f59a3b17",
         "askId": "f59a3b17",

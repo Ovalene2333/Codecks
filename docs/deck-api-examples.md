@@ -7,6 +7,7 @@
 
 - Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，默认实时解析本机台账；右上角可刷新。
 - 「指定会话」支持询问别名、`@s-…` 会话别名和 `agent:threadId`；URL 里写 `/deck-api?q=@s-…` 可直接分享/收藏某个案例。
+- 泳道固定四列：**用户 → 来源会话 → Deck → 目标会话**。用户列来自来源会话的原生 `userMessage`，包括发起询问前的指令和询问期间的新提示。
 - 页面失败或后端不可用时退回 `shared/deck-api-swimlane-example.json` 的脱敏快照。
 - 静态图 [deck-api-swimlane.svg](deck-api-swimlane.svg) 来自真实询问 `f59a3b17`
   （deck-api 设计评审，detached），已脱敏；它不是虚构案例。
@@ -18,6 +19,7 @@
 
 | 泳道事件 | 来源 |
 | --- | --- |
+| 用户指令 | 来源会话原生历史里的 `userMessage`，只取可见文本并跳过 Deck 注入消息；读不到历史时退回会话标题 |
 | 发起询问 | `ask-sessions.json` 的 `question` 与 `createdAt` |
 | 来源补充 | 目标线程收到、但不属于该询问回传的 `message-deliveries` 记录 |
 | 唤醒通知 | 目标线程收到的 `[wake:<代号>]` 投递；同一代号聚合成一条，保留次数和时间范围 |

@@ -68,10 +68,12 @@ test("泳道从台账和投递记录还原真实顺序", () => {
   const result = buildLaneScenarios([ask], deliveries, threads, { limit: 1, maxSteps: 20 });
   const scenario = result.scenarios[0];
   assert.equal(scenario.id, "7f3a2c90");
-  assert.deepEqual(scenario.lanes.map((lane) => lane.id), ["source", "deck", "target"]);
-  assert.equal(scenario.steps[0].title, "发起询问");
-  assert.equal(scenario.steps[0].from, "source");
-  assert.equal(scenario.steps[0].to, "target");
+  assert.deepEqual(scenario.lanes.map((lane) => lane.id), ["user", "source", "deck", "target"]);
+  assert.equal(scenario.steps[0].from, "user");
+  assert.equal(scenario.steps[0].to, "source");
+  const question = scenario.steps.find((step) => step.title === "发起询问");
+  assert.equal(question?.from, "source");
+  assert.equal(question?.to, "target");
   assert.ok(scenario.steps.some((step) => step.kind === "send" && step.title === "来源补充"));
   const wake = scenario.steps.find((step) => step.kind === "wake");
   assert.equal(wake?.title, "唤醒通知 ×2");
@@ -142,4 +144,31 @@ test("可以按询问别名、会话别名或 threadId 定位", () => {
   assert.equal(buildLaneScenarios([ask], deliveries, threads, { session: "@s-main" }).scenarios.length, 1);
   assert.equal(buildLaneScenarios([ask], deliveries, threads, { ask: "ask-1" }).scenarios.length, 1);
   assert.equal(buildLaneScenarios([ask], deliveries, threads, { query: "missing" }).scenarios.length, 0);
+});
+
+test("来源会话的真实用户消息进入用户泳道", () => {
+  const result = buildLaneScenarios([ask], deliveries, threads, {
+    limit: 1,
+    userMessages: [
+      { agentId: "opencode", threadId: "src-thread", atMs: 800, text: "请实现模块，先跑测试" },
+      { agentId: "opencode", threadId: "src-thread", atMs: 12_000, text: "补充：不要动 GPU" },
+      { agentId: "opencode", threadId: "other-thread", atMs: 900, text: "不该出现" },
+    ],
+  });
+  const scenario = result.scenarios[0];
+  assert.equal(scenario.lanes[0].id, "user");
+  const users = scenario.steps.filter((step) => step.from === "user");
+  assert.equal(users.length, 2);
+  assert.match(users[0].detail, /请实现模块/);
+  assert.match(users[1].detail, /不要动 GPU/);
+  assert.ok(!scenario.steps.some((step) => step.detail.includes("不该出现")));
+});
+
+test("没有用户消息时用会话标题兜底，仍保留四列", () => {
+  const result = buildLaneScenarios([ask], deliveries, threads, { limit: 1 });
+  const scenario = result.scenarios[0];
+  assert.deepEqual(scenario.lanes.map((lane) => lane.id), ["user", "source", "deck", "target"]);
+  const user = scenario.steps.find((step) => step.from === "user");
+  assert.equal(user?.tag, "会话标题");
+  assert.match(user?.detail || "", /主研究会话/);
 });

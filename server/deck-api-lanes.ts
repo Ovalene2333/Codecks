@@ -1,5 +1,6 @@
 import type { AskRecord } from "./ask-service.js";
 import type { MessageDelivery } from "./agents/messages.js";
+import { visibleUserText } from "./agents/injected-context.js";
 
 export type LaneKind =
   | "message"
@@ -10,6 +11,13 @@ export type LaneKind =
   | "failure"
   | "wake"
   | "query";
+
+export interface LaneUserMessage {
+  agentId: string;
+  threadId: string;
+  atMs: number;
+  text: string;
+}
 
 export interface LaneThread {
   agentId: string;
@@ -80,6 +88,8 @@ export interface LaneBuildOptions {
   session?: string;
   /** 一个输入同时匹配询问和会话，页面搜索框使用。 */
   query?: string;
+  /** 来源会话里的真实用户消息；缺失时用会话标题兜底。 */
+  userMessages?: LaneUserMessage[];
   sanitize?: boolean;
 }
 
@@ -176,6 +186,7 @@ const selectSteps = (steps: LaneStep[], maxSteps?: number) => {
   for (const kind of ["failure", "wake", "success"]) {
     for (const step of steps) if (step.kind === kind) add(step);
   }
+  for (const step of steps) if (step.from === "user") add(step);
   add(lastReply);
   const remaining = Math.max(0, maxSteps - keep.size);
   const rest = steps.filter((step) => !keep.has(step.id));
@@ -187,13 +198,19 @@ const selectSteps = (steps: LaneStep[], maxSteps?: number) => {
   return { steps: selected, omitted: steps.length - selected.length };
 };
 
-export function buildLaneScenarios(
+interface PreparedLaneAsk {
+  ask: AskRecord;
+  followUps: MessageDelivery[];
+  failed: number;
+  score: number;
+}
+
+function prepareLaneAsks(
   asks: AskRecord[],
   deliveryList: MessageDelivery[],
   threads: LaneThread[],
-  options: LaneBuildOptions = {},
-): LaneScenarioSet {
-  const sanitize = options.sanitize === true;
+  options: LaneBuildOptions,
+) {
   const limit = options.limit ?? 8;
   const deliveries = new Map(deliveryList.map((item) => [item.id, item]));
   const threadMap = new Map(threads.map((thread) => [`${thread.agentId}:${thread.id}`, thread]));
@@ -228,8 +245,7 @@ export function buildLaneScenarios(
     ask.alias === queryRef ||
     ask.id === queryRef ||
     matchesSession(ask, queryRef);
-
-  const prepared = asks
+  const prepared: PreparedLaneAsk[] = asks
     .filter((ask) => ask.targetThreadId && (ask.sentMessages?.length || ask.detached || ask.status === "failed"))
     .filter(inProject)
     .filter(matchesAsk)
@@ -249,6 +265,28 @@ export function buildLaneScenarios(
     })
     .sort((left, right) => right.score - left.score || right.ask.updatedAt - left.ask.updatedAt)
     .slice(0, limit);
+  return { prepared, threadFor };
+}
+
+/** 先按筛选条件选出要展示的询问，供服务端只读取这些来源会话的用户消息。 */
+export function selectLaneAsks(
+  asks: AskRecord[],
+  deliveryList: MessageDelivery[],
+  threads: LaneThread[],
+  options: LaneBuildOptions = {},
+): AskRecord[] {
+  return prepareLaneAsks(asks, deliveryList, threads, options).prepared.map((item) => item.ask);
+}
+
+export function buildLaneScenarios(
+  asks: AskRecord[],
+  deliveryList: MessageDelivery[],
+  threads: LaneThread[],
+  options: LaneBuildOptions = {},
+): LaneScenarioSet {
+  const sanitize = options.sanitize === true;
+  const deliveries = new Map(deliveryList.map((item) => [item.id, item]));
+  const { prepared, threadFor } = prepareLaneAsks(asks, deliveryList, threads, options);
 
   const scenarios = prepared.map(({ ask, followUps, failed }): LaneScenario => {
     const sourceThread = threadFor(ask.sourceAgentId, ask.sourceThreadId);
@@ -272,6 +310,43 @@ export function buildLaneScenarios(
         atMs: step.atMs + order++ / 1000,
       });
     };
+
+    const sourceMessages = (options.userMessages || [])
+      .filter((message) => message.agentId === ask.sourceAgentId && message.threadId === ask.sourceThreadId)
+      .sort((left, right) => left.atMs - right.atMs);
+    const before = sourceMessages.filter((message) => message.atMs <= ask.createdAt + 1_000).at(-1);
+    const after = sourceMessages.filter(
+      (message) =>
+        message.atMs > (before?.atMs ?? ask.createdAt - 12 * 3_600_000) &&
+        message.atMs <= ask.updatedAt + 5 * 60_000,
+    );
+    const userMessages = [...(before ? [before] : []), ...after];
+    if (userMessages.length) {
+      userMessages.forEach((message, index) => {
+        push({
+          id: `user:${ask.id}:${message.atMs}:${index}`,
+          from: "user",
+          to: "source",
+          kind: "message",
+          title: headline(message.text),
+          detail: text(message.text, 220),
+          tag: index === 0 ? "用户指令" : "用户追问",
+          atMs: message.atMs,
+        });
+      });
+    } else {
+      push({
+        id: `user:${ask.id}`,
+        from: "user",
+        to: "source",
+        kind: "message",
+        title: headline(rawSourceName),
+        detail: text(rawSourceName, 220),
+        tag: "会话标题",
+        atMs: ask.createdAt - 1,
+        estimated: true,
+      });
+    }
 
     push({
       id: `question:${ask.id}`,
@@ -361,6 +436,7 @@ export function buildLaneScenarios(
       atMs: ended + 1,
     });
 
+    steps.sort((left, right) => left.atMs - right.atMs);
     const { steps: chosen, omitted } = selectSteps(steps, options.maxSteps);
     const replyCount = ask.sentMessages?.length || 0;
     const wakeCount = followUps.filter((delivery) => delivery.id.startsWith("wake:")).length;
@@ -383,6 +459,7 @@ export function buildLaneScenarios(
       kicker: `${agentName(ask.sourceAgentId)} → ${agentName(ask.targetAgentId)} · ${ask.returnMode}${ask.detached ? " · detached" : ""}`,
       summary: `${sourceName} 于 ${start} 发起，${end} 收口；目标共回传 ${replyCount} 条，来源/唤醒补充 ${followUps.length} 条，其中 ${failed} 条投递失败。最终状态：${ask.status}。`,
       lanes: [
+        { id: "user", name: "用户", role: "目标、指令与追问", tone: "human" },
         { id: "source", name: sourceName.length > 16 ? `${sourceName.slice(0, 15)}…` : sourceName, role: `${agentName(ask.sourceAgentId)} · ${sourceAlias} · 来源`, tone: "lead" },
         { id: "deck", name: "Deck", role: "消息队列 / 投递台账", tone: "service" },
         { id: "target", name: targetName.length > 16 ? `${targetName.slice(0, 15)}…` : targetName, role: `${agentName(ask.targetAgentId)} · ${targetAlias} · 目标`, tone: "worker" },
@@ -423,6 +500,65 @@ export function buildLaneScenarios(
 }
 
 type LaneThreadLike = Omit<LaneThread, "agentId"> & { agentId?: string };
+
+/**
+ * 从来源会话读取真实用户消息。只保留可见文本，跳过 Deck 注入的
+ * [ask:]/[send:]/[wake:] 与历史展开提示；读取失败只影响用户泳道。
+ */
+const userMessageCache = new Map<string, { at: number; messages: LaneUserMessage[] }>();
+const USER_MESSAGE_CACHE_MS = 30_000;
+
+export async function readLaneUserMessages(
+  asks: AskRecord[],
+  readThread: (agentId: string, threadId: string) => Promise<unknown>,
+): Promise<LaneUserMessage[]> {
+  const pairs = new Map<string, { agentId: string; threadId: string }>();
+  for (const ask of asks) {
+    if (!ask.sourceThreadId) continue;
+    pairs.set(`${ask.sourceAgentId}:${ask.sourceThreadId}`, {
+      agentId: ask.sourceAgentId,
+      threadId: ask.sourceThreadId,
+    });
+  }
+  const results = await Promise.all(
+    [...pairs.values()].map(async ({ agentId, threadId }) => {
+      const cacheKey = `${agentId}:${threadId}`;
+      const cached = userMessageCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < USER_MESSAGE_CACHE_MS) return cached.messages;
+      try {
+        const full = (await readThread(agentId, threadId)) as any;
+        const messages: LaneUserMessage[] = [];
+        for (const turn of full?.turns || full?.thread?.turns || []) {
+          const atMs = Number(turn?.startedAt) || Number(turn?.createdAt);
+          if (!Number.isFinite(atMs) || atMs <= 0) continue;
+          for (const item of turn?.items || []) {
+            if (item?.type !== "userMessage") continue;
+            const raw = (item.content || [])
+              .filter((part: any) => part?.type === "text")
+              .map((part: any) => String(part.text || ""))
+              .join("\n")
+              .trim();
+            if (!raw || /^\[(ask|send|wake|deck-api):/i.test(raw) || raw.includes("[查看完整会话]"))
+              continue;
+            const text = visibleUserText(raw).trim();
+            if (text) messages.push({ agentId, threadId, atMs, text });
+          }
+        }
+        userMessageCache.set(cacheKey, { at: Date.now(), messages });
+        return messages;
+      } catch {
+        return cached?.messages || [];
+      }
+    }),
+  );
+  const seen = new Set<string>();
+  return results.flat().filter((message) => {
+    const key = `${message.agentId}:${message.threadId}:${message.atMs}:${message.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export function laneThreadsFromSummary(summary: {
   threads?: LaneThreadLike[];

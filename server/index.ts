@@ -72,7 +72,7 @@ import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { WakeOutbox } from "./wake-outbox.js";
 import { AskSettingsStore, askConfigurationSchema, resolveAskConfiguration } from "./ask-settings.js";
 import { AskService } from "./ask-service.js";
-import { buildLaneScenarios, laneThreadsFromSummary } from "./deck-api-lanes.js";
+import { buildLaneScenarios, laneThreadsFromSummary, readLaneUserMessages, selectLaneAsks } from "./deck-api-lanes.js";
 import {
   listWakeWatchers,
   readTail,
@@ -1945,18 +1945,19 @@ app.get(
       ...thread,
       alias: threadSettings.sessionAlias(thread.agentId as AgentId, thread.id) || thread.alias,
     }));
-    return buildLaneScenarios(
-      askService.records(),
-      messageDeliveries.list(),
-      threads,
-      {
-        limit,
-        project: readString(req.query.project),
-        ask: readString(req.query.ask),
-        session: readString(req.query.session),
-        query: readString(req.query.q),
-      },
-    );
+    const askRecords = askService.records();
+    const deliveries = messageDeliveries.list();
+    const options = {
+      limit,
+      project: readString(req.query.project),
+      ask: readString(req.query.ask),
+      session: readString(req.query.session),
+      query: readString(req.query.q),
+    };
+    const selectedAsks = selectLaneAsks(askRecords, deliveries, threads, options);
+    const userMessages = await readLaneUserMessages(selectedAsks, (agent, thread) =>
+      agents.readThread(agent as AgentId, thread, { background: true, turnLimit: 40 }));
+    return buildLaneScenarios(selectedAsks, deliveries, threads, { ...options, userMessages });
   }),
 );
 // watcher 通常就跑在 deck 本机（agent 的 bash 亦然），回环直连
