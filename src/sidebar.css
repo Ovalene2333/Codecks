@@ -296,14 +296,13 @@
      竖线只是辅助，真正可读的信号是 meta 行里的「分支」徽标（不依赖 hover）。 */
   box-shadow: inset 2px 0 0 var(--line);
 }
-.session-row--fork[data-branch-depth="1"] {
-  padding-left: 10px;
-}
+/* 第一层分支不额外缩进：和普通会话保持同一列，只靠左侧竖线区分；
+   更深的嵌套（普通行左内边距 26px）才逐级缩进。 */
 .session-row--fork[data-branch-depth="2"] {
-  padding-left: 16px;
+  padding-left: 32px;
 }
 .session-row--fork[data-branch-depth="3"] {
-  padding-left: 22px;
+  padding-left: 38px;
 }
 .thread-list .thread-meta .branch-badge,
 .branch-badge {
@@ -537,16 +536,6 @@
     min-height: 48px;
     padding: 8px 8px 8px 10px;
   }
-  /* 触控行更高，嵌套缩进相应缩小，保证标题仍有足够宽度点按。 */
-  .session-row--fork[data-branch-depth="1"] {
-    padding-left: 12px;
-  }
-  .session-row--fork[data-branch-depth="2"] {
-    padding-left: 16px;
-  }
-  .session-row--fork[data-branch-depth="3"] {
-    padding-left: 20px;
-  }
   .session-row-more {
     opacity: 1;
   }
@@ -674,43 +663,141 @@
   height: 18px;
   margin-left: -4px;
 }
-.is-dragging-sidebar,
-.is-dragging-sidebar * {
-  cursor: grabbing !important;
+
+/* 项目折叠箭头用一个图标旋转，展开/折叠不再瞬间换图形。 */
+.project-toggle .project-chevron {
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.is-drag-container {
+.project-toggle .project-chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+/* 展开时新出现的会话做一个很轻的上浮淡入。 */
+.project-sessions {
+  animation: sidebar-sessions-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes sidebar-sessions-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 落位线挂在滚动容器上，滚动/自动滚动时都贴着目标行。 */
+.thread-list {
   position: relative;
 }
 .sidebar-drop-indicator {
   position: absolute;
-  z-index: 3;
+  top: 0;
+  left: 0;
+  z-index: 6;
+  width: 0;
   height: 2px;
   border-radius: 2px;
   background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  opacity: 0;
   pointer-events: none;
+  transform: translate3d(-100px, -100px, 0);
+  transition:
+    transform 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 90ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 80ms linear;
+  will-change: transform;
 }
-.sidebar-drop-indicator::before {
+.sidebar-drop-indicator.is-visible {
+  opacity: 1;
+}
+.sidebar-drop-indicator::before,
+.sidebar-drop-indicator::after {
   content: "";
   position: absolute;
   top: 50%;
-  left: -3px;
   width: 6px;
   height: 6px;
   margin-top: -3px;
   border-radius: 50%;
   background: var(--accent);
 }
-.project-group.is-dragging,
+.sidebar-drop-indicator::before {
+  left: -3px;
+}
+.sidebar-drop-indicator::after {
+  right: -3px;
+}
+
+/* 拖动中的浮层：脱离文档流，只改 transform 跟随指针。 */
+.sidebar-drag-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  will-change: transform;
+}
+.sidebar-drag-ghost-inner {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow:
+    0 14px 32px color-mix(in srgb, #000 26%, transparent),
+    0 2px 8px color-mix(in srgb, #000 16%, transparent);
+  animation: sidebar-ghost-lift 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes sidebar-ghost-lift {
+  from {
+    opacity: 0.35;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 0.98;
+    transform: scale(1.012);
+  }
+}
+.sidebar-drag-ghost.is-leaving {
+  opacity: 0;
+  transition: opacity 110ms ease;
+}
+.sidebar-drag-ghost-inner .session-row {
+  width: 100%;
+  margin: 0;
+}
+.sidebar-drag-ghost-inner .session-row-more,
+.sidebar-drag-ghost-inner .project-add {
+  display: none;
+}
+.sidebar-drag-ghost-inner .sidebar-drag-handle {
+  cursor: grabbing;
+}
+
+/* 被拖走的那一行留在原位当占位，淡下去但不消失。 */
+.thread-list.is-reordering .project-group,
+.thread-list.is-reordering .session-row {
+  transition: opacity 140ms ease;
+}
+.project-group.is-dragging {
+  opacity: 0.4;
+}
 .session-row.is-dragging {
-  opacity: 0.45;
+  opacity: 0.35;
+}
+.is-dragging-sidebar,
+.is-dragging-sidebar * {
+  cursor: grabbing !important;
 }
 .is-reordering .project-heading,
 .thread-list.is-reordering .session-row {
-  cursor: grab;
   touch-action: pan-y;
 }
-/* 手机上也要有可点的拖动目标：手柄区域不小于 36px。 */
+.is-reordering .project-heading {
+  cursor: grab;
+}
+/* 手机上也要有可点的拖动目标：手柄区域不小于 32px。 */
 @media (max-width: 760px) {
   .sidebar-drag-handle {
     width: 28px;

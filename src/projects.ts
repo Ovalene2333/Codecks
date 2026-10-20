@@ -249,25 +249,32 @@ export function sortProjectSessions(sessions: ThreadSummary[]): ThreadSummary[] 
 }
 
 /**
- * 侧栏项目的最终顺序：置顶永远在最前；其余按用户手动顺序，没排过的
- * 接在后面（有会话在跑的先来）。只看会话 status，不看 updatedAt 抖动。
+ * 侧栏项目的最终顺序：手动排过的项目严格按用户顺序（拖动优先于置顶，
+ * 否则拖到置顶项目下方会立刻弹回去）；没排过的再接在后面，置顶优先、
+ * 有会话在跑的先来。只看会话 status，不看 updatedAt 抖动。
  */
 export function sortProjectsForSidebar(
   groups: ProjectGroup[],
   order: readonly string[] | undefined,
   liveKeys: ReadonlySet<string>,
 ): ProjectGroup[] {
-  const ordered = applyOrder(groups, order, (group) => group.key);
   const manualKeys = new Set(order || []);
+  if (!manualKeys.size)
+    return [...groups].sort((a, b) => {
+      const byPinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+      if (byPinned) return byPinned;
+      return Number(liveKeys.has(b.key)) - Number(liveKeys.has(a.key));
+    });
+  const ordered = applyOrder(groups, order, (group) => group.key);
   const manual = ordered.filter((group) => manualKeys.has(group.key));
   const rest = ordered
     .filter((group) => !manualKeys.has(group.key))
-    .sort(
-      (a, b) => Number(liveKeys.has(b.key)) - Number(liveKeys.has(a.key)),
-    );
-  return [...manual, ...rest].sort(
-    (a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)),
-  );
+    .sort((a, b) => {
+      const byPinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+      if (byPinned) return byPinned;
+      return Number(liveKeys.has(b.key)) - Number(liveKeys.has(a.key));
+    });
+  return [...manual, ...rest];
 }
 
 /** 按给定键顺序重排，只影响列出的键；用于拖动后的新顺序落盘。 */

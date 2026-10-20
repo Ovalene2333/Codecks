@@ -1254,10 +1254,13 @@ export function App() {
     });
   };
 
-  /** 侧栏拖动落位：把整列当前顺序写进设备偏好，兼容没手动排过的项。 */
+  /**
+   * 侧栏拖动落位：按未过滤的完整列表落盘，搜索/状态筛选时也不会把
+   * 看不见的项从手动顺序里抹掉。
+   */
   const moveSidebarProject = useCallback(
     (from: string, before: string | null) => {
-      const all = projects.map((group) => group.key);
+      const all = orderedGroups.map((group) => group.key);
       const next = reorderKeys(all, from, before);
       const layout = getDeckSettings().sidebarLayout;
       updateDeckSettings({
@@ -1266,11 +1269,11 @@ export function App() {
       // 拖完顺手把项目展开，免得拖到折叠项目上时看着没变化。
       setExpandedProjects((currentSet) => new Set(currentSet).add(from));
     },
-    [projects],
+    [orderedGroups],
   );
   const moveSidebarSession = useCallback(
     (projectKey: string, from: string, before: string | null) => {
-      const group = projects.find((item) => item.key === projectKey);
+      const group = orderedGroups.find((item) => item.key === projectKey);
       if (!group) return;
       const next = reorderKeys(group.sessions.map(sessionKey), from, before);
       const layout = getDeckSettings().sidebarLayout;
@@ -1281,7 +1284,7 @@ export function App() {
         },
       });
     },
-    [projects],
+    [orderedGroups],
   );
   const resetSidebarOrder = useCallback(
     () =>

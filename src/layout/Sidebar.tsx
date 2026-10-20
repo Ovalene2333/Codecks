@@ -169,14 +169,21 @@ export function Sidebar({
   const asideRef = useRef<HTMLElement>(null);
   const { hiddenTools, sidebarWidth, sidebarLayout } = useDeckSettings();
   const [reorderMode, setReorderMode] = useState(false);
-  // 排序手柄只在「调整顺序」模式下出现；回调变化时重建控制器，避免闭包持有旧列表。
+  /*
+   * 拖动控制器只建一次：侧栏几乎每次快照都会重渲染，若跟随回调重建，
+   * 正在进行的拖动会被 dispose 打断。回调用 ref 指向最新的一份。
+   */
+  const moveRef = useRef({ onMoveProject, onMoveSession });
+  moveRef.current = { onMoveProject, onMoveSession };
   const drag = useMemo(
     () =>
       createSidebarDrag({
-        onProjectMove: onMoveProject,
-        onSessionMove: onMoveSession,
+        onProjectMove: (from, before) =>
+          moveRef.current.onMoveProject(from, before),
+        onSessionMove: (projectKey, from, before) =>
+          moveRef.current.onMoveSession(projectKey, from, before),
       }),
-    [onMoveProject, onMoveSession],
+    [],
   );
   useEffect(() => () => drag.dispose(), [drag]);
   const startProjectDrag = useCallback(
@@ -511,7 +518,7 @@ export function Sidebar({
       )}
       {reorderMode && (
         <p className="sidebar-reorder-hint" role="status">
-          拖动项目或会话左上角的手柄调整顺序；该顺序只保存在当前设备。
+          拖动左侧手柄调整顺序；折叠的项目展开后才能拖动其中的会话。顺序只保存在当前设备。
         </p>
       )}
       <div className={`thread-list ${reorderMode ? "is-reordering" : ""}`}>

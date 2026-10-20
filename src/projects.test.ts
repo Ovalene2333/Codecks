@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyOrder,
   filterProjectGroups,
   mergeProjectGroups,
   normalizeProjectPath,
   previewSessions,
   quickNewProjects,
+  reorderKeys,
   resolveNewThreadDefaults,
+  sortProjectSessions,
+  sortProjectsForSidebar,
   threadsForProject,
 } from "./projects";
 import type { ThreadSummary } from "./types";
@@ -401,4 +405,63 @@ test("quickNewProjects keeps pinned-first order and skips hidden or pathless gro
     ["/a", "/b"],
   );
   assert.equal(quickNewProjects(groups, 1).length, 1);
+});
+
+test("sortProjectSessions keeps two running sessions from swapping on updatedAt", () => {
+  const sessions = [
+    { ...thread("/a", "a1"), updatedAt: 300, status: "running" as const },
+    { ...thread("/a", "a2"), updatedAt: 400, status: "running" as const },
+    { ...thread("/a", "idle-newer"), updatedAt: 500 },
+  ];
+  const groups = mergeProjectGroups([], sessions);
+  assert.deepEqual(
+    groups[0].sessions.map((item) => item.id),
+    ["a2", "a1", "idle-newer"],
+  );
+});
+
+test("applyOrder respects the manual order and appends unmapped items", () => {
+  const items = ["a", "b", "c"];
+  assert.deepEqual(applyOrder(items, ["c", "a"], (item) => item), ["c", "a", "b"]);
+  assert.deepEqual(applyOrder(items, [], (item) => item), ["a", "b", "c"]);
+  assert.deepEqual(applyOrder(items, ["x"], (item) => item), ["a", "b", "c"]);
+});
+
+test("reorderKeys moves an item before a target or to the end", () => {
+  assert.deepEqual(reorderKeys(["a", "b", "c"], "c", "a"), ["c", "a", "b"]);
+  assert.deepEqual(reorderKeys(["a", "b", "c"], "a", null), ["b", "c", "a"]);
+  assert.deepEqual(reorderKeys(["a", "b", "c"], "b", "missing"), ["a", "c", "b"]);
+});
+
+test("sortProjectsForSidebar keeps manual order, pinned first, running next", () => {
+  const groups = mergeProjectGroups(
+    [{ key: "/p", cwd: "/p", name: "p", pinned: true, updatedAt: 1 }],
+    [
+      { ...thread("/a", "a1"), updatedAt: 100 },
+      { ...thread("/b", "b1"), updatedAt: 300, status: "running" as const },
+      { ...thread("/p", "p1"), updatedAt: 50 },
+    ],
+  );
+  // 手动顺序就是用户拖出来的结果：置顶项目被拖下去后不能弹回顶部。
+  assert.deepEqual(
+    sortProjectsForSidebar(
+      groups,
+      ["/a", "/b", "/p"],
+      new Set(["/b"]),
+    ).map((group) => group.key),
+    ["/a", "/b", "/p"],
+  );
+  assert.deepEqual(
+    sortProjectsForSidebar(groups, undefined, new Set(["/p", "/b"])).map(
+      (group) => group.key,
+    ),
+    ["/p", "/b", "/a"],
+  );
+  // 没手动排过的项目接在手动项后面，置顶优先。
+  assert.deepEqual(
+    sortProjectsForSidebar(groups, ["/a"], new Set()).map(
+      (group) => group.key,
+    ),
+    ["/a", "/p", "/b"],
+  );
 });

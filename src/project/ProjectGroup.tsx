@@ -1,7 +1,6 @@
 import { useState, type CSSProperties, type PointerEvent } from "react";
 import {
   ChevronDown,
-  ChevronRight,
   Folder,
   GripVertical,
   Lock,
@@ -99,13 +98,19 @@ export function ProjectGroupView({
   registerSessionRow?: (key: string, node: HTMLElement | null) => void;
 }) {
   const [menu, setMenu] = useState(false);
-  const visible = previewSessions(project.sessions, !collapsed, {
-    isPinned: (thread) => {
-      const key = sessionKey(thread);
-      return key === selected || unseenSessions.has(key);
-    },
-  });
-  const hiddenCount = project.sessions.length - visible.length;
+  // 拖动排序时折叠就是完全折叠：不留预览会话，项目行之间才看得清、拖得准。
+  const fullyCollapsed = Boolean(reorderMode) && collapsed;
+  const visible = fullyCollapsed
+    ? []
+    : previewSessions(project.sessions, !collapsed, {
+        isPinned: (thread) => {
+          const key = sessionKey(thread);
+          return key === selected || unseenSessions.has(key);
+        },
+      });
+  const hiddenCount = fullyCollapsed
+    ? 0
+    : project.sessions.length - visible.length;
   const providerById = new Map(
     providers.map((item) => [item.id, item] as const),
   );
@@ -147,7 +152,10 @@ export function ProjectGroupView({
           title={collapsed ? "展开该项目" : "折叠该项目"}
           onClick={onToggle}
         >
-          {collapsed ? <ChevronRight /> : <ChevronDown />}
+          <ChevronDown
+            className={`project-chevron ${collapsed ? "is-collapsed" : ""}`}
+            aria-hidden="true"
+          />
           <Folder />
           <span className="project-name" title={project.cwd}>
             {project.name}
@@ -257,7 +265,12 @@ export function ProjectGroupView({
                 ]
                   .filter(Boolean)
                   .join("，")}
-                onClick={() => onSelect(thread, searchMatch)}
+                onClick={(event) => {
+                  // 拖动手柄松开时也会在行上补一个 click：不要顺手打开会话。
+                  if (reorderMode) return;
+                  void event;
+                  onSelect(thread, searchMatch);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();

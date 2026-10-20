@@ -2,7 +2,19 @@ import { useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { Sidebar } from "./layout/Sidebar";
 import { Welcome } from "./welcome/Welcome";
-import type { ProjectGroup } from "./projects";
+import {
+  applyOrder,
+  reorderKeys,
+  sortProjectsForSidebar,
+  type ProjectGroup,
+} from "./projects";
+import {
+  getDeckSettings,
+  updateDeckSettings,
+  useDeckSettings,
+} from "./deck-settings";
+import { sessionKey } from "./format";
+import { branchRelations } from "./session-branch";
 import { ToastStack } from "./ui";
 import type {
   Approval,
@@ -73,6 +85,15 @@ const THREADS: ThreadSummary[] = [
     status: "running",
     updatedAt: minutes(0.4),
     preview: "正在生成平铺布局组件 · tsc --noEmit 通过",
+  }),
+  thread({
+    id: "sidebar-drag",
+    name: "sidebar-drag",
+    cwd: "/home/u/Codecks",
+    status: "idle",
+    updatedAt: minutes(18),
+    preview: "侧栏拖动排序与落位动画",
+    forkedFromId: "tiled",
   }),
   thread({
     id: "etl",
@@ -166,7 +187,22 @@ function groupsFor(threads: ThreadSummary[]): ProjectGroup[] {
 }
 
 function Harness() {
-  const groups = useMemo(() => groupsFor(THREADS), []);
+  const { sidebarLayout } = useDeckSettings();
+  const branches = useMemo(() => branchRelations(THREADS), []);
+  const groups = useMemo(
+    () =>
+      sortProjectsForSidebar(groupsFor(THREADS), sidebarLayout.projects, new Set()).map(
+        (group) => ({
+          ...group,
+          sessions: applyOrder(
+            group.sessions,
+            sidebarLayout.sessions[group.key],
+            sessionKey,
+          ),
+        }),
+      ),
+    [sidebarLayout],
+  );
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(groups.map((group) => group.key)),
   );
@@ -207,6 +243,7 @@ function Harness() {
         counts={counts}
         projects={groups}
         selected={undefined}
+        branches={branches}
         unseenSessions={
           new Set(["claude:official:gateway", "opencode:relay:infra"])
         }
@@ -226,9 +263,42 @@ function Harness() {
         onQuery={noop("搜索")}
         onStatusFilter={noop("筛选")}
         onHome={noop("总览")}
-        onMoveProject={() => {}}
-        onMoveSession={() => {}}
-        onResetOrder={() => {}}
+        onMoveProject={(from, before) => {
+          const layout = getDeckSettings().sidebarLayout;
+          updateDeckSettings({
+            sidebarLayout: {
+              ...layout,
+              projects: reorderKeys(
+                groups.map((group) => group.key),
+                from,
+                before,
+              ),
+            },
+          });
+        }}
+        onMoveSession={(projectKey, from, before) => {
+          const group = groups.find((item) => item.key === projectKey);
+          if (!group) return;
+          const layout = getDeckSettings().sidebarLayout;
+          updateDeckSettings({
+            sidebarLayout: {
+              ...layout,
+              sessions: {
+                ...layout.sessions,
+                [projectKey]: reorderKeys(
+                  group.sessions.map(sessionKey),
+                  from,
+                  before,
+                ),
+              },
+            },
+          });
+        }}
+        onResetOrder={() =>
+          updateDeckSettings({
+            sidebarLayout: { projects: [], sessions: {} },
+          })
+        }
         onToggleProject={(key) =>
           setExpanded((current) => {
             const next = new Set(current);
