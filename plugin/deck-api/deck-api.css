@@ -35,6 +35,77 @@
   height: 14px;
 }
 
+
+.lanes-source-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.lanes-source-row p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.lanes-mode {
+  flex: none;
+  margin-top: 1px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.lanes-mode.is-live {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
+  background: var(--success-bg);
+  color: var(--ok);
+}
+
+.lanes-refresh {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+
+.lanes-refresh.refreshing svg {
+  animation: lanes-spin 0.9s linear infinite;
+}
+
+@keyframes lanes-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.lane-omitted {
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--wait);
+  font-size: var(--fs-micro);
+}
+
+.lane-detail-time {
+  flex: none;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+
+.lane-empty {
+  margin: 0;
+  padding: 24px;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+}
+
 .lanes-intro h2 {
   margin: 0;
   font-size: var(--fs-heading);
@@ -379,6 +450,8 @@
 }
 
 .lane-detail {
+  width: 100%;
+  align-self: stretch;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -386,8 +459,9 @@
 
 .lane-detail-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
 }
@@ -404,10 +478,15 @@
 
 .lane-detail-route {
   display: inline-flex;
+  flex: 1 1 180px;
+  min-width: 0;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
   color: var(--text-dim);
   font-size: var(--fs-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .lane-detail-route svg {
@@ -416,10 +495,12 @@
 }
 
 .lane-detail-count {
+  flex: none;
   margin-left: auto;
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: var(--fs-micro);
+  white-space: nowrap;
 }
 
 .lane-detail-nav {
@@ -446,7 +527,7 @@
 }
 
 .lane-detail-body > div:first-child {
-  flex: 1 1 320px;
+  flex: 1 1 100%;
   min-width: 0;
 }
 

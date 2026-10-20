@@ -268,6 +268,17 @@ export class AskService {  private items: AskRecord[] = [];
     }));
   }
 
+  /**
+   * 完整台账只读副本，供协作泳道解析。list() 面向 UI 会裁掉问题与逐条
+   * 回传正文；这里需要原样保留，才能从真实消息还原时间线。
+   */
+  records(): AskRecord[] {
+    return this.items.map((item) => ({
+      ...item,
+      sentMessages: item.sentMessages?.map((message) => ({ ...message })),
+    }));
+  }
+
   private lookup(reference: string) {
     if (this.loadError) throw new Error(this.loadError);
     const key = reference.replace(/^@/, "");

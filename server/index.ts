@@ -72,6 +72,7 @@ import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { WakeOutbox } from "./wake-outbox.js";
 import { AskSettingsStore, askConfigurationSchema, resolveAskConfiguration } from "./ask-settings.js";
 import { AskService } from "./ask-service.js";
+import { buildLaneScenarios, laneThreadsFromSummary } from "./deck-api-lanes.js";
 import {
   listWakeWatchers,
   readTail,
@@ -1930,6 +1931,25 @@ const tryThreadSummary = (id: AgentId, threadId: string) => {
     return undefined;
   }
 };
+/**
+ * 协作泳道直接解析本机询问台账与消息投递记录，不维护第二份示例数据。
+ * 页面传 project=traceroute 可以把范围收窄到某个工作区。
+ */
+app.get(
+  "/api/deck/lanes",
+  route(async (req) => {
+    const limit = z.coerce.number().int().min(1).max(20).default(8).parse(req.query.limit);
+    const project = typeof req.query.project === "string" && req.query.project.trim()
+      ? req.query.project.trim()
+      : undefined;
+    return buildLaneScenarios(
+      askService.records(),
+      messageDeliveries.list(),
+      laneThreadsFromSummary(agents.snapshot()),
+      { limit, project },
+    );
+  }),
+);
 // watcher 通常就跑在 deck 本机（agent 的 bash 亦然），回环直连
 // 即可，无需绕公网/tunnel。
 const localBase = `http://${formatHost(

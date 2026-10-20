@@ -23,8 +23,10 @@
     "lan6": "node --experimental-sqlite dist-server/server/index.js --lan6",
     "cf-tunnel": "node --experimental-sqlite dist-server/server/index.js --cf-tunnel",
     "share": "node --experimental-sqlite dist-server/server/index.js --share",
-    "swimlane": "node scripts/deck-api-swimlane.mjs",
-    "test": "node --experimental-sqlite --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
+    "swimlane": "npm run lanes:sync && node scripts/deck-api-swimlane.mjs --input .data/deck-api-swimlanes.json --output .data/deck-api-swimlane.svg",
+    "test": "node --experimental-sqlite --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts",
+    "lanes:sync": "node --import tsx scripts/deck-api-session-lanes.ts",
+    "swimlane:example": "node --import tsx scripts/deck-api-session-lanes.ts --ask f59a3b17 --limit 1 --output shared/deck-api-swimlane-example.json && node scripts/deck-api-swimlane.mjs --input shared/deck-api-swimlane-example.json --output docs/deck-api-swimlane.svg"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.283",

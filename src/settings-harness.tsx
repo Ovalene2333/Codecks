@@ -238,7 +238,7 @@ const TOOLS: ToolDescriptor[] = [
   {
     id: "deck-api",
     name: "协作泳道",
-    description: "用泳道图查看 deck-api 的委派、steer、wake 与 detached 案例",
+    description: "解析本机询问台账，用泳道图查看委派、补充、唤醒与 detached",
     icon: "waypoints",
     available: true,
   },

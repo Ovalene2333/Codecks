@@ -181,7 +181,7 @@ const TOOLS: ToolDescriptor[] = [
   { id: "git", name: "Git 管理", description: "查看改动、管理暂存区与分支，并同步远端仓库", icon: "git-branch", available: true, pagePath: "/git", defaultCwd: SHOP },
   { id: "text-editor", name: "文本编辑器", description: "浏览宿主机文件系统，查看、编辑、查找并保存文本文件", icon: "file-pen", available: true, pagePath: "/text-editor", defaultCwd: SHOP },
   { id: "commands", name: "快捷指令", description: "在指定目录一键执行常用指令，命令里可用 {参数名} 占位符带参执行", icon: "zap", available: true, pagePath: "/commands", defaultCwd: SHOP },
-  { id: "deck-api", name: "协作泳道", description: "用泳道图查看 deck-api 的委派、steer、wake 与 detached 案例", icon: "waypoints", available: true, pagePath: "/deck-api", defaultCwd: SHOP },
+  { id: "deck-api", name: "协作泳道", description: "解析本机询问台账，用泳道图查看委派、补充、唤醒与 detached", icon: "waypoints", available: true, pagePath: "/deck-api", defaultCwd: SHOP },
 ];
 
 const QUICK_COMMANDS = [

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowRight,
@@ -14,13 +14,15 @@ import {
   Eye,
   MessageSquare,
   Radar,
+  RefreshCw,
   Send,
   Sparkles,
   Waypoints,
 } from "lucide-react";
+import { api } from "../../src/api";
 import { copyText } from "../../src/clipboard";
 import type { ToolViewProps } from "../client-registry";
-import examples from "../../shared/deck-api-swimlanes.json";
+import examples from "../../shared/deck-api-swimlane-example.json";
 
 type LaneTone = "human" | "lead" | "service" | "worker" | "artifact";
 type StepKind =
@@ -48,6 +50,8 @@ interface Step {
   title: string;
   detail: string;
   tag: string;
+  at?: string;
+  estimated?: boolean;
   command?: string;
 }
 
@@ -59,16 +63,18 @@ interface Scenario {
   lanes: Lane[];
   steps: Step[];
   rules: string[];
+  omitted?: number;
 }
 
 interface SwimlaneData {
   version: number;
   title: string;
   source: string;
+  generatedAt?: number;
   scenarios: Scenario[];
 }
 
-const data = examples as unknown as SwimlaneData;
+const snapshot = examples as unknown as SwimlaneData;
 
 const KIND_META: Record<
   StepKind,
@@ -96,12 +102,42 @@ const KIND_ORDER: StepKind[] = [
 ];
 
 export function DeckApiView({ onToast }: ToolViewProps) {
-  const [scenarioId, setScenarioId] = useState(data.scenarios[0]?.id || "");
+  const [data, setData] = useState<SwimlaneData>(snapshot);
+  const [live, setLive] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [scenarioId, setScenarioId] = useState(snapshot.scenarios[0]?.id || "");
   const scenario = useMemo(
     () => data.scenarios.find((item) => item.id === scenarioId) || data.scenarios[0],
-    [scenarioId],
+    [data, scenarioId],
   );
   const [stepId, setStepId] = useState(scenario?.steps[0]?.id || "");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await api<SwimlaneData>("/deck/lanes?limit=8");
+      if (result.scenarios?.length) {
+        setData(result);
+        setLive(true);
+        setLoadError("");
+      } else {
+        setData(snapshot);
+        setLive(false);
+        setLoadError("本机台账暂无可用询问，当前显示脱敏快照。");
+      }
+    } catch (error: any) {
+      setData(snapshot);
+      setLive(false);
+      setLoadError(error?.message || "本机台账读取失败，当前显示脱敏快照。");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   useEffect(() => {
     if (!scenario) return;
@@ -109,15 +145,15 @@ export function DeckApiView({ onToast }: ToolViewProps) {
   }, [scenario]);
 
   const laneIndex = useMemo(
-    () => new Map(scenario.lanes.map((lane, index) => [lane.id, index])),
+    () => new Map(scenario?.lanes.map((lane, index) => [lane.id, index]) || []),
     [scenario],
   );
   const laneById = useMemo(
-    () => new Map(scenario.lanes.map((lane) => [lane.id, lane])),
+    () => new Map(scenario?.lanes.map((lane) => [lane.id, lane]) || []),
     [scenario],
   );
-  const selectedIndex = scenario.steps.findIndex((step) => step.id === stepId);
-  const selected = scenario.steps[selectedIndex];
+  const selectedIndex = scenario?.steps.findIndex((step) => step.id === stepId) ?? -1;
+  const selected = selectedIndex >= 0 ? scenario.steps[selectedIndex] : undefined;
 
   const copy = async (command: string) => {
     if (await copyText(command)) onToast("命令已复制");
@@ -125,9 +161,18 @@ export function DeckApiView({ onToast }: ToolViewProps) {
   };
 
   const move = (delta: number) => {
+    if (!scenario) return;
     const next = scenario.steps[selectedIndex + delta];
     if (next) setStepId(next.id);
   };
+
+  if (!scenario) {
+    return (
+      <div className="deck-api-lanes">
+        <p className="lane-empty">本机台账里还没有可解析的询问记录。</p>
+      </div>
+    );
+  }
 
   return (
     <div className="deck-api-lanes">
@@ -138,7 +183,22 @@ export function DeckApiView({ onToast }: ToolViewProps) {
             多 Agent 协作
           </p>
           <h2>{data.title}</h2>
-          <p>{data.source}</p>
+          <div className="lanes-source-row">
+            <span className={`lanes-mode ${live ? "is-live" : "is-snapshot"}`}>
+              {live ? "本机会话解析" : "脱敏快照"}
+            </span>
+            <p>{loadError || data.source}</p>
+            <button
+              type="button"
+              className={`icon-btn lanes-refresh${loading ? " refreshing" : ""}`}
+              title="重新解析本机台账"
+              aria-label="重新解析本机台账"
+              disabled={loading}
+              onClick={() => void load()}
+            >
+              <RefreshCw />
+            </button>
+          </div>
         </div>
         <div className="lanes-legend" aria-label="事件类型图例">
           {KIND_ORDER.map((kind) => {
@@ -170,7 +230,12 @@ export function DeckApiView({ onToast }: ToolViewProps) {
       </nav>
 
       <section className="lane-scenario" role="tabpanel">
-        <p className="lane-summary">{scenario.summary}</p>
+        <p className="lane-summary">
+          {scenario.summary}
+          {scenario.omitted ? (
+            <span className="lane-omitted">中间省略 {scenario.omitted} 条，切到本机会话解析可看完整记录。</span>
+          ) : null}
+        </p>
 
         <div className="lane-board-scroll">
           <div
@@ -188,7 +253,7 @@ export function DeckApiView({ onToast }: ToolViewProps) {
                 style={{ gridColumn: index + 2, gridRow: 1 }}
               >
                 <b>{String(index + 1).padStart(2, "0")}</b>
-                <span>{step.tag}</span>
+                <span>{step.at || step.tag}</span>
               </div>
             ))}
 
@@ -293,6 +358,7 @@ export function DeckApiView({ onToast }: ToolViewProps) {
               <span className={`lane-detail-kind kind-${selected.kind}`}>
                 {KIND_META[selected.kind].label}
               </span>
+              {selected.at && <span className="lane-detail-time">{selected.at}</span>}
               <span className="lane-detail-route">
                 {laneById.get(selected.from)?.name}
                 {selected.from === selected.to ? " · 本会话内" : (
@@ -354,7 +420,7 @@ export function DeckApiView({ onToast }: ToolViewProps) {
         <div className="lane-rules">
           <h3>
             <Sparkles aria-hidden="true" />
-            这一段要记住
+            从记录里看到
           </h3>
           <ul>
             {scenario.rules.map((rule) => (
@@ -366,8 +432,10 @@ export function DeckApiView({ onToast }: ToolViewProps) {
 
       <footer className="lanes-footer">
         <Database aria-hidden="true" />
-        示例数据来自真实会话整理，已去除主机、路径、令牌与账号信息。完整命令见
-        <code>docs/deck-api-examples.md</code>。
+        {live
+          ? "数据来自本机 Deck 询问台账与消息投递记录；刷新会重新解析，不写回任何会话。"
+          : "当前是脱敏快照；启动 Deck 后自动切换到本机会话解析。"}
+        完整说明见 <code>docs/deck-api-examples.md</code>。
       </footer>
     </div>
   );

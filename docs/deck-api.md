@@ -55,11 +55,12 @@
 
 ## 实战例子与泳道图
 
-[deck-api-examples.md](deck-api-examples.md) 收录了委派回传、steer 静默丢失、远端长任务唤醒和 detached 领取四个真实案例，并有一张按会话分泳道的流程图。
+[deck-api-examples.md](deck-api-examples.md) 记录了如何从本机询问台账和消息投递记录解析真实协作，并列出了 traceroute 工作区里 6 个实际询问的时间、回传数和走向。
 
-- Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，可交互查看每一步的命令、路由和失败点。
-- 静态图由 `npm run swimlane` 从 `shared/deck-api-swimlanes.json` 生成到 `docs/deck-api-swimlane.svg`；`--scenario steer` 可只导出一个场景。
-- 添加新案例只需改 JSON，页面、文档和 SVG 共用同一份数据。
+- Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，页面实时读取 `/api/deck/lanes`，按来源会话、Deck 队列、目标会话分泳道；右上角可刷新。
+- 页面优先显示本机台账；后端不可用时退回 `shared/deck-api-swimlane-example.json` 的脱敏快照，不会用虚构案例填充。
+- `npm run lanes:sync` 把本机解析结果写到 `.data/deck-api-swimlanes.json`；`npm run swimlane` 生成 `.data/deck-api-swimlane.svg`；`npm run swimlane:example` 重新生成仓库内脱敏示例和文档图。
+- 解析只读 `ask-sessions.json`、`message-deliveries.json` 和 `thread-summaries.json`，不复制会话、不写回台账。
 
 ## 安装与入口
 

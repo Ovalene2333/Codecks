@@ -250,7 +250,7 @@ Linux 多核机器的资源监控已降低 CPU 采样开销，避免首页轮询
 - **Git 管理**（`/git`）：选项目目录，看工作区和暂存区的改动，批量暂存或取消暂存，提交，切换或新建分支，fetch、快进 pull、push。不是仓库的目录可以直接 init。文件名和分支名都作为独立的 Git 参数传，不拼 Shell 命令
 - **文本编辑器**（`/text-editor`，旧的 `/text-files` 会自动跳转）：逐级浏览宿主机目录（含隐藏文件和 WSL 路径），可以筛选、新建、重命名、删除，打开文本文件后在线编辑、查找、保存。超过 1MB 的文件只读预览开头一段；保存带 mtime 冲突检测，文件被外部改过的话要确认后才能覆盖
 - **快捷指令**（`/commands`）：把常用命令存下来，点一下就在指定目录里执行。命令里可以写 `{参数名}` 占位符，执行前填值，值会做 Shell 转义。可以绑定目录，按目录分组。输出和退出码直接显示，超时 10 分钟，输出太长会截断。存在 `.data/quick-commands.json`
-- **协作泳道**（`/deck-api`）：用按会话分行的泳道图还原 deck-api 的委派回传、steer 静默丢失、远端长任务唤醒和 detached 领取。点任一步可看命令、路由和失败点；示例数据在 `shared/deck-api-swimlanes.json`，`npm run swimlane` 重新生成静态 SVG
+- **协作泳道**（`/deck-api`）：直接解析本机询问台账和消息投递记录，按来源会话、Deck 队列、目标会话分行；点任一步可看真实消息、时间、投递模式和状态。页面优先显示本机会话，后端不可用时退回脱敏快照
 
 <img src="docs/screenshots/desktop-tools.png" alt="Codecks 快捷指令工具" width="100%">
 
@@ -295,7 +295,7 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 - **Detached 独立执行**：`create --detached` 后主 Agent 可继续工作；子会话完成、失败或中断时不会向正在运行的来源推送消息，状态与最终答复只能用 `tasks` / `result @<alias>` 查询，`inspect @<alias> --tail 30` 查看近期执行输出；仍可显式 `send` 交流。已保存的交付可跨重启读取，雷达面板也支持创建与读取 detached 任务。同步失败会记 `captureError` 并自动重试，不要把 `pending` 当失败重建会话。
 - **收件人解析收敛**：`--to` / `--code` 四通道同一套解析，错误分四类（`UNKNOWN_ALIAS` 404、`ARCHIVED` 409、`AMBIGUOUS` 409 带候选、`BAD_FORMAT` 400），歧义不再静默投错。
 - **可观测**：雷达面板查看询问和 watcher，总览首页显示正在监督的任务；失联 watcher 进入「需要处理」。
-- **协作泳道**：工具菜单里的「协作泳道」（`/deck-api`）用泳道图还原委派回传、steer 静默丢失、远端长任务唤醒和 detached 领取四个真实案例，逐步显示命令、路由与失败点。示例数据在 `shared/deck-api-swimlanes.json`，`npm run swimlane` 可重新生成 [docs/deck-api-swimlane.svg](docs/deck-api-swimlane.svg)；完整说明见 [docs/deck-api-examples.md](docs/deck-api-examples.md)。
+- **协作泳道**：工具菜单里的「协作泳道」（`/deck-api`）直接解析本机询问台账与消息投递记录，按来源会话、Deck 队列、目标会话画出真实协作；成功后显示本机会话，后端不可用时退回脱敏快照。页面会合并重复唤醒、标出投递失败和 detached 状态。`npm run lanes:sync` 导出本机解析结果，`npm run swimlane` 生成静态 SVG，`npm run swimlane:example` 重新生成仓库内脱敏快照和 [docs/deck-api-swimlane.svg](docs/deck-api-swimlane.svg)；完整说明见 [docs/deck-api-examples.md](docs/deck-api-examples.md)。
 
 ```bash
 DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"

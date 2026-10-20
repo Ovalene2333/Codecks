@@ -4,8 +4,8 @@ import path from "node:path";
 import process from "node:process";
 
 const DEFAULTS = {
-  input: "shared/deck-api-swimlanes.json",
-  output: "docs/deck-api-swimlane.svg",
+  input: ".data/deck-api-swimlanes.json",
+  output: ".data/deck-api-swimlane.svg",
 };
 
 const COLORS = {
@@ -119,7 +119,7 @@ function scenarioSvg(scenario, top) {
     parts.push(
       `<line x1="${x}" y1="${gridTop - 12}" x2="${x}" y2="${gridTop + gridHeight}" stroke="${COLORS.line}" stroke-dasharray="3 5" />`,
       `<text x="${x + 8}" y="${gridTop - 20}" fill="${COLORS.dim}" font-family="monospace" font-size="10">${String(index + 1).padStart(2, "0")}</text>`,
-      `<text x="${x + 30}" y="${gridTop - 20}" fill="${COLORS.faint}" font-size="9">${escapeXml(step.tag)}</text>`,
+      `<text x="${x + 30}" y="${gridTop - 20}" fill="${COLORS.faint}" font-size="9">${escapeXml(step.at || step.tag)}</text>`,
     );
   });
 
