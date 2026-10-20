@@ -105,7 +105,7 @@ test("deck-api detached creation and read-only result/inspect commands preserve 
   assert.equal(requests[0].body.detached, true);
   assert.equal(requests[0].body.sessionExplicit, true);
   assert.equal(requests[0].body.returnMode, "queue");
-  assert.match(stdout, /完成\/失败\/中断只发一行 \[done:\] 指针通知/);
+  assert.match(stdout, /完成\/失败\/中断不会推送通知，只能主动查询/);
   assert.doesNotMatch(stdout, /本回合到此结束/);
   await run("bash", [script, "result", "@abcd1234"], { env });
   await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });
@@ -251,4 +251,25 @@ test("deck-api validates wake/send/create arguments client-side without requests
   ])
     await assert.rejects(run("bash", [script, ...args], { env }), undefined, args.join(" "));
   assert.equal(count, 0, "参数校验失败时一次请求都不该发");
+});
+
+test("deck-api surfaces recipient resolution errors instead of exiting silently", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-404-"));
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "会话别名 s-abc1234 不存在", code: "UNKNOWN_ALIAS" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  let error: { code?: number; stderr?: string } | undefined;
+  try {
+    await run("bash", [script, "send", "--to", "@s-abc1234", "--", "demo"], { env });
+  } catch (caught) {
+    error = caught as { code?: number; stderr?: string };
+  }
+  assert.equal(error?.code, 1);
+  assert.match(error?.stderr ?? "", /会话别名 s-abc1234 不存在/);
 });

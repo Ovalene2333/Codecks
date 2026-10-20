@@ -36,7 +36,7 @@ deck-api create <agentId> [--detached] [--mode queue|steer|interrupt] [--name ti
     创建独立会话并绑定来源；目标自行用 send 回传，不自动转发最终回复。
     受理后本回合就结束：不要 sleep、轮询或等待结果；回传会在新的 [ask] 回合到达。
     即使没有结论，目标也应主动 send 一条状态；目标不 send 时来源不会收到消息。
-    --detached 独立执行：目标在最终答复中交付，不要求 send；完成/失败只发一行 [done:] 指针通知（queue-only），正文用 result 领取。
+    --detached 独立执行：目标在最终答复中交付，不要求 send；完成/失败不向来源推送通知，结果用 result/tasks 查询。
     来源可继续自己的工作，在合适时机用 result @alias 领取结果、inspect @alias 查看输出。
     detached 仍可显式 send 联系来源；--mode 只控制这些主动消息的默认投递方式。
     --mode 是目标消息回传到来源时的默认投递方式，默认 queue。
@@ -102,7 +102,7 @@ deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
 queue 等目标空闲；steer 即时追加到目标当前回合（不打断，仅 codex 这类可转向会话支持）；interrupt 停止目标当前回合再发送。
 steer 时目标空闲则直接发送；目标回合已变化会失败，可用 --request-id 重试。
 默认 create 受理后结束本回合，不要 sleep/轮询/等待；目标用 send 回传，失败自动通知。
-    detached 可继续自己的工作，稍后用 result/inspect 自行获取；完成/失败只有一行 [done:] 指针通知，正文自行领取。
+    detached 可继续自己的工作，稍后用 result/inspect 自行获取；完成/失败不会推送通知，只能主动查询。
 send 与 wake 是两条独立链路：send 不会创建或复用唤醒代号。
 地址与令牌读取 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/{url,token}，
 可用 DECK_API_URL / DECK_TOKEN 覆盖；兼容 DECK_SEND_URL / DECK_WAKE_URL。
@@ -138,7 +138,14 @@ api() {
   local out code err
   out=$(curl "${args[@]}") || { echo "deck-api: 无法连接 Deck（$URL）" >&2; return 1; }
   code=${out##*$'\n'}; out=${out%$'\n'*}
-  [ "$code" = 404 ] && return 4
+  if [ "$code" = 404 ]; then
+    # 404 既可能是接口不存在（旧版 Deck，prepare 用它探测并静默回退），
+    # 也可能是收件人解析失败（UNKNOWN_ALIAS）。调用方决定是否吞掉提示：
+    # prepare 重定向 stderr；send/result 等必须让用户看到原因，不能静默退出。
+    err=$(json_field "$out" error)
+    echo "deck-api: ${err:-Deck 返回 404：$out}" >&2
+    return 4
+  fi
   if [ "${code:0:1}" != 2 ]; then
     err=$(json_field "$out" error)
     echo "deck-api: ${err:-Deck 返回 $code：$out}" >&2
@@ -171,7 +178,7 @@ prepare() {
   [ -n "$1" ] && code_json=$(json_str "$1")
   api POST /api/deck/prepare "$(printf '{"code":%s,"pid":%s,"cwd":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"command":%s,"force":%s,"dryRun":%s}' \
     "$code_json" "$PID" "$(json_str "$PWD")" "$(json_str "${session-}")" "${session_explicit:-false}" \
-    "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")"
+    "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")" 2>/dev/null
 }
 
 send() { # code text [mode]
@@ -341,7 +348,7 @@ case "$cmd" in
       "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "$(json_str "$question")")
     api POST /api/deck/create "$body" || exit 1
     if [ "$detached" = true ]; then
-      echo 'Detached 会话已创建；可继续自己的工作，稍后用 result @alias 领取或 inspect @alias 查看。完成/失败/中断只发一行 [done:] 指针通知，正文自行领取；不要紧密轮询。'
+      echo 'Detached 会话已创建；可继续自己的工作，稍后用 result @alias 领取或 inspect @alias 查看。完成/失败/中断不会推送通知，只能主动查询；不要紧密轮询。'
     else
       echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 就不会有通知，失败会自动通知。'
     fi

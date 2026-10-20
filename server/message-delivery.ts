@@ -39,6 +39,7 @@ export class MessageDeliveryQueue {
 
   async load() {
     let recovered = false;
+    let migrated = false;
     try {
       const stored = JSON.parse(await readFile(this.options.file, "utf8"));
       if (stored.version === 1 && Array.isArray(stored.items)) {
@@ -50,6 +51,11 @@ export class MessageDeliveryQueue {
         );
         for (const item of this.items) {
           this.persisted.add(item.id);
+          // 旧版主会话缓冲不再使用：历史缓冲转为普通排队，空闲时正常送达。
+          if (item.buffered) {
+            delete item.buffered;
+            migrated = true;
+          }
           if (item.status === "sending" || item.status === "interrupting") {
             recovered = true;
             item.canRetry = item.status === "interrupting";
@@ -64,7 +70,7 @@ export class MessageDeliveryQueue {
     } catch (error: any) {
       if (error?.code !== "ENOENT") console.error("消息队列读取失败，原文件保留:", error?.message);
     }
-    if (recovered) await this.save();
+    if (recovered || migrated) await this.save();
     this.options.agents.on("event", this.onEvent);
     if (this.options.timer !== false) {
       this.timer = setInterval(() => void this.tick().catch((error) => console.error("消息队列调度失败:", error?.message)), 1000);

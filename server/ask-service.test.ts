@@ -101,7 +101,7 @@ test("completion without send stays silent toward the source", async (t) => {
 });
 
 test("interrupt return stops even a steer-capable non-master source and starts a new turn", async (t) => {
-  // 主会话只收缓冲不接受注入；注入语义只对非主节点来源（子会话链）生效。
+  // 主会话不接受 steer/interrupt 注入；注入语义只对非主节点来源（子会话链）生效。
   const { create, fake, service, messages } = await fixture(t);
   const first = await create();
   await messages.tick(); await service.tick();
@@ -167,25 +167,37 @@ test("failed target turn returns a failure message to a non-master source", asyn
   assert.match(fake.sends[2].text, /询问失败/);
 });
 
-test("sends to a master source buffer instead of injecting a turn", async (t) => {
+test("replies to an idle master source deliver without waiting for user input", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
   const { thread } = await create();
   await messages.tick(); await service.tick();
-  await service.sendFrom("demo-review", thread.id, "Buffered update", "interrupt");
+  fake.threads.get("source")!.status = "idle";
+  await service.sendFrom("demo-review", thread.id, "Idle reply", "interrupt");
   await messages.tick();
-  // 主会话永不接受注入：interrupt 也只入缓冲，不打断、不开新回合。
+  // 主会话不接受注入，但空闲时应正常送达：interrupt 降级为 queue，不打断。
+  assert.deepEqual(fake.interrupts, []);
+  assert.equal(fake.sends.length, 2);
+  assert.equal(fake.sends[1].mode, "start");
+  assert.match(fake.sends[1].text, /Idle reply/);
+  assert.equal(messages.list().filter((entry) => entry.buffered === true).length, 0);
+  assert.equal(messages.inbox("demo", "source").length, 0);
+});
+
+test("replies to a busy master source wait for idle instead of injecting", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread } = await create();
+  await messages.tick(); await service.tick();
+  await service.sendFrom("demo-review", thread.id, "Busy reply", "interrupt");
+  await messages.tick();
+  // 来源正在跑：不打断、不注入，排队等空闲。
   assert.deepEqual(fake.interrupts, []);
   assert.equal(fake.sends.length, 1);
-  const queued = messages.list().filter((entry) => entry.buffered === true);
-  assert.equal(queued.length, 1);
-  assert.match(queued[0].text!, /Buffered update/);
+  assert.equal(messages.list().filter((entry) => entry.buffered === true).length, 0);
   fake.finish("source");
   await messages.tick();
-  assert.equal(fake.sends.length, 1, "tick 永远跳过缓冲");
-  assert.equal(messages.inbox("demo", "source").length, 1);
-  const claimed = await messages.claim("demo", "source");
-  assert.equal(claimed.length, 1);
-  assert.equal(messages.inbox("demo", "source").length, 0);
+  assert.equal(fake.sends.length, 2);
+  assert.equal(fake.sends[1].mode, "start");
+  assert.match(fake.sends[1].text, /Busy reply/);
 });
 
 test("cancelled question is reported through the same callback path", async (t) => {
@@ -628,29 +640,63 @@ test("detached capture failure is recorded instead of mistaken for task failure"
   assert.equal((service.list()[0] as any).captureError, undefined);
 });
 
-test("done notification is idempotent per turn, skips read turns, recurs on new turns", async (t) => {
+test("detached result correlates by turn start when the adapter changes turn ids", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create("queue", true);
+  await messages.tick(); await service.tick();
+  const record = (service as any).items[0];
+  assert.ok(Number.isFinite(record.turnStartedAt));
+  // 模拟 OpenCode：结束后回合 id 从 Deck 的 UUID 换成原生 user message id，
+  // 且一次询问可能因重试产生多个原生回合，最终答复在最后一个回合。
+  fake.turns.set(thread.id, [
+    {
+      id: "msg_native_1",
+      status: "completed",
+      startedAt: record.turnStartedAt + 50,
+      items: [{ id: "msg_native_1", type: "userMessage", content: [{ type: "text", text: 'Review "demo"\nwith context' }] }],
+    },
+    {
+      id: "msg_native_2",
+      status: "completed",
+      startedAt: record.turnStartedAt + 1_000,
+      items: [{ id: "msg_native_2", type: "userMessage", content: [{ type: "text", text: "retry" }] },
+        { type: "agentMessage", text: "Native answer" }],
+    },
+  ]);
+  fake.threads.get(thread.id)!.status = "idle";
+  fake.threads.get(thread.id)!.activeTurnId = undefined;
+  record.status = "completed";
+  record.turnEndedAt = record.turnStartedAt + 2_000;
+  const read = await service.readResult(item.id);
+  assert.equal(read.result?.text, "Native answer", "取本轮窗口内最后一个回合");
+  assert.equal(read.result?.turnId, record.turnId, "结果仍记 Deck 侧 turnId");
+  assert.equal(read.pending, false);
+  // 早于本轮开始的回合不能被当成答案。
+  fake.turns.set(thread.id, [{ id: "msg_old", status: "completed",
+    startedAt: record.turnStartedAt - 60_000, items: [{ type: "agentMessage", text: "Old answer" }] }]);
+  record.result = undefined;
+  record.lastReadTurnId = undefined;
+  const none = await service.readResult(item.id);
+  assert.equal(none.result, null);
+  assert.equal(none.pending, true);
+});
+
+test("detached completion stays query-only for a master source", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
   const { thread, item } = await create("queue", true);
   await messages.tick(); await service.tick();
   fake.finish(thread.id, "Done work");
   await service.tick();
   const dones = () => messages.list().filter((entry) => entry.text?.startsWith(`[done:${item.alias}]`));
-  assert.equal(dones().length, 1);
-  assert.match(dones()[0].text!, /result @/);
+  assert.equal(service.isMaster("demo", "source"), true);
+  assert.equal(dones().length, 0, "主会话运行中不接收完成推送");
+  const read = await service.readResult(item.id);
+  assert.equal(read.result?.text, "Done work");
   await (service as any).notifyDone((service as any).items[0]);
-  assert.equal(dones().length, 1, "同回合重复完成事件不重复通知");
-  await service.readResult(item.id);
-  (service as any).items[0].doneTurnId = undefined;
-  await (service as any).notifyDone((service as any).items[0]);
-  assert.equal(dones().length, 1, "已读回合即使通知记录丢失也不补发");
-  (service as any).items[0].turnId = "turn-2";
-  (service as any).items[0].status = "completed";
-  await (service as any).notifyDone((service as any).items[0]);
-  assert.equal(dones().length, 2, "新回合完成重新通知");
-  assert.notEqual(dones()[0].id, dones()[1].id);
+  assert.equal(dones().length, 0, "重复完成事件也不补发通知");
 });
 
-test("failed detached notification is single-line and redacts credentials", async (t) => {
+test("failed detached stays query-only and records the error", async (t) => {
   const { create, fake, service, messages } = await fixture(t);
   const { thread, item } = await create("queue", true);
   await messages.tick(); await service.tick();
@@ -658,12 +704,11 @@ test("failed detached notification is single-line and redacts credentials", asyn
   fake.finish(thread.id, "", "failed");
   await service.tick();
   const dones = messages.list().filter((entry) => entry.text?.startsWith(`[done:${item.alias}]`));
-  assert.equal(dones.length, 1);
-  assert.doesNotMatch(dones[0].text!, /\n/);
-  assert.doesNotMatch(dones[0].text!, /sk-abcdef/);
-  assert.doesNotMatch(dones[0].text!, /secrettoken/);
-  assert.doesNotMatch(dones[0].text!, /token=ABC/);
-  assert.match(dones[0].text!, /\[已脱敏\]/);
+  assert.equal(dones.length, 0, "主会话不接收失败推送，改用 result/tasks 查询");
+  const read = await service.readResult(item.id);
+  assert.equal(read.result, null);
+  assert.equal(read.pending, false);
+  assert.match(read.item.error ?? "", /boom/);
 });
 
 test("sanitizeInline folds lines and redacts credentials", () => {

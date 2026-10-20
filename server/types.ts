@@ -245,8 +245,8 @@ export interface ThreadSummary {
   /** 每个可见会话自动分配的稳定短别名，例如 `@s-3f9kq2pz`。 */
   alias?: string;
   /**
-   * 主从缓冲区的未读计数：发往主会话且尚未自取的 agent 消息条数。
-   * 由服务端快照下发，供 UI 徽标与搭车摘要使用；普通会话恒为 0。
+   * 旧版主从缓冲的未读计数。主会话消息现在走普通队列（空闲即送达），
+   * 正常流程不再产生缓冲；字段保留只为兼容旧快照，通常为 0。
    */
   bufferedCount?: number;
   agentId?: AgentId;

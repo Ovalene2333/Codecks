@@ -40,6 +40,14 @@ export interface AskRecord extends AskSession {
   doneDeliveryId?: string;
   /** done 通知已覆盖的 turnId；跟随新回合推进，避免同回合重复打扰、跨回合漏通知。 */
   doneTurnId?: string;
+  /**
+   * 本轮在 Deck 侧开始的时刻。部分 Agent（如 OpenCode）结束后会把回合 id
+   * 从 Deck 生成的 UUID 换回原生 user message id，单靠 turnId 会永远匹配
+   * 不到结果；captureResult 用这个时间做兜底关联。
+   */
+  turnStartedAt?: number;
+  /** 本轮在 Deck 侧结束（完成/失败事件）的时刻；关联重试产生的多个原生回合。 */
+  turnEndedAt?: number;
 }
 
 interface SessionAliasProvision {
@@ -60,8 +68,8 @@ interface Options {
 }
 
 /**
- * 把错误压成单行并脱敏（key/token/bearer/URL 查询串），供 [done] 通知使用；
- * 通知可能被转发到远端客户端，不能携带凭据或完整 baseURL。
+ * 把错误压成单行并脱敏（key/token/bearer/URL 查询串），供非主节点的 [done]
+ * 通知使用；主节点不发通知。通知可能被转发，不能携带凭据或完整 baseURL。
  */
 export function sanitizeInline(text: string | undefined, limit = 160) {
   const single = String(text || "").replace(/\s+/g, " ").trim()
@@ -93,6 +101,8 @@ export class AskService {  private items: AskRecord[] = [];
       item.status = "running";
       item.updatedAt = Date.now();
       item.turnSentOffset = item.sentMessages?.length || 0;
+      item.turnStartedAt = Date.now();
+      delete item.turnEndedAt;
       delete item.executionCompletion;
       delete item.executionFailure;
       delete item.response;
@@ -115,6 +125,7 @@ export class AskService {  private items: AskRecord[] = [];
     if (!item) return;
     item.turnId ||= turn.id;
     item.updatedAt = Date.now();
+    item.turnEndedAt = Date.now();
     item.executionCompletion = { turnId: turn.id, status: turn.status };
     if (turn.status !== "completed") {
       item.executionFailure = { turnId: turn.id,
@@ -147,6 +158,8 @@ export class AskService {  private items: AskRecord[] = [];
       }
       for (const item of this.items) {
         if (item.detached !== undefined && typeof item.detached !== "boolean") throw new Error("detached 模式无效");
+        if (item.turnStartedAt !== undefined && !Number.isFinite(item.turnStartedAt)) throw new Error("回合开始时间无效");
+        if (item.turnEndedAt !== undefined && !Number.isFinite(item.turnEndedAt)) throw new Error("回合结束时间无效");
         if (item.result !== undefined && (typeof item.result?.turnId !== "string" ||
           typeof item.result.text !== "string" || item.result.text.length > ASK_OUTPUT_LIMIT ||
           !Number.isFinite(item.result.completedAt) || typeof item.result.truncated !== "boolean"))
@@ -412,6 +425,7 @@ export class AskService {  private items: AskRecord[] = [];
             item.status = "running";
             item.updatedAt = Date.now();
             item.turnId = delivery.turnId;
+            item.turnStartedAt ??= Date.now();
             await this.save();
           }
           const state = this.options.agents.messageState(item.targetAgentId, item.targetThreadId!);
@@ -421,7 +435,7 @@ export class AskService {  private items: AskRecord[] = [];
           if (!state.ready) continue;
           const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId!, { background: true });
           const turns: any[] = full?.turns || full?.thread?.turns || [];
-          const turn = item.turnId ? turns.find((turn) => turn.id === item.turnId) : turns[0];
+          const turn = this.findTurn(item, turns);
           if (!turn || ["inProgress", "running", "pending"].includes(turn.status)) continue;
           const failed = ["failed", "error", "interrupted", "cancelled"].includes(turn.status);
           if (failed) { await this.fail(item, state.thread.lastError || `询问未正常完成（${turn.status}）`); continue; }
@@ -503,19 +517,57 @@ export class AskService {  private items: AskRecord[] = [];
       throw new Error("对方会话不支持打断当前回合；请改用 queue（空闲时立即发送）或 steer（对方支持时）");
   }
 
+  /**
+   * 找到询问对应的回合。优先精确 id；OpenCode 等适配器在回合结束后会把 id
+   * 换回原生 user message id，而且一次询问可能因重试产生多个原生回合。
+   * 兜底按 Deck 看到的回合起止时间关联，取该区间内最后一个回合（重试后的
+   * 最终答复所在回合），区间外的旧/新回合都不领取。
+   */
+  private findTurn(item: AskRecord, turns: any[]) {
+    if (item.turnId) {
+      const exact = turns.find((turn) => String(turn?.id) === item.turnId);
+      if (exact) return exact;
+    }
+    // 旧台账没有 turnStartedAt：初始询问可用创建时间兜底；追问不猜，避免领错回合。
+    const startedAt = item.turnStartedAt ??
+      (!item.sentMessages?.length ? item.createdAt : undefined);
+    if (!Number.isFinite(startedAt)) return undefined;
+    const endedAt = item.turnEndedAt ??
+      (item.executionCompletion || ["completed", "answered", "failed"].includes(item.status)
+        ? item.updatedAt
+        : undefined);
+    let best: any;
+    let bestAt = -Infinity;
+    for (const turn of turns) {
+      const at = Number(turn?.startedAt);
+      if (!Number.isFinite(at)) continue;
+      // 原生历史可能比 Deck 的发送回执稍晚；早于该时刻太多的回合不是本轮。
+      if (at < startedAt! - 2_000) continue;
+      // 已知结束时刻时，只收本轮窗口内的回合（含重试）；否则给 5 分钟上限。
+      if (Number.isFinite(endedAt) ? at > endedAt! + 2_000 : at > startedAt! + 5 * 60_000) continue;
+      if (at > bestAt) {
+        best = turn;
+        bestAt = at;
+      }
+    }
+    return best;
+  }
+
   private reference(item: AskRecord) {
     return item.alias ? `[查看完整会话](/s/${item.alias})` : "";
   }
 
   private async deliverMessage(item: AskRecord, message: NonNullable<AskRecord["sentMessages"]>[number]) {
-    // 发往主会话：永不注入回合，只入缓冲等自取；落盘即视为已受理。
-    const buffered = this.isMaster(item.sourceAgentId, item.sourceThreadId);
+    // 发往主会话不留注入后门：steer/interrupt 降级为 queue；但不再无限期缓冲，
+    // 空闲时正常送达，运行中排队等空闲。
+    const master = this.isMaster(item.sourceAgentId, item.sourceThreadId);
+    const mode = master ? "queue" : message.mode;
     const delivery = await this.options.messages.enqueue(
       item.sourceAgentId, item.sourceThreadId,
-      message.mode === "queue" ? "queue" : "feedback",
+      mode === "queue" ? "queue" : "feedback",
       { text: `[ask:${item.alias}] ${this.reference(item)}\n\n${message.text}` },
       // 以消息 id 幂等：同一条消息的重复投递（重启恢复、重试）只入队一次。
-      { id: `ask:${item.id}:${message.id}`, forceInterrupt: buffered ? false : message.mode === "interrupt", buffered },
+      { id: `ask:${item.id}:${message.id}`, forceInterrupt: mode === "interrupt" },
     );
     message.deliveryId = delivery.id;
     item.updatedAt = Date.now();
@@ -529,7 +581,7 @@ export class AskService {  private items: AskRecord[] = [];
     if (!turn) {
       try {
         const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId, { background: true });
-        turn = (full?.turns || full?.thread?.turns || []).find((entry: any) => entry.id === turnId);
+        turn = this.findTurn(item, full?.turns || full?.thread?.turns || []);
       } catch (error: any) {
         // 落态不吞错：来源查询能看到明确的同步失败原因，而不是把 pending 误判成任务失败。
         item.captureAttempts = (item.captureAttempts || 0) + 1;
@@ -539,9 +591,10 @@ export class AskService {  private items: AskRecord[] = [];
       }
     }
     // 完成事件可能早于原生历史落盘；后续调度/查询继续同步，不把旧回合当成新结果。
-    if (!turn || turn.id !== turnId || turn.status !== "completed" || !Array.isArray(turn.items) ||
+    if (!turn || turn.status !== "completed" || !Array.isArray(turn.items) ||
       item.turnId !== turnId || !["completed", "answered"].includes(item.status)) return;
     const text = finalAnswer(turn);
+    // 结果始终记 Deck 侧的 turnId：readResult 用它判断“本回合已交付”。
     const result = { turnId, text: text.slice(0, ASK_OUTPUT_LIMIT), completedAt: Date.now(), truncated: text.length > ASK_OUTPUT_LIMIT };
     item.result = result;
     delete item.lastCaptureError;
@@ -560,6 +613,7 @@ export class AskService {  private items: AskRecord[] = [];
     // 纯双向通信：正常结束不产生任何自动通知，来源只会看到目标主动 send
     // 的内容；status 仍记录 answered/completed 供 UI 与后续 send 路由使用。
     item.status = item.sentMessages?.length ? "answered" : "completed";
+    item.turnEndedAt ??= Date.now();
     item.updatedAt = Date.now();
     await this.save();
     try { await this.captureResult(item, turn); } catch { /* 状态已保存；历史恢复后再同步结果。 */ }
@@ -569,6 +623,7 @@ export class AskService {  private items: AskRecord[] = [];
   private async fail(item: AskRecord, message: string, notify = true) {
     notify = notify && !item.detached;
     item.status = "failed";
+    item.turnEndedAt ??= Date.now();
     item.updatedAt = Date.now();
     item.error = message.slice(0, 500);
     item.suppressFailureReply = !notify;
@@ -584,6 +639,11 @@ export class AskService {  private items: AskRecord[] = [];
    */
   private async notifyDone(item: AskRecord) {
     if (!item.detached || !item.targetThreadId) return;
+    // 主会话（人创建的来源）永不接收 agent 推送，包括 detached 完成指针：
+    // 它可能正在跑用户回合，结果只能由 tasks/result/inspect 主动查询。
+    // 目前 create 的源必须不是询问目标，因此这里实际覆盖所有正常来源；
+    // 保留判断是为了将来允许非主节点发起询问时不把通知重新漏进用户回合。
+    if (this.isMaster(item.sourceAgentId, item.sourceThreadId)) return;
     // 同一回合只通知一次；新回合推进时重新通知。
     if (item.doneTurnId === item.turnId) return;
     // 来源已领取本回合交付时不再打扰；领取早于完成事件时通知直接省略。
@@ -595,7 +655,7 @@ export class AskService {  private items: AskRecord[] = [];
       item.sourceAgentId, item.sourceThreadId, "queue",
       { text: headline },
       // 幂等 id 含 turnId：同回合重复投递（重启恢复）只入队一次，新回合重新通知。
-      { id: `ask:${item.id}:done:${item.turnId || "creating"}`, buffered: this.isMaster(item.sourceAgentId, item.sourceThreadId) },
+      { id: `ask:${item.id}:done:${item.turnId || "creating"}` },
     );
     item.doneDeliveryId = delivery.id;
     item.doneTurnId = item.turnId;
@@ -607,11 +667,13 @@ export class AskService {  private items: AskRecord[] = [];
     if (item.detached || item.replyDeliveryId) return;
     const body = `${this.reference(item)}\n\n${item.response || ""}`;
     const prompt = `[ask:${item.alias}] ` + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
+    const master = this.isMaster(item.sourceAgentId, item.sourceThreadId);
+    const mode = master ? "queue" : item.returnMode;
     const delivery = await this.options.messages.enqueue(
       item.sourceAgentId, item.sourceThreadId,
-      item.returnMode === "queue" ? "queue" : "feedback",
+      mode === "queue" ? "queue" : "feedback",
       { text: prompt },
-      { id: `ask:${item.id}:reply:${item.turnId || "creating"}`, forceInterrupt: item.returnMode === "interrupt", buffered: this.isMaster(item.sourceAgentId, item.sourceThreadId) },
+      { id: `ask:${item.id}:reply:${item.turnId || "creating"}`, forceInterrupt: mode === "interrupt" },
     );
     item.replyDeliveryId = delivery.id;
     item.updatedAt = Date.now();

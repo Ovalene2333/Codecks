@@ -321,16 +321,17 @@ test("buffered messages wait for claim and never auto-deliver", async (t) => {
   assert.deepEqual(await deliveries.claim("agent", "t"), []);
 });
 
-test("buffered entries survive reload and stay out of auto-delivery", async (t) => {
+test("legacy buffered entries become normal queued messages after reload", async (t) => {
   const { transport, deliveries, file } = await fixture(t, "queue");
   await deliveries.enqueue("agent", "t", "queue", { text: "Buffered" }, { id: "b2", buffered: true });
   deliveries.close();
   const restored = new MessageDeliveryQueue({ file, agents: transport as unknown as AgentRegistry, timer: false });
   await restored.load();
   t.after(() => restored.close());
-  assert.equal(restored.bufferedCount("agent", "t"), 1);
+  // 旧版缓冲不再无限期等待用户输入，重启后按普通队列空闲即送达。
+  assert.equal(restored.bufferedCount("agent", "t"), 0);
   transport.finish();
   await restored.tick();
-  assert.equal(transport.sent.length, 0);
-  assert.equal(restored.inbox("agent", "t").length, 1);
+  assert.equal(transport.sent.length, 1);
+  assert.match(transport.sent[0].text, /Buffered/);
 });
