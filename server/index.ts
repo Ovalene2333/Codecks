@@ -103,6 +103,7 @@ import { GitTool } from "../plugin/git/git.server.js";
 import { WebTerminalTool } from "../plugin/terminal/terminal.server.js";
 import { TextFilesTool } from "../plugin/text-files/text-files.server.js";
 import { QuickCommandTool } from "../plugin/quick-command/quick-command.server.js";
+import { DeckApiTool } from "../plugin/deck-api/deck-api.server.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(
@@ -288,6 +289,7 @@ const tools = new ToolRegistry([
     processCwd: projectRoot,
     file: path.join(dataDir, "quick-commands.json"),
   }),
+  new DeckApiTool(),
 ]);
 const activity = new ActivityTracker();
 

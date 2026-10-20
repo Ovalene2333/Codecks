@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api } from "../api";
 import { toolIcon, toolPath, toolView } from "../../plugin/client-registry";
@@ -26,7 +26,11 @@ export function ToolCenter({
     () => toolPath(location.pathname)?.slice(1) || "terminal",
   );
   const [error, setError] = useState("");
+  const selectedRef = useRef<HTMLButtonElement | null>(null);
   const needsFetch = !snapshotTools;
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [selected]);
   useEffect(() => {
     if (!needsFetch) return;
     let cancelled = false;
@@ -82,6 +86,7 @@ export function ToolCenter({
               <button
                 key={item.id}
                 type="button"
+                ref={selected === item.id ? selectedRef : undefined}
                 className={selected === item.id ? "on" : ""}
                 onClick={() => {
                   setSelected(item.id);

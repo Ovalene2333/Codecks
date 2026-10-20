@@ -23,6 +23,7 @@
     "lan6": "node --experimental-sqlite dist-server/server/index.js --lan6",
     "cf-tunnel": "node --experimental-sqlite dist-server/server/index.js --cf-tunnel",
     "share": "node --experimental-sqlite dist-server/server/index.js --share",
+    "swimlane": "node scripts/deck-api-swimlane.mjs",
     "test": "node --experimental-sqlite --import tsx --test server/*.test.ts server/**/*.test.ts src/*.test.ts src/**/*.test.ts plugin/**/*.test.ts"
   },
   "dependencies": {

@@ -53,6 +53,14 @@
 `result` / `inspect @s-…` 会先找到该会话对应的询问回执再查询，所以会话别名也能直接领取 detached 交付。
 三个命名空间互不复用：会话别名分配时会避开已有询问别名和唤醒代号，反之亦然。
 
+## 实战例子与泳道图
+
+[deck-api-examples.md](deck-api-examples.md) 收录了委派回传、steer 静默丢失、远端长任务唤醒和 detached 领取四个真实案例，并有一张按会话分泳道的流程图。
+
+- Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，可交互查看每一步的命令、路由和失败点。
+- 静态图由 `npm run swimlane` 从 `shared/deck-api-swimlanes.json` 生成到 `docs/deck-api-swimlane.svg`；`--scenario steer` 可只导出一个场景。
+- 添加新案例只需改 JSON，页面、文档和 SVG 共用同一份数据。
+
 ## 安装与入口
 
 Deck 启动时会把与当前版本配套的脚本安装到：

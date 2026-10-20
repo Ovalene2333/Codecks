@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Radar, Send, Square, X } from "lucide-react";
+import { Check, Copy, Radar, Send, Square, Waypoints, X } from "lucide-react";
 import { api, getToken, post, remove } from "../api";
 import { copyText } from "../clipboard";
 import { agentShortName, threadPath } from "../agents";
@@ -41,6 +41,7 @@ export function WakeModal({
   watchers,
   lost,
   onClose,
+  onOpenLanes,
 }: {
   thread: ThreadSummary;
   /** 本机正绑定此会话代号的 watcher（来自快照缓存，可能滞后几秒）。 */
@@ -48,6 +49,8 @@ export function WakeModal({
   /** 此会话失联待处理的 watcher。 */
   lost: LostWakeWatcher[];
   onClose: () => void;
+  /** 打开 deck-api 协作泳道示例页；不传时不显示入口。 */
+  onOpenLanes?: () => void;
 }) {
   const [code, setCode] = useState<string | null>(null);
   const [localUrl, setLocalUrl] = useState("");
@@ -282,6 +285,12 @@ export function WakeModal({
       {hidden.size > 0 && (
         <Button variant="ghost" size="sm" onClick={() => saveHidden(new Set())}>
           恢复隐藏记录（{hidden.size}）
+        </Button>
+      )}
+      {onOpenLanes && (
+        <Button variant="ghost" size="sm" onClick={onOpenLanes}>
+          <Waypoints />
+          查看协作泳道示例
         </Button>
       )}
       {visibleAsks.length > 0 && (

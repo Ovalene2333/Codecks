@@ -25,6 +25,7 @@ import {
   Search,
   Settings,
   Terminal,
+  Waypoints,
   Wrench,
   X,
   Zap,
@@ -287,7 +288,8 @@ export function Sidebar({
     !hiddenTools.includes("terminal") ||
     !hiddenTools.includes("git") ||
     !hiddenTools.includes("text-editor") ||
-    !hiddenTools.includes("commands");
+    !hiddenTools.includes("commands") ||
+    !hiddenTools.includes("deck-api");
   const searching = Boolean(query.trim());
   const emptyKind = searching
     ? "search"
@@ -659,6 +661,14 @@ export function Sidebar({
                     onSelect={() => onTools("/commands")}
                   >
                     快捷指令
+                  </MenuItem>
+                ) : null}
+                {!hiddenTools.includes("deck-api") ? (
+                  <MenuItem
+                    icon={<Waypoints />}
+                    onSelect={() => onTools("/deck-api")}
+                  >
+                    协作泳道
                   </MenuItem>
                 ) : null}
                 <MenuSep />

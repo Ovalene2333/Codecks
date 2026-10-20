@@ -1,10 +1,18 @@
 import { lazy, type ComponentType } from "react";
-import { FilePen, GitBranch, Puzzle, Terminal, Zap } from "lucide-react";
+import {
+  FilePen,
+  GitBranch,
+  Puzzle,
+  Terminal,
+  Waypoints,
+  Zap,
+} from "lucide-react";
 import type { ToolDescriptor } from "./types";
 import "./git/git.css";
 import "./terminal/terminal.css";
 import "./text-files/text-files.css";
 import "./quick-command/quick-command.css";
+import "./deck-api/deck-api.css";
 
 const GitView = lazy(() =>
   import("./git/GitView.client").then((module) => ({
@@ -26,6 +34,11 @@ const QuickCommandView = lazy(() =>
     default: module.QuickCommandView,
   })),
 );
+const DeckApiView = lazy(() =>
+  import("./deck-api/DeckApiView.client").then((module) => ({
+    default: module.DeckApiView,
+  })),
+);
 
 export interface ToolViewProps {
   tool: ToolDescriptor;
@@ -44,6 +57,7 @@ const plugins: Record<string, ClientPlugin> = {
   git: { icon: GitBranch, view: GitView },
   "text-editor": { icon: FilePen, view: TextFilesView },
   commands: { icon: Zap, view: QuickCommandView },
+  "deck-api": { icon: Waypoints, view: DeckApiView },
 };
 
 export const toolIcon = (id: string) => plugins[id]?.icon || Puzzle;

@@ -20,6 +20,7 @@ import {
   KeyRound,
   SunMoon,
   Terminal,
+  Waypoints,
   Zap,
 } from "lucide-react";
 import {
@@ -1783,6 +1784,13 @@ export function App() {
                 icon: <Zap />,
                 onClick: () => openTool("/commands"),
               },
+              {
+                id: "deck-api",
+                label: "协作泳道",
+                detail: "委派、steer、wake 与 detached 案例",
+                icon: <Waypoints />,
+                onClick: () => openTool("/deck-api"),
+              },
             ]
               .filter((item) => !hiddenTools.includes(item.id))
               .map(({ id: _id, ...item }) => item),
@@ -2237,6 +2245,10 @@ export function App() {
           watchers={wakeFor(wakeThread).watchers}
           lost={wakeFor(wakeThread).lost}
           onClose={() => setWakeThread(null)}
+          onOpenLanes={() => {
+            setWakeThread(null);
+            openTool("/deck-api");
+          }}
         />
       )}
       {sessionSettingsOpen &&

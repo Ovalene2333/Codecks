@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "title": "deck-api 多 Agent 协作泳道",
+  "source": "整理自 traceroute 仓库 2026-10-18 至 2026-10-20 的真实协作记录，时间、别名、主机与路径均已脱敏。",
+  "scenarios": [
+    {
+      "id": "delegate",
+      "title": "委派实现并回传",
+      "kicker": "默认 send 模式",
+      "summary": "主会话把自包含任务交给独立执行会话；执行会话改代码、跑验证，再主动 send 结论。回传走普通消息队列，来源空闲即送达。",
+      "lanes": [
+        { "id": "user", "name": "用户", "role": "提出目标", "tone": "human" },
+        { "id": "lead", "name": "主会话", "role": "研究、验收、派发", "tone": "lead" },
+        { "id": "deck", "name": "Deck", "role": "路由、队列、台账", "tone": "service" },
+        { "id": "worker", "name": "执行会话", "role": "Codex · 实现与验证", "tone": "worker" },
+        { "id": "artifact", "name": "产物", "role": "代码、测试、运行目录", "tone": "artifact" }
+      ],
+      "steps": [
+        {
+          "id": "d1",
+          "from": "user",
+          "to": "lead",
+          "kind": "message",
+          "title": "下发目标与验收口径",
+          "detail": "先冻结文件范围、验收命令、产物路径和停止条件。子会话看不到主会话历史，背景必须写进问题本身。",
+          "tag": "人 → Agent"
+        },
+        {
+          "id": "d2",
+          "from": "lead",
+          "to": "deck",
+          "kind": "send",
+          "title": "create 独立会话",
+          "detail": "Deck 新建原生会话并绑定来源，返回询问别名与目标会话别名。来源身份由进程树确认，不靠猜。",
+          "tag": "create",
+          "command": "deck-api create codex --name '实现模块' --file ./task.md"
+        },
+        {
+          "id": "d3",
+          "from": "deck",
+          "to": "worker",
+          "kind": "queue",
+          "title": "问题持久入队",
+          "detail": "202 只表示已受理并入队，不代表目标已开始执行。来源结束本回合，不 sleep、不轮询。",
+          "tag": "202 受理 ≠ 送达"
+        },
+        {
+          "id": "d4",
+          "from": "worker",
+          "to": "worker",
+          "kind": "run",
+          "title": "实现并自测",
+          "detail": "在独立会话里改代码、跑单测和 smoke。完整分析与工具日志留在当前会话，不整段倒给来源。",
+          "tag": "独立回合"
+        },
+        {
+          "id": "d5",
+          "from": "worker",
+          "to": "artifact",
+          "kind": "success",
+          "title": "产物落地",
+          "detail": "回报里必须给出可复核的文件、命令和结果；只有“已完成”不算交付。",
+          "tag": "可复核"
+        },
+        {
+          "id": "d6",
+          "from": "worker",
+          "to": "deck",
+          "kind": "send",
+          "title": "主动 send 结论",
+          "detail": "只发结论、关键依据、文件位置和未决问题。send 不结束会话，也不代表来源已读。",
+          "tag": "[ask:7f3a2c]",
+          "command": "deck-api send --session codex:<thread> --file ./result.txt"
+        },
+        {
+          "id": "d7",
+          "from": "deck",
+          "to": "lead",
+          "kind": "queue",
+          "title": "进入来源队列",
+          "detail": "来源空闲立即送达；来源运行中则排队等空闲，不注入当前回合。回执里的 messageId 是可追溯凭据。",
+          "tag": "queue"
+        },
+        {
+          "id": "d8",
+          "from": "lead",
+          "to": "worker",
+          "kind": "message",
+          "title": "验收并继续追问",
+          "detail": "核对产物后在同一会话上补约束。用询问别名，不要复制完整 thread ID。",
+          "tag": "继续追问",
+          "command": "deck-api send --to @7f3a2c90 -- '补充：并发上限按 8 处理'"
+        }
+      ],
+      "rules": [
+        "问题必须自包含：来源历史不会复制给子会话。",
+        "默认 send 模式要求目标主动回传；来源不主动 send 就收不到结论。",
+        "2xx 是持久受理，不是已读、已执行或已回复。",
+        "关键指令发完后核对落地产物，而不是等通知。"
+      ]
+    },
+    {
+      "id": "steer",
+      "title": "steer 受理 ≠ 送达",
+      "kicker": "回合切换的静默丢失",
+      "summary": "执行会话正在长回合里跑任务，主会话用 steer 改道。回执成功，但目标回合恰好切换，消息没有落进任何回合；必须用同一 request-id 重发并核对现场。",
+      "lanes": [
+        { "id": "lead", "name": "主会话", "role": "下发裁定、核对落地", "tone": "lead" },
+        { "id": "deck", "name": "Deck 队列", "role": "持久化与重试", "tone": "service" },
+        { "id": "worker", "name": "执行会话", "role": "长回合内改道", "tone": "worker" },
+        { "id": "evidence", "name": "落地证据", "role": "新代码 / 新 run / GPU 占用", "tone": "artifact" }
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "from": "lead",
+          "to": "deck",
+          "kind": "send",
+          "title": "steer 下发修订",
+          "detail": "目标是长回合：queue 会一直滞留，interrupt 会杀掉在途回合；steer 才是不丢工作的改道方式。",
+          "tag": "202 + messageId",
+          "command": "deck-api send --to @7f3a2c90 --mode steer --request-id rev1-002 -- '只改评估器，冻结数据口径'"
+        },
+        {
+          "id": "s2",
+          "from": "deck",
+          "to": "deck",
+          "kind": "queue",
+          "title": "持久入队",
+          "detail": "消息先落盘再尝试投递，重启不丢；这一步只能证明 Deck 收下了。",
+          "tag": "accepted"
+        },
+        {
+          "id": "s3",
+          "from": "deck",
+          "to": "worker",
+          "kind": "failure",
+          "title": "转向落空",
+          "detail": "目标回合在投递瞬间发生变化，steer 没有可追加的回合。旧实现会静默失败，调用方只看到成功回执。",
+          "tag": "silent drop"
+        },
+        {
+          "id": "s4",
+          "from": "worker",
+          "to": "worker",
+          "kind": "run",
+          "title": "继续旧方案",
+          "detail": "没有新代码，也没有新的运行目录。表面上“已经下发”，实际上目标从未看见修订。",
+          "tag": "旧回合"
+        },
+        {
+          "id": "s5",
+          "from": "evidence",
+          "to": "lead",
+          "kind": "failure",
+          "title": "落地证据为空",
+          "detail": "在约定时限内检查三项：新代码 diff、新 run 目录、GPU 占用。三选一都没有，就不能假定送达。",
+          "tag": "核对失败"
+        },
+        {
+          "id": "s6",
+          "from": "lead",
+          "to": "deck",
+          "kind": "send",
+          "title": "同一 request-id 重发",
+          "detail": "内容和 mode 保持不变，才能复用幂等记录；不同消息必须换新的 request-id。",
+          "tag": "retry",
+          "command": "deck-api send --to @7f3a2c90 --mode steer --request-id rev1-002 -- '只改评估器，冻结数据口径'"
+        },
+        {
+          "id": "s7",
+          "from": "deck",
+          "to": "worker",
+          "kind": "success",
+          "title": "注入当前回合",
+          "detail": "目标在下一次工具调用前看到修订，已做的工作不丢。",
+          "tag": "delivered"
+        },
+        {
+          "id": "s8",
+          "from": "evidence",
+          "to": "lead",
+          "kind": "success",
+          "title": "出现新 run 目录",
+          "detail": "新代码、新 run、GPU 占用出现实据后，才把这一轮标记为送达。",
+          "tag": "核对通过"
+        }
+      ],
+      "rules": [
+        "steer / queue 的 2xx 只代表入队，不代表目标回合已经收到。",
+        "长回合改道优先 steer；queue 会滞留，interrupt 会损失在途工作。",
+        "重发同一条消息必须复用 request-id；换内容就换 ID。",
+        "关键裁定必须核对落地证据，不能凭回执结束。"
+      ]
+    },
+    {
+      "id": "wake",
+      "title": "监督远端长任务",
+      "kicker": "wake watcher",
+      "summary": "GPU 任务在远端 tmux / Slurm 中独立运行，Deck watcher 按间隔查询结束态，任务结束后把退出码和日志尾部送回会话。",
+      "lanes": [
+        { "id": "lead", "name": "主会话", "role": "启动、交接、收尾", "tone": "lead" },
+        { "id": "deck", "name": "Deck", "role": "watcher / 唤醒 outbox", "tone": "service" },
+        { "id": "host", "name": "GPU 主机", "role": "远端进程与日志", "tone": "worker" },
+        { "id": "job", "name": "训练任务", "role": "Slurm / tmux", "tone": "artifact" }
+      ],
+      "steps": [
+        {
+          "id": "w1",
+          "from": "lead",
+          "to": "host",
+          "kind": "run",
+          "title": "启动独立长任务",
+          "detail": "nohup / tmux / sbatch 独立运行，SSH 必须免密；确认加载成功、计算已开始后再交还回合。",
+          "tag": "ssh",
+          "command": "ssh gpu-a 'tmux new -d -s r3 ./run.sh'"
+        },
+        {
+          "id": "w2",
+          "from": "lead",
+          "to": "deck",
+          "kind": "wake",
+          "title": "挂 poll watcher",
+          "detail": "一个任务一个 watcher。省略代号时 Deck 从当前进程树识别会话并自动分配。",
+          "tag": "wake poll",
+          "command": "deck-api wake poll -l train-r3 -i 300 -- ssh gpu-a 'sacct -j 4821 -n -X -o State | head -1'"
+        },
+        {
+          "id": "w3",
+          "from": "deck",
+          "to": "host",
+          "kind": "query",
+          "title": "按间隔查询状态",
+          "detail": "只有进入结束态才唤醒，中间状态默认不打扰；连续连接失败 10 次也会提醒。",
+          "tag": "-i 300"
+        },
+        {
+          "id": "w4",
+          "from": "host",
+          "to": "job",
+          "kind": "run",
+          "title": "任务持续运行",
+          "detail": "现场单次等待不超过 30 秒；稳定后交给 watcher，不在前台 sleep 轮询。",
+          "tag": "GPU"
+        },
+        {
+          "id": "w5",
+          "from": "job",
+          "to": "deck",
+          "kind": "success",
+          "title": "进入 COMPLETED",
+          "detail": "watcher 抓到结束态，收集退出码与日志尾部。",
+          "tag": "COMPLETED"
+        },
+        {
+          "id": "w6",
+          "from": "deck",
+          "to": "lead",
+          "kind": "wake",
+          "title": "投递 [wake:<代号>]",
+          "detail": "主会话空闲立即送达；运行中排队等空闲，不 steer/interrupt 用户正在看的回合。",
+          "tag": "queue"
+        },
+        {
+          "id": "w7",
+          "from": "lead",
+          "to": "host",
+          "kind": "query",
+          "title": "重新核实再继续",
+          "detail": "GONE 不等于完成。先看进程、退出码、日志尾部和产物完整性，再决定下一步或重挂 watcher。",
+          "tag": "人工复核"
+        }
+      ],
+      "rules": [
+        "watcher 由发起会话挂，执行会话只负责现场稳定观察。",
+        "不要直接 kill watcher，否则会被记为失联；用 wake stop。",
+        "重启后 token 轮换可能导致旧 watcher 无法投递，需要固定 token 或重挂。",
+        "收到唤醒后必须重新核实产物，不能把通知当成成功证明。"
+      ]
+    },
+    {
+      "id": "detached",
+      "title": "detached 独立执行",
+      "kicker": "只查不推",
+      "summary": "来源创建任务后继续做自己的事；子会话结束后不推送任何消息，只把最终答复写入台账，由来源用 tasks / result 主动领取。",
+      "lanes": [
+        { "id": "lead", "name": "主会话", "role": "继续独立工作", "tone": "lead" },
+        { "id": "deck", "name": "Deck", "role": "状态与交付快照", "tone": "service" },
+        { "id": "worker", "name": "执行会话", "role": "Codex · 独立任务", "tone": "worker" },
+        { "id": "artifact", "name": "产物", "role": "最终答复与文件", "tone": "artifact" }
+      ],
+      "steps": [
+        {
+          "id": "t1",
+          "from": "lead",
+          "to": "deck",
+          "kind": "send",
+          "title": "create --detached",
+          "detail": "任务里写明交付内容、文件范围与验证要求。detached 只改变交付方式，不改变显式 send 的语义。",
+          "tag": "独立执行",
+          "command": "deck-api create codex --detached -- '独立完成模块，最终答复列出改动、产物和验证'"
+        },
+        {
+          "id": "t2",
+          "from": "deck",
+          "to": "worker",
+          "kind": "queue",
+          "title": "开始执行，不回推过程",
+          "detail": "正常情况下不为进度或完成推送消息；只有阻塞问题或用户明确要求时才显式 send。",
+          "tag": "no push"
+        },
+        {
+          "id": "t3",
+          "from": "lead",
+          "to": "lead",
+          "kind": "run",
+          "title": "来源继续自己的工作",
+          "detail": "不 sleep、不紧密轮询；在合适节点主动查询状态和交付。",
+          "tag": "并行"
+        },
+        {
+          "id": "t4",
+          "from": "worker",
+          "to": "artifact",
+          "kind": "success",
+          "title": "产物与最终答复",
+          "detail": "最终答复直接写结论、依据、文件和验证，不要求额外调用模型总结。",
+          "tag": "final answer"
+        },
+        {
+          "id": "t5",
+          "from": "worker",
+          "to": "deck",
+          "kind": "queue",
+          "title": "保存交付，不发送 done",
+          "detail": "完成、失败、中断都不向来源推送。状态和正文落台账，可跨重启、目标离线时重复读取。",
+          "tag": "query-only"
+        },
+        {
+          "id": "t6",
+          "from": "lead",
+          "to": "deck",
+          "kind": "query",
+          "title": "tasks / result 主动领取",
+          "detail": "result 返回 item、result、pending；result 里有 turnId、text、completedAt、truncated。",
+          "tag": "result @7f3a2c90",
+          "command": "deck-api result @7f3a2c90"
+        },
+        {
+          "id": "t7",
+          "from": "deck",
+          "to": "lead",
+          "kind": "success",
+          "title": "返回已保存交付",
+          "detail": "pending=true 表示回合已完成但原生历史尚未同步，稍后再查；不要误判为失败而重建会话。",
+          "tag": "result"
+        },
+        {
+          "id": "t8",
+          "from": "lead",
+          "to": "worker",
+          "kind": "message",
+          "title": "继续追问",
+          "detail": "追问开启新回合后旧交付清除，新回合完成后再保存新结果，避免旧答复冒充新结果。",
+          "tag": "send --to",
+          "command": "deck-api send --to @7f3a2c90 -- '补充：再覆盖 Windows 路径'"
+        }
+      ],
+      "rules": [
+        "detached 完成/失败不会通知来源，也不会 steer/interrupt 来源。",
+        "结果只保存最终答复快照，完整历史仍在原生会话。",
+        "pending 不是失败；同步失败会记录 captureError 并自动重试。",
+        "来源可能正在跑用户回合，自动返回会污染或打断它。"
+      ]
+    }
+  ]
+}

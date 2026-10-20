@@ -235,6 +235,13 @@ const TOOLS: ToolDescriptor[] = [
     icon: "commands",
     available: true,
   },
+  {
+    id: "deck-api",
+    name: "协作泳道",
+    description: "用泳道图查看 deck-api 的委派、steer、wake 与 detached 案例",
+    icon: "waypoints",
+    available: true,
+  },
 ];
 
 const SERVER: ServerInfo = {

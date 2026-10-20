@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import data from "../shared/deck-api-swimlanes.json";
+
+const KINDS = new Set([
+  "message",
+  "send",
+  "queue",
+  "run",
+  "success",
+  "failure",
+  "wake",
+  "query",
+]);
+
+test("deck-api 泳道示例数据完整", () => {
+  assert.equal(data.version, 1);
+  assert.ok(data.scenarios.length >= 4);
+  const scenarioIds = new Set<string>();
+  for (const scenario of data.scenarios) {
+    assert.ok(scenario.id && !scenarioIds.has(scenario.id), scenario.id);
+    scenarioIds.add(scenario.id);
+    assert.ok(scenario.title && scenario.summary && scenario.rules.length);
+    const lanes = new Set(scenario.lanes.map((lane) => lane.id));
+    assert.equal(lanes.size, scenario.lanes.length, `${scenario.id} 泳道重复`);
+    const steps = new Set<string>();
+    for (const step of scenario.steps) {
+      assert.ok(!steps.has(step.id), `${scenario.id}/${step.id} 步骤重复`);
+      steps.add(step.id);
+      assert.ok(lanes.has(step.from), `${scenario.id}/${step.id} from 不存在`);
+      assert.ok(lanes.has(step.to), `${scenario.id}/${step.id} to 不存在`);
+      assert.ok(KINDS.has(step.kind), `${scenario.id}/${step.id} kind 无效`);
+      assert.ok(step.title && step.detail && step.tag);
+    }
+  }
+});
