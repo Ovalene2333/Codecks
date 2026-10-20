@@ -74,6 +74,12 @@ export interface LaneBuildOptions {
   limit?: number;
   maxSteps?: number;
   project?: string;
+  /** 询问别名或完整 ask id。 */
+  ask?: string;
+  /** 会话别名、原始 thread id 或 agent:threadId。 */
+  session?: string;
+  /** 一个输入同时匹配询问和会话，页面搜索框使用。 */
+  query?: string;
   sanitize?: boolean;
 }
 
@@ -199,10 +205,36 @@ export function buildLaneScenarios(
     return [threadFor(ask.sourceAgentId, ask.sourceThreadId), threadFor(ask.targetAgentId, ask.targetThreadId)]
       .some((thread) => thread?.cwd?.toLowerCase().includes(needle));
   };
+  const normalizeRef = (value?: string) => value?.trim().replace(/^@/, "") || "";
+  const askRef = normalizeRef(options.ask);
+  const sessionRef = normalizeRef(options.session);
+  const queryRef = normalizeRef(options.query);
+  const matchesAsk = (ask: AskRecord) =>
+    !askRef || ask.alias === askRef || ask.id === askRef;
+  const matchesSession = (ask: AskRecord, value: string) => {
+    if (!value) return true;
+    const source = threadFor(ask.sourceAgentId, ask.sourceThreadId);
+    const target = threadFor(ask.targetAgentId, ask.targetThreadId);
+    return [source, target].some((thread) =>
+      thread
+        ? thread.id === value ||
+          thread.alias === value ||
+          `${thread.agentId}:${thread.id}` === value
+        : false,
+    );
+  };
+  const matchesQuery = (ask: AskRecord) =>
+    !queryRef ||
+    ask.alias === queryRef ||
+    ask.id === queryRef ||
+    matchesSession(ask, queryRef);
 
   const prepared = asks
     .filter((ask) => ask.targetThreadId && (ask.sentMessages?.length || ask.detached || ask.status === "failed"))
     .filter(inProject)
+    .filter(matchesAsk)
+    .filter((ask) => matchesSession(ask, sessionRef))
+    .filter(matchesQuery)
     .map((ask) => {
       const followUps = deliveryList.filter((delivery) => isFollowUp(ask, delivery, deliveries));
       const failed = followUps.filter((delivery) => delivery.status === "failed").length;

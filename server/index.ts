@@ -1939,14 +1939,23 @@ app.get(
   "/api/deck/lanes",
   route(async (req) => {
     const limit = z.coerce.number().int().min(1).max(20).default(8).parse(req.query.limit);
-    const project = typeof req.query.project === "string" && req.query.project.trim()
-      ? req.query.project.trim()
-      : undefined;
+    const readString = (value: unknown) =>
+      typeof value === "string" && value.trim() ? value.trim() : undefined;
+    const threads = laneThreadsFromSummary(agents.snapshot()).map((thread) => ({
+      ...thread,
+      alias: threadSettings.sessionAlias(thread.agentId as AgentId, thread.id) || thread.alias,
+    }));
     return buildLaneScenarios(
       askService.records(),
       messageDeliveries.list(),
-      laneThreadsFromSummary(agents.snapshot()),
-      { limit, project },
+      threads,
+      {
+        limit,
+        project: readString(req.query.project),
+        ask: readString(req.query.ask),
+        session: readString(req.query.session),
+        query: readString(req.query.q),
+      },
     );
   }),
 );

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api } from "../../src/api";
 import { copyText } from "../../src/clipboard";
+import { Button } from "../../src/kit";
 import type { ToolViewProps } from "../client-registry";
 import examples from "../../shared/deck-api-swimlane-example.json";
 
@@ -102,10 +103,16 @@ const KIND_ORDER: StepKind[] = [
 ];
 
 export function DeckApiView({ onToast }: ToolViewProps) {
+  const initialQuery = useMemo(
+    () => new URLSearchParams(window.location.search).get("q")?.trim() || "",
+    [],
+  );
   const [data, setData] = useState<SwimlaneData>(snapshot);
   const [live, setLive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [query, setQuery] = useState(initialQuery);
+  const [filter, setFilter] = useState(initialQuery);
   const [scenarioId, setScenarioId] = useState(snapshot.scenarios[0]?.id || "");
   const scenario = useMemo(
     () => data.scenarios.find((item) => item.id === scenarioId) || data.scenarios[0],
@@ -113,14 +120,21 @@ export function DeckApiView({ onToast }: ToolViewProps) {
   );
   const [stepId, setStepId] = useState(scenario?.steps[0]?.id || "");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (search: string) => {
+    const value = search.trim();
     setLoading(true);
     try {
-      const result = await api<SwimlaneData>("/deck/lanes?limit=8");
+      const params = new URLSearchParams({ limit: value ? "20" : "8" });
+      if (value) params.set("q", value);
+      const result = await api<SwimlaneData>(`/deck/lanes?${params.toString()}`);
       if (result.scenarios?.length) {
         setData(result);
         setLive(true);
         setLoadError("");
+      } else if (value) {
+        setData(snapshot);
+        setLive(false);
+        setLoadError(`没有匹配的询问或会话：${value}；当前显示脱敏快照。`);
       } else {
         setData(snapshot);
         setLive(false);
@@ -136,8 +150,19 @@ export function DeckApiView({ onToast }: ToolViewProps) {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(initialQuery);
+  }, [load, initialQuery]);
+
+  const applyFilter = (value: string) => {
+    const next = value.trim();
+    setFilter(next);
+    setQuery(next);
+    const url = new URL(window.location.href);
+    if (next) url.searchParams.set("q", next);
+    else url.searchParams.delete("q");
+    window.history.replaceState(window.history.state, "", url.toString());
+    void load(next);
+  };
 
   useEffect(() => {
     if (!scenario) return;
@@ -194,7 +219,7 @@ export function DeckApiView({ onToast }: ToolViewProps) {
               title="重新解析本机台账"
               aria-label="重新解析本机台账"
               disabled={loading}
-              onClick={() => void load()}
+              onClick={() => void load(filter)}
             >
               <RefreshCw />
             </button>
@@ -228,6 +253,31 @@ export function DeckApiView({ onToast }: ToolViewProps) {
           </button>
         ))}
       </nav>
+
+      <form
+        className="lane-filter"
+        onSubmit={(event) => {
+          event.preventDefault();
+          applyFilter(query);
+        }}
+      >
+        <label htmlFor="deck-api-lane-filter">指定会话</label>
+        <input
+          id="deck-api-lane-filter"
+          value={query}
+          placeholder="询问别名、@s-… 会话别名，或 agent:threadId"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <Button type="submit" size="sm" busy={loading}>
+          解析
+        </Button>
+        {filter ? (
+          <Button type="button" size="sm" variant="ghost" onClick={() => applyFilter("")}>
+            全部
+          </Button>
+        ) : null}
+        {filter ? <span className="lane-filter-active">只看 {filter}</span> : null}
+      </form>
 
       <section className="lane-scenario" role="tabpanel">
         <p className="lane-summary">

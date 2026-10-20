@@ -147,6 +147,48 @@
   height: 11px;
 }
 
+
+.lane-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.lane-filter label {
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+
+.lane-filter input {
+  flex: 1 1 260px;
+  min-width: 0;
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control);
+  color: var(--text);
+  font-size: var(--fs-meta);
+}
+
+.lane-filter input:focus {
+  border-color: var(--focus-ring);
+  outline: none;
+  box-shadow: var(--focus-halo);
+}
+
+.lane-filter-active {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+}
+
 .lane-tabs {
   display: flex;
   flex: none;

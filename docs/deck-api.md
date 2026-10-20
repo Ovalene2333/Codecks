@@ -58,6 +58,7 @@
 [deck-api-examples.md](deck-api-examples.md) 记录了如何从本机询问台账和消息投递记录解析真实协作，并列出了 traceroute 工作区里 6 个实际询问的时间、回传数和走向。
 
 - Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，页面实时读取 `/api/deck/lanes`，按来源会话、Deck 队列、目标会话分泳道；右上角可刷新。
+- 页面「指定会话」可填询问别名（`7f3a2c90`）、会话别名（`@s-3f9kq2pz`）或 `agent:threadId`；也可直接访问 `/deck-api?q=@s-…`，只解析匹配的来源或目标会话。
 - 页面优先显示本机台账；后端不可用时退回 `shared/deck-api-swimlane-example.json` 的脱敏快照，不会用虚构案例填充。
 - `npm run lanes:sync` 把本机解析结果写到 `.data/deck-api-swimlanes.json`；`npm run swimlane` 生成 `.data/deck-api-swimlane.svg`；`npm run swimlane:example` 重新生成仓库内脱敏示例和文档图。
 - 解析只读 `ask-sessions.json`、`message-deliveries.json` 和 `thread-summaries.json`，不复制会话、不写回台账。
@@ -392,6 +393,7 @@ curl -X POST "$(cat ~/.codex-deck/url)/api/send/events/<代号>" \
 | `POST` | `/api/deck/prepare` | 识别来源、确认/分配唤醒代号、whoami |
 | `GET` | `/api/deck/agents` | 可用 Agent、配置和 steer 能力 |
 | `GET` | `/api/deck/sessions` | 询问台账、状态、别名、回传统计 |
+| `GET` | `/api/deck/lanes` | 解析实际协作泳道；`q` 匹配询问/会话，或 `ask` / `session` / `project` 收窄 |
 | `GET` | `/api/deck/sessions/:reference/result` | 按别名或询问 ID 读取状态与 detached 最终交付 |
 | `GET` | `/api/deck/sessions/:reference/inspect?tail=40` | 查看原生会话近期输出 |
 | `GET` | `/api/deck/targets` | 唤醒代号绑定 |

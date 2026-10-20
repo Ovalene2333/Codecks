@@ -6,6 +6,7 @@
 了队列、最终状态是什么。
 
 - Deck 内打开 **工具 → 协作泳道**，或访问 `/deck-api`，默认实时解析本机台账；右上角可刷新。
+- 「指定会话」支持询问别名、`@s-…` 会话别名和 `agent:threadId`；URL 里写 `/deck-api?q=@s-…` 可直接分享/收藏某个案例。
 - 页面失败或后端不可用时退回 `shared/deck-api-swimlane-example.json` 的脱敏快照。
 - 静态图 [deck-api-swimlane.svg](deck-api-swimlane.svg) 来自真实询问 `f59a3b17`
   （deck-api 设计评审，detached），已脱敏；它不是虚构案例。
@@ -66,6 +67,9 @@ npm run lanes:sync -- --project traceroute --limit 10
 # 只导出一个询问
 npm run lanes:sync -- --ask f59a3b17 --limit 1 --output /tmp/lanes.json
 
+# 按会话别名 / thread id 解析
+npm run lanes:sync -- --session @s-0485dda --output /tmp/lanes.json
+
 # 生成静态 SVG（默认读 .data 的完整解析结果）
 npm run swimlane
 
@@ -78,6 +82,10 @@ npm run swimlane:example
 ```bash
 curl -H "Authorization: Bearer $(cat ~/.codex-deck/token)" \
   "$(cat ~/.codex-deck/url)/api/deck/lanes?limit=8&project=traceroute"
+
+# 只看某个会话或询问
+curl -H "Authorization: Bearer $(cat ~/.codex-deck/token)" \
+  "$(cat ~/.codex-deck/url)/api/deck/lanes?q=@s-0485dda"
 ```
 
 返回字段与页面一致：`scenarios[]`、每组 `lanes[]`、`steps[]`、`rules[]` 和 `meta`。

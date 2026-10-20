@@ -133,3 +133,13 @@ test("投递失败与 detached 会改变泳道标记", () => {
   assert.equal(scenario.steps.at(-1)?.kind, "query");
   assert.match(scenario.rules.join("\n"), /202 只代表受理/);
 });
+
+test("可以按询问别名、会话别名或 threadId 定位", () => {
+  for (const query of ["7f3a2c90", "@s-worker", "worker-thread", "codex:worker-thread", "src-thread"]) {
+    const result = buildLaneScenarios([ask], deliveries, threads, { query });
+    assert.equal(result.scenarios.length, 1, query);
+  }
+  assert.equal(buildLaneScenarios([ask], deliveries, threads, { session: "@s-main" }).scenarios.length, 1);
+  assert.equal(buildLaneScenarios([ask], deliveries, threads, { ask: "ask-1" }).scenarios.length, 1);
+  assert.equal(buildLaneScenarios([ask], deliveries, threads, { query: "missing" }).scenarios.length, 0);
+});
