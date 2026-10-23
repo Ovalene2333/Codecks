@@ -932,44 +932,6 @@
 
 .monitor-view .spin { animation: spin 0.9s linear infinite; }
 
-.monitor-usage-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 30px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-dim);
-  font-size: var(--fs-meta);
-  text-align: left;
-  cursor: pointer;
-}
-
-.monitor-usage-row:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.monitor-usage-row span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.monitor-usage-row b {
-  flex: none;
-  color: var(--text);
-  font: var(--fw-medium) var(--fs-meta)/1 var(--font-sans);
-}
-
-.monitor-usage-row.warn b { color: var(--wait); }
-.monitor-usage-row.danger b { color: var(--danger); }
-
 /* 进度条默认中性色，只有接近上限时才变成警示色。 */
 .monitor-meter {
   --meter-color: var(--text-dim);

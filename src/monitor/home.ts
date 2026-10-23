@@ -31,7 +31,7 @@ export interface HomeBoard {
   unseen: HomeItem[];
   /** 疑似卡住的在前，其余跑得最久的在前（顺序稳定，不随秒表跳动）。 */
   running: RunningItem[];
-  /** 以上都不是的最近会话（被 deck-wake 监督的另列，不在这里重复）。 */
+  /** 所有状态的会话，按最近活动排序。 */
   recent: HomeItem[];
 }
 
@@ -39,13 +39,20 @@ export interface HomeBoard {
 export const finishedAt = (item: HomeItem) =>
   item.activity?.lastTurn?.endedAt ?? item.thread.updatedAt;
 
-/** 首页按“球在谁手里”分桶：你要处理的、agent 交回来的、agent 还在做的、其余。 */
+/** 元数据可能滞后于实时活动，排序和显示使用同一时间。 */
+export const recentActivityAt = (item: HomeItem) => Math.max(
+  item.thread.updatedAt,
+  item.activity?.lastEventAt ?? 0,
+  item.activity?.turnStartedAt ?? 0,
+  item.activity?.lastTurn?.endedAt ?? 0,
+);
+
+/** 状态分组互斥；最近会话独立收录所有状态。 */
 export function buildHomeBoard({
   threads,
   activities,
   pendingOf,
   unseenSessions,
-  supervised,
   now,
   recentLimit,
 }: {
@@ -53,8 +60,6 @@ export function buildHomeBoard({
   activities: ReadonlyMap<string, ThreadActivity>;
   pendingOf: (thread: ThreadSummary) => Approval[] | undefined;
   unseenSessions: ReadonlySet<string>;
-  /** 有 deck-wake watcher 的会话，键为 activityKey(agentId, threadId)。 */
-  supervised?: ReadonlySet<string>;
   now: number;
   recentLimit: number;
 }): HomeBoard {
@@ -64,6 +69,7 @@ export function buildHomeBoard({
     const agentKey = activityKey(thread.agentId, thread.id);
     const activity = activities.get(agentKey);
     const item = { key, thread, activity };
+    board.recent.push(item);
     if (pendingOf(thread)?.length) continue;
     if (thread.status === "waiting" || thread.status === "error")
       board.attention.push(item);
@@ -75,7 +81,6 @@ export function buildHomeBoard({
       });
     else if (thread.ask) continue;
     else if (unseenSessions.has(key)) board.unseen.push(item);
-    else if (!supervised?.has(agentKey)) board.recent.push(item);
   }
   const byKey = (a: HomeItem, b: HomeItem) => (a.key < b.key ? -1 : 1);
   board.attention.sort(
@@ -92,7 +97,7 @@ export function buildHomeBoard({
       byKey(a, b),
   );
   board.recent = board.recent
-    .sort((a, b) => b.thread.updatedAt - a.thread.updatedAt || byKey(a, b))
+    .sort((a, b) => recentActivityAt(b) - recentActivityAt(a) || byKey(a, b))
     .slice(0, recentLimit);
   return board;
 }

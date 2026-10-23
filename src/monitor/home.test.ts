@@ -3,7 +3,7 @@ import test from "node:test";
 import type { Approval, ThreadActivity, ThreadSummary } from "../types";
 import { activityKey } from "./activity-store";
 import { STALL_MS } from "./activity";
-import { buildHomeBoard, replyPreview, turnTone } from "./home";
+import { buildHomeBoard, recentActivityAt, replyPreview, turnTone } from "./home";
 
 const NOW = 10_000_000;
 const thread = (id: string, extra: Partial<ThreadSummary> = {}) =>
@@ -19,7 +19,7 @@ const base = {
 };
 const keys = (list: { thread: ThreadSummary }[]) => list.map((item) => item.thread.id);
 
-test("sessions land in exactly one bucket by whose turn it is", () => {
+test("status buckets are exclusive while recent includes all statuses", () => {
   const board = buildHomeBoard({
     ...base,
     threads: [
@@ -33,11 +33,11 @@ test("sessions land in exactly one bucket by whose turn it is", () => {
     unseenSessions: new Set(["codex:p:done"]),
     pendingOf: (item) => (item.id === "approval" ? [{ id: "x" } as Approval] : undefined),
   });
-  // 有审批的会话交给审批卡片，不在任何列表里重复。
+  // 审批会话仍可从最近会话找到。
   assert.deepEqual(keys(board.attention), ["asking", "broken"]);
   assert.deepEqual(keys(board.running), ["busy"]);
   assert.deepEqual(keys(board.unseen), ["done"]);
-  assert.deepEqual(keys(board.recent), ["old"]);
+  assert.deepEqual(keys(board.recent), ["approval", "asking", "broken", "busy", "done"]);
 });
 
 test("a running session is not an unread reply even if flagged unseen", () => {
@@ -92,7 +92,7 @@ test("recent is capped and newest first; waiting sorts before errors", () => {
       thread("wait", { status: "waiting", updatedAt: 5 }),
     ],
   });
-  assert.deepEqual(keys(board.recent), ["r2", "r3"]);
+  assert.deepEqual(keys(board.recent), ["err", "wait"]);
   assert.deepEqual(keys(board.attention), ["wait", "err"]);
 });
 
@@ -110,13 +110,27 @@ test("turnTone maps statuses to result tones", () => {
   assert.equal(turnTone("interrupted"), "stop");
 });
 
-test("sessions under deck-wake supervision leave the recent list", () => {
+test("recent includes running and ordinary sessions", () => {
   const board = buildHomeBoard({
     ...base,
     threads: [thread("watched"), thread("plain"), thread("busy", { status: "running" })],
-    supervised: new Set(["codex:watched", "codex:busy"]),
   });
-  assert.deepEqual(keys(board.recent), ["plain"]);
-  // 监督只影响“最近”，运行中照常显示
+  assert.deepEqual(keys(board.recent), ["busy", "plain", "watched"]);
+  // 运行中分组照常显示
   assert.deepEqual(keys(board.running), ["busy"]);
+});
+
+
+test("recent sorts live activity before limiting, with matching display time", () => {
+  const board = buildHomeBoard({
+    ...base, recentLimit: 2,
+    threads: [thread("metadata", { updatedAt: NOW - 100 }), thread("live", { updatedAt: 1 }), thread("finished", { updatedAt: 2 })],
+    activities: map([
+      { agentId: "codex", threadId: "live", lastEventAt: NOW },
+      { agentId: "codex", threadId: "finished", lastEventAt: 2, lastTurn: { startedAt: 2, endedAt: NOW - 1, status: "completed" } },
+    ]),
+  });
+  assert.deepEqual(keys(board.recent), ["live", "finished"]);
+  assert.equal(recentActivityAt(board.recent[0]), NOW);
+  assert.equal(recentActivityAt({ thread: thread("fallback"), key: "fallback" }), NOW - 1000);
 });

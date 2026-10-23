@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "../kit";
 import { Gauge, RefreshCw } from "lucide-react";
-import { formatTokens, sessionKey } from "../format";
+import { formatTokens } from "../format";
 import type { RateLimitWindow, RuntimeSnapshot, ThreadSummary } from "../types";
 import { estimateCost, formatCost } from "../usage/cost";
 import {
@@ -11,9 +11,6 @@ import {
 } from "../usage/format";
 import { buildUsageStats } from "../usage/stats";
 import type { UsageView } from "../usage/UsageChip";
-import { contextPercent, contextTone } from "./activity";
-
-const CONTEXT_ALERT = 80;
 
 function LimitRow({ label, window }: { label: string; window?: RateLimitWindow }) {
   const left = remainingPercent(window?.usedPercent);
@@ -38,33 +35,26 @@ function LimitRow({ label, window }: { label: string; window?: RateLimitWindow }
 export function MonitorUsage({
   threads,
   runtime,
-  onSelect,
   onRefreshLimits,
   onOpenUsage,
 }: {
   threads: ThreadSummary[];
   runtime?: RuntimeSnapshot;
-  onSelect: (thread: ThreadSummary) => void;
   onRefreshLimits: (force?: boolean) => Promise<void>;
   onOpenUsage: (view: UsageView) => void;
 }) {
   const [refreshing, setRefreshing] = useState(false);
-  // 按会话排行的用量在「明细」抽屉里看，首页右栏只留总量、额度和需要处理的上下文。
-  const { totals, cost, crowded } = useMemo(() => {
+  // 按会话排行的用量在「明细」抽屉里看，首页右栏只留总量和额度。
+  const { totals, cost } = useMemo(() => {
     const stats = buildUsageStats(threads);
     const cost = stats.sessions.reduce((sum, row) => {
       const model = row.thread.resolvedModel || row.thread.model;
       const duplicated = estimateCost(row.duplicated, model);
       return sum + Math.max(0, estimateCost(row.totals, model) - duplicated);
     }, 0);
-    const crowded = stats.sessions
-      .map((row) => ({ thread: row.thread, percent: contextPercent(row.thread.tokenUsage) }))
-      .filter((row) => row.percent != null && row.percent >= CONTEXT_ALERT)
-      .sort((left, right) => right.percent! - left.percent!);
     return {
       totals: stats.totals,
       cost,
-      crowded,
     };
   }, [threads]);
   const limits = runtime?.rateLimits;
@@ -144,24 +134,6 @@ export function MonitorUsage({
               ))}
             </>
           )}
-        </div>
-      ) : null}
-      {crowded.length ? (
-        <div className="monitor-usage-block">
-          <div className="monitor-usage-subhead">
-            <span>上下文将满</span>
-          </div>
-          {crowded.map(({ thread, percent }) => (
-            <button
-              type="button"
-              key={sessionKey(thread)}
-              className={`monitor-usage-row ${contextTone(percent)}`}
-              onClick={() => onSelect(thread)}
-            >
-              <span title={thread.name}>{thread.name}</span>
-              <b>{percent}%</b>
-            </button>
-          ))}
         </div>
       ) : null}
     </section>

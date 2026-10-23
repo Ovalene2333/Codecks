@@ -464,7 +464,6 @@ export function MonitorPanel({
                       key={id}
                       threads={liveThreads}
                       runtime={runtime}
-                      onSelect={onSelect}
                       onRefreshLimits={onRefreshLimits}
                       onOpenUsage={onOpenUsage}
                     />

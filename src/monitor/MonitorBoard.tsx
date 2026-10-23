@@ -59,6 +59,7 @@ import { activityKey, useNow } from "./activity-store";
 import {
   buildHomeBoard,
   finishedAt,
+  recentActivityAt,
   replyPreview,
   turnTone,
   type HomeItem,
@@ -719,7 +720,7 @@ function RecentPanel({
             project={projectOf.get(item.key)}
             tone="idle"
             lead={<i className="home-dot" />}
-            time={relativeTime(thread.updatedAt)}
+            time={relativeTime(recentActivityAt(item))}
             detail={
               detail ? (
                 <span className="home-row-reply">{detail}</span>
@@ -853,7 +854,7 @@ function WatchPanel({
 
 /**
  * 首页主栏：默认按“球在谁手里”排——需要你处理的、agent 交回来的新回复、
- * 还在跑的、其余最近会话，最后是 deck-api 盯着的远端任务；用户可在「调整布局」里改顺序。
+ * 还在跑的、按活动时间排序的最近会话，最后是 deck-api 盯着的远端任务；用户可在「调整布局」里改顺序。
  * 审批卡片由外层放在最上方。「监督中」常驻，其余面板没内容时不显示。
  */
 export function MonitorBoard({
@@ -918,17 +919,6 @@ export function MonitorBoard({
       ),
     [deliveries],
   );
-  const supervised = useMemo(
-    () =>
-      new Set(
-        watched.flatMap((watcher) =>
-          watcher.threadId
-            ? [activityKey(watcher.agentId, watcher.threadId)]
-            : [],
-        ),
-      ),
-    [watched],
-  );
   const board = useMemo(
     () =>
       buildHomeBoard({
@@ -936,11 +926,10 @@ export function MonitorBoard({
         activities,
         pendingOf: (thread) => approvalsByThread.get(sessionKey(thread)),
         unseenSessions,
-        supervised,
         now,
         recentLimit: RECENT_LIMIT,
       }),
-    [threads, activities, approvalsByThread, unseenSessions, supervised, now],
+    [threads, activities, approvalsByThread, unseenSessions, now],
   );
   const panel = (id: MainPanelId): ReactNode => {
     switch (id) {
