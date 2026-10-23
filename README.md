@@ -8,21 +8,21 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 </div>
 
-> **本地优先的 AI 编程 Agent 控制台。** 在浏览器里看会话、批审批、接管任务，电脑和手机都能用；登录、会话和历史都留在你自己的机器上。
+> **多 Agent 的统一 Web 控制台。** 把 Agent CLI 会话接到浏览器，在电脑和手机上统一管理对话、审批和任务；通过 deck-api 创建子会话、收发消息与协作。
 
-[Codecks](https://github.com/Ovalene2333/Codecks) 是一个跑在你自己电脑上的网页控制台，用浏览器（电脑或手机都行）盯着、指挥 AI 编程 Agent 干活。主要接 [Codex CLI](https://github.com/openai/codex)，也能接 Claude Code、OpenCode，以及通过 [ACP](https://agentclientprotocol.com) 接入的 Devin、Kimi CLI、Goose、Copilot CLI 等。
+[Codecks](https://github.com/Ovalene2333/Codecks) 接入 [Codex CLI](https://github.com/openai/codex)、Claude Code、OpenCode，以及通过 [ACP](https://agentclientprotocol.com) 接入的 Devin、Kimi CLI、Goose、Copilot CLI 等 Agent，把各自的会话、运行状态、审批和用量放到同一个界面。
 
-它直接用本机已有的登录状态、`~/.codex` 里的会话和你的项目目录，不另存一套历史。人不在电脑前，可以用手机看任务跑到哪了、批一下命令、接着往下聊。
+它将 CLI 的会话与操作能力转发到 Web：服务运行在电脑或服务器上，你可以从桌面浏览器或手机查看实时输出、批准操作、追加指令、停止或继续任务。通过 `deck-api`，Agent 还能创建独立子会话、交换消息和领取结果，人在同一个控制台查看进度、处理异常或接手工作。
 
 **它能做什么**
 
-- **一个控制台管多种 Agent**：Codex、Claude Code、OpenCode 和 ACP Agent 的会话、审批、任务和用量放在一起看。
-- **离开电脑也能值守**：手机打开同一个控制台，看进度、批命令、继续对话；也可以接远程访问。
-- **每个会话独立选供应商**：同一台机器上并行跑多家中转/模型，不用来回切「当前项」。
-- **Agent 之间能协作**：用 `deck-api` 创建子会话、主动回传结论、监督 SSH/GPU/Slurm 长任务，任务结束再唤醒。
-- **本地数据不搬家**：复用原生会话、登录态和项目目录，不复制一份 Deck 私有的历史。
+- **多 Agent 接入与统一管理**：在同一个控制台使用 Codex、Claude Code、OpenCode 和 ACP Agent，集中查看会话、审批、任务和用量。
+- **CLI 会话的 Web 转发**：把原生 Agent 的对话、执行过程与审批带到浏览器，电脑和手机都能继续操作；支持局域网、隧道和反向代理等远程访问方式。
+- **deck-api 任务协作**：用 `create` / `send` / `receive` / `del` 创建子会话、收发消息和管理任务；Agent / 模型 / effort 可保存成命名预设，SSH / GPU / Slurm 等外部长任务也可监督并通知会话。
+- **每个会话独立选供应商**：并行使用不同中转和模型，无需来回切换全局「当前项」。
+- **复用原生登录与配置**：各 Agent 继续使用自己的原生目录、登录状态和项目工作区，Deck 保存控制台设置与协作投递状态。
 
-适合把 Codex / Claude Code 等 Agent CLI 跑在本机或服务器上、又想离开电脑后继续盯着的人；也适合同时使用多家供应商或多个 Agent 的开发者。
+适合同时使用多种 Agent、需要集中管理会话和审批，或希望通过浏览器远程操作 CLI、让多个 Agent 分工协作的开发者。
 
 CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。Codex 和 Claude 都可以使用本机 CLI 登录，或在「设置 → 供应商」直接添加自定义中转；无头 Linux 也能用配置文件管理。如果你已经在 [CC Switch](https://github.com/farion1231/cc-switch) 里配置了供应商，Codecks 会兼容只读读取，让每个会话各选各的供应商和模型，不用来回切「当前项」。会话列表、任务和审批里都会标出实际用的是哪个 Agent。
 
@@ -33,9 +33,9 @@ CC Switch 是可选的配置来源，不是启动或使用 Codecks 的前提。C
   - [特性](#特性)
     - [总览首页](#总览首页) · [手机上用](#手机上用) · [真实会话](#真实会话) · [审批和提醒](#审批和提醒)
     - [对话和时间线](#对话和时间线) · [任务与用量](#任务与用量) · [工具](#工具) · [设置](#设置)
-    - [Agent 协作与远程唤醒（deck-api）](#deck-api) · [远程值守](#远程值守) · [多家中转同时在线](#多家中转同时在线)
+    - [Agent 协作与任务通信（deck-api）](#deck-api) · [远程值守](#远程值守) · [多家中转同时在线](#多家中转同时在线)
 - **深入阅读**
-  - [deck-api：创建会话、主动消息与远程唤醒](docs/deck-api.md)
+  - [deck-api：创建会话、收发消息与任务管理](docs/deck-api.md)
   - [deck-api 协作实例与泳道图](docs/deck-api-examples.md)
   - [Agent 适配说明](docs/agent-adapters.md) · [消息输送与普通对话](docs/message-transport.md)
 - **开始使用**
@@ -266,7 +266,7 @@ Linux 多核机器的资源监控已降低 CPU 采样开销，避免首页轮询
 | 会话 | 发送键（Enter 发送，或 Ctrl/⌘+Enter 发送）、系统提醒、新会话的默认值 |
 | Agent | 启用、停用、重载每个 Agent，不用重启 Deck；Codex、Claude、OpenCode 有各自的详情页 |
 | 供应商 | 只管 Codex / Claude 自定义供应商与 CC Switch 只读同步；OpenCode 的供应商收进 Agent 详情 |
-| 工具 | 工具菜单显示哪些、桌面端怎么打开 |
+| 工具 | deck-api 的 Agent / 模型 / effort 创建预设、工具菜单显示哪些、桌面端怎么打开 |
 | 快捷键 | 桌面端快捷键一览 |
 | 数据 | 设置备份（导出 / 导入 JSON，不含令牌和 API Key）、本地缓存、最近目录、恢复默认、在本设备退出、开发者模式开关 |
 | 开发者 | 开启后出现：已删除会话的别名保留期、协作泳道入口、紧急停止 |
@@ -287,44 +287,60 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 - 用普通 `codex` 创建的旧 Session 还是会出现在历史里，但不会假装成实时受管的状态
 
 <a id="deck-api"></a>
-### deck-api：Agent 协作与远程唤醒
+### deck-api：Agent 协作与任务通信
 
-`deck-api` 的默认通信收敛为四个操作：`create` 创建独立子会话，`send` 向持久收件箱发送消息，`receive` 在当前回合批量取信，`del` 安全删除目标。脚本随 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目里也可直接用 `skills/deck-api`。`stop` / `archive` / `inspect` 等保留为辅助管理能力，`wake` 继续监督外部长任务。
+`deck-api` 让 Agent 在独立原生会话里分工，通过持久收件箱交换消息。来源可以继续自己的工作，在当前回合领取进度、问题和结果；目标的最终答复或执行失败会自动交付给来源。
 
-在「设置 → 工具 → deck-api 创建预设」（或会话雷达面板 → 通信与创建设置）保存命名的 Agent / 供应商 / 模型 / effort 组合，再用 `deck-api presets` 查看、`deck-api create --preset review -- '任务'` 使用。模型必填，OpenCode 须填写完整 `provider/model`；供应商留空沿用 Agent 默认供应商，effort 留空使用原生默认。预设按名称整套使用，不与 `--provider` / `--model` / `--effort` 混用；权限仍沿用目标 Agent 的创建默认值和允许集合。新增、编辑、删除只影响之后的创建，已有会话不变；不传预设的 `create <agentId>` 保持原行为。配置保存在 Deck 数据目录的 `deck-presets.json`，重启后保留。
+| 操作 | 用途 |
+| --- | --- |
+| `create` | 创建独立子会话，返回稳定会话地址与受理回执 |
+| `send` | 给已知会话发送补充任务、进度或问题；子会话省略目标时发给来源 |
+| `receive` | 在当前回合批量领取新消息，可用 `--wait 0..60` 有界等待 |
+| `del` | 删除自己有权管理的目标会话，并清理可安全删除的关联资源 |
 
-删除中的 `--force` 只用于停止后删除，不绕过 Agent 的所有权检查，也不会强制删除有未提交改动的 worktree；脏工作区会保留，交给用户另行处理。
+#### 配置并使用预设
 
-- **运行中收信，不打断**：新消息进 inbox，Agent 可继续当前工作并调用 `receive`，无需先结束回合；空闲时按批次自动继续。自动批次不可作为用户草稿编辑或提升为即时反馈，网页普通聊天的即时/排队功能不变。`wake` 保留独立外部任务 outbox。
-- **升级提示**：独立 wake-code 已移除；旧 watcher 需要停止后用会话别名重新挂载，外部回调地址也需改为会话别名。
-- **后端自动发现**：每个 Deck 实例独立登记地址与凭据，CLI 调用前验证实例身份；多个后端并存时按来源会话选择，无法唯一确定则报错。watcher 固定所属实例，重启后重新读取该实例的新地址和凭据。旧的全局 `url` / `token` 文件不再使用；需要手动指定时用 `DECK_INSTANCE_ID`，或同时设置 `DECK_API_URL` / `DECK_TOKEN`。
-- **会话别名默认开启**：每个会话（UI 新建、询问创建、fork、重试）都会自动拿到一个 `@s-xxxxxxx` 形式的稳定短别名，点击会话顶栏的雷达按钮，在任务回传面板查看和复制；活跃别名落盘后永不重算。普通会话删除后默认保留 2 天，新协议子任务已发放地址不会复用于另一个目标。`send --to @s-…`、`sessions`、`/s/s-…` 都直接可用。
-- **询问别名**：每次询问另有自己的短标识（如 `@7f3a2c`），首先生成后写入台账、永不重算；完整 ID 留在服务端和 UI，用 `send --to @<alias>` 继续追问，不用复制长 UUID。会话别名和询问别名是两个命名空间，不能混用。
-- **主动交流与静默停止**：目标自行 `send` 进度或澄清问题；新管理任务的最终答复自动交付。中止、取消和主动 stop 不向来源制造失败消息。stop 会暂停目标自动处理，保留尚未交付的 inbox 消息；父会话的无关人工输入不会让已停子任务恢复，明确发送新工作或用户继续才恢复。
-- **子任务生命周期**：`stop @alias`（别名 `kill`）停止排队投递并打断当前回合，`--after-turn` 让当前回合自然收尾、`--force` 在打断失败时紧急归位；`del @alias`（兼容 `delete`）删除原生会话并保存墓碑，默认停止绑定 watcher、清理 Deck 创建且干净的 worktree。运行中需先 stop 或明确加 `--force`，后者只代表停止后删除，不绕过所有权，dirty worktree 始终保留。清理失败可重复 del 重试；`archive` / `unarchive` 软归档，保留原生会话、结果和别名。
-- **最终结果自动交付**：新子任务最终答复/失败自动成为来源消息，无需再手动 send；结果处理回合不自动反向回复。receive 领取与空闲续跑共用消费状态，已领取消息不会再次唤醒。查看 UI 或辅助 result/collect 不消费 inbox，也不等于模型完成或用户已读。
-- **可靠重试与预算**：create/send/receive 自动携带请求 ID；`receive --replay` 可找回近 7 天领取批次。受理未知的原生投递不自动重发，雷达面板支持人工核对。自动续跑默认每会话连续最多 10 回合、每小时 30 回合，超限暂停但仍可取信；用户可在雷达面板继续。离线/审批等待不自动判失败。
-- **创建配置与脚本等待**：`create --cwd <目录> --worktree[=base]` 可选择目标工作区，回执区分适配器确认值、请求/默认值与未知原生默认；权限默认值与 Agent 可选允许集合分别由用户配置，模型覆盖不会丢失权限设置。脚本可选 `wait @alias --timeout 60`，超时返回 `timedOut`，不会消费结果或发送催促消息。Agent 默认只需 create/send/receive/del。
-- **后台静默与升级**：新 `create --detached` 的结果也进收件箱，但不单独唤醒来源；普通 create 同样允许来源继续工作。旧任务保留原队列、通知和 result 语义，不补发历史完成消息。更新后由用户重启 Deck 同步服务与脚本；自动继续可能产生额外模型费用。
-- **重启通知**：启动时已有的询问结果、失败和等待状态不会重新生成 `[deck:notice]`；运行中新发生的通知照常发送，停机前已落盘待投递的通知仍会继续重试。历史错误可通过 `result` / `inspect` 查看。
-- **收件人解析收敛**：会话别名、询问引用和 `agent:thread` 使用同一套解析，错误分 `UNKNOWN_ALIAS` 404、`ARCHIVED` 409、`DELETED` 410、`AMBIGUOUS` 409（带候选）、`BAD_FORMAT` 400，歧义不再静默投错；已删除会话的别名在保留期内返回 `DELETED`。普通会话到期释放后旧链接可能指向新会话；新协议子任务地址不复用。
-- **可观测**：雷达面板查看会话代号、已有询问记录和 watcher，不再提供创建提问表单，总览首页显示正在监督的任务；失联 watcher 进入「需要处理」。
-- **协作泳道**：工具菜单里的「协作泳道」（`/deck-api`）直接解析本机询问台账与消息投递记录，按来源会话、Deck 队列、目标会话画出真实协作；成功后显示本机会话，后端不可用时退回脱敏快照。页面会合并重复唤醒、标出投递失败和 detached 状态。`npm run lanes:sync` 导出本机解析结果，`npm run swimlane` 生成静态 SVG，`npm run swimlane:example` 重新生成仓库内脱敏快照和 [docs/deck-api-swimlane.svg](docs/deck-api-swimlane.svg)；完整说明见 [docs/deck-api-examples.md](docs/deck-api-examples.md)。
+在「设置 → 工具 → deck-api 创建预设」保存 Agent、供应商、模型和 effort 组合；会话雷达面板的「通信与创建设置」里也能管理。比如保存一个名为 `review` 的代码评审组合：
 
 ```bash
 DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"
-bash "$DA" create codex --name '方案复核' -- '请根据以下代码提供第二意见：…'
-bash "$DA" send -- '结论：建议方案 B，依据是……。'
-bash "$DA" send --to @<alias> -- '补充约束：……'
-bash "$DA" send --to @s-3f9kq2pz -- '按会话别名补充上下文……'
-bash "$DA" create codex --detached -- '独立实现这个模块，最终答复列出产物和验证：…'
-bash "$DA" result @<alias>
-bash "$DA" inspect @<alias> --tail 30
-bash "$DA" stop @<alias> --after-turn
-bash "$DA" archive @<alias>
-bash "$DA" delete @<alias> --force
-bash "$DA" wake -- ssh demo-box 'wait-for-job'
+bash "$DA" presets
+bash "$DA" create --preset review -- '评审以下改动，检查边界条件并给出修改建议：…'
+# 后续命令使用 create 回执中的会话地址
+bash "$DA" send --to @s-xxxxxxx -- '补充约束：保持现有接口兼容。'
+bash "$DA" receive
+bash "$DA" del @s-xxxxxxx
 ```
+
+模型必填，OpenCode 使用完整 `provider/model`；供应商留空沿用 Agent 默认供应商，effort 留空使用原生默认。预设整套使用，不与 `--provider` / `--model` / `--effort` 混用。权限仍沿用目标 Agent 的创建默认值和允许集合。预设保存后只影响后续创建，重启后保留；不使用预设时，仍可运行 `create <agentId> -- '任务'`，采用该 Agent 的创建默认配置。
+
+脚本由 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目中的 `skills/deck-api` 入口会优先转发到安装版。更新后需重启 Deck，让服务和脚本使用同一版本。
+
+#### 收信、结果与继续执行
+
+- **运行中只收信**：`send` 先把消息存入收件箱，目标当前回合继续运行；Agent 可以调用 `receive` 领取。空闲时，未领取消息可合为一批自动开启新回合，已领取消息不会再次触发。
+- **最终结果自动交付**：子任务的最终答复和执行失败自动进入来源收件箱，无需再 `send` 一遍最终结论。处理结果或系统消息的回合不会自动反向回复。网页查看记录、`result` / `inspect` 查询与 `receive` 领取相互独立。
+- **后台静默**：`create --detached` 的结果也进收件箱，但不单独触发来源执行。来源仍可继续工作并主动取信。
+- **有界自动继续**：默认每会话最多连续 10 个自动回合、每小时 30 个；超限暂停后仍可取信，在雷达面板可查看状态并继续。自动继续会产生模型调用，按所用供应商计费。
+- **可核对、可重试**：create/send/receive 自动携带请求 ID；同一次请求重试沿用 ID。`receive --replay` 可找回近 7 天的领取批次；受理未知的原生投递不会自动重发，可在雷达面板核对。
+
+#### 会话地址与任务管理
+
+每个会话都有稳定的 `@s-…` 地址，在会话顶栏的雷达面板查看和复制。`send --to @s-…`、`sessions` 和 `/s/s-…` 都可使用；多个 Deck 实例会按来源会话自动发现并校验所属后端，歧义时明确报错。需要指定实例时使用 `DECK_INSTANCE_ID`，或同时设置 `DECK_API_URL` / `DECK_TOKEN`。
+
+`stop` 用于暂停任务，`archive` / `unarchive` 管理归档，`result` / `inspect` 辅助核对状态和输出。停止和取消不会自动制造失败通知；停止后保留未交付消息，明确发送新任务或用户继续才恢复。雷达面板集中显示任务、消息投递和 watcher 状态；「协作泳道」（`/deck-api`）可查看实际消息流转，详见 [协作实例与泳道图](docs/deck-api-examples.md)。
+
+创建时可用 `--cwd <目录>` 指定工作区，或用 `--worktree[=base]` 创建独立 Git worktree。删除忙碌任务需要先停止或显式加 `--force`；强制删除仍校验所有权，并保留有未提交改动的 worktree。资源清理失败可重试，`--keep-worktree` 可明确保留工作区。
+
+<details>
+<summary>升级前任务与兼容行为</summary>
+
+- 旧任务保留原队列、通知和 `result` 语义，不补发历史结果；旧的询问别名仍可用于辅助查询，与 `@s-…` 会话地址分属不同命名空间。
+- 启动时已有的结果、失败和等待状态不会重新生成 `[deck:notice]`；运行中新通知和停机前已落盘通知的重试照常处理。
+- 独立 wake-code 和全局 `url` / `token` 发现文件已停用；旧 watcher 需停止后用会话地址重新挂载，外部回调地址也需更新。
+- 普通会话删除后默认保留别名 2 天；新协议子任务已发放的地址不会复用于其他目标。
+
+</details>
 
 #### 远程唤醒
 
@@ -668,7 +684,7 @@ codex --remote ws://127.0.0.1:<runtime-port>
 | `CLAUDE_WSL_BIN`                | `claude`                   | Windows `--wsl` 模式下优先使用的 WSL 内 Claude Code 命令                               |
 | `CLAUDE_WSL_SHELL`              | `CODEX_WSL_SHELL` / `bash` | 探测并启动 WSL Claude 时使用的 shell                                                   |
 | `DATA_DIR`                      | `.data`                    | Codecks 的偏好、项目、用量缓存、Agent 开关、快捷指令、自定义供应商等数据               |
-| `CODEX_DECK_HOME`               | `~/.codex-deck`            | 本机发现目录：Deck 把访问地址和令牌写在这里（权限 600），给本机的唤醒脚本读            |
+| `CODEX_DECK_HOME`               | `~/.codex-deck`            | 本机发现目录：Deck 按实例将访问地址和令牌写入 `instances/`（文件权限 600），供 deck-api 校验和连接            |
 | `CODEX_DECK_RUNTIME_PORT`       | _(自动)_                   | 仅监听本机的 Codex control WebSocket 端口                                              |
 | `CC_SWITCH_DB`                  | _(自动发现)_               | CC Switch SQLite 数据库绝对路径；也可用 `CC_SWITCH_CONFIG_DIR` 指定其所在目录          |
 | `CODEX_DECK_EXPOSE`             | _(空)_                     | 暴露供应商：`announce` / `cloudflare[:quick\|named\|share]` / `command` / `ddns:duckdns\|ddns:cloudflare` |
@@ -756,7 +772,7 @@ CC Switch 的「本地路由」如果指向 Windows 的 `127.0.0.1`，在 WSL 2 
 - runtime control WebSocket 只监听 `127.0.0.1`，不会随 `--lan` 或 Cloudflare Tunnel 暴露
 - Web Terminal 等同于以 Codecks Server 用户身份登录宿主机，终端 WebSocket 使用同一访问令牌鉴权；快捷指令同样会在宿主机上执行命令。对外暴露时不要使用 `--no-token`，并建议在反向代理或隧道层再加一道访问控制
 - 网页具备执行命令和批准文件修改的能力；公网使用时请同时启用令牌与额外访问控制
-- 启动时会把访问地址和令牌写到 `~/.codex-deck/`（权限 600，目录可用 `CODEX_DECK_HOME` 改），给本机的唤醒脚本读。没开令牌时 `token` 文件是空的
+- 启动时会把本实例的访问地址和令牌写到 `~/.codex-deck/instances/<instanceId>.json`（文件权限 600，目录可用 `CODEX_DECK_HOME` 改），供本机 deck-api 发现与校验后端；请勿分享或提交这些凭据文件
 
 详见 [SECURITY.md](SECURITY.md)。
 
