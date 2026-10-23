@@ -291,6 +291,8 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 
 `deck-api` 的默认通信收敛为四个操作：`create` 创建独立子会话，`send` 向持久收件箱发送消息，`receive` 在当前回合批量取信，`del` 安全删除目标。脚本随 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目里也可直接用 `skills/deck-api`。`stop` / `archive` / `inspect` 等保留为辅助管理能力，`wake` 继续监督外部长任务。
 
+在「设置 → 工具 → deck-api 创建预设」（或会话雷达面板 → 通信与创建设置）保存命名的 Agent / 供应商 / 模型 / effort 组合，再用 `deck-api presets` 查看、`deck-api create --preset review -- '任务'` 使用。模型必填，OpenCode 须填写完整 `provider/model`；供应商留空沿用 Agent 默认供应商，effort 留空使用原生默认。预设按名称整套使用，不与 `--provider` / `--model` / `--effort` 混用；权限仍沿用目标 Agent 的创建默认值和允许集合。新增、编辑、删除只影响之后的创建，已有会话不变；不传预设的 `create <agentId>` 保持原行为。配置保存在 Deck 数据目录的 `deck-presets.json`，重启后保留。
+
 删除中的 `--force` 只用于停止后删除，不绕过 Agent 的所有权检查，也不会强制删除有未提交改动的 worktree；脏工作区会保留，交给用户另行处理。
 
 - **运行中收信，不打断**：新消息进 inbox，Agent 可继续当前工作并调用 `receive`，无需先结束回合；空闲时按批次自动继续。自动批次不可作为用户草稿编辑或提升为即时反馈，网页普通聊天的即时/排队功能不变。`wake` 保留独立外部任务 outbox。

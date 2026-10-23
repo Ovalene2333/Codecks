@@ -35,7 +35,7 @@ usage() { # 不带参数打印总览，带主题打印对应段落
   case "${1-}" in
     create)
       cat <<'EOF'
-deck-api create <agentId> [--detached] [--name title] [--file path|-] -- <任务>
+deck-api create [<agentId> | --preset name] [--detached] [--name title] [--file path|-] -- <任务>
     创建独立会话并绑定来源，返回稳定会话地址与持久受理回执。
     受理后可继续当前工作；receive 在当前回合领取来信，无需先结束回合。
     最终答复和执行失败自动进入来源收件箱，不需要额外 send 最终结论。
@@ -47,6 +47,8 @@ deck-api create <agentId> [--detached] [--name title] [--file path|-] -- <任务
     create 回执的 effectiveConfiguration 显示 value/source；confirmed=false 表示未获适配器确认。
     --session agent:thread 显式指定创建来源；默认由 Deck 识别（无法佐证时必须显式给出）。
     --request-id id 可重放同一次创建，不能改变参数；CLI 自动为本次调用生成。
+    presets 列出用户保存的 Agent / 模型 / effort 组合；create --preset name 使用整套组合。
+    预设与 --provider / --model / --effort 不能混用；指定 agentId 时必须与预设一致。
     仅用户明确要求时使用 --provider id / --model id / --effort value；否则使用 Deck 默认。
 EOF
       ;;
@@ -142,6 +144,8 @@ EOF
 deck-api [--json] help [create|send|receive|del] 查看通信操作
 
 deck-api create <agentId> -- <任务>          创建独立会话，返回稳定地址
+deck-api presets                            列出用户预配置的组合
+deck-api create --preset name -- <任务>      使用预设创建会话
 deck-api send [--to @s-…] -- <消息>          向收件箱发送；省略目标时发给绑定来源
 deck-api receive [--wait 0..60]               在当前回合批量取信
 deck-api del @s-…                            安全删除自己创建的目标会话
@@ -456,12 +460,16 @@ if [ "$cmd" = wake ]; then
   case "${1-}" in watch|poll|ps|stop) cmd=$1; shift ;; *) cmd=watch ;; esac
 fi
 if [ "$json_output" = true ]; then
-  case "$cmd" in create|ask|send|receive|tasks|sessions|asks|agents|result|inspect|wait|collect|delivery) ;;
+  case "$cmd" in create|ask|send|receive|tasks|sessions|asks|agents|presets|result|inspect|wait|collect|delivery) ;;
     *) die "该命令未提供 --json 模式" ;;
   esac
 fi
 if [ "${1-}" = --help ]; then usage "${cmd-}"; exit 0; fi
 case "$cmd" in
+  presets)
+    [ $# -eq 0 ] || die "用法：deck-api presets"
+    api GET /api/deck/presets
+    ;;
   agents|asks|sessions|tasks)
     endpoint=/api/deck/sessions; unread=false; source=''
     while [ $# -gt 0 ]; do
@@ -481,7 +489,8 @@ case "$cmd" in
     ;;
   ask|create)
     if [ "${1-}" = --help ]; then usage create; exit 0; fi
-    target=${1:?缺少目标 agentId}; shift
+    target=''; preset=''
+    if [ $# -gt 0 ] && [[ "$1" != -* ]]; then target=$1; shift; fi
     mode=queue; detached=false; provider=''; model=''; effort=''; name=''; file=''; target_cwd=''; worktree=''; sandbox=''; approval=''; permission=''; request_id=''
     session=${CODEX_DECK_SESSION-}; session_explicit=false
     while [ $# -gt 0 ]; do
@@ -495,6 +504,7 @@ case "$cmd" in
         --approval) approval=${2:?缺少 approval}; shift 2 ;;
         --permission-mode) permission=${2:?缺少 permissionMode}; shift 2 ;;
         --request-id) request_id=${2:?缺少 request-id}; shift 2 ;;
+        --preset) preset=${2:?缺少预设名}; shift 2 ;;
         --provider) provider=${2:?缺少 provider}; shift 2 ;;
         --model) model=${2:?缺少 model}; shift 2 ;;
         --effort) effort=${2:?缺少 effort}; shift 2 ;;
@@ -506,6 +516,10 @@ case "$cmd" in
         *) break ;;
       esac
     done
+    [ -n "$target" ] || [ -n "$preset" ] || die "缺少目标 agentId 或 --preset"
+    if [ -n "$preset" ] && { [ -n "$provider" ] || [ -n "$model" ] || [ -n "$effort" ]; }; then
+      die "预设不能与 --provider / --model / --effort 同时使用"
+    fi
     question=$*
     if [ -n "$file" ]; then
       [ -z "$question" ] || { echo 'deck-api: --file 与问题参数不能同时使用' >&2; exit 1; }
@@ -518,6 +532,11 @@ case "$cmd" in
       "$(json_str "$effort")" "$(json_str "$name")" "$(json_str "$session")" "$session_explicit" \
       "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "$(json_str "$question")")
     extra=''
+    if [ -n "$preset" ]; then
+      extra+=",\"preset\":$(json_str "$preset")"
+      # An omitted Agent is resolved by the server from the preset.
+      if [ -z "$target" ]; then body=${body/\"targetAgentId\":\"\",/}; fi
+    fi
     [ -z "$target_cwd" ] || extra+=",\"targetCwd\":$(json_str "$target_cwd")"
     [ -z "$worktree" ] || extra+=",\"worktree\":{\"base\":$(json_str "$worktree")}"
     permissions=''; sep=''

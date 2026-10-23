@@ -9,6 +9,33 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
+test("CLI lists presets and creates by preset without inventing an Agent or model", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-preset-cli-"));
+  const requests: { url?: string; body: any }[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push({ url: req.url, body: JSON.parse(Buffer.concat(chunks).toString() || "{}") });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ items: [{ name: "review", agentId: "demo", model: "acme/demo", reasoningEffort: "high" }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "", DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}` };
+  const script = "skills/deck-api/scripts/deck-api";
+  const listed = await run("bash", [script, "--json", "presets"], { env });
+  assert.equal(JSON.parse(listed.stdout).items[0].name, "review");
+  assert.equal(requests[0].url, "/api/deck/presets");
+  await run("bash", [script, "create", "--preset", "review", "--session", "demo:source", "--request-id", "preset-request", "--", "review changes"], { env });
+  assert.equal(requests[1].url, "/api/deck/create");
+  assert.equal(requests[1].body.preset, "review");
+  assert.equal(requests[1].body.targetAgentId, undefined);
+  assert.equal(requests[1].body.question, "review changes");
+  assert.equal(requests[1].body.requestId, "preset-request");
+  await assert.rejects(run("bash", [script, "create", "--preset", "review", "--model", "other", "--", "task"], { env }));
+  await assert.rejects(run("bash", [script, "create", "--", "task"], { env }));
+  assert.equal(requests.length, 2);
+});
+
 test("four-operation CLI receives, discovers replay batches and retries with the same request ID", { skip: process.platform === "win32" }, async (context) => {
   const directory = await mkdtemp(path.join(tmpdir(), "deck-inbox-cli-"));
   const requests: any[] = [];

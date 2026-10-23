@@ -1,3 +1,4 @@
+import { DeckPresetsStore, deckPresetsSchema } from "./deck-presets.js";
 import { closeCliProbes } from "./cli-probe-work.js";
 import { startEventLoopHealth } from "./event-loop-health.js";
 import compression from "compression";
@@ -433,6 +434,8 @@ inboxAskService = askService;
 inbox.start();
 const askSettings = new AskSettingsStore(path.join(dataDir, "ask-settings.json"));
 await askSettings.load();
+const deckPresets = new DeckPresetsStore(path.join(dataDir, "deck-presets.json"));
+await deckPresets.load();
 
 const reservedAliasIdentifiers = () => {
   const reserved = new Set<string>();
@@ -1144,9 +1147,16 @@ app.post(["/api/deck/agents/:agentId/configuration", "/api/send/agents/:agentId/
   const id = agentId(req.params.agentId);
   return { configuration: await askSettings.set(id, askConfigurationSchema.parse(req.body)) };
 }));
+app.get("/api/deck/presets", route(async () => ({ items: deckPresets.list() })));
+app.post("/api/deck/presets", route(async (req) => {
+  const items = deckPresetsSchema.parse(req.body?.items);
+  for (const item of items) agents.get(agentId(item.agentId));
+  return { items: await deckPresets.replace(items) };
+}));
 app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
-    targetAgentId: agentIdSchema,
+    targetAgentId: agentIdSchema.optional(),
+    preset: z.string().min(1).max(64).optional(),
     protocol: z.literal(2).optional(),
     requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
     question: z.string().trim().min(1).max(80_000),
@@ -1173,7 +1183,9 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   const requestId = input.requestId || randomBytes(16).toString("hex");
   const { pid: _pid, codexThread: _codexThread, session: _session, sessionExplicit: _sessionExplicit, requestId: _requestId, ...requestInput } = input;
   const response = await deckRequests.execute(`create:${resolution.agentId}:${resolution.threadId}`, requestId, requestInput, async () => {
-  const descriptor = agents.list().find((agent) => agent.id === input.targetAgentId);
+  const selection = deckPresets.resolve(input);
+  const targetAgentId = agentId(selection.targetAgentId);
+  const descriptor = agents.list().find((agent) => agent.id === targetAgentId);
   if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
   if (resolution.thread.archived) throw new Error("发起会话已归档");
   // Human-owned source sessions always receive queue delivery; validate the effective mode.
@@ -1182,21 +1194,19 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     throw new Error("发起 Agent 不支持排队回传");
   if (!descriptor.capabilities.messages?.deliveryModes?.includes("queue")) throw new Error("目标 agent 不支持询问消息投递");
   if (askService.decorate(resolution.thread).ask) throw new Error("询问会话不能再次发起询问，请由原会话发起，避免循环调用");
-  const profiles = agents.profiles(input.targetAgentId);
-  const explicit = input.providerId || input.model || input.reasoningEffort
-    ? { providerId: input.providerId, model: input.model, reasoningEffort: input.reasoningEffort } : undefined;
-  const defaults = askSettings.get(input.targetAgentId);
-  const configuration = { ...resolveAskConfiguration(defaults, input.configuration ?? explicit), ...boundedAskPermissions(defaults, input.permissions || {}) };
+  const profiles = agents.profiles(targetAgentId);
+  const defaults = askSettings.get(targetAgentId);
+  const configuration = { ...resolveAskConfiguration(defaults, selection.configuration), ...boundedAskPermissions(defaults, input.permissions || {}) };
   const targetCwd = input.targetCwd ? path.resolve(resolution.thread.cwd, input.targetCwd) : resolution.thread.cwd;
   if (input.targetCwd && !(await stat(targetCwd)).isDirectory()) throw new Error("目标 cwd 必须是现有目录");
   const providerId = configuration.providerId || profiles.find((profile) => profile.current)?.id ||
     (profiles.length === 1 ? profiles[0].id : undefined);
   if (configuration.providerId && !profiles.some((profile) => profile.id === configuration.providerId))
     throw new Error("目标供应商已不可用，请在 Deck 询问面板中重新设置");
-  if (input.targetAgentId === "codex" && !providerId)
+  if (targetAgentId === "codex" && !providerId)
     throw new Error("目标没有默认供应商，请在 Deck 询问面板中手动设置默认配置");
   if (configuration.reasoningEffort) {
-    const models = await agents.models(input.targetAgentId, providerId, targetCwd);
+    const models = await agents.models(targetAgentId, providerId, targetCwd);
     const model = models.find((model) => configuration.model ? model.id === configuration.model || model.model === configuration.model : model.isDefault);
     if (!model?.supportedReasoningEfforts?.some((effort) => effort.reasoningEffort === configuration.reasoningEffort))
       throw new Error("所选模型不支持该 effort，请在 Deck 询问面板中重新选择");
@@ -1211,7 +1221,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   try {
     result = await askService.create({
       sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
-      targetAgentId: input.targetAgentId, question: input.question, returnMode: effectiveReturnMode, detached: input.detached,
+      targetAgentId, question: input.question, returnMode: effectiveReturnMode, detached: input.detached,
       protocol: input.protocol,
       settings: { ...configuration, cwd: prepared?.path || targetCwd, providerId, name: input.name },
     });
@@ -1232,10 +1242,10 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     : requested !== undefined ? { value: requested, source: "request", confirmed: false }
     : saved !== undefined ? { value: saved, source: "default", confirmed: false }
     : { value: null, source: "native", confirmed: false };
-  return { ...result, protocol: input.protocol || 1, requestId, ref: `@${result.thread.alias || result.item.targetAlias || result.item.alias}`, status: "accepted", expiresAt: Date.now() + 7 * 86400_000, effectiveConfiguration: {
-    providerId: effective(result.thread.providerId, input.configuration?.providerId || input.providerId || undefined, providerId),
-    model: effective(result.thread.model, input.configuration?.model || input.model || undefined, configuration.model),
-    reasoningEffort: effective(result.thread.reasoningEffort, input.configuration?.reasoningEffort || input.reasoningEffort || undefined, configuration.reasoningEffort),
+  return { ...result, protocol: input.protocol || 1, requestId, ref: `@${result.thread.alias || result.item.targetAlias || result.item.alias}`, status: "accepted", preset: input.preset, expiresAt: Date.now() + 7 * 86400_000, effectiveConfiguration: {
+    providerId: effective(result.thread.providerId, selection.configuration?.providerId || undefined, providerId),
+    model: effective(result.thread.model, selection.configuration?.model || undefined, configuration.model),
+    reasoningEffort: effective(result.thread.reasoningEffort, selection.configuration?.reasoningEffort || undefined, configuration.reasoningEffort),
     approvalPolicy: effective(result.thread.approvalPolicy, input.permissions?.approvalPolicy, defaults.approvalPolicy),
     sandbox: effective(result.thread.sandbox, input.permissions?.sandbox, defaults.sandbox),
     permissionMode: effective(result.thread.permissionMode, input.permissions?.permissionMode, defaults.permissionMode),

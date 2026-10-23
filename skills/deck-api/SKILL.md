@@ -18,6 +18,7 @@ bash "$DA" del @<create 返回的会话地址>
 
 - `create` 总是创建独立原生会话并绑定来源；目标看不到来源历史，任务必须自包含。长问题可用 `--file path`。
 - 不自行枚举或猜 provider/model/effort；默认用用户配置。用户明确指定时才传 `--provider` / `--model` / `--effort`。目标不明确时用 `agents` 查看可用 Agent。
+- 用户可在 Deck「设置 → 工具 → deck-api 创建预设」保存命名组合。用 `presets` 只读列出，再用 `create --preset <name> -- '任务'` 使用用户预配的 Agent / 供应商 / 模型 / effort，不必自行拼模型名。显式指定 Agent 时须与预设一致；预设不能与 `--provider` / `--model` / `--effort` 混用，不自行修改用户预设。无预设时仍用原来的 `create <agentId>`。
 - 在目标会话中，`send` 省略收件人即发给绑定来源；用于有用的进度或阻塞问题。新任务最终答复/执行失败自动成为来源消息，不要再 send 一遍最终结论。
 - 创建后可以继续自己的工作。运行中消息只进收件箱，不打断；`receive` 在当前回合批量取信，可用 `--wait 0..60` 有界等待，不紧密轮询或自行 sleep。
 - 来源空闲时，消息可被合为一批自动开启回合；已 receive 的消息不会再自动触发回合。自动续跑有预算，暂停后仍可 receive，不反复 send 催促。

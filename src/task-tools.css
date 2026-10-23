@@ -431,4 +431,5 @@
 
 .deck-communication-fields label { min-height: 36px; }
 .deck-communication-fields summary { cursor: pointer; margin: 8px 0; color: var(--text-dim); }
+.deck-preset-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .deck-communication-fields input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--text); }

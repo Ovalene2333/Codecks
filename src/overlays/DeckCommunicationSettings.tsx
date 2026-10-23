@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../api";
 import { Button, Section } from "../kit";
+import { DeckPresetsSection } from "../settings/DeckPresetsSection";
 
 type Policy = { resultReady: boolean; failure: boolean; waiting: boolean; windowSeconds: number; minIntervalSeconds: number; detachedFailure: boolean };
 type Configuration = { providerId?: string; model?: string; reasoningEffort?: string; approvalPolicy?: string; sandbox?: string; permissionMode?: string; allowedPermissions?: Record<string, string[]> };
@@ -39,6 +40,7 @@ export function DeckCommunicationSettings({ agentId, threadId }: { agentId: stri
     finally { setBusy(false); }
   };
   return <Section title="通信设置">
+    <DeckPresetsSection />
     {error && <p role="alert" className="error-text">{error}</p>}
     {saved && <p role="status" className="form-hint">{saved}</p>}
     {policy && <fieldset disabled={busy} className="deck-communication-fields">

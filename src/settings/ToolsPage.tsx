@@ -1,4 +1,5 @@
 import { ExternalLink } from "lucide-react";
+import { DeckPresetsSection } from "./DeckPresetsSection";
 import { toolIcon } from "../../plugin/client-registry";
 import type { ToolDescriptor } from "../../plugin/types";
 import {
@@ -38,6 +39,7 @@ export function ToolsPage({
   };
   return (
     <>
+      <DeckPresetsSection />
       <Section
         title="工具菜单"
         scope="device"
