@@ -214,8 +214,16 @@ export interface AskSession {
   sourceThreadId: string;
   sourceProviderId?: string;
   returnMode: DeckDeliveryMode;
-  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed" | "cancelled";
   error?: string;
+  /** 已主动停止的时间；中止不会向来源自动发消息。 */
+  cancelledAt?: number;
+  /** 最近一次停止请求的时间；after-turn 模式下会先等当前回合收尾。 */
+  cancelRequestedAt?: number;
+  /** 已归档时间；归档仍保留原生会话与别名。 */
+  archivedAt?: number;
+  /** 已删除时间；记录作为墓碑保留，别名永不复用。 */
+  deletedAt?: number;
 }
 
 /**
@@ -403,6 +411,7 @@ export interface ThreadActivity {
 /** 本机正在运行的 deck-wake watcher（只读发现，Deck 不托管其生命周期）。 */
 export interface WakeWatcher {
   pid: number;
+  /** 目标会话别名；沿用持久化字段名，已不再分配独立唤醒代号。 */
   code: string;
   mode: "watch" | "poll";
   label: string;
@@ -416,7 +425,7 @@ export interface WakeWatcher {
   /** poll：正处于连续连接失败（满 10 次 watcher 报错退出）。 */
   failures?: number;
   log?: string;
-  /** 代号当前绑定的会话；代号已被关闭时为空。 */
+  /** 别名对应的会话；旧 watcher 或会话不存在时为空。 */
   agentId?: AgentId;
   threadId?: string;
 }
@@ -445,7 +454,7 @@ export interface WakeDelivery {
   id: string;
   code: string;
   status: "pending" | "delivered" | "dead";
-  /** 入队时的目标快照；代号之后解绑也不影响展示定位。 */
+  /** 入队时的目标快照；会话之后删除也不影响展示定位。 */
   agentId: AgentId;
   threadId: string;
   /** 本轮投递已失败次数。 */

@@ -19,6 +19,8 @@ class Agents extends EventEmitter {
   turns = new Map<string, any[]>();
   sends: { id: string; text: string; mode: string }[] = [];
   interrupts: string[] = [];
+  forceStops: string[] = [];
+  deleted: string[] = [];
   constructor() {
     super();
     this.threads.set("source", { id: "source", agentId: "demo", providerId: "acme", cwd: "/work/demo", status: "running", activeTurnId: "original" } as ThreadSummary);
@@ -48,6 +50,18 @@ class Agents extends EventEmitter {
   async interruptMessage(_agent: string, id: string, expected: string) {
     assert.equal(this.threads.get(id)?.activeTurnId, expected);
     this.interrupts.push(id); this.finish(id);
+  }
+  async interrupt(_agent: string, id: string, _turnId: string) {
+    this.interrupts.push(id);
+    if (this.threads.has(id)) this.finish(id, "", "interrupted");
+  }
+  async forceStop(_agent: string, id: string) {
+    this.forceStops.push(id);
+    if (this.threads.has(id)) this.finish(id, "", "interrupted");
+  }
+  async deleteThread(_agent: string, id: string) {
+    this.deleted.push(id);
+    this.threads.delete(id);
   }
   async readThread(_agent: string, id: string) { return { turns: this.turns.get(id) || [] }; }
   finish(id: string, answer = "demo answer", status = "completed") {
@@ -200,15 +214,76 @@ test("replies to a busy master source wait for idle instead of injecting", async
   assert.match(fake.sends[1].text, /Busy reply/);
 });
 
-test("cancelled question is reported through the same callback path", async (t) => {
+test("cancelled question is marked cancelled without a junk reply", async (t) => {
   const { create, service, messages } = await fixture(t);
   const { item, thread } = await create();
   await messages.cancel(item.deliveryId!, "demo-review", thread.id);
   await service.tick();
-  assert.equal(service.list()[0].status, "failed");
-  const replies = askReplies(messages);
-  assert.equal(replies.length, 1);
-  assert.match(replies[0].text!, /已被取消/);
+  assert.equal(service.list()[0].status, "cancelled");
+  assert.equal(askReplies(messages).length, 0, "中止不再向来源自动回传失败消息");
+});
+
+test("stop cancels a queued ask and stays silent toward the source", async (t) => {
+  const { create, service, messages } = await fixture(t);
+  const { item } = await create();
+  const stopped = await service.stop(item.id, { mode: "now" });
+  assert.equal(stopped.item.status, "cancelled");
+  assert.equal(messages.list().some((entry) => entry.id === item.deliveryId), false);
+  await service.tick(); await messages.tick();
+  assert.equal(service.list()[0].status, "cancelled");
+  assert.equal(askReplies(messages).length, 0);
+  assert.equal((await service.stop(item.id)).alreadyStopped, true, "重复停止是幂等的");
+});
+
+test("stop interrupts a running ask without reporting a failure", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  assert.equal(service.list()[0].status, "running");
+  await service.stop(item.alias!, { mode: "now" });
+  assert.deepEqual(fake.interrupts, [thread.id]);
+  assert.equal(service.list()[0].status, "cancelled");
+  await service.tick(); await messages.tick();
+  assert.equal(askReplies(messages).length, 0);
+});
+
+test("stop --after-turn lets the current turn finish, then cancels silently", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  const stopped = await service.stop(item.id, { mode: "after-turn" });
+  assert.equal(stopped.pendingAfterTurn, true);
+  assert.equal(service.list()[0].status, "running");
+  assert.deepEqual(fake.interrupts, []);
+  fake.finish(thread.id);
+  await service.tick(); await messages.tick();
+  assert.equal(service.list()[0].status, "cancelled");
+  assert.equal(askReplies(messages).length, 0);
+});
+
+test("a turn interrupted outside stop becomes cancelled, not a failure reply", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread } = await create();
+  await messages.tick(); await service.tick();
+  fake.finish(thread.id, "partial output", "interrupted");
+  await service.tick(); await messages.tick();
+  assert.equal(service.list()[0].status, "cancelled");
+  assert.equal(askReplies(messages).length, 0);
+});
+
+test("deleted ask becomes a tombstone and result/inspect reject it", async (t) => {
+  const { create, service } = await fixture(t);
+  const { item } = await create();
+  const deleted = await service.markDeleted(item.alias!);
+  assert.equal(deleted.item.deletedAt !== undefined, true);
+  assert.equal((service as any).items[0].question, "", "删除时清掉正文，只保留墓碑");
+  await assert.rejects(service.readResult(item.alias!), (error: any) => {
+    assert.ok(error instanceof DeckRecipientError);
+    assert.equal(error.code, "DELETED");
+    assert.equal(error.statusCode, 410);
+    return true;
+  });
+  assert.equal((await service.markDeleted(item.alias!)).alreadyDeleted, true);
 });
 
 test("completion forwards neither final answer nor commentary", async (t) => {
@@ -466,17 +541,22 @@ test("detached saves only the final answer and can be read repeatedly after offl
 
 test("detached failures, cancellation and delivery errors stay silent across reload", async (t) => {
   const { create, fake, service, messages, options } = await fixture(t);
-  for (const status of ["failed", "interrupted", "cancelled"]) {
+  for (const status of ["interrupted", "cancelled"]) {
     const { thread, item } = await create("interrupt", true);
     await messages.tick(); await service.tick(); fake.finish(thread.id, "Partial output", status);
     await service.tick();
     const read = await service.readResult(item.alias!);
-    assert.equal(read.item.status, "failed"); assert.ok(read.item.error);
+    assert.equal(read.item.status, "cancelled", "中止不是失败");
     assert.equal(read.result, null); assert.equal(read.pending, false);
   }
+  const failed = await create("interrupt", true);
+  await messages.tick(); await service.tick(); fake.finish(failed.thread.id, "Partial output", "failed");
+  await service.tick();
+  const failedRead = await service.readResult(failed.item.alias!);
+  assert.equal(failedRead.item.status, "failed"); assert.ok(failedRead.item.error);
   const cancelled = await create("queue", true);
   await messages.cancel(cancelled.item.deliveryId!, "demo-review", cancelled.thread.id);
-  await service.tick(); assert.equal((await service.readResult(cancelled.item.id)).item.status, "failed");
+  await service.tick(); assert.equal((await service.readResult(cancelled.item.id)).item.status, "cancelled");
   const broken = await create("queue", true);
   fake.sendMessage = async () => { throw new Error("Demo delivery rejected"); };
   await messages.tick();

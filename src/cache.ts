@@ -270,7 +270,6 @@ export function compactSnapshot(snapshot: Snapshot): Snapshot {
     preferences: snapshot.preferences,
     // watcher/代号列表极小，带上它们首页「deck-wake 监督中」与会话页
     // 图标才能随快照缓存秒出，不必再等一次接口往返。
-    wakeCodes: snapshot.wakeCodes,
     sessionAliases: snapshot.sessionAliases,
     wakeWatchers: snapshot.wakeWatchers,
     wakeLost: snapshot.wakeLost,

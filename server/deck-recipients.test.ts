@@ -12,8 +12,6 @@ const deps = (over: Partial<RecipientResolverDeps> = {}): RecipientResolverDeps 
     alias === "s-abc1234" ? { agentId: "codex", threadId: "t1" } : undefined,
   findAskByAlias: (alias) =>
     alias === "deadbeef" ? { alias, target: { agentId: "opencode", threadId: "t2" } } : undefined,
-  findByWakeCode: (code) =>
-    code === "wake1" ? { agentId: "codex", threadId: "t3" } : undefined,
   isArchived: (target) => target.threadId === "archived",
   ensureAlias: async () => "s-new0001",
   ...over,
@@ -35,6 +33,19 @@ test("resolves @s- session aliases and rejects unknown or archived sessions", as
       assert.equal(error.statusCode, 409);
       return true;
     });
+  await assert.rejects(
+    resolveExplicitRecipient({ to: "@s-abc1234" }, deps({ isDeleted: () => true })), (error: any) => {
+      assert.ok(error instanceof DeckRecipientError);
+      assert.equal(error.code, "DELETED");
+      assert.equal(error.statusCode, 410);
+      return true;
+    });
+  // 删除优先于归档：墓碑不能再被当成可恢复的归档会话。
+  await assert.rejects(
+    resolveExplicitRecipient({ to: "@s-abc1234" }, deps({ isDeleted: () => true, isArchived: () => true })), (error: any) => {
+      assert.equal(error.code, "DELETED");
+      return true;
+    });
 });
 
 test("resolves @ask aliases without leaking ledger internals", async () => {
@@ -47,22 +58,6 @@ test("resolves @ask aliases without leaking ledger internals", async () => {
   });
   await assert.rejects(
     resolveExplicitRecipient({ to: "@deadbeef" }, deps({ isArchived: () => true })), (error: any) => {
-      assert.equal(error.code, "ARCHIVED");
-      assert.equal(error.statusCode, 409);
-      return true;
-    });
-});
-
-test("resolves legacy wake codes and rejects unknown or archived bindings", async () => {
-  const ok = await resolveExplicitRecipient({ code: "wake1" }, deps());
-  assert.deepEqual(ok, { kind: "session", target: { agentId: "codex", threadId: "t3" } });
-  await assert.rejects(resolveExplicitRecipient({ code: "nope" }, deps()), (error: any) => {
-    assert.equal(error.code, "UNKNOWN_ALIAS");
-    assert.equal(error.statusCode, 404);
-    return true;
-  });
-  await assert.rejects(
-    resolveExplicitRecipient({ code: "wake1" }, deps({ isArchived: () => true })), (error: any) => {
       assert.equal(error.code, "ARCHIVED");
       assert.equal(error.statusCode, 409);
       return true;
@@ -101,9 +96,9 @@ test("recipient errors carry only whitelisted candidate fields", () => {
   assert.deepEqual(Object.keys(error.candidates![0]).sort(), ["agentId", "alias", "status", "threadId"]);
 });
 
-test("send route keeps --to/--code mutual exclusion and honors recipient status codes", async () => {
+test("send route uses explicit recipients and honors recipient status codes", async () => {
   const server = await readFile("server/index.ts", "utf8");
-  assert.match(server, /--to 与 --code 不能同时使用/);
+  assert.doesNotMatch(server, /findByWakeCode/);
   assert.match(server, /resolveExplicitRecipient\(input,/);
   // 路由错误包装器按 DeckRecipientError.statusCode 回状态码，404/409 才有意义。
   assert.match(server, /typeof error\?\.statusCode === "number"/);

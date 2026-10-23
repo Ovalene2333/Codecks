@@ -997,7 +997,7 @@ export function App() {
 
   const current = allThreads.find((thread) => sessionKey(thread) === selected);
 
-  /** 会话的 deck-wake 状态：唤醒代号绑定（wakeCodes）+ 本机 watcher（wakeWatchers）。 */
+  /** 会话的 deck-wake 状态：会话别名（sessionAliases）+ 本机 watcher（wakeWatchers）。 */
   const wakeFor = (thread: ThreadSummary) => {
     const key = activityKey(thread.agentId, thread.id);
     const mine = (item: { agentId?: AgentId; threadId?: string }) =>
@@ -1005,7 +1005,7 @@ export function App() {
       activityKey(item.agentId, item.threadId!) === key;
     const watchers = (snapshot.wakeWatchers || []).filter(mine);
     return {
-      code: (snapshot.wakeCodes || []).find(mine)?.code,
+      code: (snapshot.sessionAliases || []).find(mine)?.alias,
       watcher: watchers[0],
       watchers,
       lost: (snapshot.wakeLost || []).filter(mine),

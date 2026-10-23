@@ -286,14 +286,17 @@ runtime 的 control WebSocket 只监听本机回环地址。终端里用 `codex 
 <a id="deck-api"></a>
 ### deck-api：Agent 协作与远程唤醒
 
-`deck-api` 是 Deck 的本地 Agent 通信入口：`create` 创建独立子会话，`send` 主动回传/补充消息，`wake` 监督外部长任务。脚本随 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目里也可直接用 `skills/deck-api`。
+`deck-api` 是 Deck 的本地 Agent 通信入口：`create` 创建独立子会话，`send` 主动回传/补充消息，`stop` / `delete` / `archive` 管理子任务生命周期，`wake` 监督外部长任务。脚本随 Deck 安装到 `${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/`，项目里也可直接用 `skills/deck-api`。
 
-- **send 与 wake 分开**：`send` 只进已知会话的持久消息队列；新写法（绑定来源、`--to`、`@alias`）不读取或创建唤醒代号，`--code` 仅保留兼容定位。只有 watcher 结束等外部事件才走唤醒 outbox。消息头分别是 `[ask:<alias>]` / `[send:<id>]` 和 `[wake:<code>]`。
-- **会话别名默认开启**：每个会话（UI 新建、询问创建、fork、重试）都会自动拿到一个 `@s-xxxxxxx` 形式的稳定短别名，无需开关；落盘后永不重算，删除后也不复用，`send --to @s-…`、`sessions`、`/s/s-…` 都直接可用。
+- **send 与 wake 分开**：`send` 只进已知会话的持久消息队列；所有会话默认可通信，send 与 wake 都使用会话别名，已移除独立唤醒代号和 `--code`。只有 watcher 结束等外部事件才走唤醒 outbox。消息头分别是 `[ask:<alias>]` / `[send:<id>]` 和 `[wake:<会话别名>]`。
+- **升级提示**：独立 wake-code 已移除；旧 watcher 需要停止后用会话别名重新挂载，外部回调地址也需改为会话别名。
+- **后端自动发现**：每个 Deck 实例独立登记地址与凭据，CLI 调用前验证实例身份；多个后端并存时按来源会话选择，无法唯一确定则报错。watcher 固定所属实例，重启后重新读取该实例的新地址和凭据。旧的全局 `url` / `token` 文件不再使用；需要手动指定时用 `DECK_INSTANCE_ID`，或同时设置 `DECK_API_URL` / `DECK_TOKEN`。
+- **会话别名默认开启**：每个会话（UI 新建、询问创建、fork、重试）都会自动拿到一个 `@s-xxxxxxx` 形式的稳定短别名，标题栏和任务回传面板可复制；无需开启唤醒；落盘后永不重算，删除后也不复用，`send --to @s-…`、`sessions`、`/s/s-…` 都直接可用。
 - **询问别名**：每次询问另有自己的短标识（如 `@7f3a2c`），首先生成后写入台账、永不重算；完整 ID 留在服务端和 UI，用 `send --to @<alias>` 继续追问，不用复制长 UUID。会话别名和询问别名是两个命名空间，不能混用。
-- **主动回传**：目标自己决定何时 `send` 结论、进度或澄清问题；正常结束不自动转发最终回复，启动/执行失败会自动通知。发往主会话（人创建的会话）的消息不会 steer/interrupt 当前回合：目标空闲时立即送达，运行中排队等空闲。
+- **主动回传**：目标自己决定何时 `send` 结论、进度或澄清问题；正常结束不自动转发最终回复，启动/执行失败会自动通知。**中止、取消和主动 stop 默认静默**：只把询问标记为已停止，不会再向主会话或来源自动回一条「询问失败」；需要交流时由目标显式 `send`。发往主会话（人创建的会话）的消息不会 steer/interrupt 当前回合：目标空闲时立即送达，运行中排队等空闲。
+- **子任务生命周期**：`stop @alias`（别名 `kill`）取消排队消息并打断当前回合，`--after-turn` 让当前回合自然收尾、`--force` 在打断失败时紧急归位；`delete @alias`（别名 `del`）删除原生会话与台账，默认同时停止绑定 watcher、清理 Deck 创建且干净的 worktree；`archive @alias` / `unarchive @alias` 软归档，保留会话、结果和别名。删除后别名作为墓碑保留并返回 `DELETED`（410），不会复用或误投；运行中的会话需要先 stop 或给 delete 加 `--force`，`--force` 也会清理 dirty worktree。
 - **Detached 独立执行**：`create --detached` 后主 Agent 可继续工作；子会话完成、失败或中断时不会向正在运行的来源推送消息，状态与最终答复只能用 `tasks` / `result @<alias>` 查询，`inspect @<alias> --tail 30` 查看近期执行输出；仍可显式 `send` 交流。已保存的交付可跨重启读取，雷达面板也支持创建与读取 detached 任务。同步失败会记 `captureError` 并自动重试，不要把 `pending` 当失败重建会话。
-- **收件人解析收敛**：`--to` / `--code` 四通道同一套解析，错误分四类（`UNKNOWN_ALIAS` 404、`ARCHIVED` 409、`AMBIGUOUS` 409 带候选、`BAD_FORMAT` 400），歧义不再静默投错。
+- **收件人解析收敛**：会话别名、询问引用和 `agent:thread` 使用同一套解析，错误分 `UNKNOWN_ALIAS` 404、`ARCHIVED` 409、`DELETED` 410、`AMBIGUOUS` 409（带候选）、`BAD_FORMAT` 400，歧义不再静默投错；已删除会话的别名保留为墓碑，不会回落到“找不到”或投给新会话。
 - **可观测**：雷达面板查看询问和 watcher，总览首页显示正在监督的任务；失联 watcher 进入「需要处理」。
 - **协作泳道**：工具菜单里的「协作泳道」（`/deck-api`）直接解析本机询问台账与消息投递记录，按来源会话、Deck 队列、目标会话画出真实协作；成功后显示本机会话，后端不可用时退回脱敏快照。页面会合并重复唤醒、标出投递失败和 detached 状态。`npm run lanes:sync` 导出本机解析结果，`npm run swimlane` 生成静态 SVG，`npm run swimlane:example` 重新生成仓库内脱敏快照和 [docs/deck-api-swimlane.svg](docs/deck-api-swimlane.svg)；完整说明见 [docs/deck-api-examples.md](docs/deck-api-examples.md)。
 
@@ -306,12 +309,15 @@ bash "$DA" send --to @s-3f9kq2pz -- '按会话别名补充上下文……'
 bash "$DA" create codex --detached -- '独立实现这个模块，最终答复列出产物和验证：…'
 bash "$DA" result @<alias>
 bash "$DA" inspect @<alias> --tail 30
+bash "$DA" stop @<alias> --after-turn
+bash "$DA" archive @<alias>
+bash "$DA" delete @<alias> --force
 bash "$DA" wake -- ssh demo-box 'wait-for-job'
 ```
 
 #### 远程唤醒
 
-在远端启动长任务后，用 `deck-api wake` 在本机挂一个后台 watcher；任务结束时 Deck 向绑定会话注入一条 `[wake:<code>]` 消息。唤醒请求先落盘再返回 202，Deck 短暂重启不会丢；watcher 没有发出唤醒就消失时，会作为「失联」进入总览的「需要处理」。
+在远端启动长任务后，用 `deck-api wake` 在本机挂一个后台 watcher；任务结束时 Deck 向绑定会话注入一条 `[wake:<会话别名>]` 消息。唤醒请求先落盘再返回 202，Deck 短暂重启不会丢；watcher 没有发出唤醒就消失时，会作为「失联」进入总览的「需要处理」。
 
 完整用法、消息头、投递模式、Windows/WSL、升级和排障见 **[docs/deck-api.md](docs/deck-api.md)**。
 

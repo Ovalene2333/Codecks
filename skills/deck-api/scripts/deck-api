@@ -22,8 +22,11 @@ if [ -z "${DECK_API_NO_FORWARD-}" ] && [ -f "$INSTALLED" ] && [ "$SELF" != "$INS
   esac
 fi
 
-URL="${DECK_API_URL:-${DECK_SEND_URL:-${DECK_WAKE_URL:-$(cat "$DECK_HOME/url" 2>/dev/null || true)}}}"
-TOKEN="${DECK_TOKEN-$(cat "$DECK_HOME/token" 2>/dev/null || true)}"
+EXPLICIT_URL="${DECK_API_URL:-}"
+URL="$EXPLICIT_URL"
+TOKEN="${DECK_TOKEN-}"
+# Each request rediscovers the selected instance so long-running watchers survive address changes.
+SELECTED_INSTANCE="${DECK_INSTANCE_ID-}"
 LOG_DIR="${DECK_API_LOG_DIR:-${DECK_SEND_LOG_DIR:-${DECK_WAKE_LOG_DIR:-$DECK_HOME/watch}}}"
 DONE_RE_DEFAULT='^(COMPLETED|FAILED|CANCELLED|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL|PREEMPTED|BOOT_FAIL|DEADLINE|DONE|EXITED|ERROR|GONE)'
 CODE_RE='^[a-z0-9][a-z0-9-]{1,30}$'
@@ -60,52 +63,82 @@ EOF
       ;;
     send)
       cat <<'EOF'
-deck-api send [--mode queue|steer|interrupt] [--to agent:thread|@alias | --code code] [--file path|-] -- <消息>
+deck-api send [--mode queue|steer|interrupt] [--to agent:thread|@alias] [--file path|-] -- <消息>
     不指定目标时发给 create 绑定的来源；默认沿用创建时的 mode。
-    消息必须放在 -- 之后；旧式 `send <代号> <消息>` 不接受。
+    消息必须放在 -- 之后；旧式 `send <会话别名> <消息>` 不接受。
     --to @alias 指向询问回执；--to @s-xxxxxxx 指向会话本身（由 Deck 在创建时默认分配）。
     两者都不需要完整 thread ID；回执给哪个就用哪个，跨会话协作通常用 @s-…。
     steer 即时追加到对方当前回合（运行时直接可见，不打断；codex 支持，需要时可用 agents 确认 steer 字段）；
     对方空闲时与直接发送相同，回合已变化时会失败（用 --request-id 重试）。
-    --to/--code 显式指定其他目标时默认 queue；send 直接进消息队列，不读取/创建唤醒代号。
+    --to 显式指定其他目标时默认 queue；send 直接进消息队列。
     --session agent:thread 指定当前发送会话（不是收件人）；多会话或跨平台时建议显式带上。
     --request-id id 可用于绑定来源消息的幂等重试；同一 id 不得换内容或 mode。
     一次可发送进度、澄清问题或结果，可多次发送；2xx 表示持久受理，不表示已送达或已读。
     send 返回后不要等待、轮询或反复追问来源。
 EOF
       ;;
+    stop|kill)
+      cat <<'EOF'
+deck-api stop @alias [--after-turn|--now|--force] [--session agent:thread]
+    （别名 kill）停止没有结束的询问；停止是静默的，不向来源回传失败消息。
+    --after-turn 取消排队消息，等当前回合自然结束后标记已停止。
+    --now        立即打断当前回合（默认）。
+    --force      打断失败时再执行紧急停止；也只用于操作他人会话时绕过所有权检查。
+    @alias 可以是询问别名（7f3a2c90）或会话别名（@s-xxx）；已结束的询问不能停止。
+EOF
+      ;;
+    delete|del)
+      cat <<'EOF'
+deck-api delete @alias [--force] [--keep-worktree] [--keep-watchers] [--close-connection] [--session agent:thread]
+    （别名 del）删除询问对应的原生会话与台账；别名保留为墓碑，不会再被复用。
+    正在执行的会话需要先 stop 或加 --force（会先停止再删除）。
+    默认停止该会话绑定的 watcher；--keep-watchers 保留它们并给出警告。
+    默认清理 Deck 创建且无未提交改动的 worktree；dirty worktree 会保留并报告。
+    Claude 等需要关闭 Deck 连接的会话，可加 --close-connection。
+EOF
+      ;;
+    archive|unarchive)
+      cat <<'EOF'
+deck-api archive @alias | deck-api unarchive @alias [--session agent:thread]
+    归档是软隐藏：保留原生会话、结果与别名，但不能再 send。
+    运行中的会话必须先 stop；归档不会删除任何历史。
+EOF
+      ;;
     wake|watch|poll)
       cat <<'EOF'
-deck-api wake [watch|poll] [code] [--mode queue|steer|interrupt] [--session agent:thread] [-l label] [-f] -- <command...>
+deck-api wake [watch|poll] [@s-alias] [--mode queue|steer|interrupt] [--session agent:thread] [-l label] [-f] -- <command...>
     默认 watch：后台运行阻塞命令，结束后带退出码和末尾输出通知。
     watch 可用 -n lines（默认 40）。
     poll 可用 -i sec（默认 60，最小 5）、-d regex（自定义结束态）、-a（也通知中间状态变化）。
     poll 连续 10 次 SSH 连接失败也会通知；空状态视为 GONE。
-    省略 code 自动绑定当前会话；无法确认来源或代号属于其他会话时，请用户确认后加 -f。
+    省略别名 自动绑定当前会话；无法确认来源或会话别名属于其他会话时，请用户确认后加 -f。
     watcher 自行后台运行；提交后结束回合，不自行 sleep/轮询。
 EOF
       ;;
     *)
       cat <<'EOF'
-deck-api help [create|send|result|inspect|wake] 查看用法
+deck-api help [create|send|result|inspect|stop|delete|archive|wake] 查看用法
 
 deck-api create …                             创建独立会话并绑定来源（help create 看详情）
 deck-api create <agentId> --detached …         独立执行，不自动通知来源
 deck-api result @alias / inspect @alias        按需领取结果 / 查看执行输出
 deck-api send …                               向来源或指定会话发消息（help send 看详情）
+deck-api stop @alias                          停止未结束的询问（别名 kill，静默不回报）
+deck-api delete @alias                        删除原生会话与台账（别名 del，别名保留墓碑）
+deck-api archive @alias / unarchive @alias    归档 / 恢复子任务会话
 deck-api wake …                               监督外部任务（help wake 看详情）
 
 deck-api agents / sessions（或 tasks）         查看可用 Agent / 创建记录与会话短别名（不是消息正文）
-deck-api whoami / list                        确认当前会话 / 查看会话别名与唤醒代号
+deck-api whoami / list                        确认当前会话 / 查看会话别名与唤醒会话别名
 deck-api wake ps / wake stop <pid>            查看 / 主动停止 watcher
 
 queue 等目标空闲；steer 即时追加到目标当前回合（不打断，仅 codex 这类可转向会话支持）；interrupt 停止目标当前回合再发送。
 steer 时目标空闲则直接发送；目标回合已变化会失败，可用 --request-id 重试。
 默认 create 受理后结束本回合，不要 sleep/轮询/等待；目标用 send 回传，失败自动通知。
     detached 可继续自己的工作，稍后用 result/inspect 自行获取；完成/失败不会推送通知，只能主动查询。
-send 与 wake 是两条独立链路：send 不会创建或复用唤醒代号。
-地址与令牌读取 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/{url,token}，
-可用 DECK_API_URL / DECK_TOKEN 覆盖；兼容 DECK_SEND_URL / DECK_WAKE_URL。
+send 与 wake 共用默认会话别名，分别投递普通消息与任务事件。
+后端通过 ${CODEX_DECK_HOME:-$HOME/.codex-deck}/instances/ 自动发现并校验，
+可用 DECK_API_URL / DECK_TOKEN 覆盖；可用 DECK_INSTANCE_ID 固定实例。
 旧 ask/watch/poll/asks/ps/stop 命令继续兼容。
 EOF
       ;;
@@ -128,9 +161,42 @@ json_field() {
     sed -E -e "s/^\"$2\":\"//" -e 's/"$//' -e 's/\\n/ /g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
 }
 
+discover() {
+  if [ -n "$EXPLICIT_URL" ]; then URL="$EXPLICIT_URL"; return 0; fi
+  local file record candidate_url candidate_token expected reply body
+  local live=0 matched=0 chosen_url='' chosen_token='' chosen_id='' fallback_url='' fallback_token='' fallback_id=''
+  body=$(printf '{"pid":%s,"cwd":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s}' \
+    "$PID" "$(json_str "$PWD")" "$(json_str "${session-${CODEX_DECK_SESSION-}}")" "${session_explicit:-false}" "$(json_str "${CODEX_THREAD_ID-}")")
+  for file in "$DECK_HOME"/instances/*.json; do
+    [ -f "$file" ] || continue
+    record=$(cat "$file" 2>/dev/null) || continue
+    expected=$(json_field "$record" instanceId)
+    [ -z "$SELECTED_INSTANCE" ] || [ "$SELECTED_INSTANCE" = "$expected" ] || continue
+    candidate_url=$(json_field "$record" url); candidate_token=$(json_field "$record" token)
+    [ -n "$expected" ] && [ -n "$candidate_url" ] || continue
+    reply=$(curl -fsS --connect-timeout 2 --max-time 5 -X POST "$candidate_url/api/deck/discover" \
+      -H "Content-Type: application/json" -H "Authorization: Bearer ${DECK_TOKEN-$candidate_token}" --data-binary "$body" 2>/dev/null) || continue
+    [ "$(json_field "$reply" instanceId)" = "$expected" ] || continue
+    live=$((live + 1)); fallback_url=$candidate_url; fallback_token=$candidate_token; fallback_id=$expected
+    if [[ $reply =~ \"caller\":[[:space:]]*true ]]; then
+      matched=$((matched + 1)); chosen_url=$candidate_url; chosen_token=$candidate_token; chosen_id=$expected
+    fi
+  done
+  if [ "$matched" -eq 1 ]; then
+    URL=$chosen_url; TOKEN=${DECK_TOKEN-$chosen_token}; SELECTED_INSTANCE=$chosen_id
+  elif [ "$matched" -eq 0 ] && [ "$live" -eq 1 ] && { [ -n "$SELECTED_INSTANCE" ] || { [ -z "${session-${CODEX_DECK_SESSION-}}" ] && [ -z "${CODEX_THREAD_ID-}" ]; }; }; then
+    URL=$fallback_url; TOKEN=${DECK_TOKEN-$fallback_token}; SELECTED_INSTANCE=$fallback_id
+  elif [ "$live" -eq 0 ]; then
+    echo 'deck-api: 没有可达的 Deck 实例；请启动 Deck，检查 Windows/WSL 网络，或显式设置 DECK_API_URL 与 DECK_TOKEN' >&2; return 2
+  else
+    echo 'deck-api: 无法唯一确定当前会话所属后端（多个 Deck 实例或来源不匹配）；请用 --session 或 DECK_INSTANCE_ID 指定' >&2; return 2
+  fi
+}
+
 # api METHOD PATH [BODY] —— 成功打印响应体；失败打印原因到 stderr 并返回非 0
 # （接口不存在返回 4，便于对旧版 Deck 回退）。
 api() {
+  discover || return $?
   [ -n "$URL" ] || { echo "deck-api: 找不到 Deck 地址（Deck 未启动过？可设置 DECK_SEND_URL）" >&2; return 2; }
   local args=(-sS --connect-timeout 10 --max-time 120 -X "$1" "$URL$2" -H "Content-Type: application/json" -w $'\n%{http_code}')
   [ -n "$TOKEN" ] && args+=(-H "Authorization: Bearer $TOKEN")
@@ -155,7 +221,7 @@ api() {
 }
 
 check_code() {
-  [[ ${1-} =~ $CODE_RE ]] || die "无效代号：${1-}"
+  [[ ${1#@} =~ ^s-[a-z0-9]+$ ]] || die "无效会话别名：${1-}"
 }
 
 # ask_of_session ALIAS —— 找出指向该会话的询问记录 ID（没有则输出空）。
@@ -169,6 +235,28 @@ ask_of_session() {
     grep -oE '"id":"[^"]+"' | head -n1 | sed -E 's/^"id":"//; s/"$//' || true
 }
 
+# resolve_ask_reference REF —— 把 @s-xxx 会话别名还原成询问记录 ID。
+# 询问别名/完整 ID 原样返回；格式不对直接退出，避免把打错的引用发给服务端。
+resolve_ask_reference() {
+  local reference=${1-}
+  reference=${reference#@}
+  if [ "${reference:0:2}" = s- ]; then
+    [[ $reference =~ ^s-[a-z0-9]{7}$ ]] || die "无效会话别名：@$reference"
+    local ask
+    ask=$(ask_of_session "$reference") || exit 1
+    [ -n "$ask" ] || die "会话 @$reference 没有关联的询问记录"
+    reference=$ask
+  fi
+  [[ $reference =~ ^[a-z0-9-]{8,64}$ ]] || die "用法：deck-api ${cmd} @alias（或完整询问 ID）"
+  printf '%s' "$reference"
+}
+
+# lifecycle_body SESSION SESSION_EXPLICIT EXTRA_JSON —— 所有权校验与审计用的调用者信息。
+lifecycle_body() {
+  printf '{"session":%s,"sessionExplicit":%s,"codexThread":%s,"cwd":%s,"pid":%s%s}' \
+    "$(json_str "$1")" "$2" "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "${3-}"
+}
+
 # prepare CODE COMMAND FORCE DRY —— 让 Deck 确认/识别目标会话。
 # 附带本进程 pid（Deck 据此沿进程树找到发起命令的 agent）、工作目录，
 # 以及 agent 自己提供的会话标识（$session 为空则不传；$session_explicit
@@ -178,7 +266,7 @@ prepare() {
   [ -n "$1" ] && code_json=$(json_str "$1")
   api POST /api/deck/prepare "$(printf '{"code":%s,"pid":%s,"cwd":%s,"session":%s,"sessionExplicit":%s,"codexThread":%s,"command":%s,"force":%s,"dryRun":%s}' \
     "$code_json" "$PID" "$(json_str "$PWD")" "$(json_str "${session-}")" "${session_explicit:-false}" \
-    "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")" 2>/dev/null
+    "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$2")" "$3" "$4")"
 }
 
 send() { # code text [mode]
@@ -234,8 +322,8 @@ spawn() { # code subcommand args...
   mkdir -p "$LOG_DIR"
   local log
   log="$LOG_DIR/$code-$(date +%Y%m%d-%H%M%S).log"
-  # 同代号同一秒内挂两个 watcher 时日志名会撞车（后者会截断前者）：
-  # 等到下一秒再取名，保持 `<代号>-时间.log` 的命名约定不变。
+  # 同会话别名同一秒内挂两个 watcher 时日志名会撞车（后者会截断前者）：
+  # 等到下一秒再取名，保持 `<会话别名>-时间.log` 的命名约定不变。
   while [ -e "$log" ]; do
     sleep 1
     log="$LOG_DIR/$code-$(date +%Y%m%d-%H%M%S).log"
@@ -252,7 +340,7 @@ spawn() { # code subcommand args...
     win=$(cat "/proc/$child/winpid" 2>/dev/null || true)
     [ -n "$win" ] && shown=$win
   fi
-  echo "watcher 已在后台启动：pid $shown，代号 $code，日志 $log"
+  echo "watcher 已在后台启动：pid $shown，会话别名 $code，日志 $log"
 }
 
 WATCH_TMP=""
@@ -354,15 +442,7 @@ case "$cmd" in
     fi
     ;;
   result|inspect)
-    reference=${1-}; reference=${reference#@}
-    # `s-` 前缀是会话本身，不是询问：先查明它的询问回执，再按询问 ID 查询。
-    if [ "${reference:0:2}" = s- ]; then
-      [[ $reference =~ ^s-[a-z0-9]{7}$ ]] || die "无效会话别名：@$reference"
-      ask=$(ask_of_session "$reference") || exit 1
-      [ -n "$ask" ] || die "会话 @$reference 没有关联的询问记录"
-      reference=$ask
-    fi
-    [[ $reference =~ ^[a-z0-9-]{8,64}$ ]] || die "用法：deck-api $cmd @alias（或完整询问 ID）"
+    reference=$(resolve_ask_reference "${1-}") || exit 1
     shift
     tail=40
     while [ $# -gt 0 ]; do
@@ -382,36 +462,35 @@ case "$cmd" in
     json_field "$out" summary
     ;;
   list)
-    # 列出会话别名（send/result 可直接用 @s-xxxxxxx）与唤醒代号两条通道。
+    # 列出询问引用与默认会话别名（send/result 可直接用 @s-xxxxxxx）。
     out=$(api GET /api/deck/sessions) || exit 1
     if command -v jq >/dev/null 2>&1; then
       printf '%s' "$out" | jq -r '.items[] | [.alias, (.targetAlias // "-"), .targetAgentId, .status] | @tsv'
       out=$(api GET /api/deck/targets) || exit 1
-      printf '%s' "$out" | jq -r '.items[] | [.code, "-", .agentId, (.status // "-")] | @tsv'
+      printf '%s' "$out" | jq -r '.items[] | [.alias, "-", .agentId, (.status // "-")] | @tsv'
     else
       printf '%s\n' "$out"
     fi
     ;;
   send)
-    mode=''; to=''; code=''; file=''; request_id=''
+    mode=''; to=''; file=''; request_id=''
     session=${CODEX_DECK_SESSION-}; session_explicit=false
     # Legacy deck-send send <code> <text> syntax is intentionally handled by the compatibility entry.
     while [ $# -gt 0 ]; do
       case "$1" in
         --mode) mode=${2:?缺少 mode}; shift 2 ;;
         --to) to=${2:?缺少目标会话}; shift 2 ;;
-        --code) code=${2:?缺少代号}; check_code "$code"; shift 2 ;;
+        --code) die "--code 已移除，请用 --to @s-…" ;;
         --session) session=${2:?缺少当前会话}; session_explicit=true; shift 2 ;;
         --request-id) request_id=${2:?缺少 request-id}; shift 2 ;;
         --file) file=${2:?缺少 file}; shift 2 ;;
         --help) usage send; exit 0 ;;
         --) shift; break ;;
         -*) die "未知参数 $1" ;;
-        *) die "send 不接受位置参数：$1（消息要放在 -- 之后；发给指定代号用 --code <代号>）" ;;
+        *) die "send 不接受位置参数：$1（消息要放在 -- 之后；发给指定会话别名用 --to @s-…）" ;;
       esac
     done
     [ -z "$mode" ] || case "$mode" in queue|steer|interrupt) ;; *) die "mode 应为 queue、steer 或 interrupt" ;; esac
-    [ -z "$to" ] || [ -z "$code" ] || die "--to 与 --code 不能同时使用"
     if [ "${to:0:3}" = @s- ]; then
       # 会话别名直接交给服务端解析；这里只做格式校验，避免把打错的别名当收件人。
       [[ $to =~ ^@s-[a-z0-9]{7}$ ]] || die "无效会话别名：$to"
@@ -427,7 +506,6 @@ case "$cmd" in
       "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID")
     [ -z "$mode" ] || body+=",\"mode\":$(json_str "$mode")"
     [ -z "$to" ] || body+=",\"to\":$(json_str "$to")"
-    [ -z "$code" ] || body+=",\"code\":$(json_str "$code")"
     [ -z "$request_id" ] || body+=",\"requestId\":$(json_str "$request_id")"
     body+="}"
     resp=$(api POST /api/deck/send "$body") || exit 1
@@ -441,10 +519,83 @@ case "$cmd" in
       echo '消息已持久受理，将按投递方式发送。'
     fi
     ;;
+  stop|kill)
+    # 兼容旧入口：`deck-api stop <pid>` 仍按 watcher 处理；会话停止用 @alias。
+    if [[ ${1-} =~ ^[0-9]+$ ]]; then
+      pid=$1
+      if api POST "/api/monitor/watchers/$pid/stop" '{}' >/dev/null 2>&1; then
+        echo "已停止 watcher $pid"
+        exit 0
+      fi
+      args=$(ps -o args= -p "$pid" 2>/dev/null) || die "进程 $pid 不存在"
+      [[ $args =~ deck-(api|send|wake)\ _(watch|poll) ]] || die "pid $pid 不是 deck-api watcher"
+      kill -USR1 -- "-$pid" 2>/dev/null || kill -USR1 "$pid" || die "无法停止 $pid"
+      echo "已停止 watcher $pid"
+      exit 0
+    fi
+    ref=${1-}
+    [ -n "$ref" ] || die "用法：deck-api stop @alias [--after-turn|--now|--force]"
+    shift
+    mode=now; force=false
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --after-turn) mode=after-turn; shift ;;
+        --now) mode=now; shift ;;
+        --force) force=true; shift ;;
+        --session) session=${2:?缺少 session}; session_explicit=true; shift 2 ;;
+        --) shift; break ;;
+        *) die "未知参数 $1" ;;
+      esac
+    done
+    reference=$(resolve_ask_reference "$ref") || exit 1
+    body=$(lifecycle_body "$session" "$session_explicit" ",\"mode\":$(json_str "$mode"),\"force\":$force")
+    api POST "/api/deck/sessions/$reference/stop" "$body" || exit 1
+    ;;
+  delete|del)
+    ref=${1-}
+    [ -n "$ref" ] || die "用法：deck-api delete @alias [--force] [--keep-worktree] [--keep-watchers]"
+    shift
+    force=false; keep_worktree=false; keep_watchers=false; close_connection=false
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --force) force=true; shift ;;
+        --keep-worktree) keep_worktree=true; shift ;;
+        --keep-watchers) keep_watchers=true; shift ;;
+        --close-connection) close_connection=true; shift ;;
+        --session) session=${2:?缺少 session}; session_explicit=true; shift 2 ;;
+        --) shift; break ;;
+        *) die "未知参数 $1" ;;
+      esac
+    done
+    reference=$(resolve_ask_reference "$ref") || exit 1
+    body=$(lifecycle_body "$session" "$session_explicit" \
+      ",\"force\":$force,\"keepWorktree\":$keep_worktree,\"keepWatchers\":$keep_watchers,\"closeConnection\":$close_connection")
+    api DELETE "/api/deck/sessions/$reference" "$body" || exit 1
+    ;;
+  archive|unarchive)
+    ref=${1-}
+    [ -n "$ref" ] || die "用法：deck-api $cmd @alias"
+    shift
+    force=false
+    session=${CODEX_DECK_SESSION-}; session_explicit=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --force) force=true; shift ;;
+        --session) session=${2:?缺少 session}; session_explicit=true; shift 2 ;;
+        --) shift; break ;;
+        *) die "未知参数 $1" ;;
+      esac
+    done
+    reference=$(resolve_ask_reference "$ref") || exit 1
+    body=$(lifecycle_body "$session" "$session_explicit" ",\"force\":$force")
+    api POST "/api/deck/sessions/$reference/$cmd" "$body" || exit 1
+    ;;
   watch|poll)
     code=""
     if [ $# -gt 0 ] && [ "${1:0:1}" != "-" ]; then
-      check_code "$1"; code=$1; shift
+      check_code "$1"; code=${1#@}; shift
     fi
     label=""; lines=40; interval=60; done_re=$DONE_RE_DEFAULT; all=0; force=false; delivery_mode=queue
     session=${CODEX_DECK_SESSION-}; session_explicit=false
@@ -470,19 +621,21 @@ case "$cmd" in
     [ $# -gt 0 ] || die "缺少要运行的命令"
     resp=$(prepare "$code" "$*" "$force" false); rc=$?
     if [ "$rc" -eq 4 ]; then
-      # 旧版 Deck 没有 prepare 接口：只能按显式代号挂载。
-      [ -n "$code" ] || die "当前 Deck 版本不能自动识别会话，请提供代号"
+      # 旧版 Deck 没有 prepare 接口：只能按显式会话别名挂载。
+      [ -n "$code" ] || die "当前 Deck 版本不能自动识别会话，请提供会话别名"
       api GET "/api/deck/events/$code" >/dev/null || exit 1
     elif [ "$rc" -ne 0 ]; then
       exit 1
     else
       code=$(json_field "$resp" code)
-      [[ $code =~ $CODE_RE ]] || die "Deck 未返回有效代号：$resp"
+      [[ $code =~ $CODE_RE ]] || die "Deck 未返回有效会话别名：$resp"
       summary=$(json_field "$resp" summary)
       warning=$(json_field "$resp" warning)
       [ -n "$summary" ] && echo "$summary"
       [ -n "$warning" ] && echo "注意：$warning" >&2
     fi
+    discover || exit $?
+    export DECK_INSTANCE_ID="$SELECTED_INSTANCE"
     label=${label:-$code}
     export DECK_SEND_MODE="$delivery_mode"
     if [ "$cmd" = watch ]; then

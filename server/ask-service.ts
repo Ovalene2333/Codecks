@@ -8,6 +8,15 @@ import type { MessageDeliveryQueue } from "./message-delivery.js";
 import { ASK_OUTPUT_LIMIT, finalAnswer, inspectOutput, type AskResult } from "./ask-output.js";
 import { DeckRecipientError } from "./deck-recipients.js";
 
+export type AskCancelMode = "after-turn" | "now" | "force";
+
+/** 谁发起了停止/删除：Agent 来源或 Deck 用户；只用于审计与 UI 展示。 */
+export interface AskActor {
+  kind: "agent" | "user";
+  agentId?: AgentId;
+  threadId?: string;
+}
+
 export interface AskRecord extends AskSession {
   targetAgentId: AgentId;
   targetThreadId?: string;
@@ -16,8 +25,6 @@ export interface AskRecord extends AskSession {
   targetAlias?: string;
   question: string;
   result?: AskResult;
-  /** 旧版询问回传使用的唤醒代号；仅用于兼容旧记录，新流程不再使用。 */
-  wakeCode?: string;
   createdAt: number;
   updatedAt: number;
   deliveryId?: string;
@@ -48,6 +55,13 @@ export interface AskRecord extends AskSession {
   turnStartedAt?: number;
   /** 本轮在 Deck 侧结束（完成/失败事件）的时刻；关联重试产生的多个原生回合。 */
   turnEndedAt?: number;
+  /** 停止请求先落盘，再打断后端；重启后据此继续收口，不把中断误报成失败。 */
+  cancelMode?: AskCancelMode;
+  /** 谁发起了停止/删除，仅用于审计。 */
+  cancelledBy?: AskActor;
+  deletedBy?: AskActor;
+  /** 删除失败原因；保留台账，修正后可以重试。 */
+  deleteError?: string;
 }
 
 interface SessionAliasProvision {
@@ -65,6 +79,15 @@ interface Options {
   sessionAliases?: SessionAliasProvision;
   onChanged?: () => void;
   timer?: boolean;
+}
+
+/**
+ * 中止类结束不应触发「询问失败」自动回传。不同后端会把它报成
+ * interrupted / cancelled / aborted，甚至 failed + aborted 错误文案。
+ */
+export function isAbortLike(status: string | undefined, message?: string) {
+  if (status && ["interrupted", "cancelled", "canceled"].includes(status)) return true;
+  return Boolean(message && /(^|[^a-z])(abort(ed)?|interrupt(ed|ion)?|cancel(led|ed)?)([^a-z]|$)|中断|取消|已停止/i.test(message));
 }
 
 /**
@@ -95,10 +118,16 @@ export class AskService {  private items: AskRecord[] = [];
     const turn = data.params?.turn;
     if (!turn?.id) return;
     if (data.method === "turn/started") {
-      const item = this.items.find((entry) => entry.targetAgentId === (data.agentId || "codex") && entry.targetThreadId === data.params?.threadId);
+      const item = this.items.find((entry) => !entry.deletedAt &&
+        entry.targetAgentId === (data.agentId || "codex") && entry.targetThreadId === data.params?.threadId);
       if (!item || item.turnId === turn.id) return;
       item.turnId = turn.id;
       item.status = "running";
+      // 显式重新发送会开启新回合；上一轮的停止意图不能继续套在新回合上。
+      delete item.cancelRequestedAt;
+      delete item.cancelMode;
+      delete item.cancelledAt;
+      delete item.cancelledBy;
       item.updatedAt = Date.now();
       item.turnSentOffset = item.sentMessages?.length || 0;
       item.turnStartedAt = Date.now();
@@ -118,7 +147,7 @@ export class AskService {  private items: AskRecord[] = [];
       return;
     }
     if (!["completed", "failed", "error", "interrupted", "cancelled"].includes(turn.status)) return;
-    const item = this.items.find((item) =>
+    const item = this.items.find((item) => !item.deletedAt &&
       ["queued", "running"].includes(item.status) && item.targetAgentId === (data.agentId || "codex") &&
       item.targetThreadId === data.params?.threadId && (!item.turnId || item.turnId === turn.id),
     );
@@ -146,10 +175,10 @@ export class AskService {  private items: AskRecord[] = [];
         typeof item?.id === "string" && typeof item.sourceAgentId === "string" &&
         typeof item.sourceThreadId === "string" && typeof item.targetAgentId === "string" &&
         typeof item.question === "string" &&
-        (item.wakeCode === undefined || typeof item.wakeCode === "string") &&
         ["queue", "steer", "interrupt"].includes(item.returnMode) &&
-        ["creating", "queued", "running", "answered", "completed", "failed"].includes(item.status),
+        ["creating", "queued", "running", "answered", "completed", "failed", "cancelled"].includes(item.status),
       );
+      for (const item of this.items) delete (item as unknown as Record<string, unknown>).wakeCode;
       // 先收下记录自带的别名，再为缺别名的旧记录补齐：入参里的保留集合
       // 可能包含本台账自己刚写入的别名，先补会把已落盘别名误判成撞车。
       const used = new Set<string>();
@@ -175,13 +204,22 @@ export class AskService {  private items: AskRecord[] = [];
           ["doneDeliveryId", (value: any) => typeof value === "string"],
           ["doneTurnId", (value: any) => typeof value === "string"],
           ["captureAttempts", (value: any) => Number.isInteger(value) && value >= 0],
+          ["cancelRequestedAt", (value: any) => Number.isFinite(value)],
+          ["cancelledAt", (value: any) => Number.isFinite(value)],
+          ["archivedAt", (value: any) => Number.isFinite(value)],
+          ["deletedAt", (value: any) => Number.isFinite(value)],
+          ["deleteError", (value: any) => typeof value === "string"],
+          ["cancelMode", (value: any) => ["after-turn", "now", "force"].includes(value)],
         ] as const) {
           if (item[field] !== undefined && !valid(item[field])) throw new Error(`询问台账 ${field} 字段无效`);
         }
         if (item.status === "creating") {
-          item.status = "failed";
+          item.status = item.cancelRequestedAt ? "cancelled" : "failed";
           item.updatedAt = Date.now();
-          item.error = "创建期间服务重启，请检查目标会话后重新发起询问";
+          item.error = item.status === "failed"
+            ? "创建期间服务重启，请检查目标会话后重新发起询问"
+            : undefined;
+          if (item.status === "cancelled") item.cancelledAt ??= item.updatedAt;
           changed = true;
         }
         // 旧记录的 wakeDeliveryId 仅视为“已回传”标记，避免升级后重复回复。
@@ -279,11 +317,25 @@ export class AskService {  private items: AskRecord[] = [];
     }));
   }
 
-  private lookup(reference: string) {
+  /** 管理操作需要读取墓碑；普通查询用 lookup 拒绝已删除记录。 */
+  findRecord(reference: string): AskRecord | undefined {
     if (this.loadError) throw new Error(this.loadError);
     const key = reference.replace(/^@/, "");
-    const item = this.items.find((entry) => entry.alias === key || entry.id === key);
+    return this.items.find((entry) => entry.alias === key || entry.id === key);
+  }
+
+  /** 供收件人解析：目标会话对应的询问若已删除（事务只完成一半）也不能再投递。 */
+  isTargetDeleted(agentId: AgentId, threadId: string): boolean {
+    return this.items.some((entry) =>
+      entry.deletedAt !== undefined &&
+      entry.targetAgentId === agentId && entry.targetThreadId === threadId);
+  }
+
+  private lookup(reference: string) {
+    const item = this.findRecord(reference);
     if (!item) throw new Error(`询问 ${reference} 不存在`);
+    if (item.deletedAt)
+      throw new DeckRecipientError("DELETED", 410, `询问 ${reference} 已删除`);
     return item;
   }
 
@@ -360,6 +412,17 @@ export class AskService {  private items: AskRecord[] = [];
         ? await this.options.sessionAliases.ensure([{ agentId: input.targetAgentId, threadId: thread.id }])
         : new Map<string, string>();
       item.targetAlias = sessionAliases.get(JSON.stringify([input.targetAgentId, thread.id]));
+      // createThread 返回前可能已经被 stop/delete：不能再把问题投递出去，
+      // 并把刚创建的原生会话尽力回收，避免留下无人管理的空会话。
+      if (item.deletedAt || item.cancelRequestedAt) {
+        try {
+          await this.options.agents.deleteThread?.(input.targetAgentId, thread.id);
+        } catch { /* 原生删除失败时保留会话，台账状态仍然一致。 */ }
+        if (!item.deletedAt) await this.cancelItem(item);
+        else await this.save();
+        const decorated = this.decorate(thread);
+        return { item: this.list().find((entry) => entry.id === item.id)!, thread: { ...decorated, alias: item.targetAlias ?? decorated.alias } };
+      }
       item.status = "queued";
       item.updatedAt = Date.now();
       await this.save();
@@ -407,6 +470,7 @@ export class AskService {  private items: AskRecord[] = [];
     try {
       for (const item of this.items) {
         try {
+          if (item.deletedAt) continue;
           if (item.detached && ["completed", "answered"].includes(item.status) && !item.result) {
             try { await this.captureResult(item); } catch { /* 结果同步不阻塞显式 send 的恢复。 */ }
           }
@@ -416,19 +480,41 @@ export class AskService {  private items: AskRecord[] = [];
           if (item.status === "failed" && !item.suppressFailureReply && !item.response && item.error) await this.fail(item, item.error);
           if (item.response && !item.replyDeliveryId) await this.reply(item);
           if (!["queued", "running"].includes(item.status)) continue;
-          if (item.executionFailure) { await this.fail(item, item.executionFailure.message); continue; }
-          if (item.executionCompletion?.status === "completed") { await this.complete(item); continue; }
+          if (item.executionFailure) {
+            // 中止/取消是用户或 stop 的主动行为：标记 cancelled，不再向来源
+            // 自动回一条「询问失败」，避免每次停会话都往主进程灌垃圾消息。
+            if (isAbortLike(item.executionCompletion?.status, item.executionFailure.message))
+              await this.cancelItem(item);
+            else await this.fail(item, item.executionFailure.message);
+            continue;
+          }
+          if (item.executionCompletion?.status === "completed") {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.complete(item);
+            continue;
+          }
           const descriptor = this.options.agents.list().find((agent) => agent.id === item.targetAgentId);
-          if (descriptor?.enabled === false) { await this.fail(item, "目标 Agent 已停用，询问无法继续", false); continue; }
-          if (!descriptor?.online && descriptor?.error) { await this.fail(item, descriptor.error); continue; }
+          if (descriptor?.enabled === false) {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, "目标 Agent 已停用，询问无法继续", false);
+            continue;
+          }
+          if (!descriptor?.online && descriptor?.error) {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, descriptor.error);
+            continue;
+          }
           if (!item.deliveryId) await this.start(item);
           const delivery = this.options.messages.list().find((entry) => entry.id === item.deliveryId);
           if (!delivery) {
-            await this.fail(item, "询问消息已被取消或投递记录不存在");
+            // 初始投递被取消（stop、用户在待发送列表取消）不是执行失败，
+            // 统一收口为 cancelled，避免给来源回一条失败消息。
+            await this.cancelItem(item);
             continue;
           }
           if (delivery.status === "failed") {
-            await this.fail(item, delivery.error || "询问消息投递失败");
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, delivery.error || "询问消息投递失败");
             continue;
           }
           if (delivery.status !== "delivered") continue;
@@ -440,33 +526,174 @@ export class AskService {  private items: AskRecord[] = [];
             await this.save();
           }
           const state = this.options.agents.messageState(item.targetAgentId, item.targetThreadId!);
-          if (state.thread.status === "error") { await this.fail(item, state.thread.lastError || "目标 Agent 执行失败，未生成回答"); continue; }
+          if (state.thread.status === "error") {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, state.thread.lastError || "目标 Agent 执行失败，未生成回答");
+            continue;
+          }
           if (!this.options.agents.messageBackendOnline(item.targetAgentId)) continue;
-          if (state.thread.archived) { await this.fail(item, "询问会话已归档"); continue; }
+          if (state.thread.archived) {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, "询问会话已归档");
+            continue;
+          }
           if (!state.ready) continue;
           const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId!, { background: true });
           const turns: any[] = full?.turns || full?.thread?.turns || [];
           const turn = this.findTurn(item, turns);
           if (!turn || ["inProgress", "running", "pending"].includes(turn.status)) continue;
           const failed = ["failed", "error", "interrupted", "cancelled"].includes(turn.status);
-          if (failed) { await this.fail(item, state.thread.lastError || `询问未正常完成（${turn.status}）`); continue; }
-          await this.complete(item, turn);
+          if (failed) {
+            const message = state.thread.lastError || `询问未正常完成（${turn.status}）`;
+            if (isAbortLike(turn.status, message)) await this.cancelItem(item);
+            else await this.fail(item, message);
+            continue;
+          }
+          if (item.cancelRequestedAt) await this.cancelItem(item);
+          else await this.complete(item, turn);
         } catch (error: any) {
           // Offline adapters/history refreshes are retried; never repeat an accepted question.
-          if (/会话不存在|已归档/.test(String(error.message))) await this.fail(item, error.message);
+          if (/会话不存在|已归档/.test(String(error.message))) {
+            if (item.cancelRequestedAt) await this.cancelItem(item);
+            else await this.fail(item, error.message);
+          }
           else console.error(`询问 ${item.id} 等待恢复:`, error.message);
         }
       }
     } finally { this.ticking = false; }
   }
 
+  /**
+   * 主动停止：先落停止意图并取消自动投递，再按模式打断后端。
+   * after-turn 让当前回合自然收尾；now 立即打断；force 再补一次紧急归位。
+   * 停止是静默的，不会向来源自动回一条失败消息。
+   */
+  async stop(reference: string, options: { mode?: AskCancelMode; actor?: AskActor } = {}) {
+    const item = this.lookup(reference);
+    if (item.status === "cancelled") return { item: this.itemView(item), alreadyStopped: true };
+    if (["completed", "answered", "failed"].includes(item.status))
+      throw new DeckRecipientError("NOT_CANCELLABLE", 409, `询问 ${reference} 已结束（${item.status}），不能停止`);
+    const mode = options.mode || "now";
+    item.cancelRequestedAt ??= Date.now();
+    item.cancelMode = mode;
+    if (options.actor) item.cancelledBy = options.actor;
+    item.updatedAt = Date.now();
+    delete item.deleteError;
+    await this.save();
+    await this.cancelPendingDeliveries(item);
+    // creating 阶段还没有原生会话；create() 返回后会看到停止意图并回收刚建的会话。
+    if (item.status === "creating" || !item.targetThreadId) {
+      await this.cancelItem(item);
+      return { item: this.itemView(item), alreadyStopped: false, pendingAfterTurn: false };
+    }
+    const state = this.safeMessageState(item);
+    const running = state ? ["running", "waiting"].includes(state.thread.status) : false;
+    const activeTurn = state?.thread.activeTurnId || item.turnId;
+    if (mode === "after-turn" && running)
+      return { item: this.itemView(item), alreadyStopped: false, pendingAfterTurn: true };
+    let warning: string | undefined;
+    if (running && activeTurn) {
+      try {
+        await this.options.agents.interrupt(item.targetAgentId, item.targetThreadId, activeTurn);
+      } catch (error: any) {
+        warning = `打断请求失败：${error?.message || error}`;
+      }
+    }
+    if (mode === "force") {
+      try { await this.options.agents.forceStop(item.targetAgentId, item.targetThreadId); }
+      catch (error: any) { warning = warning || `紧急停止失败：${error?.message || error}`; }
+    }
+    await this.cancelItem(item);
+    return { item: this.itemView(item), alreadyStopped: false, pendingAfterTurn: false, warning };
+  }
+
+  /** 归档只改 Deck 侧生命周期，不清原生历史；运行中的会话必须先停止。 */
+  async setArchived(reference: string, archived: boolean) {
+    const item = this.lookup(reference);
+    if (archived) item.archivedAt = Date.now();
+    else delete item.archivedAt;
+    item.updatedAt = Date.now();
+    await this.save();
+    return this.itemView(item);
+  }
+
+  /** 删除台账转墓碑：路由负责删原生会话；这里清掉正文，别名继续保留。 */
+  async markDeleted(reference: string, actor?: AskActor) {
+    const item = this.findRecord(reference);
+    if (!item) throw new Error(`询问 ${reference} 不存在`);
+    if (item.deletedAt) return { item: this.itemView(item), alreadyDeleted: true };
+    if (["creating", "queued", "running"].includes(item.status)) await this.cancelItem(item);
+    item.deletedAt = Date.now();
+    item.deletedBy = actor;
+    item.updatedAt = item.deletedAt;
+    item.question = "";
+    item.sentMessages = [];
+    delete item.result;
+    delete item.response;
+    delete item.error;
+    delete item.deleteError;
+    delete item.lastCaptureError;
+    await this.save();
+    return { item: this.itemView(item), alreadyDeleted: false };
+  }
+
+  async markDeleteFailed(reference: string, message: string) {
+    const item = this.findRecord(reference);
+    if (!item || item.deletedAt) return;
+    item.deleteError = message.slice(0, 500);
+    item.updatedAt = Date.now();
+    await this.save();
+  }
+
+  private itemView(item: AskRecord) {
+    return this.list().find((entry) => entry.id === item.id)!;
+  }
+
+  private safeMessageState(item: AskRecord) {
+    if (!item.targetThreadId) return undefined;
+    try { return this.options.agents.messageState(item.targetAgentId, item.targetThreadId); }
+    catch { return undefined; }
+  }
+
+  /** 取消自动投递（初始询问、失败回传、detached done）；显式 send 不在此列。 */
+  private async cancelPendingDeliveries(item: AskRecord) {
+    const cancel = async (id: string | undefined, agentId: AgentId, threadId: string) => {
+      if (!id) return;
+      try { await this.options.messages.cancel(id, agentId, threadId); }
+      catch { /* 已送达/发送中的消息不能取消，交给后端打断收口。 */ }
+    };
+    if (item.targetThreadId)
+      await cancel(item.deliveryId, item.targetAgentId, item.targetThreadId);
+    await cancel(item.replyDeliveryId, item.sourceAgentId, item.sourceThreadId);
+    await cancel(item.doneDeliveryId, item.sourceAgentId, item.sourceThreadId);
+  }
+
+  private async cancelItem(item: AskRecord) {
+    item.status = "cancelled";
+    item.cancelledAt ??= Date.now();
+    item.turnEndedAt ??= Date.now();
+    item.updatedAt = Date.now();
+    item.suppressFailureReply = true;
+    delete item.response;
+    delete item.executionCompletion;
+    delete item.executionFailure;
+    delete item.error;
+    delete item.doneDeliveryId;
+    delete item.doneTurnId;
+    await this.save();
+  }
+
   /** Bound source is resolved on the server, never from an agent-supplied wake code. */
   async sendFrom(agentId: AgentId, threadId: string, text: string, mode?: DeckDeliveryMode, requestId?: string) {
     if (this.loadError) throw new Error(this.loadError);
-    const bound = this.items.filter((entry) =>
+    const bound = this.items.filter((entry) => !entry.deletedAt &&
       entry.targetAgentId === agentId && entry.targetThreadId === threadId && entry.sourceThreadId);
-    if (!bound.length)
-      throw new Error("当前会话没有绑定来源，请使用 --to <agentId:threadId> 或 --code <代号> 指定目标");
+    if (!bound.length) {
+      if (this.items.some((entry) => entry.deletedAt &&
+        entry.targetAgentId === agentId && entry.targetThreadId === threadId))
+        throw new DeckRecipientError("DELETED", 410, "当前询问已删除，不能再回传");
+      throw new Error("当前会话没有绑定来源，请使用 --to <agentId:threadId> 或 --to @s-… 指定目标");
+    }
     // fork/重试会让同一目标挂多条询问；来源一致时投递无歧义，否则明确报错
     // 带候选，不再静默取第一条把结论投给错误的来源。
     const distinctSources = new Map<string, AskRecord>();
@@ -494,7 +721,12 @@ export class AskService {  private items: AskRecord[] = [];
     if (!message) {
       message = { id: requestId || randomUUID(), text, mode: mode || item.returnMode };
       messages.push(message);
-      if (item.status === "completed") item.status = "answered";
+      if (["completed", "cancelled"].includes(item.status)) item.status = "answered";
+      // 新的显式回传意味着会话重新工作；上一轮停止意图随之失效。
+      delete item.cancelRequestedAt;
+      delete item.cancelMode;
+      delete item.cancelledAt;
+      delete item.cancelledBy;
       item.updatedAt = Date.now();
       await this.save();
     }
@@ -544,7 +776,7 @@ export class AskService {  private items: AskRecord[] = [];
       (!item.sentMessages?.length ? item.createdAt : undefined);
     if (!Number.isFinite(startedAt)) return undefined;
     const endedAt = item.turnEndedAt ??
-      (item.executionCompletion || ["completed", "answered", "failed"].includes(item.status)
+      (item.executionCompletion || ["completed", "answered", "failed", "cancelled"].includes(item.status)
         ? item.updatedAt
         : undefined);
     let best: any;
@@ -621,6 +853,11 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async complete(item: AskRecord, turn?: any) {
+    // 停止/删除意图优先：即使完成事件晚到，也不能把已取消的任务改回完成。
+    if (item.cancelRequestedAt || item.deletedAt) {
+      if (!item.deletedAt) await this.cancelItem(item);
+      return;
+    }
     // 纯双向通信：正常结束不产生任何自动通知，来源只会看到目标主动 send
     // 的内容；status 仍记录 answered/completed 供 UI 与后续 send 路由使用。
     item.status = item.sentMessages?.length ? "answered" : "completed";
@@ -632,6 +869,10 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async fail(item: AskRecord, message: string, notify = true) {
+    if (item.cancelRequestedAt || item.deletedAt) {
+      if (!item.deletedAt) await this.cancelItem(item);
+      return;
+    }
     notify = notify && !item.detached;
     item.status = "failed";
     item.turnEndedAt ??= Date.now();
@@ -649,7 +890,7 @@ export class AskService {  private items: AskRecord[] = [];
    * 正文留在 result/inspect 快照里；通知只带指针，丢失走会话待发送列表兜底。
    */
   private async notifyDone(item: AskRecord) {
-    if (!item.detached || !item.targetThreadId) return;
+    if (!item.detached || !item.targetThreadId || item.deletedAt || item.status === "cancelled") return;
     // 主会话（人创建的来源）永不接收 agent 推送，包括 detached 完成指针：
     // 它可能正在跑用户回合，结果只能由 tasks/result/inspect 主动查询。
     // 目前 create 的源必须不是询问目标，因此这里实际覆盖所有正常来源；
@@ -675,7 +916,7 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async reply(item: AskRecord) {
-    if (item.detached || item.replyDeliveryId) return;
+    if (item.detached || item.replyDeliveryId || item.deletedAt || item.status === "cancelled") return;
     const body = `${this.reference(item)}\n\n${item.response || ""}`;
     const prompt = `[ask:${item.alias}] ` + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
     const master = this.isMaster(item.sourceAgentId, item.sourceThreadId);

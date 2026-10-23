@@ -1063,14 +1063,14 @@
   }
 }
 
-.ask-form { margin-bottom: 16px; }
-.ask-form > summary { cursor: pointer; min-height: 44px; padding: 12px; font-weight: var(--fw-strong); }
-.ask-form .form { padding-top: 12px; }
-.ask-form textarea, .ask-form select { width: 100%; min-width: 0; box-sizing: border-box; }
+.wake-ask-form textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .ask-notice { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 16px; font-size: var(--fs-meta); border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .ask-notice a { color: inherit; text-decoration: underline; }
 .ask-notice .error-text { flex-basis: 100%; }
 
-.ask-form textarea { resize: vertical; min-height: 120px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--control); color: var(--text); padding: 10px 11px; font: inherit; }
-.ask-form textarea:focus { outline: 0; border-color: var(--focus-ring); box-shadow: var(--focus-halo); }
+.wake-ask-form textarea { resize: vertical; min-height: 120px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--control); color: var(--text); padding: 10px 11px; font: inherit; }
+.wake-ask-form textarea:focus { outline: 0; border-color: var(--focus-ring); box-shadow: var(--focus-halo); }
 .ask-notice a { min-height: 24px; display: inline-flex; align-items: center; }
+
+.session-alias { flex: none; max-width: 13ch; overflow: hidden; text-overflow: ellipsis; border: 0; background: transparent; color: var(--text-faint); font: var(--fs-meta)/1.4 var(--font-mono); cursor: pointer; min-height: 44px; padding: 0 5px; }
+.session-alias:focus-visible { outline: 2px solid var(--focus-ring); }

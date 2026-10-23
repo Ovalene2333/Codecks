@@ -31,7 +31,7 @@ test("deck-send unifies multiline ask, event delivery and legacy CLI aliases", {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
   const address = server.address() as { port: number };
-  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_SEND_URL: `http://127.0.0.1:${address.port}`, DECK_ASK_NO_FORWARD: "1", DECK_SEND_NO_FORWARD: "1", DECK_TOKEN: "", CODEX_DECK_SESSION: "demo:source", CODEX_THREAD_ID: "" };
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${address.port}`, DECK_ASK_NO_FORWARD: "1", DECK_SEND_NO_FORWARD: "1", DECK_TOKEN: "", CODEX_DECK_SESSION: "demo:source", CODEX_THREAD_ID: "" };
   const question = 'Review "demo"\n路径 \\ example\tend';
   const file = path.join(dir, "question.txt"); await writeFile(file, question);
   await run("bash", ["skills/deck-send/scripts/deck-send", "ask", "demo-review", "--mode", "interrupt", "--file", file], { env });
@@ -43,14 +43,14 @@ test("deck-send unifies multiline ask, event delivery and legacy CLI aliases", {
   assert.equal(requests[1].path, "/api/deck/create");
   assert.equal(requests[1].body.returnMode, "queue");
   assert.equal(requests[1].body.question, "second opinion");
-  await run("bash", ["skills/deck-wake/scripts/deck-wake", "send", "--mode", "queue", "demo-code", "done"], { env });
+  await run("bash", ["skills/deck-wake/scripts/deck-wake", "send", "--mode", "queue", "s-abc1234", "done"], { env });
   assert.equal(requests[2].path, "/api/deck/send");
   assert.equal(requests[2].body.text, "done");
   assert.equal(requests[2].body.mode, "queue");
-  assert.equal(requests[2].body.code, "demo-code");
-  await run("bash", ["skills/deck-send/scripts/deck-send", "_watch", "demo-code", "demo", "40", "--", "printf", "task-done"],
+  assert.equal(requests[2].body.to, "@s-abc1234");
+  await run("bash", ["skills/deck-send/scripts/deck-send", "_watch", "s-abc1234", "demo", "40", "--", "printf", "task-done"],
     { env: { ...env, DECK_SEND_MODE: "interrupt", TMPDIR: dir } });
-  assert.equal(requests[3].path, "/api/deck/events/demo-code");
+  assert.equal(requests[3].path, "/api/deck/events/s-abc1234");
   assert.equal(requests[3].body.mode, "interrupt");
   assert.match(requests[3].body.text, /task-done/);
 });
@@ -80,10 +80,10 @@ test("deck-api create and send preserve caller, default mode and explicit destin
   assert.equal(requests[1].body.requestId, "demo-result"); assert.equal(requests[1].body.to, undefined);
   await run("bash", [script, "send", "--to", "demo:other", "--mode", "interrupt", "--", "Follow up"], { env });
   assert.equal(requests[2].body.to, "demo:other"); assert.equal(requests[2].body.mode, "interrupt");
-  await run("bash", [script, "send", "--code", "demo-code", "--mode", "steer", "--", "Hot update"], { env });
-  assert.equal(requests[3].body.code, "demo-code"); assert.equal(requests[3].body.mode, "steer");
-  await assert.rejects(run("bash", [script, "send", "--code", "demo-code", "--mode", "bogus", "--", "Bad"], { env }));
-  await assert.rejects(run("bash", [script, "send", "--code", "demo-code", "--to", "demo:other", "--", "Bad"], { env }));
+  await run("bash", [script, "send", "--to", "@s-abc1234", "--mode", "steer", "--", "Hot update"], { env });
+  assert.equal(requests[3].body.to, "@s-abc1234"); assert.equal(requests[3].body.mode, "steer");
+  await assert.rejects(run("bash", [script, "send", "--code", "s-abc1234", "--mode", "bogus", "--", "Bad"], { env }));
+  await assert.rejects(run("bash", [script, "send", "--code", "s-abc1234", "--to", "demo:other", "--", "Bad"], { env }));
   assert.equal(requests.length, 4);
   await run("bash", [script, "wake", "--help"], { env }); assert.equal(requests.length, 4);
 });
@@ -110,15 +110,30 @@ test("deck-api detached creation and read-only result/inspect commands preserve 
   await run("bash", [script, "result", "@abcd1234"], { env });
   await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });
   await run("bash", [script, "tasks"], { env });
+  await run("bash", [script, "stop", "@abcd1234", "--after-turn"], { env });
+  await run("bash", [script, "kill", "@abcd1234", "--force"], { env });
+  await run("bash", [script, "archive", "@abcd1234"], { env });
+  await run("bash", [script, "unarchive", "@abcd1234"], { env });
+  await run("bash", [script, "delete", "@abcd1234", "--keep-worktree", "--session", "demo:source"], { env });
   assert.deepEqual(requests.slice(1).map(({ method, path }) => ({ method, path })), [
     { method: "GET", path: "/api/deck/sessions/abcd1234/result" },
     { method: "GET", path: "/api/deck/sessions/abcd1234/inspect?tail=30" },
     { method: "GET", path: "/api/deck/sessions" },
+    { method: "POST", path: "/api/deck/sessions/abcd1234/stop" },
+    { method: "POST", path: "/api/deck/sessions/abcd1234/stop" },
+    { method: "POST", path: "/api/deck/sessions/abcd1234/archive" },
+    { method: "POST", path: "/api/deck/sessions/abcd1234/unarchive" },
+    { method: "DELETE", path: "/api/deck/sessions/abcd1234" },
   ]);
+  assert.equal(requests[4].body.mode, "after-turn");
+  assert.equal(requests[5].body.mode, "now");
+  assert.equal(requests[5].body.force, true);
+  assert.equal(requests[8].body.keepWorktree, true);
+  assert.equal(requests[8].body.session, "demo:source");
   for (const args of [["result", "../../other"], ["inspect", "@abcd1234", "--tail", "0"],
     ["inspect", "@abcd1234", "--tail", "201"], ["result", "@abcd1234", "--tail", "3"]])
     await assert.rejects(run("bash", [script, ...args], { env }));
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 9);
 });
 
 test("deck-api wake watch and poll spawn discovered workers and notify with the chosen mode", { skip: process.platform === "win32" }, async (t) => {
@@ -129,9 +144,9 @@ test("deck-api wake watch and poll spawn discovered workers and notify with the 
   const server = createServer(async (req, res) => {
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-    if (req.url === "/api/deck/events/demo-code") { events.push(body); waiters.shift()?.(); }
+    if (req.url === "/api/deck/events/s-abc1234") { events.push(body); waiters.shift()?.(); }
     res.writeHead(202, { "Content-Type": "application/json" });
-    res.end(req.url === "/api/deck/prepare" ? '{"code":"demo-code","summary":"bound demo session"}' : '{"ok":true}');
+    res.end(req.url === "/api/deck/prepare" ? '{"code":"s-abc1234","summary":"bound demo session"}' : '{"ok":true}');
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
@@ -272,4 +287,48 @@ test("deck-api surfaces recipient resolution errors instead of exiting silently"
   }
   assert.equal(error?.code, 1);
   assert.match(error?.stderr ?? "", /会话别名 s-abc1234 不存在/);
+});
+
+test("instance discovery ignores stale URLs, rejects ambiguity, and verifies identity", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-discovery-"));
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(dir, "instances"));
+  const received: string[] = [];
+  const servers: ReturnType<typeof createServer>[] = [];
+  const register = async (id: string, caller: boolean, reportedId = id) => {
+    const server = createServer(async (req, res) => {
+      for await (const _ of req) { /* consume request */ }
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/api/deck/discover") {
+        assert.equal(req.headers.authorization, `Bearer demo-${id}`);
+        res.end(JSON.stringify({ instanceId: reportedId, caller }));
+      } else { received.push(id); res.end('{"items":[]}'); }
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await writeFile(path.join(dir, "instances", `${id}.json`), JSON.stringify({ instanceId: id, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, token: `demo-${id}` }));
+    return server;
+  };
+  t.after(async () => { for (const server of servers) server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_NO_FORWARD: "1", DECK_API_URL: "", DECK_INSTANCE_ID: "", CODEX_THREAD_ID: "", CODEX_DECK_SESSION: "" };
+  delete (env as Record<string, unknown>).DECK_TOKEN;
+  await writeFile(path.join(dir, "url"), "http://127.0.0.1:1");
+  await writeFile(path.join(dir, "instances", "stale.json"), JSON.stringify({ instanceId: "stale", url: "http://127.0.0.1:1", token: "" }));
+  await register("wrong", false, "different-instance");
+  const first = await register("first", false);
+  const script = "skills/deck-api/scripts/deck-api";
+  await run("bash", [script, "agents"], { env });
+  assert.deepEqual(received, ["first"]);
+  await register("second", false);
+  await assert.rejects(run("bash", [script, "agents"], { env }), /多个 Deck 实例/);
+  assert.equal(received.length, 1);
+  await register("owner", true);
+  await run("bash", [script, "agents"], { env });
+  assert.equal(received.at(-1), "owner");
+  await run("bash", [script, "agents"], { env: { ...env, DECK_INSTANCE_ID: "first" } });
+  assert.equal(received.at(-1), "first");
+  await new Promise<void>((resolve) => first.close(() => resolve()));
+  await register("first", false);
+  await run("bash", [script, "agents"], { env: { ...env, DECK_INSTANCE_ID: "first" } });
+  assert.equal(received.at(-1), "first");
 });

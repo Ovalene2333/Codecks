@@ -3,7 +3,7 @@ import { startEventLoopHealth } from "./event-loop-health.js";
 import compression from "compression";
 import express from "express";
 import { createServer } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -26,7 +26,7 @@ import {
   sameConnectionOverlay,
 } from "./projects.js";
 import { listDirectories } from "./fs-browse.js";
-import { resolveExplicitRecipient } from "./deck-recipients.js";
+import { DeckRecipientError, resolveExplicitRecipient } from "./deck-recipients.js";
 import { GitContextProbe } from "./git-context.js";
 import { parseWorktreePorcelain, WorktreeStore } from "./worktrees.js";
 import { execFile } from "node:child_process";
@@ -178,10 +178,11 @@ const token = cli.noToken
 const pairing =
   remote && !cli.noToken && !cli.token ? new Pairing(token) : undefined;
 const pairLimiter = pairing ? new PairRateLimiter() : undefined;
-/** 本机发现目录：url/token 供 deck-api 读取，watch/ 下是 watcher 日志。 */
+/** 本机发现目录：instances/ 供 deck-api 读取，watch/ 下是 watcher 日志。 */
 const deckHome = path.resolve(
   process.env.CODEX_DECK_HOME || path.join(os.homedir(), ".codex-deck"),
 );
+const instanceId = createHash("sha256").update(dataDir).digest("hex").slice(0, 24);
 if (remote && cli.noToken)
   process.stderr.write(
     "\n⚠ 安全警告：--no-token 已关闭鉴权。任何能访问该地址的人都可以操作 Codex、执行命令和修改文件。\n\n",
@@ -340,7 +341,7 @@ const messageDeliveries = new MessageDeliveryQueue({
 await messageDeliveries.load();
 const wakeOutbox = new WakeOutbox({
   file: path.join(dataDir, "wake-outbox.json"),
-  resolve: (code) => threadSettings.findByWakeCode(code),
+  resolve: (code) => threadSettings.findSessionByAlias(code),
   send: async (agentId, threadId, prompt, delivery) => {
     // 主会话不接受 steer/interrupt 注入，但消息仍走普通队列：空闲立即送达，
     // 运行中排队等空闲，不再无限期缓冲到下一次用户输入。
@@ -365,7 +366,6 @@ const wakeOutbox = new WakeOutbox({
 await wakeOutbox.load();
 const reservedSessionAliases = () => new Set<string>([
   ...threadSettings.listSessionAliases().map((entry) => entry.alias),
-  ...threadSettings.listWakeCodes().map((entry) => entry.code),
 ]);
 /** 会话引用既可以是 ThreadSummary（`id`），也可以是已解构的 `threadId`。 */
 type ThreadAliasTarget = {
@@ -407,7 +407,6 @@ const reservedAliasIdentifiers = () => {
     if (typeof item.alias === "string" && item.alias) reserved.add(item.alias);
   }
   for (const entry of threadSettings.listSessionAliases()) reserved.add(entry.alias);
-  for (const entry of threadSettings.listWakeCodes()) reserved.add(entry.code);
   return reserved;
 };
 
@@ -428,12 +427,6 @@ const scheduleThreadAliases = (
 };
 
 await scheduleThreadAliases(initialThreads);
-
-  const reservedWakeAliases = () => {
-    const reserved = reservedAliasIdentifiers();
-    for (const entry of threadSettings.listWakeCodes()) reserved.add(entry.code);
-    return reserved;
-  };
 
 async function withSessionAlias<T>(agentId: AgentId, thread: T): Promise<T> {
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) return thread;
@@ -466,7 +459,7 @@ const watcherCache = new WakeWatcherCache(
     const items = (await listWakeWatchers(watchDir, Date.now(), { wsl: useWsl })).map(
       (watcher) => ({
         ...watcher,
-        ...threadSettings.findByWakeCode(watcher.code),
+        ...threadSettings.findSessionByAlias(watcher.code),
       }),
     );
     // 只有完整扫描成功才对账（扫描失败会抛错，不会走到这里）。
@@ -604,7 +597,6 @@ const fullSnapshotRaw = () => ({
   preferences: projects.getPreferences(),
   wakeDeliveries: wakeOutbox.list(),
   messageDeliveries: messageDeliveries.list(),
-  wakeCodes: threadSettings.listWakeCodes(),
   sessionAliases: threadSettings.listSessionAliases(),
   wakeWatchers: watcherCache.current(),
   wakeLost: watcherLedger.lost(),
@@ -803,7 +795,7 @@ app.get(
     readHostStats(),
   ),
 );
-// 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒代号，会与 /api/wake/:code 冲突。
+// 不挂在 /api/wake 下：`watchers` 本身就是合法的唤醒别名，会与 /api/wake/:code 冲突。
 // 返回缓存结果：客户端轮询顺带驱动过期重扫，变化经快照广播下发。
 app.get(
   "/api/monitor/watchers",
@@ -830,6 +822,40 @@ const sessionLabel = (target: { agentId: AgentId; threadId: string }) => {
   const thread = tryThreadSummary(target.agentId, target.threadId);
   return `「${thread?.name || target.threadId}」（${target.agentId}）`;
 };
+/** deck-api 子任务生命周期接口共用：调用者身份仅用于所有权校验与审计。 */
+const deckLifecycleSchema = wakePrepareSchema.pick({
+  pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true,
+}).extend({
+  mode: z.enum(["after-turn", "now", "force"]).optional(),
+  force: z.boolean().default(false),
+  keepWorktree: z.boolean().default(false),
+  keepWatchers: z.boolean().default(false),
+  closeConnection: z.boolean().default(false),
+});
+const deckLifecycleActor = async (input: z.infer<typeof deckLifecycleSchema>) => {
+  const resolution = await resolveWakeCaller(input);
+  return resolution.ok
+    ? { kind: "agent" as const, agentId: resolution.agentId, threadId: resolution.threadId }
+    : undefined;
+};
+/**
+ * 默认只允许来源会话操作自己创建的子任务，或子任务停止自己。
+ * 浏览器/用户请求没有可识别的 Agent 身份，仍按本机用户授权放行；
+ * 其他 Agent 必须显式 --force，避免兄弟会话互删。
+ */
+const assertDeckLifecycleOwner = (
+  item: ReturnType<AskService["findRecord"]>,
+  actor: Awaited<ReturnType<typeof deckLifecycleActor>>,
+  force: boolean,
+) => {
+  if (!item || !actor || force) return;
+  const source = actor.agentId === item.sourceAgentId && actor.threadId === item.sourceThreadId;
+  const target = item.targetThreadId !== undefined &&
+    actor.agentId === item.targetAgentId && actor.threadId === item.targetThreadId;
+  if (!source && !target)
+    throw new DeckRecipientError("FORBIDDEN", 403,
+      "只能停止/删除自己发起或自己所在的询问；确需操作其他会话请加 --force");
+};
 app.get(["/api/deck/sessions", "/api/send/asks"], route(async () => ({ items: askService.list() })));
 app.get("/api/deck/sessions/:reference/result", route(async (req) =>
   askService.readResult(param(req.params.reference)),
@@ -837,6 +863,120 @@ app.get("/api/deck/sessions/:reference/result", route(async (req) =>
 app.get("/api/deck/sessions/:reference/inspect", route(async (req) =>
   askService.inspect(param(req.params.reference), z.coerce.number().int().min(1).max(200).default(40).parse(req.query.tail)),
 ));
+app.post("/api/deck/sessions/:reference/stop", route(async (req) => {
+  const input = deckLifecycleSchema.parse(req.body || {});
+  const reference = param(req.params.reference);
+  const item = askService.findRecord(reference);
+  if (!item) throw new Error(`询问 ${reference} 不存在`);
+  const actor = await deckLifecycleActor(input);
+  assertDeckLifecycleOwner(item, actor, input.force);
+  const result = await askService.stop(reference, { mode: input.mode, actor });
+  broadcastSnapshotSoon();
+  return result;
+}));
+app.post("/api/deck/sessions/:reference/archive", route(async (req) => {
+  const input = deckLifecycleSchema.parse(req.body || {});
+  const reference = param(req.params.reference);
+  const item = askService.findRecord(reference);
+  if (!item) throw new Error(`询问 ${reference} 不存在`);
+  if (item.deletedAt) throw new DeckRecipientError("DELETED", 410, `询问 ${reference} 已删除`);
+  const actor = await deckLifecycleActor(input);
+  assertDeckLifecycleOwner(item, actor, input.force);
+  if (["creating", "queued", "running"].includes(item.status))
+    throw new DeckRecipientError("BUSY", 409, "会话仍在执行；请先 stop 再归档");
+  if (!item.targetThreadId) throw new Error("目标会话尚未创建");
+  if (!item.archivedAt) await agents.archiveThread(item.targetAgentId, item.targetThreadId);
+  const updated = await askService.setArchived(reference, true);
+  broadcastSnapshotSoon();
+  return { item: updated };
+}));
+app.post("/api/deck/sessions/:reference/unarchive", route(async (req) => {
+  const input = deckLifecycleSchema.parse(req.body || {});
+  const reference = param(req.params.reference);
+  const item = askService.findRecord(reference);
+  if (!item) throw new Error(`询问 ${reference} 不存在`);
+  if (item.deletedAt) throw new DeckRecipientError("DELETED", 410, `询问 ${reference} 已删除`);
+  const actor = await deckLifecycleActor(input);
+  assertDeckLifecycleOwner(item, actor, input.force);
+  if (!item.targetThreadId) throw new Error("目标会话尚未创建");
+  await agents.unarchiveThread(item.targetAgentId, item.targetThreadId);
+  const updated = await askService.setArchived(reference, false);
+  broadcastSnapshotSoon();
+  return { item: updated };
+}));
+app.delete("/api/deck/sessions/:reference", route(async (req) => {
+  const input = deckLifecycleSchema.parse(req.body || {});
+  const reference = param(req.params.reference);
+  const item = askService.findRecord(reference);
+  if (!item) throw new Error(`询问 ${reference} 不存在`);
+  const actor = await deckLifecycleActor(input);
+  assertDeckLifecycleOwner(item, actor, input.force);
+  if (item.deletedAt) return { item: askService.list().find((entry) => entry.id === item.id)!, alreadyDeleted: true };
+  const liveState = item.targetThreadId
+    ? (() => { try { return agents.messageState(item.targetAgentId, item.targetThreadId!); } catch { return undefined; } })()
+    : undefined;
+  const active = ["creating", "queued", "running"].includes(item.status) ||
+    (liveState ? ["running", "waiting"].includes(liveState.thread.status) : false);
+  if (active && !input.force)
+    throw new DeckRecipientError("BUSY", 409, "会话仍在执行；请先 stop，或加 --force 强制删除");
+  // detached 完成但历史尚未同步时，先给一次捕获机会，避免删除把最后交付一起丢掉。
+  if (item.detached && ["completed", "answered"].includes(item.status) && !item.result)
+    await askService.readResult(reference).catch(() => undefined);
+  if (active) {
+    if (["creating", "queued", "running"].includes(item.status)) {
+      await askService.stop(reference, { mode: "force", actor }).catch((error: any) => {
+        // 检查与停止之间回合可能刚好结束；已终态不影响删除，其他错误照常抛出。
+        if (error?.code !== "NOT_CANCELLABLE") throw error;
+      });
+    } else if (item.targetThreadId) {
+      // 台账已终态但原生会话又被新的 send 拉起：删除前先紧急归位。
+      await agents.forceStop(item.targetAgentId, item.targetThreadId).catch(() => undefined);
+    }
+  }
+  const warnings: string[] = [];
+  const alias = item.targetAlias ||
+    (item.targetThreadId ? threadSettings.sessionAlias(item.targetAgentId, item.targetThreadId) : undefined);
+  let stoppedWatchers = 0;
+  if (!input.keepWatchers && alias) {
+    const watchers = (await watcherCache.ready()).filter((watcher) => watcher.code === alias);
+    for (const watcher of watchers) {
+      try {
+        watcherLedger.markStopping(watcher);
+        await stopWatcherProcess(watcher.pid, { wsl: useWsl });
+        stoppedWatchers += 1;
+      } catch (error: any) {
+        warnings.push(`watcher ${watcher.pid} 停止失败：${error?.message || error}`);
+      }
+    }
+    if (stoppedWatchers) {
+      setTimeout(() => {
+        watcherCache.invalidate();
+        void watcherCache.current();
+      }, 1_500).unref();
+    }
+  }
+  let worktree: Awaited<ReturnType<typeof worktrees.remove>> | undefined;
+  if (item.targetThreadId) {
+    try {
+      await agents.deleteThread(item.targetAgentId, item.targetThreadId, { closeConnection: input.closeConnection });
+    } catch (error: any) {
+      const message = `原生会话删除失败：${error?.message || error}`;
+      await askService.markDeleteFailed(reference, message);
+      throw new Error(message);
+    }
+    await threadSettings.remove(item.targetAgentId, item.targetThreadId, { reason: "deck-api delete" });
+    if (!input.keepWorktree) {
+      try {
+        worktree = await worktrees.remove(item.targetThreadId, { force: input.force });
+      } catch (error: any) {
+        warnings.push(`worktree 清理失败：${error?.message || error}`);
+      }
+    }
+  }
+  const result = await askService.markDeleted(reference, actor);
+  broadcastSnapshotSoon();
+  return { ...result, stoppedWatchers, worktree, warnings };
+}));
 app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
   items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
     id: agent.id, name: agent.name, online: agent.online,
@@ -925,6 +1065,12 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   broadcastSnapshotSoon();
   res.status(202).json(result);
 }));
+// Discovery is authenticated and read-only. Identity prevents stale ports resolving to a different Deck.
+app.post("/api/deck/discover", route(async (req) => {
+  const input = wakePrepareSchema.parse(req.body || {});
+  const caller = await resolveWakeCaller(input);
+  return { instanceId, caller: caller.ok };
+}));
 /** steer 要求目标能把消息转向进当前回合；不支持就明确拒绝，不静默降级为打断或排队。 */
 const assertSteerTarget = (agentId: AgentId, threadId: string) => {
   let capabilities;
@@ -953,11 +1099,9 @@ app.post("/api/deck/send", route(async (req, res) => {
     text: z.string().trim().min(1).max(80_000),
     mode: z.enum(["queue", "steer", "interrupt"]).optional(),
     to: z.string().trim().min(1).max(500).optional(),
-    code: z.string().regex(/^[a-z0-9][a-z0-9-]{1,30}$/).optional(),
     requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
-  }).parse(req.body);
-  if (input.to && input.code) throw new Error("--to 与 --code 不能同时使用");
-  if (!input.to && !input.code) {
+  }).strict().parse(req.body);
+  if (!input.to) {
     const caller = await resolveWakeCaller(input);
     if (!caller.ok) throw new Error(`${caller.error}；请用 --session 显式指定当前发送会话，不要猜测`);
     const result = await askService.sendFrom(caller.agentId, caller.threadId, input.text, input.mode, input.requestId);
@@ -969,11 +1113,13 @@ app.post("/api/deck/send", route(async (req, res) => {
   const recipient = await resolveExplicitRecipient(input, {
     findSessionByAlias: (alias) => threadSettings.findSessionByAlias(alias),
     findAskByAlias: (alias) => askService.findByAlias(alias),
-    findByWakeCode: (code) => threadSettings.findByWakeCode(code),
     isArchived: (target) => {
       try { return agents.messageState(target.agentId, target.threadId).thread.archived === true; }
       catch { return false; }
     },
+    isDeleted: (target) =>
+      threadSettings.isDeleted(target.agentId, target.threadId) ||
+      askService.isTargetDeleted(target.agentId, target.threadId),
     ensureAlias: async (target) =>
       (await ensureThreadAliases([target])).aliases.get(JSON.stringify([target.agentId, target.threadId])),
   });
@@ -986,7 +1132,7 @@ app.post("/api/deck/send", route(async (req, res) => {
   const mode = master ? "queue" : input.mode || "queue";
   if (!master && mode === "steer") assertSteerTarget(target.agentId, target.threadId);
   if (!master && mode === "interrupt") assertInterruptTarget(target.agentId, target.threadId);
-  // send 与 wake 隔离：目标已确定，直接进入会话消息队列，不解析/创建唤醒代号。
+  // send 与 wake 隔离：目标已确定，直接进入会话消息队列，使用已确定的会话身份。
   const id = randomBytes(8).toString("hex");
   const prompt = kind === "ask" && alias
     ? `[ask:${alias}] ${input.text}`
@@ -1002,9 +1148,9 @@ app.post("/api/deck/send", route(async (req, res) => {
   res.status(202).json({ target, alias, kind, mode, delivery });
 }));
 /**
- * deck-api wake 挂 watcher 前的确认：省略代号时识别发起命令的会话并自动分配
- * 代号（不往会话里发任何消息）；给了代号则核对它确实属于发起命令的会话；
- * 同代号同命令的 watcher 已在跑时拒绝重复挂载。dryRun 只查不改（whoami）。
+ * deck-api wake 挂 watcher 前的确认：省略别名时识别发起命令的会话并使用
+ * 会话别名（不往会话里发任何消息）；给了别名则核对它确实属于发起命令的会话；
+ * 同别名同命令的 watcher 已在跑时拒绝重复挂载。dryRun 只查不改（whoami）。
  */
 app.post(
   ["/api/deck/prepare", "/api/monitor/send/prepare", "/api/monitor/watchers/prepare"],
@@ -1014,12 +1160,12 @@ app.post(
     let target: { agentId: AgentId; threadId: string };
     let code: string | null;
     let via: string;
-    let created = false;
+    const created = false;
     if (input.code) {
-      const bound = threadSettings.findByWakeCode(input.code);
+      const bound = threadSettings.findSessionByAlias(input.code.replace(/^@/, ""));
       if (!bound)
         throw new Error(
-          `代号 ${input.code} 不存在；省略代号即可由 Deck 识别当前会话`,
+          `别名 ${input.code} 不存在；省略别名即可由 Deck 识别当前会话`,
         );
       const conflict = bindingConflict(bound, resolution);
       if (conflict && !input.force) {
@@ -1029,35 +1175,27 @@ app.post(
             : "无法确认来源（进程树里没有 Deck 托管的 agent，环境变量也不可信）"
           : `来自会话${sessionLabel({ agentId: (conflict.agentId || "codex") as AgentId, threadId: conflict.id })}`;
         throw new Error(
-          `代号 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略代号即可挂到当前会话；向用户确认后加 -f 再挂到该代号`,
+          `别名 ${input.code} 属于会话${sessionLabel(bound)}，但这条命令${actual}。省略别名即可挂到当前会话；向用户确认后加 -f 再挂到该别名`,
         );
       }
       target = bound;
-      code = input.code;
-      via = conflict ? "显式代号（-f 强制）" : "显式代号";
+      code = threadSettings.sessionAlias(bound.agentId, bound.threadId)!;
+      via = conflict ? "显式别名（-f 强制）" : "显式别名";
     } else {
       if (!resolution.ok) {
         const candidates = resolution.candidates
           .map((thread) => describeThread(thread))
           .join("；");
         throw new Error(
-          `${resolution.error}。请向用户确认唤醒代号后用 deck-api wake <代号> … 重试${candidates ? `。候选：${candidates}` : ""}`,
+          `${resolution.error}。请向用户确认唤醒别名后用 deck-api wake <别名> … 重试${candidates ? `。候选：${candidates}` : ""}`,
         );
       }
       target = { agentId: resolution.agentId, threadId: resolution.threadId };
       via = resolution.via;
-      const existing =
-        threadSettings.get(target.agentId, target.threadId)?.wakeCode ?? null;
-      if (input.dryRun) code = existing;
-      else {
-        code = await threadSettings.ensureWakeCode(
-          target.agentId,
-          target.threadId,
-          undefined,
-          reservedWakeAliases(),
-        );
-        created = !existing;
-        if (created) broadcastSnapshotSoon();
+      code = threadSettings.sessionAlias(target.agentId, target.threadId) ?? null;
+      if (!code && !input.dryRun) {
+        const result = await ensureThreadAliases([target]);
+        code = result.aliases.get(JSON.stringify([target.agentId, target.threadId])) ?? null;
       }
     }
     let warning: string | undefined;
@@ -1068,15 +1206,15 @@ app.post(
       const duplicate = same.find((watcher) => watcher.code === code);
       if (duplicate && !input.force)
         throw new Error(
-          `代号 ${code} 下已有相同命令的 watcher 在运行（pid ${duplicate.pid}），不重复挂载；确需重复请加 -f`,
+          `别名 ${code} 下已有相同命令的 watcher 在运行（pid ${duplicate.pid}），不重复挂载；确需重复请加 -f`,
         );
       const other = same.find((watcher) => watcher.code !== code);
       if (other)
-        warning = `代号 ${other.code} 也在用相同命令监督（pid ${other.pid}），确认没有挂错会话`;
+        warning = `别名 ${other.code} 也在用相同命令监督（pid ${other.pid}），确认没有挂错会话`;
     }
     const summary = input.dryRun
-      ? `当前会话${sessionLabel(target)}，代号 ${code ?? "尚未分配（首次挂 watcher 时自动分配）"}；依据：${via}`
-      : `已绑定会话${sessionLabel(target)}，代号 ${code}${created ? "（新分配）" : ""}；依据：${via}`;
+      ? `当前会话${sessionLabel(target)}，别名 ${code ?? "尚未分配"}；依据：${via}`
+      : `已绑定会话${sessionLabel(target)}，别名 ${code}${created ? "（新分配）" : ""}；依据：${via}`;
     return { code, summary, warning, ...target, via, created };
   }),
 );
@@ -1111,8 +1249,8 @@ app.post(
   route(async (req) => {
     const item = watcherLedger.find(param(req.params.id));
     if (!item) throw new Error("失联记录不存在");
-    const target = threadSettings.findByWakeCode(item.code);
-    if (!target) throw new Error(`代号 ${item.code} 已解绑，无法通知会话`);
+    const target = threadSettings.findSessionByAlias(item.code);
+    if (!target) throw new Error(`别名 ${item.code} 已解绑，无法通知会话`);
     const prompt = [
       `[wake:${item.code}] [${item.label}] watcher 已失联：${item.reason}。`,
       `$ ${item.command}`,
@@ -1137,7 +1275,7 @@ app.delete(
     return { ok: true };
   }),
 );
-// 投递管理同样不放 /api/wake/* 下：`wake-deliveries` 是合法唤醒代号。
+// 投递管理同样不放 /api/wake/* 下：`wake-deliveries` 是合法唤醒别名。
 app.post(
   "/api/monitor/wake-deliveries/:id/retry",
   route(async (req) => ({
@@ -1923,7 +2061,7 @@ const findThreadSummary = (id: AgentId, threadId: string) => {
     (item) => item.id === threadId,
   );
 };
-// adapter 已被移除时代号本体仍要返回，便于排查悬挂映射。
+// adapter 已被移除时别名本体仍要返回，便于排查悬挂映射。
 const tryThreadSummary = (id: AgentId, threadId: string) => {
   try {
     return findThreadSummary(id, threadId);
@@ -1968,74 +2106,21 @@ const localBase = `http://${formatHost(
 app.get(
   "/api/agents/:agentId/threads/:threadId/wake",
   route(async (req) => {
-    const code =
-      threadSettings.get(
-        agentId(req.params.agentId),
-        param(req.params.threadId),
-      )?.wakeCode ?? null;
-    return { code, localUrl: code ? `${localBase}/api/deck/events/${code}` : null };
-  }),
-);
-app.post(
-  "/api/agents/:agentId/threads/:threadId/wake",
-  route(async (req) => {
     const id = agentId(req.params.agentId);
     const threadId = param(req.params.threadId);
     if (!findThreadSummary(id, threadId)) throw new Error("会话不存在");
-    const { code, notify } = z
-      .object({
-        code: z.string().max(40).optional(),
-        notify: z.boolean().optional(),
-      })
-      .parse(req.body || {});
-    const wakeCode = await threadSettings.ensureWakeCode(id, threadId, code, reservedWakeAliases());
-    broadcastSnapshotSoon();
-    const wakePath = `/api/deck/events/${wakeCode}`;
-    const localUrl = `${localBase}${wakePath}`;
-    const result: {
-      code: string;
-      path: string;
-      localUrl: string;
-      notified?: boolean;
-    } = { code: wakeCode, path: wakePath, localUrl };
-    if (notify) {
-      // 只告诉会话代号与用法；地址和令牌由本机发现文件提供，
-      // 令牌不进入会话上下文。
-      try {
-        await agents.sendTurn(
-          id,
-          threadId,
-          [
-            `[deck] 本会话已开启远程唤醒，代号 ${wakeCode}。`,
-            `在远端启动长任务后，用 deck-api skill 在本机挂 watcher；任务结束时我会收到 [wake:${wakeCode}] 消息。挂好后直接结束当前回合，不要阻塞等待或自己轮询。`,
-            `没有该 skill 时可直接调用：curl -X POST "$(cat ${deckHome}/url)${wakePath}" -H "Authorization: Bearer $(cat ${deckHome}/token)" -H "Content-Type: application/json" -d '{"text":"<事件摘要>"}'`,
-            "本条仅需确认收到，无需其它操作。",
-          ].join("\n"),
-        );
-        result.notified = true;
-      } catch (error: any) {
-        // 通知失败不影响代号生效（例如会话正忙、进程未起），UI 另行提示。
-        result.notified = false;
-      }
-    }
-    return result;
-  }),
-);
-app.delete(
-  "/api/agents/:agentId/threads/:threadId/wake",
-  route(async (req) => {
-    await threadSettings.clearWakeCode(
-      agentId(req.params.agentId),
-      param(req.params.threadId),
-    );
-    broadcastSnapshotSoon();
-    return { ok: true };
+    const { aliases } = await ensureThreadAliases([{ agentId: id, threadId }]);
+    const alias = aliases.get(JSON.stringify([id, threadId]))!;
+    return { alias, localUrl: `${localBase}/api/deck/events/${alias}` };
   }),
 );
 app.get(
   ["/api/deck/targets", "/api/send/targets", "/api/wake"],
   route(async () => ({
-    items: threadSettings.listWakeCodes().map((target) => {
+    items: threadSettings.listSessionAliases().filter((target) => {
+      const thread = tryThreadSummary(target.agentId, target.threadId);
+      return thread && !thread.archived;
+    }).map((target) => {
       const thread = tryThreadSummary(target.agentId, target.threadId);
       return {
         ...target,
@@ -2049,9 +2134,9 @@ app.get(
 app.get(
   ["/api/deck/events/:code", "/api/send/events/:code", "/api/wake/:code"],
   route(async (req) => {
-    const code = param(req.params.code);
-    const target = threadSettings.findByWakeCode(code);
-    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const code = param(req.params.code).replace(/^@/, "");
+    const target = threadSettings.findSessionByAlias(code);
+    if (!target || !tryThreadSummary(target.agentId, target.threadId) || tryThreadSummary(target.agentId, target.threadId)?.archived) throw new Error(`会话别名 @${code} 不存在或已归档`);
     const thread = tryThreadSummary(target.agentId, target.threadId);
     return { code, ...target, name: thread?.name, status: thread?.status };
   }),
@@ -2059,9 +2144,9 @@ app.get(
 app.post(
   ["/api/deck/events/:code", "/api/send/events/:code", "/api/wake/:code"],
   route(async (req, res) => {
-    const code = param(req.params.code);
-    const target = threadSettings.findByWakeCode(code);
-    if (!target) throw new Error(`wake code ${code} 不存在`);
+    const code = param(req.params.code).replace(/^@/, "");
+    const target = threadSettings.findSessionByAlias(code);
+    if (!target || !tryThreadSummary(target.agentId, target.threadId) || tryThreadSummary(target.agentId, target.threadId)?.archived) throw new Error(`会话别名 @${code} 不存在或已归档`);
     const body = (
       req.body && typeof req.body === "object" ? req.body : {}
     ) as Record<string, unknown>;
@@ -3129,8 +3214,12 @@ void Promise.all(
 // 本机发现文件：deck-api 脚本从这里读地址与令牌，令牌不必出现在会话上下文里。
 try {
   mkdirSync(deckHome, { recursive: true, mode: 0o700 });
-  writeFileSync(path.join(deckHome, "url"), `${localBase}\n`, { mode: 0o600 });
-  writeFileSync(path.join(deckHome, "token"), `${token}\n`, { mode: 0o600 });
+  const directory = path.join(deckHome, "instances");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, `${instanceId}.json`);
+  const temporary = `${file}.${process.pid}.tmp`;
+  writeFileSync(temporary, JSON.stringify({ instanceId, url: localBase, token }), { mode: 0o600 });
+  renameSync(temporary, file);
 } catch (error: any) {
   console.error("写入唤醒发现文件失败:", error?.message || error);
 }
@@ -3164,7 +3253,7 @@ if (useWsl && wslDeckHome) {
         : undefined
       : localBase;
     const discoveryUrl = wslBase || localBase;
-    await writeWslDiscovery(wslDeckHome, discoveryUrl, token);
+    await writeWslDiscovery(wslDeckHome, discoveryUrl, token, instanceId);
     await installWslScripts(
       wslDeckHome,
       ["deck-api", "deck-send", "deck-wake"].map((script) => ({

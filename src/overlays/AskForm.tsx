@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../api";
 import type { ModelInfo, ThreadSummary } from "../types";
-import { Button } from "../kit";
+import { Button, Disclosure } from "../kit";
 
 type Configuration = { providerId?: string; model?: string; reasoningEffort?: string };
 type Target = { id: string; name: string; online: boolean; steer?: boolean; configuration: Configuration; profiles: { id: string; name: string; current?: boolean }[] };
@@ -69,9 +69,8 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
   const defaults = selectedTarget?.configuration;
 
   const profiles = targets.find((item) => item.id === target)?.profiles || [];
-  return <details className="ask-form">
-    <summary>向另一个 Agent 提问</summary>
-    <form className="form" onSubmit={async (event) => {
+  return <Disclosure title="向另一个 Agent 提问">
+    <form className="form wake-ask-form" onSubmit={async (event) => {
       event.preventDefault();
       if (busy) return;
       setBusy(true); setError(""); setResult("");
@@ -139,5 +138,5 @@ export function AskForm({ thread, onCreated }: { thread: ThreadSummary; onCreate
       {result && <p className="form-hint" role="status">{result}</p>}
       <Button variant="primary" type="submit" disabled={busy || !target || !question.trim()}>{busy ? "正在创建…" : "发起询问"}</Button>
     </form>
-  </details>;
+  </Disclosure>;
 }

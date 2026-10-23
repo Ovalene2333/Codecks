@@ -63,6 +63,7 @@ export async function writeWslDiscovery(
   deckHome: string,
   url: string,
   token: string,
+  instanceId: string,
 ) {
   await execFileAsync("wsl.exe", ["--exec", "mkdir", "-p", deckHome], {
     windowsHide: true,
@@ -70,20 +71,18 @@ export async function writeWslDiscovery(
   });
   const windowsHome = await wslWindowsPath(deckHome);
   await mkdir(windowsHome, { recursive: true, mode: 0o700 });
-  await writeFile(path.join(windowsHome, "url"), `${url}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await writeFile(path.join(windowsHome, "token"), `${token}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const directory = path.join(windowsHome, "instances");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, `${instanceId}.json`);
+  const temporary = `${file}.${process.pid}.tmp`;
+  await writeFile(temporary, JSON.stringify({ instanceId, url, token }), { mode: 0o600 });
+  await rename(temporary, file);
   await execFileAsync(
     "wsl.exe",
     [
       "--exec", "sh", "-c",
-      'chmod 700 "$1"; chmod 600 "$1/url" "$1/token"',
-      "sh", deckHome,
+      'chmod 700 "$1" "$1/instances"; chmod 600 "$1/instances/$2.json"',
+      "sh", deckHome, instanceId,
     ],
     { windowsHide: true, timeout: 5_000 },
   ).catch(() => undefined);

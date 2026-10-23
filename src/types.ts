@@ -209,8 +209,12 @@ export interface AskSession {
   sourceThreadId: string;
   sourceProviderId?: string;
   returnMode: DeckDeliveryMode;
-  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed";
+  status: "creating" | "queued" | "running" | "answered" | "completed" | "failed" | "cancelled";
   error?: string;
+  cancelRequestedAt?: number;
+  cancelledAt?: number;
+  archivedAt?: number;
+  deletedAt?: number;
 }
 
 /**
@@ -376,6 +380,7 @@ export interface ThreadActivity {
 /** 本机正在运行的 deck-wake watcher（只读发现，Deck 不托管其生命周期）。 */
 export interface WakeWatcher {
   pid: number;
+  /** 目标会话别名；沿用持久化字段名，已不再分配独立唤醒代号。 */
   code: string;
   mode: "watch" | "poll";
   label: string;
@@ -389,7 +394,7 @@ export interface WakeWatcher {
   /** poll：正处于连续连接失败（满 10 次 watcher 报错退出）。 */
   failures?: number;
   log?: string;
-  /** 代号当前绑定的会话；代号已被关闭时为空。 */
+  /** 别名对应的会话；旧 watcher 或会话不存在时为空。 */
   agentId?: AgentId;
   threadId?: string;
 }
@@ -631,8 +636,6 @@ export interface Snapshot {
   approvals: Approval[];
   activities?: ThreadActivity[];
   wakeDeliveries?: WakeDelivery[];
-  /** 已开启远程唤醒的会话及其代号。 */
-  wakeCodes?: { code: string; agentId: AgentId; threadId: string }[];
   /** 已分配的会话短别名（含已删除会话的台账，用于避免别名复用）。 */
   sessionAliases?: { alias: string; agentId: AgentId; threadId: string }[];
   /** 本机 deck-wake watcher 列表（服务端 TTL 缓存，滞后数秒属正常）。 */

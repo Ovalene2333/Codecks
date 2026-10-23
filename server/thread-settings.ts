@@ -25,7 +25,7 @@ export interface ThreadSettings {
   sessionMode?: string;
   /** Deck 侧重命名（ACP 会话没有原生 rename 接口）。 */
   name?: string;
-  /** 每个会话自动分配的稳定短别名，例如 `s-3f9kq2pz`。不代表唤醒代号。 */
+  /** 每个会话自动分配的稳定短别名，例如 `s-3f9kq2pz`。 */
   alias?: string;
   /**
    * Deck 发起的 fork 子会话指向父会话。重启后内存的 fork 映射清零，
@@ -38,11 +38,7 @@ export interface ThreadSettings {
    * 只存 `true`；恢复时用 `null` 清除。
    */
   archived?: boolean;
-  /**
-   * 唤醒代号：`POST /api/wake/:code` 命中后向该会话注入一条 prompt。
-   * 由 ensureWakeCode 生成或认领，随会话删除（remove）一并清除。
-   */
-  wakeCode?: string;
+
 }
 
 type ThreadSettingsInput = Omit<ThreadSettings, "serviceTier" | "archived" | "alias"> & {
@@ -87,6 +83,8 @@ interface StoredThreadSettings {
   settings: Partial<Record<AgentId, Record<string, ThreadSettings>>>;
   /** 已分配的会话别名台账；会话删除后仍保留，以避免别名复用。 */
   sessionAliases?: Partial<Record<AgentId, Record<string, string>>>;
+  /** 已删除会话墓碑：别名仍可定位，但收件人解析明确返回已删除而不是误投。 */
+  deletedSessions?: Partial<Record<AgentId, Record<string, { deletedAt: number; reason?: string }>>>;
   turnModels?: Partial<Record<AgentId, Record<string, TurnModelStamp[]>>>;
   turnStats?: Partial<Record<AgentId, Record<string, TurnStatsStamp[]>>>;
   deferred?: Partial<Record<AgentId, Record<string, ThreadSettingsInput>>>;
@@ -124,6 +122,9 @@ export class ThreadSettingsStore {
       for (const [agentId, group] of Object.entries(parsed.settings)) {
         if (group && typeof group === "object" && !Array.isArray(group))
           settings[agentId] = group as Record<string, ThreadSettings>;
+      }
+      for (const group of Object.values(settings)) {
+        for (const entry of Object.values(group ?? {})) delete (entry as Record<string, unknown>).wakeCode;
       }
       const turnModels: StoredThreadSettings["turnModels"] = {};
       const rawTurnModels = parsed.turnModels;
@@ -208,7 +209,23 @@ export class ThreadSettingsStore {
           }
         }
       }
-      this.data = { version: 1, settings, sessionAliases, turnModels, turnStats, deferred };
+      const deletedSessions: NonNullable<StoredThreadSettings["deletedSessions"]> = {};
+      const rawDeleted = parsed.deletedSessions;
+      if (rawDeleted && typeof rawDeleted === "object") {
+        for (const [agentId, group] of Object.entries(rawDeleted)) {
+          if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+          for (const [threadId, entry] of Object.entries(group)) {
+            const deletedAt = Number((entry as any)?.deletedAt);
+            if (!Number.isFinite(deletedAt) || deletedAt <= 0) continue;
+            const reason = (entry as any)?.reason;
+            (deletedSessions[agentId as AgentId] ||= {})[threadId] = {
+              deletedAt,
+              ...(typeof reason === "string" ? { reason } : {}),
+            };
+          }
+        }
+      }
+      this.data = { version: 1, settings, sessionAliases, deletedSessions, turnModels, turnStats, deferred };
     } catch (error: any) {
       // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
       // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
@@ -401,13 +418,19 @@ export class ThreadSettingsStore {
     );
   }
 
-  async remove(agentId: AgentId, threadId: string) {
+  async remove(agentId: AgentId, threadId: string, options: { reason?: string } = {}) {
     const alias = this.sessionAlias(agentId, threadId);
+    // 别名台账故意保留；同时记墓碑，让 @s-… 在删除后返回明确的 DELETED，
+    // 而不是继续解析到一个已经不存在、发消息才报错的线程。
+    ((this.data.deletedSessions ||= {})[agentId] ||= {})[threadId] = {
+      deletedAt: Date.now(),
+      ...(options.reason ? { reason: options.reason } : {}),
+    };
     const group = this.data.settings[agentId];
     const models = this.data.turnModels?.[agentId];
     const stats = this.data.turnStats?.[agentId];
     const deferred = this.data.deferred?.[agentId];
-    if (!group?.[threadId] && !models?.[threadId] && !stats?.[threadId] && !deferred?.[threadId] && !alias) return;
+    // 即使没有设置/别名，也要落墓碑并保存，不能提前返回。
     if (group?.[threadId]) {
       delete group[threadId];
       if (!Object.keys(group).length) delete this.data.settings[agentId];
@@ -433,8 +456,13 @@ export class ThreadSettingsStore {
   /** 会话别名强制使用 `s-` 前缀，避免与询问别名和完整问询 ID 在路由中混淆。 */
   static readonly SESSION_ALIAS_RE = /^s-[a-z0-9]{7}$/;
 
-  /** 自定义代号限定小写字母/数字/连字符，保证可以直接拼进 URL 路径。 */
-  static readonly WAKE_CODE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+  isDeleted(agentId: AgentId, threadId: string): boolean {
+    return this.data.deletedSessions?.[agentId]?.[threadId] !== undefined;
+  }
+
+  deletedAt(agentId: AgentId, threadId: string): number | undefined {
+    return this.data.deletedSessions?.[agentId]?.[threadId]?.deletedAt;
+  }
 
   sessionAlias(agentId: AgentId, threadId: string): string | undefined {
     const configured = this.data.settings[agentId]?.[threadId]?.alias;
@@ -480,18 +508,23 @@ export class ThreadSettingsStore {
       if (!owners.has(mapping.alias))
         owners.set(mapping.alias, JSON.stringify([mapping.agentId, mapping.threadId]));
     }
-    const used = new Set<string>();
+    const used = new Set<string>(mappings.map((mapping) => mapping.alias));
     for (const reserved of reservedAliases) {
       if (typeof reserved === "string" && reserved) used.add(reserved);
     }
-    for (const code of this.listWakeCodes()) used.add(code.code);
 
     let changed = false;
     const assigned = new Map<string, string>();
     for (const target of orderedTargets) {
       const key = JSON.stringify([target.agentId, target.threadId]);
+      // 原生会话以同一 id 重新出现时，撤销墓碑；否则 @s-… 会一直被当成已删除。
+      if (this.data.deletedSessions?.[target.agentId]?.[target.threadId]) {
+        delete this.data.deletedSessions[target.agentId]![target.threadId];
+        changed = true;
+      }
       const current = this.sessionAlias(target.agentId, target.threadId);
-      if (current && owners.get(current) === key && !used.has(current)) {
+      // 保留属于本会话的代号；保留列表也可能包含它，不能据此重新分配。
+      if (current && owners.get(current) === key) {
         assigned.set(key, current);
         used.add(current);
         continue;
@@ -549,81 +582,6 @@ export class ThreadSettingsStore {
       if (!used.has(alias)) return alias;
     }
     throw new Error("会话别名分配失败");
-  }
-
-  findByWakeCode(
-    code: string,
-  ): { agentId: AgentId; threadId: string } | undefined {
-    for (const [agentId, group] of Object.entries(this.data.settings)) {
-      for (const [threadId, settings] of Object.entries(group ?? {})) {
-        if (settings.wakeCode === code)
-          return { agentId: agentId as AgentId, threadId };
-      }
-    }
-    return undefined;
-  }
-
-  listWakeCodes(): { code: string; agentId: AgentId; threadId: string }[] {
-    const items: { code: string; agentId: AgentId; threadId: string }[] = [];
-    for (const [agentId, group] of Object.entries(this.data.settings)) {
-      for (const [threadId, settings] of Object.entries(group ?? {})) {
-        if (settings.wakeCode)
-          items.push({
-            code: settings.wakeCode,
-            agentId: agentId as AgentId,
-            threadId,
-          });
-      }
-    }
-    return items;
-  }
-
-  /**
-   * 取回已有代号，没有则生成（或认领 preferred）。preferred 与已有代号
-   * 不同时直接忽略——改代号应先 clearWakeCode 再重新认领，避免误改。
-   */
-  async ensureWakeCode(
-    agentId: AgentId,
-    threadId: string,
-    preferred?: string,
-    reservedAliases: Iterable<string> = [],
-  ) {
-    const reserved = new Set<string>();
-    for (const alias of reservedAliases) {
-      if (typeof alias === "string" && alias) reserved.add(alias);
-    }
-    for (const entry of this.listSessionAliases()) reserved.add(entry.alias);
-    const existing = this.data.settings[agentId]?.[threadId]?.wakeCode;
-    if (existing) return existing;
-    let code: string;
-    if (preferred) {
-      if (!ThreadSettingsStore.WAKE_CODE_RE.test(preferred))
-        throw new Error("wake code 需为 2-31 位小写字母、数字或连字符");
-      if (this.findByWakeCode(preferred) || reserved.has(preferred))
-        throw new Error(`wake code ${preferred} 已被占用`);
-      code = preferred;
-    } else {
-      code = this.generateWakeCode(reserved);
-    }
-    await this.update(agentId, threadId, { wakeCode: code });
-    return code;
-  }
-
-  async clearWakeCode(agentId: AgentId, threadId: string) {
-    const group = this.data.settings[agentId];
-    const settings = group?.[threadId];
-    if (!settings?.wakeCode) return;
-    delete settings.wakeCode;
-    if (!Object.keys(settings).length) delete group![threadId];
-    await this.save();
-  }
-
-  private generateWakeCode(reserved: Set<string>) {
-    for (let attempt = 0; attempt < 32; attempt += 1) {
-      const code = randomBytes(4).toString("hex");
-      if (!this.findByWakeCode(code) && !reserved.has(code)) return code;
-    }
-    throw new Error("wake code 分配失败");
   }
 
   private save() {

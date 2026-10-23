@@ -225,7 +225,7 @@ export function ChatWorkspace({
     query: string;
     request: number;
   };
-  /** deck-wake 状态：code=已分配唤醒代号；watcher=本机正在监督的 watcher。 */
+  /** deck-wake 状态：code=会话别名；watcher=本机正在监督的 watcher。 */
   wake?: { code?: string; watcher?: WakeWatcher; lost?: LostWakeWatcher[] };
   onBack: () => void;
   onSnapshot: () => void;

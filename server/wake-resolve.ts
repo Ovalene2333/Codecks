@@ -130,9 +130,9 @@ export function resolveWakeSession(
   if (!agents.length)
     return failure(
       context.trustEnv && (input.session || input.codexThread)
-        ? "会话标识没有匹配到已知会话；请检查 --session / CODEX_THREAD_ID，或改用已知代号"
+        ? "会话标识没有匹配到已知会话；请检查 --session / CODEX_THREAD_ID，或改用已知会话别名"
         : input.session || input.codexThread
-          ? "进程树里没有 Deck 托管的 agent，会话标识环境变量不可信；请用已知身份显式指定（create/send 用 --session，wake 用代号加 -f）"
+          ? "进程树里没有 Deck 托管的 agent，会话标识环境变量不可信；请用已知身份显式指定（create/send 用 --session，wake 用会话别名加 -f）"
           : "无法判断命令来自哪个会话：进程树里没有 Deck 托管的 agent，也没有会话标识环境变量",
     );
 
@@ -162,7 +162,7 @@ export function resolveWakeSession(
 }
 
 /**
- * 显式代号是否与判定出的会话冲突：判定成功且是另一个会话，或进程树
+ * 显式会话别名是否与判定出的会话冲突：判定成功且是另一个会话，或进程树
  * 明确指向别的 agent。冲突时返回实际发起的会话（或进程树里的 agent 列表）；
  * 完全无线索时返回空数组（同样视为冲突，需显式确认）；
  * 无冲突返回 undefined。

@@ -2,9 +2,14 @@ import { sessionKey } from "../format";
 import { sessionPath } from "../deck-history";
 import type { AskSession, ThreadSummary } from "../types";
 
-export const ASK_STATUS = { creating: "创建中", queued: "等待发送", running: "处理中", answered: "已完成（已回传）", completed: "已完成（未回传）", failed: "失败" };
+export const ASK_STATUS = { creating: "创建中", queued: "等待发送", running: "处理中", answered: "已完成（已回传）", completed: "已完成（未回传）", failed: "失败", cancelled: "已停止" };
 
-export function askStatusLabel(ask: Pick<AskSession, "status" | "detached" | "resultAvailable" | "sentCount">) {
+export function askStatusLabel(ask: Pick<AskSession, "status" | "detached" | "resultAvailable" | "sentCount"> & {
+  archivedAt?: number;
+  deletedAt?: number;
+}) {
+  if (ask.deletedAt) return "已删除";
+  if (ask.archivedAt) return "已归档";
   if (ask.detached && ["completed", "answered"].includes(ask.status))
     return ask.resultAvailable ? "已完成（结果可读取）" : "已完成（结果待同步）";
   return ask.status === "completed" && ask.sentCount ? ASK_STATUS.answered : ASK_STATUS[ask.status];

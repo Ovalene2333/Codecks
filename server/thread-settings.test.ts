@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -189,11 +189,16 @@ test("session aliases are assigned by default, persist, and survive thread remov
 
   await restored.remove("codex", "thread-1");
   assert.equal(restored.get("codex", "thread-1"), undefined);
-  const reassigned = await restored.ensureSessionAliases([{ agentId: "codex", threadId: "thread-1" }]);
+  assert.equal(restored.isDeleted("codex", "thread-1"), true, "删除后保留墓碑，@s- 才能明确报 DELETED");
+  const reloaded = new ThreadSettingsStore(dir);
+  await reloaded.load();
+  assert.equal(reloaded.isDeleted("codex", "thread-1"), true);
+  const reassigned = await reloaded.ensureSessionAliases([{ agentId: "codex", threadId: "thread-1" }]);
   assert.equal(reassigned.aliases.get(JSON.stringify(["codex", "thread-1"])), first);
+  assert.equal(reloaded.isDeleted("codex", "thread-1"), false, "同一 id 原生会话重新出现时撤销墓碑");
 });
 
-test("session aliases avoid reserved identifiers and wake codes", async () => {
+test("session aliases avoid reserved identifiers", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-alias-reserved-"));
   const store = new ThreadSettingsStore(dir);
   await store.load();
@@ -203,53 +208,59 @@ test("session aliases avoid reserved identifiers and wake codes", async () => {
   );
   const alias = assigned.get(JSON.stringify(["codex", "thread-1"]))!;
   assert.notEqual(alias, "s-reserved");
-  await assert.rejects(store.ensureWakeCode("codex", "thread-2", alias), /已被占用/);
+  assert.notEqual(alias, "s-0000000");
 });
 
-test("wake codes are generated, survive restarts, and resolve back to the thread", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake-"));
-  const store = new ThreadSettingsStore(dir);
-  await store.load();
-  const code = await store.ensureWakeCode("opencode", "session-1");
-  assert.match(code, /^[0-9a-f]{8}$/);
-  // 幂等：再次领取返回同一代号，preferred 被忽略。
-  assert.equal(await store.ensureWakeCode("opencode", "session-1"), code);
-  assert.equal(
-    await store.ensureWakeCode("opencode", "session-1", "gpu-box"),
-    code,
-  );
-  assert.deepEqual(store.findByWakeCode(code), {
-    agentId: "opencode",
-    threadId: "session-1",
-  });
-
-  const restored = new ThreadSettingsStore(dir);
-  await restored.load();
-  assert.deepEqual(restored.findByWakeCode(code), {
-    agentId: "opencode",
-    threadId: "session-1",
-  });
-  assert.deepEqual(restored.listWakeCodes(), [
-    { code, agentId: "opencode", threadId: "session-1" },
-  ]);
+test("session aliases stay stable when all existing aliases are reserved", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-alias-stable-"));
+  try {
+    const targets = [
+      { agentId: "codex" as const, threadId: "demo-a" },
+      { agentId: "claude" as const, threadId: "demo-b" },
+    ];
+    const store = new ThreadSettingsStore(dir);
+    await store.load();
+    const initial = await store.ensureSessionAliases(targets);
+    for (const batch of [[targets[0]], targets, [...targets].reverse()]) {
+      const result = await store.ensureSessionAliases(batch, store.listSessionAliases().map((item) => item.alias));
+      assert.equal(result.changed, false);
+      for (const target of batch) {
+        const key = JSON.stringify([target.agentId, target.threadId]);
+        assert.equal(result.aliases.get(key), initial.aliases.get(key));
+      }
+    }
+    const restored = new ThreadSettingsStore(dir);
+    await restored.load();
+    const result = await restored.ensureSessionAliases(targets, restored.listSessionAliases().map((item) => item.alias));
+    assert.equal(result.changed, false);
+    assert.deepEqual(result.aliases, initial.aliases);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
-test("custom wake codes are validated and unique across agents", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake2-"));
-  const store = new ThreadSettingsStore(dir);
-  await store.load();
-  assert.equal(
-    await store.ensureWakeCode("opencode", "s-1", "gpu-train"),
-    "gpu-train",
-  );
-  await assert.rejects(
-    store.ensureWakeCode("claude", "s-2", "gpu-train"),
-    /已被占用/,
-  );
-  await assert.rejects(store.ensureWakeCode("claude", "s-2", "Bad Code!"));
-  // 不同会话各自生成不冲突的随机代号。
-  const another = await store.ensureWakeCode("claude", "s-2");
-  assert.notEqual(another, "gpu-train");
+test("session alias allocation reserves other sessions and repairs duplicate owners", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-alias-owners-"));
+  try {
+    const store = new ThreadSettingsStore(dir);
+    await store.load();
+    await store.update("codex", "demo-a", { alias: "s-aaaaaaa" });
+    await store.update("codex", "demo-b", { alias: "s-aaaaaaa" });
+    // 固定候选检查生成器收到的占用集合，不依赖随机碰撞。
+    (store as any).generateSessionAlias = (used: Set<string>) => {
+      assert.equal(used.has("s-aaaaaaa"), true);
+      assert.equal(used.has("s-bbbbbbb"), true);
+      return "s-ccccccc";
+    };
+    const result = await store.ensureSessionAliases(
+      [{ agentId: "codex", threadId: "demo-b" }], ["s-bbbbbbb"],
+    );
+    assert.equal(result.changed, true);
+    assert.equal(store.sessionAlias("codex", "demo-a"), "s-aaaaaaa");
+    assert.equal(store.sessionAlias("codex", "demo-b"), "s-ccccccc");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("turn model snapshots persist, dedupe by turn id, and drop with the thread", async () => {
@@ -285,22 +296,6 @@ test("turn model snapshots persist, dedupe by turn id, and drop with the thread"
 
   await restored.remove("codex", "t-1");
   assert.deepEqual(restored.turnModelList("codex", "t-1"), []);
-});
-
-test("clearWakeCode drops the mapping and empty settings entries", async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-wake3-"));
-  const store = new ThreadSettingsStore(dir);
-  await store.load();
-  const code = await store.ensureWakeCode("opencode", "session-1");
-  await store.clearWakeCode("opencode", "session-1");
-  assert.equal(store.findByWakeCode(code), undefined);
-  assert.equal(store.get("opencode", "session-1"), undefined);
-  // 清除不存在的代号是 no-op。
-  await store.clearWakeCode("opencode", "session-1");
-  // 会话删除时代号随设置一起消失。
-  const again = await store.ensureWakeCode("opencode", "session-2");
-  await store.remove("opencode", "session-2");
-  assert.equal(store.findByWakeCode(again), undefined);
 });
 
 test("turn stats persist, dedupe by turn id, and drop with the thread", async () => {
@@ -362,4 +357,19 @@ test("streaming thread updates retain deferred effort including explicit default
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test("legacy wake identities are discarded while stable session aliases survive", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-alias-upgrade-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, "thread-settings.json"), JSON.stringify({
+    version: 1, settings: { codex: { demo: { wakeCode: "old-demo", alias: "s-0e67727", name: "Demo" } } },
+  }));
+  const store = new ThreadSettingsStore(dir);
+  await store.load();
+  assert.equal((store.get("codex", "demo") as any).wakeCode, undefined);
+  assert.equal(store.sessionAlias("codex", "demo"), "s-0e67727");
+  const { aliases } = await store.ensureSessionAliases([{ agentId: "codex", threadId: "demo" }]);
+  assert.equal(aliases.get(JSON.stringify(["codex", "demo"])), "s-0e67727");
 });
