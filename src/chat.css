@@ -1492,47 +1492,6 @@
   height: 16px;
   flex: none;
 }
-/* 运行中可转向会话的发送方式切换：排队 / 即时追加。紧凑胶囊，
-   窄屏下优先保证可点，不挤掉输入区。 */
-.composer-sendmode {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  align-self: center;
-  gap: 2px;
-  max-width: 100%;
-  margin: 0 2px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  background: var(--surface-muted);
-}
-.composer-sendmode button {
-  flex: none;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-  font-size: var(--fs-meta);
-  font-weight: var(--fw-regular);
-  line-height: var(--lh-flat);
-  white-space: nowrap;
-  cursor: pointer;
-}
-.composer-sendmode button:hover {
-  color: var(--text);
-}
-.composer-sendmode button:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -1px;
-}
-.composer-sendmode button.is-active {
-  background: var(--surface-2);
-  color: var(--text);
-  font-weight: var(--fw-medium);
-}
 .prompt-input__button.icon-only {
   width: var(--control-h);
   min-width: var(--control-h);
@@ -1697,6 +1656,8 @@ button.composer-context-seg:focus-visible {
 }
 /* 停止：透明格子 + 方块图标，不用整块红色。 */
 .send.stop {
+  /* 操作区已画左侧分隔线，避免与停止按钮边框叠成双线。 */
+  border-left: 0;
   background: transparent;
   color: var(--text-dim);
 }

@@ -396,7 +396,7 @@ function LostRow({
             <button
               type="button"
               className="home-row-done"
-              title="通知会话：发一条唤醒说明监督进程已失联"
+              title="通知会话：监督进程已失联"
               aria-label="通知会话：监督进程已失联"
               onClick={notify}
             >

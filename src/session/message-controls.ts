@@ -51,7 +51,7 @@ export function messageControls(thread: ThreadSummary, capabilities?: AgentCapab
     blocked,
     label,
     help: behavior === "steer"
-      ? "当前会话支持即时反馈，可直接发送，无需停止当前任务。输入框可切换“即时追加”，直接塞进当前回合。"
+      ? "当前会话支持即时反馈，可直接发送，无需停止当前任务。点击发送按钮选择“即时”或“队列”。"
       : behavior === "queue"
         ? "当前会话会将新消息排队到后续回合，暂不支持运行中直接反馈。"
         : behavior === "reject"

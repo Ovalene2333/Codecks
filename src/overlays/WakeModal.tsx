@@ -7,7 +7,6 @@ import { relativeTime, sessionKey } from "../format";
 import { sessionPath } from "../deck-history";
 import { askStatusLabel } from "../session/AskNotice";
 import { AskResult } from "./AskResult";
-import { AskForm } from "./AskForm";
 import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Badge, Button, Group, Row, Section } from "../kit";
 import { ConfirmDialog, Modal } from "../ui";
@@ -55,7 +54,7 @@ export function WakeModal({
   /** 打开 deck-api 协作泳道示例页；不传时不显示入口。 */
   onOpenLanes?: () => void;
 }) {
-  const [code, setCode] = useState<string | null>(null);
+  const [code, setCode] = useState<string | null>(thread.alias || null);
   const [localUrl, setLocalUrl] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -200,13 +199,6 @@ export function WakeModal({
     <>
     <Modal title="任务回传" className="wake-modal" onClose={onClose}>
       <div className="wake-body">
-        {!thread.ask && (
-          <AskForm
-            thread={thread}
-            onCreated={() => setAsksVersion((value) => value + 1)}
-          />
-        )}
-
         <Section
           title="会话身份"
           actions={
@@ -234,12 +226,12 @@ export function WakeModal({
             </>
           }
         >
-          {!loaded ? <p className="ui-section__desc">正在读取会话身份…</p> : (
+          {!loaded && !code ? <p className="ui-section__desc">正在读取会话身份…</p> : code ? (
             <Group>
-              <Row dot="ok" title="deck-api 默认可用" desc="发送消息、查询和任务唤醒共用此别名，无需开启。"
+              <Row dot="ok" title="deck-api"
                 side={<Button variant="ghost" size="sm" title="复制会话别名" aria-label="复制会话别名" onClick={() => code && copyText(`@${code}`)}><Copy />@{code}</Button>} />
             </Group>
-          )}
+          ) : <p className="ui-section__desc">暂时无法读取会话代号</p>}
         </Section>
 
         {loaded && (code || liveWatchers.length + openLost.length > 0) && (
@@ -268,7 +260,7 @@ export function WakeModal({
                           variant="ghost"
                           size="sm"
                           iconOnly
-                          title="通知会话：发一条唤醒说明监督进程已失联"
+                          title="通知会话：监督进程已失联"
                           aria-label={`通知会话 ${item.label} 已失联`}
                           busy={busy}
                           onClick={() => notifyLost(item)}
@@ -341,7 +333,7 @@ export function WakeModal({
         {loaded && code && (
           <Section
             title="外部脚本"
-            desc="外部脚本也可向此端点 POST 消息。"
+            desc="也可向此端点 POST 消息。"
           >
             <Group pad>
               <div className="wake-endpoint">

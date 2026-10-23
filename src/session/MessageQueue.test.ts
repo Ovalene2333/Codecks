@@ -19,7 +19,7 @@ const item: MessageDelivery = {
 const noop = () => {};
 const action = async () => {};
 
-test("all current transports default the composer to queue, steerable ones offer instant append", () => {
+test("running steerable sessions offer a send menu; other transports keep direct queue sending", () => {
   for (const busyBehavior of ["steer", "reject", "queue", "unknown"] as const) {
     const capabilities = { interrupt: true, messages: {
       busyBehavior, interruptScope: "session", deliveryModes: ["queue", "feedback"],
@@ -30,9 +30,14 @@ test("all current transports default the composer to queue, steerable ones offer
     }));
     assert.match(html, /data-slot="prompt-input"/);
     assert.match(html, /data-slot="prompt-input-footer"/);
-    assert.match(html, /class="prompt-input__button send" title="排队"/);
-    if (busyBehavior === "steer") assert.match(html, /aria-label="发送方式"/);
-    else assert.doesNotMatch(html, /aria-label="发送方式"/);
+    assert.doesNotMatch(html, /composer-sendmode/);
+    if (busyBehavior === "steer") {
+      assert.match(html, /aria-label="选择发送方式"/);
+      assert.match(html, /aria-haspopup="menu"/);
+    } else {
+      assert.match(html, /class="prompt-input__button send" title="排队"/);
+      assert.doesNotMatch(html, /aria-label="选择发送方式"/);
+    }
   }
 });
 

@@ -1,4 +1,3 @@
-import { copyText } from "../clipboard";
 import {
   ArrowLeft,
   ArrowRightLeft,
@@ -96,15 +95,6 @@ export function ChatHeader({
               /
             </span>
             <h2 title={thread.name}>{thread.name}</h2>
-            {thread.alias && (
-              <button
-                className="session-alias"
-                title="复制会话别名"
-                onClick={() => copyText(`@${thread.alias}`)}
-              >
-                @{thread.alias}
-              </button>
-            )}
             {branch?.isBranch && (
               <span
                 className="chat-branch-badge"
@@ -210,12 +200,12 @@ export function ChatHeader({
                 wake?.lost?.length
                   ? `deck-api 监督进程失联：${wake.lost[0].label}（点开处理）`
                   : wake?.watcher
-                  ? `deck-api 监督中：${wake.watcher.label} · 别名 ${wake.watcher.code}`
+                  ? `deck-api 监督中：${wake.watcher.label}`
                   : wake?.code
-                    ? `deck-api 默认可用 · 别名 ${wake.code}（本机暂无监督进程）`
-                    : "deck-api · 任务回传与 Agent 询问"
+                    ? "deck-api · 暂无监督进程"
+                    : "deck-api · 任务回传与监督"
               }
-              aria-label="deck-api，任务回传与 Agent 询问"
+              aria-label="deck-api，任务回传与监督"
             >
               <Radar />
             </button>

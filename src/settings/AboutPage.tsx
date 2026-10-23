@@ -234,12 +234,12 @@ export function AboutPage({
       </Section>
       <Section
         title="诊断"
-        desc="提交问题时请附上。仅含版本、状态与错误首行，不含访问令牌、API 密钥与会话内容。"
+        desc="反馈问题时请附上。诊断不含访问令牌、API 密钥与会话内容。"
       >
         <Group>
           <Row
             title="诊断信息"
-            desc="复制为 JSON"
+            desc="复制为 JSON，仅含版本、状态与错误首行。"
             side={
               <Button
                 size="sm"

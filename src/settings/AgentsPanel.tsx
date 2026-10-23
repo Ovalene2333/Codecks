@@ -88,7 +88,7 @@ function AgentRow({
             title={
               agent.id === "opencode"
                 ? enabled
-                  ? "重载 OpenCode：失效实例缓存并重读配置与供应商目录，进程不动；若重载自检发现目录仍坏（如启动时拉取 models.dev 失败），会自动升级为重启服务"
+                  ? "重载 OpenCode：重读配置与供应商目录，进程不动；目录仍坏时自动重启服务"
                   : "OpenCode 未启用，启用后才能重载"
                 : enabled
                   ? `重载 ${agent.name}：重启服务并重新读取配置与会话`

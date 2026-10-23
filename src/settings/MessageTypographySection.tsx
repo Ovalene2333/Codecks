@@ -60,7 +60,7 @@ export function MessageTypographySection() {
     <Section
       title="消息排版"
       scope="device"
-      desc="选用模板后可继续微调，立即生效；自定义模板随设置一起导入导出。"
+      desc="模板可微调并立即生效；窄屏下自动适应宽度，自定义模板随设置导入导出。"
       actions={
         <Button
           size="sm"
@@ -144,9 +144,9 @@ export function MessageTypographySection() {
               title={range.label}
               desc={
                 key === "contentWidth"
-                  ? "0 表示铺满；窄屏始终适应屏幕宽度。"
+                  ? "0 表示铺满。"
                   : key === "sessionWidth"
-                    ? "整条会话轨道与工具行的最大宽度；窄屏始终适应屏幕宽度。"
+                    ? "会话轨道与工具行的最大宽度。"
                     : undefined
               }
               side={

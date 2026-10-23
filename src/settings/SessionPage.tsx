@@ -200,7 +200,6 @@ export function SessionPage({
           <Row
             dim={!granted}
             title="仅在后台时提醒"
-            desc="页面在前台时不通知，切到后台或锁屏后才通知"
             side={
               <Switch
                 label="仅在页面不在前台时提醒"

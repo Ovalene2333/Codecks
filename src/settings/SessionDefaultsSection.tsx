@@ -67,9 +67,8 @@ function deriveForm(
 }
 
 const MODE_HINT: Record<DefaultsMode, string> = {
-  last: "新建会话时记住选择，下次自动预填；项目首次使用的设置也会被记住。这里改完，可能在下次新建后又被覆盖。",
-  pinned:
-    "新建会话时始终用这里的设置，新建后不会回写；项目的默认值仍然优先。",
+  last: "沿用最近一次选择，下次新建自动更新。",
+  pinned: "始终使用这里的设置，新建后不会回写；项目默认值优先。",
 };
 
 /**
@@ -144,7 +143,7 @@ export function SessionDefaultsSection({
   return (
     <Section
       title="新会话默认值"
-      desc="新建会话对话框的初始选择，仅影响之后新建的会话。"
+      desc="新建会话对话框的初始选择。"
     >
       <form className="ui-form" onSubmit={save}>
         <Group pad>

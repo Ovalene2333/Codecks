@@ -294,7 +294,7 @@ export function DataPage({
     <>
       <Section
         title="设置备份"
-        desc="导出本设备偏好与新会话默认值，供更换浏览器或设备后导入。不含访问令牌与 API 密钥。"
+        desc="导出本设备偏好与新会话默认值，不含访问令牌与 API 密钥。"
       >
         <Group>
           <Row

@@ -138,18 +138,12 @@ export function Composer({
   const mode = modes?.includes("queue") ? "queue" : modes?.[0];
   const controls = messageControls(thread, capabilities, mode);
   const running = controls.busy;
-  // 运行中且可转向时，允许把这条消息即时追加进当前回合（不打断）；
-  // 默认仍排队，保持现有行为。
-  const [direct, setDirect] = useState(false);
-  const canSteer =
+  const canChooseDelivery = Boolean(
+    running &&
     capabilities?.messages?.busyBehavior === "steer" &&
-    modes?.includes("feedback");
-  const sendMode: ComposerSendMode | undefined =
-    running && canSteer && direct ? "append" : mode;
-  const sendControls =
-    sendMode === mode
-      ? controls
-      : messageControls(thread, capabilities, sendMode);
+    modes?.includes("feedback") && modes.includes("queue"),
+  );
+  const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const composerAgentId = thread.agentId || "codex";
   // 桌面显示完整配置；移动端只显示模型 ID 和推理强度。
   const gitBranch = thread.git?.available
@@ -332,8 +326,13 @@ export function Composer({
       onQuickSetting({ approvalMode: value as ApprovalMode });
     else onQuickSetting({ permissionMode: value as ClaudePermissionMode });
   };
+  const canSend = Boolean(text.trim() || images.length);
   const sendBlocked =
-    sendControls.blocked && !parseComposerCommand(text.trim(), composerAgentId);
+    controls.blocked && !parseComposerCommand(text.trim(), composerAgentId);
+  useEffect(() => {
+    if (!canChooseDelivery || compacting || sendBlocked || !canSend || sending)
+      setSendMenuOpen(false);
+  }, [canChooseDelivery, compacting, sendBlocked, canSend, sending]);
   const suggestions = matchingSlashCommands(
     text,
     composerAgentId,
@@ -341,7 +340,6 @@ export function Composer({
       ? []
       : extraCommands,
   );
-  const canSend = Boolean(text.trim() || images.length);
   useLayoutEffect(() => {
     const node = area.current;
     if (!node) return;
@@ -488,7 +486,7 @@ export function Composer({
             value={text}
             aria-label="消息"
             disabled={compacting}
-            placeholder={sendControls.placeholder}
+            placeholder={controls.placeholder}
             onChange={(event) => onChange(event.target.value)}
             onCompositionStart={() => {
               composing.current = true;
@@ -541,8 +539,10 @@ export function Composer({
               }
               if (composerEnterAction(event, sendKey) === "send") {
                 event.preventDefault();
-                if (!compacting && !sendBlocked && canSend && !sending)
-                  onSend(sendMode);
+                if (!compacting && !sendBlocked && canSend && !sending) {
+                  if (canChooseDelivery) setSendMenuOpen(true);
+                  else onSend(mode);
+                }
               }
             }}
           />
@@ -558,33 +558,6 @@ export function Composer({
         </div>
         <PromptInputFooter>
           <PromptInputTools>
-            {/* 运行中且可转向时：排队等本轮结束，或即时追加进当前回合（不打断）。默认排队。 */}
-            {running && canSteer && (
-              <div
-                className="composer-sendmode"
-                role="group"
-                aria-label="发送方式"
-              >
-                <button
-                  type="button"
-                  className={!direct ? "is-active" : ""}
-                  aria-pressed={!direct}
-                  title="排队：等当前任务结束后再处理"
-                  onClick={() => setDirect(false)}
-                >
-                  排队
-                </button>
-                <button
-                  type="button"
-                  className={direct ? "is-active" : ""}
-                  aria-pressed={direct}
-                  title="即时追加：直接塞进当前任务，不打断"
-                  onClick={() => setDirect(true)}
-                >
-                  即时追加
-                </button>
-              </div>
-            )}
             <PromptInputButton
               className="attach icon-only"
               title="添加图片"
@@ -739,15 +712,49 @@ export function Composer({
                 <Square />
               </PromptInputButton>
             ) : null}
-            <PromptInputButton
-              className="send"
-              title={sendControls.label}
-              aria-label={sendControls.label}
-              onClick={() => onSend(sendMode)}
-              disabled={compacting || sendBlocked || !canSend || sending}
-            >
-              <ArrowUp />
-            </PromptInputButton>
+            {canChooseDelivery ? (
+              <Menu
+                open={sendMenuOpen}
+                onOpenChange={setSendMenuOpen}
+                trigger={
+                  <PromptInputButton
+                    className="send"
+                    title="选择发送方式"
+                    aria-label="选择发送方式"
+                    disabled={compacting || sendBlocked || !canSend || sending}
+                  >
+                    <ArrowUp />
+                  </PromptInputButton>
+                }
+              >
+                <MenuItem
+                  meta="追加到当前回合，不打断"
+                  disabled={compacting || sendBlocked || !canSend || sending}
+                  onSelect={() => {
+                    setSendMenuOpen(false);
+                    onSend("append");
+                  }}
+                >即时</MenuItem>
+                <MenuItem
+                  meta="当前回合结束后发送"
+                  disabled={compacting || sendBlocked || !canSend || sending}
+                  onSelect={() => {
+                    setSendMenuOpen(false);
+                    onSend("queue");
+                  }}
+                >队列</MenuItem>
+              </Menu>
+            ) : (
+              <PromptInputButton
+                className="send"
+                title={controls.label}
+                aria-label={controls.label}
+                onClick={() => onSend(mode)}
+                disabled={compacting || sendBlocked || !canSend || sending}
+              >
+                <ArrowUp />
+              </PromptInputButton>
+            )}
           </div>
         </PromptInputFooter>
       </PromptInput>
