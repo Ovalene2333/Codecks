@@ -43,6 +43,7 @@ export const DECK_PUSH_LABEL: Record<DeckPushKind, string> = {
 
 export function deckPushKind(text: string): DeckPushKind | undefined {
   const trimmed = text.trimStart();
+  if (/^\[deck:inbox:[^\]\s]+\]/.test(trimmed)) return "send";
   if (/^\[deck:notice(?::[^\]\s]+)?\]/.test(trimmed)) return "notice";
   if (/^\[ask:[^\]\s]+\]/.test(trimmed)) return "ask";
   if (/^\[send:[^\]\s]+\]/.test(trimmed)) return "send";

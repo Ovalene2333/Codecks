@@ -74,7 +74,7 @@ export function MessageQueue({ items, ...actions }: Actions & { items: MessageDe
   if (!items.length) return null;
   return (
     <div className="session-message-queue" aria-label="待发送消息">
-      {items.map((item) => <DeliveryBubble key={item.id} item={item} {...actions} />)}
+      {items.filter((item) => !item.owner).map((item) => <DeliveryBubble key={item.id} item={item} {...actions} />)}
     </div>
   );
 }

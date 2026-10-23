@@ -1,5 +1,6 @@
 import type { AskRecord } from "./ask-service.js";
 import type { MessageDelivery } from "./agents/messages.js";
+import type { InboxMessage } from "./deck-inbox.js";
 import { visibleUserText } from "./agents/injected-context.js";
 
 export type LaneKind =
@@ -79,6 +80,7 @@ export interface LaneScenarioSet {
 }
 
 export interface LaneBuildOptions {
+  inboxMessages?: InboxMessage[];
   limit?: number;
   maxSteps?: number;
   project?: string;
@@ -246,7 +248,7 @@ function prepareLaneAsks(
     ask.id === queryRef ||
     matchesSession(ask, queryRef);
   const prepared: PreparedLaneAsk[] = asks
-    .filter((ask) => ask.targetThreadId && (ask.sentMessages?.length || ask.detached || ask.status === "failed"))
+    .filter((ask) => ask.targetThreadId && (ask.protocol === 2 || ask.sentMessages?.length || ask.detached || ask.status === "failed"))
     .filter(inProject)
     .filter(matchesAsk)
     .filter((ask) => matchesSession(ask, sessionRef))
@@ -359,7 +361,7 @@ export function buildLaneScenarios(
       atMs: ask.createdAt,
     });
 
-    const sendFollowUps = followUps.filter((delivery) => !delivery.id.startsWith("wake:"));
+    const sendFollowUps = followUps.filter((delivery) => !delivery.id.startsWith("wake:") && !delivery.owner);
     for (const delivery of [...sendFollowUps].sort((left, right) => left.createdAt - right.createdAt)) {
       push({
         id: delivery.id,
@@ -415,6 +417,14 @@ export function buildLaneScenarios(
       });
     }
 
+    const inboxMessages = (options.inboxMessages || []).filter((message) => message.relationId === ask.id && message.kind !== "task");
+    for (const message of inboxMessages) {
+      const reply = message.from.agentId === ask.targetAgentId && message.from.threadId === ask.targetThreadId;
+      push({ id: `inbox:${message.id}`, from: reply ? "target" : "source", to: reply ? "source" : "target",
+        kind: message.kind === "error" ? "failure" : message.state === "consumed" ? "success" : "queue",
+        title: message.kind === "result" ? "最终结果" : headline(message.text), detail: text(message.text, 220),
+        tag: `inbox · ${message.state}`, atMs: message.createdAt });
+    }
     const ended = ask.turnEndedAt || ask.updatedAt;
     push({
       id: `status:${ask.id}`,
@@ -424,11 +434,13 @@ export function buildLaneScenarios(
       title:
         ask.status === "failed"
           ? "询问失败"
+          : ask.protocol === 2 ? `任务状态：${ask.status}${ask.detached ? " · 结果静默保存" : ""}`
           : ask.detached
             ? "detached 完成，等待来源查询"
             : `台账收口：${ask.status}`,
       detail: ask.error
         ? text(ask.error, 220)
+        : ask.protocol === 2 ? "结果和失败进入来源 inbox；领取/自动交付不代表用户已读。"
         : ask.detached
           ? "完成/失败不向来源推送；状态和正文由 result / tasks 主动查询。"
           : `执行回合 ${ask.executionCompletion?.status || ask.status}，本会话共回传 ${ask.sentMessages?.length || 0} 条。`,
@@ -438,7 +450,7 @@ export function buildLaneScenarios(
 
     steps.sort((left, right) => left.atMs - right.atMs);
     const { steps: chosen, omitted } = selectSteps(steps, options.maxSteps);
-    const replyCount = ask.sentMessages?.length || 0;
+    const replyCount = (ask.sentMessages?.length || 0) + inboxMessages.filter((message) => message.from.agentId === ask.targetAgentId && message.from.threadId === ask.targetThreadId).length;
     const wakeCount = followUps.filter((delivery) => delivery.id.startsWith("wake:")).length;
     const start = formatTime(ask.createdAt);
     const end = formatTime(ended);
@@ -447,7 +459,7 @@ export function buildLaneScenarios(
       failed > 0
         ? "有投递失败记录：202 只代表受理，关键裁定要回去核对目标现场。"
         : "所有补充消息都有对应投递记录；受理状态仍不等于目标已执行。",
-      ask.detached
+      ask.protocol === 2 ? "inbox 是消息真源；领取/自动交付不代表执行完成或用户已读。" : ask.detached
         ? "detached 完成/失败不推送；结果只能由 result / tasks 主动查询。"
         : `目标共回传 ${replyCount} 条；来源不主动查询时，只会看到目标 send 的内容。`,
     ];

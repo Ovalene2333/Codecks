@@ -59,6 +59,19 @@ export class DeckNotices {
     await this.save();
     return this.get(agentId, threadId);
   }
+  /** Baseline restored outcomes without turning historical errors into new messages. */
+  async baseline(items: Outcome[]) {
+    if (this.loadError) return;
+    let changed = false;
+    for (const item of items) {
+      const kind = item.resultAvailable ? "result-ready" : item.status === "failed" ? "failed" : item.waitingReason;
+      if (!kind) continue;
+      const key = `${item.id}:${item.turnId || "creating"}:${kind}`;
+      if (!this.data.seen[key]) { this.data.seen[key] = true; changed = true; }
+    }
+    // Existing pending notices/digests retain their durable delivery and retry state.
+    if (changed) await this.save();
+  }
   private enabled(kind: string, policy: Policy, item?: Outcome) {
     return kind === "result-ready" ? policy.resultReady : kind === "failed"
       ? !(item?.replyDeliveryId || item?.suppressFailureNotice) && (item?.detached ? policy.detachedFailure : policy.failure)

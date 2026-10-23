@@ -195,6 +195,7 @@ export interface ModelInfo {
 export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
 
 export interface AskSession {
+  protocol?: 2;
   unread?: boolean;
   waitingReason?: "waiting-approval" | "backend-offline" | "unresolved" | "stalled";
   waitingSince?: number;
@@ -675,6 +676,8 @@ export interface Snapshot {
 export type MessageDeliveryMode = "queue" | "feedback";
 
 export interface MessageDelivery {
+  owner?: "deck-inbox";
+  inboxBatchId?: string;
   id: string;
   agentId: string;
   threadId: string;

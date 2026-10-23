@@ -12,6 +12,8 @@ export interface AgentMessageCapabilities {
 export type MessageDeliveryMode = "queue" | "feedback";
 
 export interface MessageDelivery {
+  owner?: "deck-inbox";
+  inboxBatchId?: string;
   id: string;
   agentId: string;
   threadId: string;

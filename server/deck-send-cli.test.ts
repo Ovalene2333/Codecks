@@ -9,6 +9,31 @@ import test from "node:test";
 
 const run = promisify(execFile);
 
+test("four-operation CLI receives, discovers replay batches and retries with the same request ID", { skip: process.platform === "win32" }, async (context) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "deck-inbox-cli-"));
+  const requests: any[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    requests.push(JSON.parse(Buffer.concat(chunks).toString()));
+    if (requests.length === 1) { request.socket.destroy(); return; }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ requestId: requests.at(-1).requestId, messages: [{ text: "reply" }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(async () => { server.close(); await rm(directory, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: directory, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "",
+    DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}` };
+  const received = await run("bash", ["skills/deck-api/scripts/deck-api", "receive", "--session", "demo:target", "--request-id", "receive-one", "--wait", "0"], { env });
+  assert.equal(JSON.parse(received.stdout).messages[0].text, "reply");
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(requests[1].protocol, 2); assert.equal(requests[1].session, "demo:target");
+  await run("bash", ["skills/deck-api/scripts/deck-api", "receive", "--replay", "receive-one"], { env });
+  assert.equal(requests[2].replay, "receive-one");
+  await run("bash", ["skills/deck-api/scripts/deck-api", "receive", "--replay"], { env });
+  assert.equal(requests[3].replay, true);
+  await assert.rejects(run("bash", ["skills/deck-api/scripts/deck-api", "receive", "--wait", "61"], { env }));
+});
+
 test("every endpoint referenced by the deck-api script exists on the server", async () => {
   // CLI 的接口路径与服务端路由各自演进时曾静默脱节（sessions 打到不存在的
   // /api/deck/creates）：这里把脚本里出现的每个 /api 路径对到服务端源码。
@@ -106,7 +131,7 @@ test("deck-api detached creation and read-only result/inspect commands preserve 
   assert.equal(requests[0].body.sessionExplicit, true);
   assert.equal(requests[0].body.returnMode, "queue");
   assert.equal(JSON.parse(stdout).item.alias, "abcd1234");
-  assert.match(stderr, /完成\/失败\/中断不会推送通知，只能主动查询/);
+  assert.match(stderr, /最终结果进入收件箱但不单独唤醒，用 receive 领取/);
   assert.doesNotMatch(stderr, /本回合到此结束/);
   await run("bash", [script, "result", "@abcd1234"], { env });
   await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });

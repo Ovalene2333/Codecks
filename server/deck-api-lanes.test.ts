@@ -88,6 +88,14 @@ test("泳道从台账和投递记录还原真实顺序", () => {
   assert.equal(scenario.meta.followUps, 3);
 });
 
+test("new protocol tasks remain visible without legacy sentMessages", () => {
+  const result = buildLaneScenarios([{ ...ask, protocol: 2, sentMessages: [], detached: true }], [], threads);
+  assert.equal(result.scenarios.length, 1);
+  assert.ok(result.scenarios[0].steps.some((step) => step.title.includes("结果静默保存")));
+  const ordinary = buildLaneScenarios([{ ...ask, protocol: 2, sentMessages: [] }], [], threads);
+  assert.equal(ordinary.scenarios.length, 1);
+});
+
 test("脱敏只作用于导出快照，路径、URL、密钥不外泄", () => {
   const text = sanitizeLaneText(
     "写入 /srv/acme/runs/r1 和 C:\\Users\\demo\\x，访问 https://example.test/a 或 10.0.0.8，Bearer abcdef",

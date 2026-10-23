@@ -8,6 +8,26 @@ import type { MessageDeliveryQueue } from "./message-delivery.js";
 
 const task = (id: string, overrides = {}) => ({ id, alias: id, sourceAgentId: "demo", sourceThreadId: "source", targetAgentId: "demo", turnId: "turn", createdAt: 1, returnMode: "queue" as const, status: "completed" as const, resultAvailable: true, ...overrides });
 
+test("startup baselines historical failures but preserves pending notices and new failures", async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-notices-startup-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const sent: string[] = [];
+  const messages = { enqueue: async (...args: any[]) => { sent.push(args[3].text); return { status: "queued" }; } } as any;
+  const file = path.join(dir, "notices.json");
+  const failed = (id: string, overrides = {}) => task(id, { status: "failed", resultAvailable: false, ...overrides });
+  const before = new DeckNotices(file, messages); await before.load();
+  await before.tick([failed("pending")], 1000);
+  const restored = new DeckNotices(file, messages); await restored.load();
+  await restored.baseline([failed("historical"), failed("pending"), task("running", { status: "running", resultAvailable: false })]);
+  await restored.tick([failed("historical"), failed("pending"), failed("running")], 6000);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /@pending/); assert.match(sent[0], /@running/);
+  assert.doesNotMatch(sent[0], /@historical/);
+  const again = new DeckNotices(file, messages); await again.load();
+  await again.tick([failed("historical")], 70000);
+  assert.equal(sent.length, 1);
+});
+
 test("completion defaults silent, configured digests batch and limit staggered results across restart", async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-notices-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

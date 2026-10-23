@@ -78,6 +78,9 @@ import { WakeOutbox } from "./wake-outbox.js";
 import { AskSettingsStore, askConfigurationSchema, askModelConfigurationSchema, askPermissionSchema, boundedAskPermissions, resolveAskConfiguration } from "./ask-settings.js";
 import { DeckNotices, noticePolicySchema } from "./deck-notices.js";
 import { AskService } from "./ask-service.js";
+import { assertDeckLifecycleOwner, isMissingDeckThread, waitForDeckStop } from "./deck-lifecycle.js";
+import { DeckInbox } from "./deck-inbox.js";
+import { DeckRequests } from "./deck-requests.js";
 import { buildLaneScenarios, laneThreadsFromSummary, readLaneUserMessages, selectLaneAsks } from "./deck-api-lanes.js";
 import {
   listWakeWatchers,
@@ -339,12 +342,27 @@ function broadcastSnapshotSoon() {
   snapshotTimer.unref();
 }
 const routingChanged = () => { if (routingReady) broadcastSnapshotSoon(); };
+let inbox: DeckInbox | undefined;
+let inboxAskService: AskService | undefined;
 const messageDeliveries = new MessageDeliveryQueue({
   file: path.join(dataDir, "message-deliveries.json"),
   agents,
   onChanged: routingChanged,
+  canDeliver: (agentId, threadId) => {
+    try { inbox?.assertActive({ agentId, threadId }); return true; } catch { return false; }
+  },
 });
 await messageDeliveries.load();
+inbox = new DeckInbox({ file: path.join(dataDir, "deck-inbox.json"), agents, messages: messageDeliveries, autostart: false,
+  onChanged: routingChanged,
+  onDelivered: async (target, messages, turnId) => {
+    if (!inboxAskService) throw new Error("会话路由尚未就绪");
+    await inboxAskService.acceptInboxTurn(target, messages, turnId);
+  },
+});
+await inbox.load();
+const deckRequests = new DeckRequests(path.join(dataDir, "deck-requests.json"));
+await deckRequests.load();
 const wakeOutbox = new WakeOutbox({
   file: path.join(dataDir, "wake-outbox.json"),
   resolve: (code) => threadSettings.findSessionByAlias(code),
@@ -390,7 +408,8 @@ const ensureThreadAliases = async (
   }
   if (!targets.length) return { aliases: new Map<string, string>(), changed: false };
   // ensureSessionAliases 自己已经避开全部已知会话别名；这里只处理新会话。
-  const result = await threadSettings.ensureSessionAliases(targets);
+  const result = await threadSettings.ensureSessionAliases(targets,
+    inboxAskService?.records().filter((item) => item.protocol === 2 && item.targetAlias).map((item) => item.targetAlias!) || []);
   if (result.changed) broadcastSnapshotSoon();
   return result;
 };
@@ -398,6 +417,7 @@ const ensureThreadAliases = async (
 const deckNotices = new DeckNotices(path.join(dataDir, "deck-notices.json"), messageDeliveries);
 await deckNotices.load();
 const askService = new AskService({
+  inbox,
   notices: deckNotices,
   file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries,
   reservedAliases: reservedSessionAliases,
@@ -408,6 +428,9 @@ const askService = new AskService({
   onChanged: routingChanged,
 });
 await askService.load();
+await deckNotices.baseline(askService.list().filter((item) => item.protocol !== 2));
+inboxAskService = askService;
+inbox.start();
 const askSettings = new AskSettingsStore(path.join(dataDir, "ask-settings.json"));
 await askSettings.load();
 
@@ -771,7 +794,7 @@ const route =
     } catch (error: any) {
       const status = error instanceof BackgroundWorkError || typeof error?.statusCode === "number"
         ? error.statusCode : 400;
-      if (!res.headersSent && !res.destroyed) res.status(status).json({ error: error.message || "请求失败" });
+      if (!res.headersSent && !res.destroyed) res.status(status).json({ code: error.code, error: error.message || "请求失败" });
     }
   };
 const param = (value: string | string[]) =>
@@ -863,6 +886,8 @@ const deckLifecycleSchema = wakePrepareSchema.pick({
 });
 const deckLifecycleActor = async (input: z.infer<typeof deckLifecycleSchema>) => {
   const resolution = await resolveWakeCaller(input);
+  if (!resolution.ok && (input.pid || input.session || input.codexThread))
+    throw new DeckRecipientError("CALLER_UNRESOLVED", 409, "无法确认生命周期请求的调用者身份");
   return resolution.ok
     ? { kind: "agent" as const, agentId: resolution.agentId, threadId: resolution.threadId }
     : undefined;
@@ -870,23 +895,9 @@ const deckLifecycleActor = async (input: z.infer<typeof deckLifecycleSchema>) =>
 /**
  * 默认只允许来源会话操作自己创建的子任务，或子任务停止自己。
  * 浏览器/用户请求没有可识别的 Agent 身份，仍按本机用户授权放行；
- * 其他 Agent 必须显式 --force，避免兄弟会话互删。
  */
-const assertDeckLifecycleOwner = (
-  item: ReturnType<AskService["findRecord"]>,
-  actor: Awaited<ReturnType<typeof deckLifecycleActor>>,
-  force: boolean,
-) => {
-  if (!item || !actor || force) return;
-  const source = actor.agentId === item.sourceAgentId && actor.threadId === item.sourceThreadId;
-  const target = item.targetThreadId !== undefined &&
-    actor.agentId === item.targetAgentId && actor.threadId === item.targetThreadId;
-  if (!source && !target)
-    throw new DeckRecipientError("FORBIDDEN", 403,
-      "只能停止/删除自己发起或自己所在的询问；确需操作其他会话请加 --force");
-};
 app.get("/api/deck/deliveries/:id", route(async (req, res) => {
-  const delivery = messageDeliveries.receipt(param(req.params.id));
+  const delivery = messageDeliveries.receipt(param(req.params.id)) || inbox?.delivery(param(req.params.id));
   if (!delivery) {
     res.status(404).json({ code: "UNKNOWN_DELIVERY", error: "投递记录不存在" });
     return;
@@ -917,7 +928,36 @@ app.post("/api/deck/collect", route(async (req) => {
   const input = z.object({ references: z.array(z.string().min(1).max(200)).max(100) }).parse(req.body);
   return askService.collect(input.references);
 }));
+app.post("/api/deck/receive", route(async (req, res) => {
+  const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
+    protocol: z.literal(2).optional(), requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
+    wait: z.number().int().min(0).max(60).default(0), replay: z.union([z.literal(true), z.string().min(1).max(100)]).optional(),
+  }).strict().parse(req.body);
+  const caller = await resolveWakeCaller(input);
+  if (!caller.ok) throw new DeckRecipientError("CALLER_UNRESOLVED", 409, "无法识别收件会话，请显式指定 --session");
+  const target = { agentId: caller.agentId, threadId: caller.threadId };
+  if (input.replay) return inbox!.replay(target, input.replay === true ? undefined : input.replay);
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.on("close", cancel);
+  try { return await inbox!.receive(target, input.requestId || randomBytes(16).toString("hex"), input.wait, controller.signal); }
+  finally { res.off("close", cancel); }
+}));
+app.get("/api/deck/inbox/:agentId/:threadId", route(async (req) => inbox!.summary({ agentId: agentId(req.params.agentId), threadId: param(req.params.threadId) })));
+app.post("/api/deck/inbox/:agentId/:threadId/resume", route(async (req) => {
+  z.object({}).strict().parse(req.body || {});
+  const target = { agentId: agentId(req.params.agentId), threadId: param(req.params.threadId) };
+  inbox!.assertActive(target);
+  await inbox!.control(target, "human");
+  return inbox!.summary(target);
+}));
+app.post("/api/deck/inbox/:agentId/:threadId/recover", route(async (req) => {
+  const input = z.object({ batchId: z.string().uuid(), delivered: z.boolean() }).strict().parse(req.body);
+  return inbox!.recover({ agentId: agentId(req.params.agentId), threadId: param(req.params.threadId) }, input.batchId, input.delivered);
+}));
 app.get("/api/deck/sessions/:reference/result", route(async (req, res) => {
+  const turnId = z.string().min(1).max(300).optional().parse(req.query.turn);
+  if (turnId) return askService.readResult(param(req.params.reference), turnId);
   const seconds = z.coerce.number().int().min(0).max(60).default(0).parse(req.query.wait);
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -934,7 +974,7 @@ app.post("/api/deck/sessions/:reference/stop", route(async (req) => {
   const item = askService.findRecord(reference);
   if (!item) throw new Error(`询问 ${reference} 不存在`);
   const actor = await deckLifecycleActor(input);
-  assertDeckLifecycleOwner(item, actor, input.force);
+  assertDeckLifecycleOwner(item, actor);
   const result = await askService.stop(reference, { mode: input.mode, actor });
   broadcastSnapshotSoon();
   return result;
@@ -946,7 +986,7 @@ app.post("/api/deck/sessions/:reference/archive", route(async (req) => {
   if (!item) throw new Error(`询问 ${reference} 不存在`);
   if (item.deletedAt) throw new DeckRecipientError("DELETED", 410, `询问 ${reference} 已删除`);
   const actor = await deckLifecycleActor(input);
-  assertDeckLifecycleOwner(item, actor, input.force);
+  assertDeckLifecycleOwner(item, actor);
   if (["creating", "queued", "running"].includes(item.status))
     throw new DeckRecipientError("BUSY", 409, "会话仍在执行；请先 stop 再归档");
   if (!item.targetThreadId) throw new Error("目标会话尚未创建");
@@ -962,31 +1002,53 @@ app.post("/api/deck/sessions/:reference/unarchive", route(async (req) => {
   if (!item) throw new Error(`询问 ${reference} 不存在`);
   if (item.deletedAt) throw new DeckRecipientError("DELETED", 410, `询问 ${reference} 已删除`);
   const actor = await deckLifecycleActor(input);
-  assertDeckLifecycleOwner(item, actor, input.force);
+  assertDeckLifecycleOwner(item, actor);
   if (!item.targetThreadId) throw new Error("目标会话尚未创建");
   await agents.unarchiveThread(item.targetAgentId, item.targetThreadId);
   const updated = await askService.setArchived(reference, false);
   broadcastSnapshotSoon();
   return { item: updated };
 }));
+const deletingOperations = new Set<string>();
 app.delete("/api/deck/sessions/:reference", route(async (req) => {
   const input = deckLifecycleSchema.parse(req.body || {});
   const reference = param(req.params.reference);
   const item = askService.findRecord(reference);
   if (!item) throw new Error(`询问 ${reference} 不存在`);
   const actor = await deckLifecycleActor(input);
-  assertDeckLifecycleOwner(item, actor, input.force);
-  if (item.deletedAt) return { item: askService.list().find((entry) => entry.id === item.id)!, alreadyDeleted: true };
+  assertDeckLifecycleOwner(item, actor, false);
+  if (deletingOperations.has(item.id)) throw new DeckRecipientError("BUSY", 409, "目标删除正在处理，请稍后重试");
+  deletingOperations.add(item.id);
+  try {
+  const alreadyDeleted = Boolean(item.deletedAt);
+  if (alreadyDeleted && !item.deletionCleanup?.pending) return { item: askService.list().find((entry) => entry.id === item.id)!, alreadyDeleted: true, warnings: item.deletionCleanup?.warnings || [] };
+  let nativeAttempted = false;
+  let beganDelete = false;
+  const warnings: string[] = [];
+  try {
+  if (!alreadyDeleted) {
   const liveState = item.targetThreadId
     ? (() => { try { return agents.messageState(item.targetAgentId, item.targetThreadId!); } catch { return undefined; } })()
     : undefined;
-  const active = ["creating", "queued", "running"].includes(item.status) ||
-    (liveState ? ["running", "waiting"].includes(liveState.thread.status) : false);
+  const active = !alreadyDeleted && (["creating", "queued", "running"].includes(item.status) ||
+    (liveState ? ["running", "waiting"].includes(liveState.thread.status) || Boolean(liveState.thread.activeTurnId) : false) ||
+    messageDeliveries.list().some((entry) => entry.agentId === item.targetAgentId && entry.threadId === item.targetThreadId && ["queued", "sending", "interrupting"].includes(entry.status)));
   if (active && !input.force)
     throw new DeckRecipientError("BUSY", 409, "会话仍在执行；请先 stop，或加 --force 强制删除");
   // detached 完成但历史尚未同步时，先给一次捕获机会，避免删除把最后交付一起丢掉。
-  if (item.detached && ["completed", "answered"].includes(item.status) && !item.result)
-    await askService.readResult(reference).catch(() => undefined);
+  if (item.targetThreadId) await inbox!.beginDelete({ agentId: item.targetAgentId, threadId: item.targetThreadId }, input.force, () => {
+    try {
+      const state = agents.messageState(item.targetAgentId, item.targetThreadId!);
+      return Boolean(state.thread.activeTurnId) || ["running", "waiting"].includes(state.thread.status) ||
+        messageDeliveries.list().some((entry) => entry.agentId === item.targetAgentId && entry.threadId === item.targetThreadId && ["queued", "sending", "interrupting"].includes(entry.status));
+    } catch (error) { if (isMissingDeckThread(error)) return false; throw error; }
+  });
+  beganDelete = true;
+  await askService.markDeleting(reference, { keepWorktree: input.keepWorktree, keepWatchers: input.keepWatchers });
+  if (["completed", "answered"].includes(item.status) && !item.result) {
+    const captured = await askService.readResult(reference).catch(() => undefined);
+    if (!captured || captured.pending) warnings.push("最终产物尚未同步，删除后请核对原生历史或已有输出文件");
+  }
   if (active) {
     if (["creating", "queued", "running"].includes(item.status)) {
       await askService.stop(reference, { mode: "force", actor }).catch((error: any) => {
@@ -995,14 +1057,34 @@ app.delete("/api/deck/sessions/:reference", route(async (req) => {
       });
     } else if (item.targetThreadId) {
       // 台账已终态但原生会话又被新的 send 拉起：删除前先紧急归位。
-      await agents.forceStop(item.targetAgentId, item.targetThreadId).catch(() => undefined);
+      await agents.forceStop(item.targetAgentId, item.targetThreadId);
     }
   }
-  const warnings: string[] = [];
+  if (item.targetThreadId && !item.nativeDeletedAt && !await waitForDeckStop(agents, item.targetAgentId, item.targetThreadId)) await askService.markNativeDeleted(reference);
+  if (item.targetThreadId && !item.nativeDeletedAt) {
+    try {
+      nativeAttempted = true;
+      await agents.deleteThread(item.targetAgentId, item.targetThreadId, { closeConnection: input.closeConnection });
+      await askService.markNativeDeleted(reference);
+    } catch (error: any) {
+      if (isMissingDeckThread(error)) { await askService.markNativeDeleted(reference); }
+      else {
+      const message = `原生会话删除失败：${error?.message || error}`;
+      await askService.markDeleteFailed(reference, message);
+      throw new Error(message);
+      }
+    }
+  }
+  if (item.targetThreadId) await threadSettings.remove(item.targetAgentId, item.targetThreadId, { reason: "deck-api delete" });
+  await askService.markDeleted(reference, actor);
+  }
+  const result = { item: askService.list().find((entry) => entry.id === item.id)!, alreadyDeleted };
+  if (item.targetThreadId) await inbox!.control({ agentId: item.targetAgentId, threadId: item.targetThreadId }, "deleted");
+  let cleanupPending = false;
   const alias = item.targetAlias ||
     (item.targetThreadId ? threadSettings.sessionAlias(item.targetAgentId, item.targetThreadId) : undefined);
   let stoppedWatchers = 0;
-  if (!input.keepWatchers && alias) {
+  if (!(item.deletionCleanup?.keepWatchers ?? input.keepWatchers) && alias) {
     const watchers = (await watcherCache.ready()).filter((watcher) => watcher.code === alias);
     for (const watcher of watchers) {
       try {
@@ -1010,6 +1092,7 @@ app.delete("/api/deck/sessions/:reference", route(async (req) => {
         await stopWatcherProcess(watcher.pid, { wsl: useWsl });
         stoppedWatchers += 1;
       } catch (error: any) {
+        cleanupPending = true;
         warnings.push(`watcher ${watcher.pid} 停止失败：${error?.message || error}`);
       }
     }
@@ -1020,27 +1103,30 @@ app.delete("/api/deck/sessions/:reference", route(async (req) => {
       }, 1_500).unref();
     }
   }
+  if (item.deletionCleanup?.keepWatchers) warnings.push("按请求保留 watcher；已删除目标不会再次接收投递");
   let worktree: Awaited<ReturnType<typeof worktrees.remove>> | undefined;
   if (item.targetThreadId) {
-    try {
-      await agents.deleteThread(item.targetAgentId, item.targetThreadId, { closeConnection: input.closeConnection });
-    } catch (error: any) {
-      const message = `原生会话删除失败：${error?.message || error}`;
-      await askService.markDeleteFailed(reference, message);
-      throw new Error(message);
-    }
-    await threadSettings.remove(item.targetAgentId, item.targetThreadId, { reason: "deck-api delete" });
-    if (!input.keepWorktree) {
+    if (!(item.deletionCleanup?.keepWorktree ?? input.keepWorktree)) {
       try {
-        worktree = await worktrees.remove(item.targetThreadId, { force: input.force });
+        worktree = await worktrees.remove(item.targetThreadId, { force: false });
       } catch (error: any) {
+        cleanupPending = true;
         warnings.push(`worktree 清理失败：${error?.message || error}`);
       }
     }
   }
-  const result = await askService.markDeleted(reference, actor);
+  if (item.deletionCleanup?.keepWorktree) warnings.push("按请求保留关联 worktree");
+  await askService.finishDeleteCleanup(reference, warnings, cleanupPending);
   broadcastSnapshotSoon();
   return { ...result, stoppedWatchers, worktree, warnings };
+  } catch (error) {
+    if (beganDelete && !nativeAttempted && !item.nativeDeletedAt && !item.deletedAt) {
+      await askService.cancelDeleting(reference);
+      if (item.targetThreadId) await inbox!.control({ agentId: item.targetAgentId, threadId: item.targetThreadId }, "restore");
+    }
+    throw error;
+  }
+  } finally { deletingOperations.delete(item.id); }
 }));
 app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
   items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
@@ -1061,6 +1147,8 @@ app.post(["/api/deck/agents/:agentId/configuration", "/api/send/agents/:agentId/
 app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   const input = wakePrepareSchema.pick({ pid: true, cwd: true, session: true, sessionExplicit: true, codexThread: true }).extend({
     targetAgentId: agentIdSchema,
+    protocol: z.literal(2).optional(),
+    requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
     question: z.string().trim().min(1).max(80_000),
     returnMode: z.enum(["queue", "steer", "interrupt"]).default("queue"),
     detached: z.boolean().default(false),
@@ -1081,6 +1169,10 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   }).parse(req.body);
   const resolution = await resolveWakeCaller(input);
   if (!resolution.ok) throw new Error(`${resolution.error}；请用 --session <agentId:threadId> 显式指定发起会话`);
+  inbox!.assertActive({ agentId: resolution.agentId, threadId: resolution.threadId });
+  const requestId = input.requestId || randomBytes(16).toString("hex");
+  const { pid: _pid, codexThread: _codexThread, session: _session, sessionExplicit: _sessionExplicit, requestId: _requestId, ...requestInput } = input;
+  const response = await deckRequests.execute(`create:${resolution.agentId}:${resolution.threadId}`, requestId, requestInput, async () => {
   const descriptor = agents.list().find((agent) => agent.id === input.targetAgentId);
   if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
   if (resolution.thread.archived) throw new Error("发起会话已归档");
@@ -1120,6 +1212,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     result = await askService.create({
       sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
       targetAgentId: input.targetAgentId, question: input.question, returnMode: effectiveReturnMode, detached: input.detached,
+      protocol: input.protocol,
       settings: { ...configuration, cwd: prepared?.path || targetCwd, providerId, name: input.name },
     });
   } catch (error) {
@@ -1139,7 +1232,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     : requested !== undefined ? { value: requested, source: "request", confirmed: false }
     : saved !== undefined ? { value: saved, source: "default", confirmed: false }
     : { value: null, source: "native", confirmed: false };
-  res.status(202).json({ ...result, effectiveConfiguration: {
+  return { ...result, protocol: input.protocol || 1, requestId, ref: `@${result.thread.alias || result.item.targetAlias || result.item.alias}`, status: "accepted", expiresAt: Date.now() + 7 * 86400_000, effectiveConfiguration: {
     providerId: effective(result.thread.providerId, input.configuration?.providerId || input.providerId || undefined, providerId),
     model: effective(result.thread.model, input.configuration?.model || input.model || undefined, configuration.model),
     reasoningEffort: effective(result.thread.reasoningEffort, input.configuration?.reasoningEffort || input.reasoningEffort || undefined, configuration.reasoningEffort),
@@ -1148,7 +1241,9 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     permissionMode: effective(result.thread.permissionMode, input.permissions?.permissionMode, defaults.permissionMode),
     cwd: { value: result.thread.cwd || prepared?.path || targetCwd, source: prepared ? "worktree" : input.targetCwd ? "request" : "source" },
     returnMode: { value: effectiveReturnMode, source: "host-policy" },
-  }, worktree: prepared || null });
+  }, worktree: prepared || null };
+  });
+  res.status(202).json(response);
 }));
 // Discovery is authenticated and read-only. Identity prevents stale ports resolving to a different Deck.
 app.post("/api/deck/discover", route(async (req) => {
@@ -1185,7 +1280,12 @@ app.post("/api/deck/send", route(async (req, res) => {
     mode: z.enum(["queue", "steer", "interrupt"]).optional(),
     to: z.string().trim().min(1).max(500).optional(),
     requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
+    protocol: z.literal(2).optional(),
   }).strict().parse(req.body);
+  const caller = await resolveWakeCaller(input);
+  if (!caller.ok && (!input.to || input.session || input.codexThread || input.sessionExplicit)) throw new DeckRecipientError("CALLER_UNRESOLVED", 409, `${caller.error}；请明确指定当前会话身份`);
+  const sender = caller.ok ? { agentId: caller.agentId, threadId: caller.threadId } : { agentId: "deck", threadId: "external" };
+  if (caller.ok) inbox!.assertActive({ agentId: caller.agentId, threadId: caller.threadId });
   if (!input.to) {
     const caller = await resolveWakeCaller(input);
     if (!caller.ok) throw new Error(`${caller.error}；请用 --session 显式指定当前发送会话，不要猜测`);
@@ -1193,7 +1293,6 @@ app.post("/api/deck/send", route(async (req, res) => {
     res.status(202).json(result);
     return;
   }
-  if (input.requestId) throw new Error("--request-id 仅用于默认向绑定来源发送消息");
   // 四通道收件人解析统一走 deck-recipients：错误分类与 404/409 在一处定义。
   const recipient = await resolveExplicitRecipient(input, {
     findSessionByAlias: (alias) => threadSettings.findSessionByAlias(alias),
@@ -1211,6 +1310,18 @@ app.post("/api/deck/send", route(async (req, res) => {
   const target = recipient.target;
   const alias = recipient.alias;
   const kind = recipient.kind;
+  const relation = askService.records().find((entry) => entry.targetAgentId === target.agentId && entry.targetThreadId === target.threadId && !entry.deletedAt);
+  const callerRelation = caller.ok ? askService.records().find((entry) => entry.targetAgentId === caller.agentId && entry.targetThreadId === caller.threadId && !entry.deletedAt) : undefined;
+  const legacy = (relation && relation.protocol !== 2) || (callerRelation && callerRelation.protocol !== 2);
+  if (!legacy && (input.protocol === 2 || relation?.protocol === 2 || callerRelation?.protocol === 2)) {
+    if (input.mode && input.mode !== "queue") throw new DeckRecipientError("BAD_FORMAT", 400, "新通信只使用收件箱，不支持 steer/interrupt");
+    const managed = askService.records().find((entry) => entry.protocol === 2 && entry.targetAgentId === target.agentId && entry.targetThreadId === target.threadId && entry.sourceAgentId === sender.agentId && entry.sourceThreadId === sender.threadId);
+    const delivery = await inbox!.append({ from: sender, to: target,
+      text: input.text, requestId: input.requestId, relationId: managed?.id });
+    if (managed) await inbox!.control(target, "resume");
+    res.status(202).json({ ...delivery, protocol: 2, alias, kind });
+    return;
+  }
   // 主会话保护：steer/interrupt 对主会话降级为普通 queue，
   // 202 受理并注明，不报错，避免调用方误判失败而升级重试。
   const master = askService.isMaster(target.agentId, target.threadId);
@@ -1224,13 +1335,19 @@ app.post("/api/deck/send", route(async (req, res) => {
     : kind === "session" && alias
       ? `[send:${alias}] ${input.text}`
       : `[send:${id.slice(0, 8)}] ${input.text}`;
+  const enqueue = async () => {
   const delivery = await messageDeliveries.enqueue(
     target.agentId, target.threadId,
     mode === "queue" ? "queue" : "feedback",
     { text: prompt },
     { id: `send:${id}`, forceInterrupt: mode === "interrupt" },
   );
-  res.status(202).json({ target, alias, kind, mode, delivery });
+  return { target, alias, kind, mode, delivery };
+  };
+  const response = input.requestId
+    ? await deckRequests.execute(`send:${JSON.stringify(sender)}`, input.requestId, { target, text: input.text, mode }, enqueue)
+    : await enqueue();
+  res.status(202).json(response);
 }));
 /**
  * deck-api wake 挂 watcher 前的确认：省略别名时识别发起命令的会话并使用
@@ -2113,10 +2230,15 @@ app.post(
       .parse(req.body || {});
     const id = agentId(req.params.agentId);
     const threadId = param(req.params.threadId);
+    inbox!.assertActive({ agentId: id, threadId });
     return agents.sendTurn(id, threadId, input.text, input.images);
   }),
 );
-registerMessageRoutes(app, agents, messageDeliveries);
+registerMessageRoutes(app, agents, messageDeliveries, async (agentId, threadId) => {
+  await inbox!.control({ agentId, threadId }, "human");
+  for (const item of askService.records().filter((entry) => entry.protocol === 2 && entry.sourceAgentId === agentId && entry.sourceThreadId === threadId && entry.targetThreadId && !entry.deletedAt))
+    await inbox!.control({ agentId: item.targetAgentId, threadId: item.targetThreadId! }, "reset-budget");
+}, (agentId, threadId) => inbox!.assertActive({ agentId, threadId }));
 if (installDevApi(app, agents))
   process.stderr.write("开发测试 API 已启用：/api/dev/approvals\n");
 app.post(
@@ -2180,7 +2302,7 @@ app.get(
     const selectedAsks = selectLaneAsks(askRecords, deliveries, threads, options);
     const userMessages = await readLaneUserMessages(selectedAsks, (agent, thread) =>
       agents.readThread(agent as AgentId, thread, { background: true, turnLimit: 40 }));
-    return buildLaneScenarios(selectedAsks, deliveries, threads, { ...options, userMessages });
+    return buildLaneScenarios(selectedAsks, deliveries, threads, { ...options, userMessages, inboxMessages: inbox!.records() });
   }),
 );
 // watcher 通常就跑在 deck 本机（agent 的 bash 亦然），回环直连
@@ -3447,6 +3569,7 @@ const shutdown = (signal: string) => {
   pairing?.stop();
   tunnel?.kill();
   messageDeliveries.close();
+  inbox?.close();
   agents.stopAll();
   tools.close();
   sessionSearch.close();

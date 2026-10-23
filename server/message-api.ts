@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AgentRegistry } from "./agents/registry.js";
 import { AgentMessageError } from "./agents/messages.js";
 import type { MessageDeliveryQueue } from "./message-delivery.js";
+import { InboxError } from "./deck-inbox.js";
 
 const messageSchema = z.object({
   text: z.string().max(100_000).default(""),
@@ -24,13 +25,15 @@ const paramsSchema = z.object({
 });
 
 /** 独立注册便于用假的 registry 验证 HTTP 契约，不启动真实 Agent。 */
-export function registerMessageRoutes(app: Express, agents: AgentRegistry, deliveries?: MessageDeliveryQueue) {
+export function registerMessageRoutes(app: Express, agents: AgentRegistry, deliveries?: MessageDeliveryQueue,
+  onHumanInput?: (agentId: string, threadId: string) => Promise<void>,
+  assertTarget?: (agentId: string, threadId: string) => void) {
   const route = (handler: (req: Request, res: Response) => Promise<unknown>) =>
     async (req: Request, res: Response) => {
       try {
         res.json(await handler(req, res));
       } catch (error: unknown) {
-        if (error instanceof AgentMessageError) {
+        if (error instanceof AgentMessageError || error instanceof InboxError) {
           res.status(error.statusCode).json({ code: error.code, error: error.message });
         } else if (error instanceof z.ZodError) {
           res.status(400).json({ code: "invalid_request", error: error.message });
@@ -43,13 +46,17 @@ export function registerMessageRoutes(app: Express, agents: AgentRegistry, deliv
   app.post("/api/agents/:agentId/threads/:threadId/messages", route(async (req, res) => {
     const { agentId, threadId } = paramsSchema.parse(req.params);
     const { mode, ...input } = messageSchema.parse(req.body ?? {});
+    assertTarget?.(agentId, threadId);
     if (mode === "queue" || mode === "feedback") {
       if (!deliveries) throw new AgentMessageError("unsupported", "当前服务端未启用发送模式", 422);
       const item = await deliveries.enqueue(agentId, threadId, mode, input);
+      await onHumanInput?.(agentId, threadId).catch(() => undefined);
       res.status(202);
       return { ...item, disposition: "queued", queueDurability: "disk" };
     }
-    return agents.sendMessage(agentId, threadId, { ...input, mode });
+    const receipt = await agents.sendMessage(agentId, threadId, { ...input, mode });
+    await onHumanInput?.(agentId, threadId).catch(() => undefined);
+    return receipt;
   }));
   app.post("/api/agents/:agentId/threads/:threadId/messages/interrupt", route(async (req) => {
     const { agentId, threadId } = paramsSchema.parse(req.params);

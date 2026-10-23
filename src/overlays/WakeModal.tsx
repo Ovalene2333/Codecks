@@ -8,6 +8,7 @@ import { sessionPath } from "../deck-history";
 import { askStatusLabel } from "../session/AskNotice";
 import { DeckCommunicationSettings } from "./DeckCommunicationSettings";
 import { AskResult } from "./AskResult";
+import { InboxStatus } from "./InboxStatus";
 import type { AskSession, LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Badge, Button, Group, Row, Section } from "../kit";
 import { ConfirmDialog, Modal } from "../ui";
@@ -203,6 +204,7 @@ export function WakeModal({
     <>
     <Modal title="任务回传" className="wake-modal" onClose={onClose}>
       <div className="wake-body">
+        <InboxStatus key={`${thread.agentId}:${thread.id}`} agentId={thread.agentId || "codex"} threadId={thread.id} />
         <Section
           title="会话身份"
           actions={

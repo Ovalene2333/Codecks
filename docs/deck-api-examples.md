@@ -1,5 +1,7 @@
 # deck-api 协作实例
 
+新关系使用 inbox 协议：`create` 后可继续工作，`send` 发送进度/问题，`receive` 在当前回合取信，结束后 `del` 清理目标。最终答复自动交付，不再要求重复 send。实时泳道读取 `deck-inbox.json`，区分 new/claimed/consumed/unknown；consumed 不表示任务完成或用户已读。下方现有 SVG 与案例保留为升级前真实记录，不把历史 detached 行为当作新协议示范。
+
 这一页不是手写的“示例故事”。Deck 会读取本机询问台账（`ask-sessions.json`）、
 消息投递记录（`message-deliveries.json`）和会话摘要（`thread-summaries.json`），
 把一次真实询问还原成泳道：谁发起、目标回了什么、来源补充了什么、哪些唤醒进入

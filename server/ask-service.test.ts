@@ -10,6 +10,7 @@ import { DeckRecipientError } from "./deck-recipients.js";
 import { MessageDeliveryQueue } from "./message-delivery.js";
 import type { AgentRegistry } from "./agents/registry.js";
 import type { ThreadSummary } from "./types.js";
+import { DeckInbox } from "./deck-inbox.js";
 
 const askReplies = (messages: MessageDeliveryQueue) =>
   messages.list().filter((entry) => entry.text?.startsWith("[ask:") || entry.text?.startsWith("[deck:notice:"));
@@ -71,23 +72,85 @@ class Agents extends EventEmitter {
   }
 }
 
-async function fixture(t: any) {
+async function fixture(t: any, protocol?: 2) {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-ask-test-"));
   const fake = new Agents();
   const agents = fake as unknown as AgentRegistry;
   const messages = new MessageDeliveryQueue({ file: path.join(dir, "messages.json"), agents, timer: false });
   await messages.load();
-  const options = { file: path.join(dir, "asks.json"), agents, messages, timer: false as const };
-  const service = new AskService(options); await service.load();
-  t.after(async () => { service.close(); messages.close(); await rm(dir, { recursive: true, force: true }); });
+  let service: AskService;
+  const inbox = protocol === 2 ? new DeckInbox({ file: path.join(dir, "inbox.json"), agents, messages, timer: false, mergeWindowMs: 0,
+    onDelivered: async (target, items, turnId) => { await service.acceptInboxTurn(target, items, turnId); } }) : undefined;
+  await inbox?.load();
+  const options = { file: path.join(dir, "asks.json"), agents, messages, inbox, timer: false as const };
+  service = new AskService(options); await service.load();
+  t.after(async () => { service.close(); inbox?.close(); messages.close(); await rm(dir, { recursive: true, force: true }); });
   // 链式来源：第二个参数起依次是来源 agent、来源 thread，便于构造子会话链。
   const create = (returnMode: "queue" | "steer" | "interrupt" = "queue", detached = false, sourceAgentId = "demo", sourceThreadId = "source") => service.create({
     sourceAgentId, sourceThreadId, targetAgentId: "demo-review",
     question: 'Review "demo"\nwith context', returnMode, detached,
     settings: { cwd: "/work/demo", providerId: "acme" },
+    protocol,
   });
-  return { fake, service, messages, create, options };
+  return { fake, service, messages, create, options, inbox };
 }
+
+test("inbox tasks automatically return final answers without injecting the busy parent", async (context) => {
+  const { fake, service, messages, create, inbox } = await fixture(context, 2);
+  const { thread, item } = await create();
+  await inbox!.tick(); await messages.tick(); await inbox!.tick(); await service.tick();
+  fake.finish(thread.id, "Automatic final"); await service.tick();
+  assert.equal(fake.sends.length, 1);
+  const result = await inbox!.receive({ agentId: "demo", threadId: "source" }, "result");
+  assert.equal(result.messages[0].kind, "result");
+  assert.equal(result.messages[0].text, "Automatic final");
+  await service.tick();
+  assert.deepEqual((await inbox!.receive({ agentId: "demo", threadId: "source" }, "again")).messages, []);
+  assert.equal((await service.readResult(item.id)).result?.text, "Automatic final");
+});
+
+test("inbox progress can be received while running and followup results preserve earlier turns", async (context) => {
+  const { fake, service, messages, create, inbox } = await fixture(context, 2);
+  const { thread, item } = await create();
+  await inbox!.tick(); await messages.tick(); await inbox!.tick(); await service.tick();
+  await service.sendFrom("demo-review", thread.id, "progress", undefined, "progress-one");
+  assert.equal((await inbox!.receive({ agentId: "demo", threadId: "source" }, "progress")).messages[0].text, "progress");
+  fake.finish(thread.id, "first final"); await service.tick();
+  const first = inbox!.result(item.id)!;
+  await inbox!.append({ from: { agentId: "demo", threadId: "source" }, to: { agentId: "demo-review", threadId: thread.id }, text: "followup" });
+  await inbox!.tick(); await messages.tick(); await inbox!.tick(); await service.tick();
+  fake.finish(thread.id, "second final"); await service.tick();
+  assert.equal(inbox!.result(item.id, first.turnId)?.text, "first final");
+  assert.equal(inbox!.result(item.id)?.text, "second final");
+});
+
+test("new detached results remain receivable without automatically waking the source", async (context) => {
+  const { fake, service, messages, create, inbox } = await fixture(context, 2);
+  const { thread } = await create("queue", true);
+  await inbox!.tick(); await messages.tick(); await inbox!.tick(); await service.tick();
+  fake.finish(thread.id, "background result"); await service.tick();
+  fake.finish("source"); await inbox!.tick(); await messages.tick();
+  assert.equal(fake.sends.length, 1);
+  assert.equal((await inbox!.receive({ agentId: "demo", threadId: "source" }, "background")).messages[0].text, "background result");
+});
+
+test("fast native failures return once even before inbox reconciliation and without a receipt turn ID", async (context) => {
+  const { fake, service, messages, create, inbox } = await fixture(context, 2);
+  const original = fake.sendMessage.bind(fake);
+  fake.sendMessage = async (agentId: string, threadId: string, input: any) => {
+    const receipt = await original(agentId, threadId, input);
+    fake.emit("event", { type: "agent.event", data: { agentId, method: "turn/started", params: { threadId, turn: { id: receipt.turnId } } } });
+    fake.finish(threadId, "", "failed");
+    fake.emit("event", { type: "agent.event", data: { agentId, method: "turn/completed", params: { threadId, turn: { id: receipt.turnId, status: "failed", error: { message: "launch failed" } } } } });
+    return { disposition: "started", turnId: undefined } as any;
+  };
+  await create(); await inbox!.tick(); await messages.tick();
+  await service.tick(); await inbox!.tick(); await service.tick();
+  const result = await inbox!.receive({ agentId: "demo", threadId: "source" }, "fast-failure");
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].kind, "error");
+  assert.match(result.messages[0].text, /launch failed/);
+});
 
 test("each ask creates a distinct native session and persists its source association", async (t) => {
   const { create, service } = await fixture(t);
@@ -283,6 +346,21 @@ test("deleted ask becomes a tombstone and result/inspect reject it", async (t) =
     return true;
   });
   assert.equal((await service.markDeleted(item.alias!)).alreadyDeleted, true);
+});
+
+test("deletion checkpoints preserve cleanup intent across tombstones and restart", async (context) => {
+  const { create, service, options } = await fixture(context, 2);
+  const { item } = await create();
+  await service.markDeleting(item.id, { keepWorktree: true, keepWatchers: false });
+  await service.markNativeDeleted(item.id);
+  await service.markDeleted(item.id);
+  service.close();
+  const restored = new AskService(options); await restored.load(); context.after(() => restored.close());
+  assert.ok(restored.findRecord(item.id)?.nativeDeletedAt);
+  assert.deepEqual(restored.findRecord(item.id)?.deletionCleanup, { pending: true, keepWorktree: true, keepWatchers: false });
+  await restored.finishDeleteCleanup(item.id, ["preserved checkout"], false);
+  assert.equal(restored.findRecord(item.id)?.deletionCleanup?.pending, false);
+  assert.deepEqual(restored.findRecord(item.id)?.deletionCleanup?.warnings, ["preserved checkout"]);
 });
 
 test("completion forwards neither final answer nor commentary", async (t) => {

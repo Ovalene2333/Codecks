@@ -56,6 +56,7 @@ const threads = laneThreadsFromSummary(
   await readJson(path.join(dataDir, "thread-summaries.json"), { threads: [], archivedThreads: [] }),
 );
 const result = buildLaneScenarios(asks, deliveries, threads, {
+  inboxMessages: (await readJson(path.join(dataDir, "deck-inbox.json"), { messages: [] })).messages || [],
   limit: options.limit,
   maxSteps: options.maxSteps,
   project: options.project || undefined,

@@ -19,6 +19,13 @@ const item: MessageDelivery = {
 const noop = () => {};
 const action = async () => {};
 
+test("inbox batches are not editable user drafts", () => {
+  const html = renderToStaticMarkup(createElement(MessageQueue, {
+    items: [{ ...item, owner: "deck-inbox", inboxBatchId: "batch" }], onEdit: action, onCancel: action, onRetry: action,
+  }));
+  assert.doesNotMatch(html, /session-message-queue-item|>编辑<|>取消</);
+});
+
 test("running sessions with queue and feedback offer a send mode menu", () => {
   for (const busyBehavior of ["steer", "reject", "queue", "unknown"] as const) {
     const capabilities = { interrupt: true, messages: {

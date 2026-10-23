@@ -1,5 +1,61 @@
 # deck-api 使用说明
 
+## 当前默认：create / send / receive / del
+
+新创建的任务使用协议 2。Agent 日常只需四个操作：
+
+```bash
+DA="${CODEX_DECK_HOME:-$HOME/.codex-deck}/bin/deck-api"
+bash "$DA" create demo-agent -- '自包含的任务、背景与交付要求'
+bash "$DA" send --to @s-xxxxxxx -- '补充约束或问题'
+bash "$DA" receive --wait 30
+bash "$DA" del @s-xxxxxxx
+```
+
+| 操作 | 当前语义 |
+| --- | --- |
+| create | 创建独立原生会话，返回稳定 `ref` 与请求回执。来源可以继续当前回合，不必立即结束 |
+| send | 写入目标持久 inbox；子会话省略 --to 时发给绑定来源。成功仅表示已持久受理 |
+| receive | 批量领取当前会话新消息，默认不等待；可等待 0–60 秒。不会启动或打断回合 |
+| del | 删除有权管理的目标，默认忙时报 BUSY；force 只表示停止后删除，不绕过所有权或清除 dirty worktree |
+
+### 收信与自动继续
+
+- 目标运行、审批、压缩或后端未就绪时只存消息，不 steer/interrupt。模型可以在当前回合调用 receive 获取进度、问题或结果。
+- 目标空闲时，500ms 内的消息合为一批，以 start 开启新回合；每批最多 20 条、80,000 字符正文，剩余消息留待后续领取。显式 receive 等待者优先。
+- receive 和自动继续共用同一消息状态；已领取的消息不再触发新回合。尚未发送的自动队列批次可以安全交给 receive，sending/受理未知的批次不可抢走。
+- 新任务最终答复和执行失败自动成为来源 inbox 消息，不需要另发 send。send 只用于独立的进度、问题或沟通，不根据正文猜测是否“最终”。
+- 只有创建任务和绑定来源发起的工作回合自动交付；人在子会话直接聊天、第三方来信和纯结果/系统消息处理不会自动反向回传。
+- `--detached` 仍可用：结果进入 inbox，但不单独触发来源执行。升级前的 detached 不补发历史完成消息。
+- 自动继续可能消耗模型额度。每会话默认最多连续 10 个自动回合、每小时 30 个；达到预算后暂停自动调度，send/receive 仍可用。会话雷达面板可查看数量、暂停原因并由用户继续。
+- 父会话的人工输入会重置其管理子任务的连续预算，但不会恢复已 stop 的子任务；小时预算不会被清零。显式给子任务发新工作、在该子会话输入或点击继续，才会解除停止暂停。
+
+### 重试与丢失边界
+
+create/send/receive 都支持 `requestId`，CLI 自动生成并在 stderr 显示；同一次网络重试沿用，不能换参数。创建在原生后端受理与回执持久化之间重启时，返回 `REQUEST_UNCERTAIN`，不会自动重复创建，需用任务列表/原生历史核对。
+
+receive 是领取，不是只读查询。相同 requestId 在至少 7 天内重放原批次；`receive --replay` 列出最近 20 个批次，`receive --replay <requestId>` 只读恢复。工具被杀、stdout/stderr 都丢失时，可从批次列表找回；这不保证模型一定读取了输出，也不提供端到端 exactly-once。
+
+原生投递中断且受理未知时不会自动重发。雷达面板显示待核对批次；用户核对原生历史后，可确认已送达，或在明确未受理时重新排队。后者可能重复执行或产生额外费用，必须显式确认。
+
+### HTTP 与兼容
+
+新增 `POST /api/deck/receive`，请求带当前调用者身份、requestId、wait，可选 replay；返回 messages、batchId、hasMore、timedOut。新 create/send 回执带持久受理身份；`GET /api/deck/sessions/:reference/result?turn=<turnId>` 可辅助定位历史结果。
+
+直接调用 HTTP 的新客户端须在 create/send 请求中传 `protocol: 2`；新版 CLI 已自动携带。create 省略版本仍建立历史关系，避免旧脚本静默改变行为。send 尊重已有关系版本，涉及旧关系时保持旧队列链路；新关系不会因旧客户端省略版本退回旁路投递。无绑定的外部显式 send 使用 `deck:external` 身份，不冒充任何会话。
+
+新数据位于现有 DATA_DIR 的 `deck-inbox.json` 和 `deck-requests.json`，不复制原生 Agent 数据。损坏台账会暂停对应写入并保留原文件。旧关系仍走原队列/通知链路，不全量迁移、不重新唤醒历史任务；网页普通聊天 queue/feedback 不变。
+
+del 会持久保存原生删除检查点和资源清理状态。原生删除之后清理失败，可重复 del 继续处理；已完成的删除不重复调用原生后端。dirty worktree 与明确要求保留的资源不会被强制清除，回执返回保留原因或清理警告。
+
+更新后需由用户重启 Deck，让服务和安装脚本使用同一版本；旧安装脚本不认识 receive 时不能用 collect 代替。新协议不把显式 steer/interrupt 当默认通信能力；旧显式模式仅保留兼容路径。不要直接用旧版本服务写新台账，降级前备份并停止新协议写入。
+
+---
+
+## 历史协议与辅助管理参考
+
+**以下章节主要描述升级前关系和仍保留的辅助接口。** 其中“普通任务必须 send”“创建后结束回合”“detached 只可 result 查询”等约定不适用于上述新协议；新任务优先使用四操作。
+
 `deck-api` 是 Deck 的本地 Agent 通信入口，提供以下能力：
 
 - `create`：创建一个独立的 Agent 原生会话，并把它和发起会话绑定。

@@ -200,6 +200,7 @@ export interface TurnExtensionItem {
 export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
 
 export interface AskSession {
+  protocol?: 2;
   unread?: boolean;
   waitingReason?: "waiting-approval" | "backend-offline" | "unresolved" | "stalled";
   waitingSince?: number;

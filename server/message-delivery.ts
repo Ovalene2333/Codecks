@@ -19,6 +19,7 @@ interface Options {
   onChanged?: () => void;
   interruptTimeoutMs?: number;
   timer?: boolean;
+  canDeliver?: (agentId: string, threadId: string) => boolean;
 }
 
 /** 用户语义：queue 等空闲再 start；feedback 原生 steer 或打断后 start。 */
@@ -102,7 +103,7 @@ export class MessageDeliveryQueue {
   }
 
   async enqueue(agentId: string, threadId: string, mode: MessageDeliveryMode, input: AgentMessageInput,
-    options?: { id: string; forceInterrupt?: boolean }) {
+    options?: { id: string; forceInterrupt?: boolean; owner?: "deck-inbox"; inboxBatchId?: string }) {
     const existing = options && this.items.find((item) => item.id === options.id);
     if (existing) {
       await this.writes;
@@ -124,6 +125,7 @@ export class MessageDeliveryQueue {
     const item: StoredMessage = {
       id: options?.id ?? randomUUID(), agentId, threadId, mode, status: "queued",
       external: Boolean(options), forceInterrupt: options?.forceInterrupt,
+      owner: options?.owner, inboxBatchId: options?.inboxBatchId,
       preview: input.text.trim().slice(0, 300) || `[${input.images?.length ?? 0} 张图片]`,
       input: { text: input.text, images: input.images },
       originTurnId: mode === "feedback" ? state.thread.activeTurnId : undefined,
@@ -138,8 +140,10 @@ export class MessageDeliveryQueue {
     return this.list().find((entry) => entry.id === item.id)!;
   }
 
-  async cancel(id: string, agentId: string, threadId: string) {
+  async cancel(id: string, agentId: string, threadId: string, owner?: "deck-inbox") {
     const item = this.find(id, agentId, threadId);
+    if (item.owner && item.owner !== owner)
+      throw new AgentMessageError("invalid_request", "宿主来信批次不能作为用户草稿编辑或取消", 403);
     if (item.status === "sending" || item.status === "delivered")
       throw new AgentMessageError("busy", "消息已在发送或已受理，无法取消");
     const draft = { text: item.input.text, images: item.input.images ?? [] };
@@ -152,6 +156,7 @@ export class MessageDeliveryQueue {
 
   async retry(id: string, agentId: string, threadId: string) {
     const item = this.find(id, agentId, threadId);
+    if (item.owner) throw new AgentMessageError("invalid_request", "宿主批次由收件箱管理", 403);
     if (item.status !== "failed" || !item.canRetry)
       throw new AgentMessageError("invalid_request", "无法确认未发送，不能自动重试，请先检查会话", 400);
     item.status = "queued";
@@ -165,6 +170,7 @@ export class MessageDeliveryQueue {
   /** 提升原消息而非重新入队；落盘前暂停调度，发送中的消息不可改模式。 */
   async feedback(id: string, agentId: string, threadId: string) {
     const item = this.find(id, agentId, threadId);
+    if (item.owner) throw new AgentMessageError("invalid_request", "宿主来信不能提升为即时反馈", 403);
     if (item.mode === "feedback" && item.status !== "failed") {
       // 并发的重复点击也必须等首次提升落盘，不能提前回执。
       await this.writes;
@@ -206,7 +212,7 @@ export class MessageDeliveryQueue {
       const key = JSON.stringify([item.agentId, item.threadId]);
       if (this.activeTargets.has(key)) continue;
       const previous = targets.get(key);
-      if (!previous || (item.mode === "feedback" && previous.mode === "queue")) targets.set(key, item);
+      if (!previous || (item.mode === "feedback" && previous.mode === "queue") || (previous.owner && !item.owner)) targets.set(key, item);
     }
     await Promise.all([...targets.values()].map((item) => this.deliver(item)));
   }
@@ -225,8 +231,10 @@ export class MessageDeliveryQueue {
     const controller = new AbortController();
     this.inflight.set(item.id, controller);
     let release = () => {};
+    let removeStartedListener = () => {};
     let attemptedSend = false;
     try {
+      if (this.options.canDeliver && !this.options.canDeliver(item.agentId, item.threadId)) return;
       // 历史还没载入的启动窗口不能把持久队列误判成「会话不存在」。
       if (!this.options.agents.messageBackendOnline(item.agentId)) return;
       const state = this.options.agents.messageState(item.agentId, item.threadId);
@@ -256,10 +264,23 @@ export class MessageDeliveryQueue {
       await this.changed(item);
       if (!this.items.includes(item) || controller.signal.aborted) return;
       attemptedSend = true;
+      if (this.options.canDeliver && !this.options.canDeliver(item.agentId, item.threadId)) {
+        item.status = "queued";
+        await this.changed(item);
+        return;
+      }
+      const startedTurns = new Set<string>();
+      const onStarted = (event: any) => {
+        const data = event?.data;
+        if (data?.method === "turn/started" && (data.agentId || "codex") === item.agentId && data.params?.threadId === item.threadId && data.params?.turn?.id)
+          startedTurns.add(String(data.params.turn.id));
+      };
+      this.options.agents.on("event", onStarted);
+      removeStartedListener = () => this.options.agents.off("event", onStarted);
       const receipt = await this.options.agents.sendMessage(item.agentId, item.threadId, input);
       item.status = "delivered";
       item.disposition = receipt.disposition;
-      item.turnId = receipt.turnId;
+      item.turnId = receipt.turnId || (startedTurns.size === 1 ? [...startedTurns][0] : undefined);
       delete item.error;
       delete item.canRetry;
       await this.changed(item);
@@ -277,6 +298,7 @@ export class MessageDeliveryQueue {
         await this.changed(item);
       }
     } finally {
+      removeStartedListener();
       release();
       this.inflight.delete(item.id);
       this.activeTargets.delete(key);
