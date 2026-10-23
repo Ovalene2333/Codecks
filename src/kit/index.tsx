@@ -706,6 +706,7 @@ export function MenuSep() {
 export function MenuItem({
   icon,
   meta,
+  shortcut,
   danger,
   disabled,
   onSelect,
@@ -713,6 +714,8 @@ export function MenuItem({
 }: {
   icon?: ReactNode;
   meta?: ReactNode;
+  /** 键盘快捷键提示（PC）；触屏设备由样式隐藏。 */
+  shortcut?: ReactNode;
   danger?: boolean;
   disabled?: boolean;
   onSelect: () => void;
@@ -727,6 +730,11 @@ export function MenuItem({
       {icon}
       <span className="ui-menu__item-label">{children}</span>
       {meta ? <small className="ui-menu__item-meta">{meta}</small> : null}
+      {shortcut ? (
+        <span className="ui-menu__item-kbd">
+          <Kbd>{shortcut}</Kbd>
+        </span>
+      ) : null}
     </BaseMenu.Item>
   );
 }

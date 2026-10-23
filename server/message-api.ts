@@ -59,8 +59,8 @@ export function registerMessageRoutes(app: Express, agents: AgentRegistry, deliv
   app.delete("/api/agents/:agentId/threads/:threadId/messages/:messageId", route(async (req) => {
     const { agentId, threadId } = paramsSchema.parse(req.params);
     if (!deliveries) throw new AgentMessageError("unsupported", "当前服务端未启用发送模式", 422);
-    await deliveries.cancel(String(req.params.messageId), agentId, threadId);
-    return { ok: true };
+    const draft = await deliveries.cancel(String(req.params.messageId), agentId, threadId);
+    return { ok: true, draft };
   }));
   app.post("/api/agents/:agentId/threads/:threadId/messages/:messageId/retry", route(async (req) => {
     const { agentId, threadId } = paramsSchema.parse(req.params);

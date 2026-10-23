@@ -191,7 +191,9 @@ test("message routes promote queue bubbles in place and cancel them", async (t) 
   assert.equal(deliveries.list().length, 1);
   assert.equal(JSON.parse(await readFile(file, "utf8")).items[0].mode, "feedback");
   assert.equal((await request("POST", "/:messageId/feedback", {}, { ...target, threadId: "other-thread" })).status, 404);
-  assert.equal((await request("DELETE", "/:messageId", {}, target)).status, 200);
+  const withdrawn = await request("DELETE", "/:messageId", {}, target);
+  assert.equal(withdrawn.status, 200);
+  assert.equal(withdrawn.data.draft?.text, "next");
   assert.deepEqual(deliveries.list(), []);
   assert.equal((await request("POST", "/:messageId/feedback", {}, target)).status, 404);
 });

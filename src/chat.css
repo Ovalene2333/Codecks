@@ -1225,12 +1225,23 @@
 .session-message-queue-controls {
   display: inline-flex;
   align-items: center;
+  flex: none;
   gap: var(--space-1);
-  margin-inline-start: var(--space-2);
-  vertical-align: middle;
   white-space: normal;
   color: var(--text-faint);
   font-size: var(--fs-meta);
+}
+/* 编辑 / 取消放在气泡上方状态行右端，不再占用气泡下方空间。 */
+.session-message-queue-item .message-block__head {
+  padding-right: 2px;
+}
+.session-message-queue-item .rail-row__head-right {
+  flex: 1;
+  justify-content: flex-end;
+}
+.session-message-queue-controls button {
+  min-height: 22px;
+  padding-inline: 7px;
 }
 .session-message-queue-item .message.user {
   overflow-wrap: anywhere;
@@ -2291,14 +2302,9 @@ button.composer-context-seg:focus-visible {
 .turn-block:last-child {
   margin-bottom: 6px;
 }
-/* 待发消息复用首行轨道，但保留队列自己的操作按钮布局。 */
+/* 待发消息复用首行轨道；操作按钮已并入状态行右端。 */
 .message-block.user-message-wrap {
   align-items: stretch;
-}
-.session-message-queue-item .session-message-queue-controls {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 2px;
 }
 .message-block--user:hover .message-actions,
 .message-block--user:focus-within .message-actions {

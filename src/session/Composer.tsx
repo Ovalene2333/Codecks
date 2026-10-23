@@ -138,11 +138,19 @@ export function Composer({
   const mode = modes?.includes("queue") ? "queue" : modes?.[0];
   const controls = messageControls(thread, capabilities, mode);
   const running = controls.busy;
+  // 运行中且后端同时支持排队和即时反馈时，发送键先弹方式菜单。
+  // 「即时」在 steer 后端是追加当前回合；在 interrupt 后端是先停止再发送。
   const canChooseDelivery = Boolean(
     running &&
-    capabilities?.messages?.busyBehavior === "steer" &&
-    modes?.includes("feedback") && modes.includes("queue"),
+    modes?.includes("feedback") &&
+    modes.includes("queue"),
   );
+  const immediateMode: ComposerSendMode =
+    capabilities?.messages?.busyBehavior === "steer" ? "append" : "feedback";
+  const immediateHint =
+    immediateMode === "append"
+      ? "追加到当前回合，不打断"
+      : "先停止当前任务，再发送";
   const [sendMenuOpen, setSendMenuOpen] = useState(false);
   const composerAgentId = thread.agentId || "codex";
   // 桌面显示完整配置；移动端只显示模型 ID 和推理强度。
@@ -333,6 +341,23 @@ export function Composer({
     if (!canChooseDelivery || compacting || sendBlocked || !canSend || sending)
       setSendMenuOpen(false);
   }, [canChooseDelivery, compacting, sendBlocked, canSend, sending]);
+  // 发送方式菜单的 PC 快捷键：1 = 即时，2 = 队列。
+  useEffect(() => {
+    if (!sendMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing)
+        return;
+      const choice =
+        event.key === "1" ? immediateMode : event.key === "2" ? "queue" : null;
+      if (!choice) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSendMenuOpen(false);
+      if (!compacting && !sendBlocked && canSend && !sending) onSend(choice);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [sendMenuOpen, compacting, sendBlocked, canSend, sending, onSend, immediateMode]);
   const suggestions = matchingSlashCommands(
     text,
     composerAgentId,
@@ -728,15 +753,17 @@ export function Composer({
                 }
               >
                 <MenuItem
-                  meta="追加到当前回合，不打断"
+                  meta={immediateHint}
+                  shortcut="1"
                   disabled={compacting || sendBlocked || !canSend || sending}
                   onSelect={() => {
                     setSendMenuOpen(false);
-                    onSend("append");
+                    onSend(immediateMode);
                   }}
                 >即时</MenuItem>
                 <MenuItem
                   meta="当前回合结束后发送"
+                  shortcut="2"
                   disabled={compacting || sendBlocked || !canSend || sending}
                   onSelect={() => {
                     setSendMenuOpen(false);

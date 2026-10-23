@@ -19,7 +19,7 @@ const item: MessageDelivery = {
 const noop = () => {};
 const action = async () => {};
 
-test("running steerable sessions offer a send menu; other transports keep direct queue sending", () => {
+test("running sessions with queue and feedback offer a send mode menu", () => {
   for (const busyBehavior of ["steer", "reject", "queue", "unknown"] as const) {
     const capabilities = { interrupt: true, messages: {
       busyBehavior, interruptScope: "session", deliveryModes: ["queue", "feedback"],
@@ -31,13 +31,9 @@ test("running steerable sessions offer a send menu; other transports keep direct
     assert.match(html, /data-slot="prompt-input"/);
     assert.match(html, /data-slot="prompt-input-footer"/);
     assert.doesNotMatch(html, /composer-sendmode/);
-    if (busyBehavior === "steer") {
-      assert.match(html, /aria-label="选择发送方式"/);
-      assert.match(html, /aria-haspopup="menu"/);
-    } else {
-      assert.match(html, /class="prompt-input__button send" title="排队"/);
-      assert.doesNotMatch(html, /aria-label="选择发送方式"/);
-    }
+    assert.match(html, /aria-label="选择发送方式"/);
+    assert.match(html, /aria-haspopup="menu"/);
+    assert.doesNotMatch(html, /class="prompt-input__button send" title="排队"/);
   }
 });
 
@@ -52,42 +48,45 @@ test("composer keeps secondary session settings behind one icon button", () => {
   assert.doesNotMatch(html, /发送说明|composer-model-trigger|composer-session-controls/);
 });
 
-test("queued messages appear as user bubbles in the timeline with full text and promotion actions", () => {
+test("queued messages appear as user bubbles with edit and cancel on the status row", () => {
   const html = renderToStaticMarkup(createElement(Timeline, {
     thread, turns: [], streamed: [], streamedItems: [], streamedEntries: [], pendingUsers: [],
-    messageDeliveries: [item], onDeliveryCancel: action, onDeliveryFeedback: action,
-    feedbackInterrupts: true, targetFallbackReady: true,
+    messageDeliveries: [item], onDeliveryCancel: action, onDeliveryEdit: action,
+    onDeliveryRetry: action, targetFallbackReady: true,
   }));
   assert.ok(html.includes(item.text!));
   assert.match(html, /class="message user"/);
   assert.match(html, /aria-label="已排队，等待当前任务结束"/);
-  assert.match(html, /aria-label="即时反馈"/);
-  assert.match(html, /aria-label="取消"/);
+  assert.match(html, />编辑</);
+  assert.match(html, /编辑：从队列取回/);
+  assert.match(html, />取消</);
+  assert.match(html, /取消排队，不会放回输入框/);
+  assert.doesNotMatch(html, /即时反馈/);
   assert.match(html, /2 张图片/);
-  assert.match(html, /即时反馈：先停止当前任务/);
   assert.doesNotMatch(html, /session-empty/);
 });
 
-test("only queued append bubbles expose promotion; in-flight and failed records show their actual state", () => {
-  const render = (record: MessageDelivery, supportsFeedback = true) => renderToStaticMarkup(createElement(MessageQueue, {
-    items: [record], onFeedback: supportsFeedback ? action : undefined, onCancel: action, onRetry: action,
+test("edit only applies to queued records; sending and delivered hide actions", () => {
+  const render = (record: MessageDelivery) => renderToStaticMarkup(createElement(MessageQueue, {
+    items: [record], onEdit: action, onCancel: action, onRetry: action,
   }));
-  assert.doesNotMatch(render(item, false), /aria-label="即时反馈"/);
-  assert.doesNotMatch(render({ ...item, mode: "feedback" }), /aria-label="即时反馈"/);
+  assert.match(render(item), />编辑</);
+  assert.match(render({ ...item, mode: "feedback" }), />编辑</);
   const sending = render({ ...item, status: "sending" });
   assert.match(sending, /正在发送/);
-  assert.doesNotMatch(sending, /aria-label="即时反馈"|aria-label="取消"/);
+  assert.doesNotMatch(sending, />编辑<|>取消</);
   const delivered = render({ ...item, status: "delivered" });
   assert.match(delivered, /已发送|正在同步聊天记录/);
-  assert.doesNotMatch(delivered, /aria-label="即时反馈"|aria-label="取消"|aria-label="重试"/);
+  assert.doesNotMatch(delivered, />编辑<|>取消<|重试/);
   const stopping = render({ ...item, mode: "feedback", status: "interrupting" });
   assert.match(stopping, /正在停止当前任务/);
-  assert.doesNotMatch(stopping, /aria-label="即时反馈"/);
+  assert.doesNotMatch(stopping, />编辑</);
   const unknown = render({ ...item, status: "failed", error: "无法确认是否已受理", canRetry: false });
   assert.match(unknown, /无法确认是否已受理/);
-  assert.doesNotMatch(unknown, /aria-label="重试"|aria-label="即时反馈"/);
+  assert.match(unknown, />移除</);
+  assert.doesNotMatch(unknown, /重试|>编辑</);
   const unsent = render({ ...item, status: "failed", canRetry: true });
-  assert.match(unsent, /aria-label="重试"/);
+  assert.match(unsent, /重试/);
   // 排队中的 Deck 注入消息不叫“你”，说话人直接标推送类型。
   const pushed = render({ ...item, text: "[wake:abc123] [job] 任务结束" });
   assert.match(pushed, /message-block__who">唤醒推送</);

@@ -52,7 +52,7 @@ import {
   parseComposerCommand,
   type ComposerCommand,
 } from "./commands";
-import type { ComposerImage } from "./images";
+import { MAX_COMPOSER_IMAGES, type ComposerImage } from "./images";
 import { readComposerDraft, writeComposerDraft } from "./drafts";
 import { collectStreamed } from "./streaming";
 import { getDeckSettings, useDeckSettings } from "../deck-settings";
@@ -1266,12 +1266,31 @@ export function ChatWorkspace({
             .then(onSnapshot).catch((err: Error) => setError(err.message))}
           onDeliveryRetry={(id) => post(`${threadPath(thread)}/messages/${encodeURIComponent(id)}/retry`)
             .then(onSnapshot).catch((err: Error) => setError(err.message))}
-          onDeliveryFeedback={capabilities.messages?.deliveryModes?.includes("feedback")
-            ? (id) => post(`${threadPath(thread)}/messages/${encodeURIComponent(id)}/feedback`)
-              .then(() => { onToast("已改为即时反馈"); onSnapshot(); })
-              .catch((err: Error) => { setError(err.message); onSnapshot(); })
-            : undefined}
-          feedbackInterrupts={capabilities.messages?.busyBehavior !== "steer"}
+          onDeliveryEdit={(id) => remove<{
+            draft?: { text?: string; images?: Array<{ url: string; name?: string }> };
+          }>(`${threadPath(thread)}/messages/${encodeURIComponent(id)}`)
+            .then((result) => {
+              const restored = result?.draft;
+              if (restored) {
+                const images: ComposerImage[] = (restored.images || [])
+                  .filter((image) => Boolean(image?.url))
+                  .slice(0, MAX_COMPOSER_IMAGES)
+                  .map((image, index) => ({
+                    id: `withdrawn-${Date.now()}-${index}`,
+                    name: image.name || "image",
+                    url: image.url,
+                  }));
+                const text = restored.text || "";
+                updateDraft({
+                  text: draft.text ? `${text}\n\n${draft.text}` : text,
+                  images: [...images, ...draft.images].slice(0, MAX_COMPOSER_IMAGES),
+                });
+                setComposerFocusRequest((current) => current + 1);
+                onToast("已取回输入框，编辑后可重新发送");
+              }
+              onSnapshot();
+            })
+            .catch((err: Error) => { setError(err.message); onSnapshot(); })}
           origin={origin}
           childBranches={childBranches}
           onOpenBranch={onOpenBranch}

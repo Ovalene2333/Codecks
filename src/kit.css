@@ -1528,6 +1528,22 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 快捷键提示：PC 显示，触屏设备隐藏（手机没有物理数字键）。 */
+.ui-menu__item-kbd {
+  flex: none;
+  margin-left: auto;
+}
+
+.ui-menu__item-meta + .ui-menu__item-kbd {
+  margin-left: 0;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .ui-menu__item-kbd {
+    display: none;
+  }
+}
+
 /* Shared single-value choices. Catalog search uses the matching SearchablePicker. */
 .ui-select-trigger {
   position: relative;

@@ -100,6 +100,11 @@ export function ShortcutsPage() {
             keys: [["Tab"], ["Enter"]],
           },
           {
+            title: "选择发送方式",
+            desc: "运行中按发送键弹出「即时 / 队列」菜单后用数字键选择",
+            keys: [["1"], ["2"]],
+          },
+          {
             title: "附加图片",
             desc: "或将图片拖入输入框",
             keys: [[mod, "V"]],

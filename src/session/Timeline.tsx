@@ -39,8 +39,7 @@ export function Timeline({
   deliveryHistoryBefore,
   onDeliveryCancel,
   onDeliveryRetry,
-  onDeliveryFeedback,
-  feedbackInterrupts,
+  onDeliveryEdit,
   origin,
   childBranches = EMPTY_BRANCHES,
   onOpenBranch,
@@ -82,8 +81,7 @@ export function Timeline({
   deliveryHistoryBefore?: ReadonlyMap<string, LoadedUserMessage[]>;
   onDeliveryCancel?: (id: string) => Promise<void>;
   onDeliveryRetry?: (id: string) => Promise<void>;
-  onDeliveryFeedback?: (id: string) => Promise<void>;
-  feedbackInterrupts?: boolean;
+  onDeliveryEdit?: (id: string) => Promise<void>;
   origin?: {
     name: string;
     key?: string;
@@ -473,8 +471,7 @@ export function Timeline({
           items={messageDeliveries}
           onCancel={onDeliveryCancel}
           onRetry={onDeliveryRetry}
-          onFeedback={onDeliveryFeedback}
-          feedbackInterrupts={feedbackInterrupts}
+          onEdit={onDeliveryEdit}
         />
       </div>
     </div>

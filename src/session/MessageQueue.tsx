@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { RotateCcw, UserRound, X, Zap } from "lucide-react";
+import { RotateCcw, UserRound } from "lucide-react";
 import type { MessageDelivery } from "../types";
 import { Button } from "../kit";
 import { DECK_PUSH_LABEL, deckPushKind } from "./user-message";
@@ -9,11 +9,10 @@ type Action = (id: string) => Promise<void>;
 interface Actions {
   onCancel?: Action;
   onRetry?: Action;
-  onFeedback?: Action;
-  feedbackInterrupts?: boolean;
+  onEdit?: Action;
 }
 
-function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupts }: Actions & {
+function DeliveryBubble({ item, onCancel, onRetry, onEdit }: Actions & {
   item: MessageDelivery;
 }) {
   const actionPending = useRef(false);
@@ -25,7 +24,6 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     try { await action(item.id); }
     finally { actionPending.current = false; setActing(false); }
   };
-  const canFeedback = item.status === "queued" && item.mode === "queue" && onFeedback;
   const status = item.status === "delivered" ? "已受理，正在同步聊天记录"
     : item.status === "interrupting" ? "正在停止当前任务"
     : item.status === "sending" ? "正在发送"
@@ -38,12 +36,26 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
     : item.mode === "queue" ? "已排队" : "反馈";
   // 排队中的 Deck 注入消息（send / 唤醒）不是人手打的，说话人直接标推送类型。
   const push = deckPushKind(item.text ?? item.preview ?? "");
+  const canEdit = item.status === "queued" && onEdit;
+  const canCancel = item.status !== "sending" && item.status !== "delivered" && onCancel;
   return (
     <div className={`message-block message-block--user user-message-wrap session-message-queue-item ${item.status}${push ? " is-deck-push" : ""}`} data-message-id={item.id}>
       <div className="rail-row message-block__head">
         <UserRound aria-hidden="true" />
         <span className="message-block__who">{push ? DECK_PUSH_LABEL[push] : "你"}</span>
-        <span className="rail-row__meta" role="status" aria-label={status} title={status}>{label}</span>
+        <span className="rail-row__head-right">
+          <span className="rail-row__meta" role="status" aria-label={status} title={status}>{label}</span>
+          <span className="session-message-queue-controls">
+            {canEdit && <Button variant="ghost" size="sm" busy={acting}
+              title="编辑：从队列取回，正文和图片放回输入框"
+              onClick={() => void act(onEdit)}>编辑</Button>}
+            {item.canRetry && onRetry && <Button variant="ghost" size="sm" busy={acting} title="重试"
+              onClick={() => void act(onRetry)}><RotateCcw aria-hidden="true" />重试</Button>}
+            {canCancel && <Button variant="ghost" size="sm" busy={acting}
+              title={item.status === "failed" ? "移除这条失败记录" : "取消排队，不会放回输入框"}
+              onClick={() => void act(onCancel)}>{item.status === "failed" ? "移除" : "取消"}</Button>}
+          </span>
+        </span>
       </div>
       <div className="message-block__body">
         <div className="message user">
@@ -53,17 +65,6 @@ function DeliveryBubble({ item, onCancel, onRetry, onFeedback, feedbackInterrupt
           </span>}
           {item.error && <span className="session-message-queue-error" role="alert">{item.error}</span>}
         </div>
-        <span className="session-message-queue-controls">
-          {canFeedback && <Button variant="ghost" iconOnly size="sm" busy={acting} aria-label="即时反馈"
-            title={feedbackInterrupts ? "即时反馈：先停止当前任务，再发送这条消息" : "即时反馈：直接反馈给当前任务，无需停止"}
-            onClick={() => void act(onFeedback)}><Zap aria-hidden="true" /></Button>}
-          {item.canRetry && onRetry && <Button variant="ghost" iconOnly size="sm" busy={acting} aria-label="重试" title="重试"
-            onClick={() => void act(onRetry)}><RotateCcw aria-hidden="true" /></Button>}
-          {item.status !== "sending" && item.status !== "delivered" && onCancel && <Button variant="ghost" iconOnly size="sm" busy={acting}
-            aria-label={item.status === "failed" ? "移除记录" : "取消"}
-            title={item.status === "failed" ? "移除记录" : "取消排队"}
-            onClick={() => void act(onCancel)}><X aria-hidden="true" /></Button>}
-        </span>
       </div>
     </div>
   );
