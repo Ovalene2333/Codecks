@@ -115,7 +115,7 @@ const compact = (text: string) => text.replace(/\s+/g, " ").trim();
 export function stripDeckPrefixes(text: string) {
   return compact(
     text
-      .replace(/\[(?:ask|send|wake|message|deck-api):[^\]]*\]\s*/gi, " ")
+      .replace(/\[(?:ask|send|wake|message|deck-api|deck:notice)(?::[^\]]*)?\]\s*/gi, " ")
       .replace(/\[查看完整会话\]\([^)]*\)\s*/gi, " ")
       .replace(/\b(?:codex|claude|opencode|devin):[0-9a-zA-Z-]+\s*/g, " "),
   );
@@ -538,7 +538,7 @@ export async function readLaneUserMessages(
               .map((part: any) => String(part.text || ""))
               .join("\n")
               .trim();
-            if (!raw || /^\[(ask|send|wake|deck-api):/i.test(raw) || raw.includes("[查看完整会话]"))
+            if (!raw || /^\[(ask|send|wake|deck-api|deck:notice)(?::|\])/i.test(raw) || raw.includes("[查看完整会话]"))
               continue;
             const text = visibleUserText(raw).trim();
             if (text) messages.push({ agentId, threadId, atMs, text });

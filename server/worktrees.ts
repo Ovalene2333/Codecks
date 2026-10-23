@@ -174,6 +174,7 @@ export class WorktreeStore {
       throw new WorktreeError(`worktree ${name} 已被其他会话占用`);
     await mkdir(this.baseDir, { recursive: true });
     const base = options.base?.trim();
+    let commit = info.commit;
     const args = ["worktree", "add", "--detach", target];
     if (base && base !== "head") {
       // 只接受已存在的提交/分支，避免把任意 rev 当分支名注入参数。
@@ -181,6 +182,7 @@ export class WorktreeStore {
         .then((value) => value.trim())
         .catch(() => "");
       if (!exists) throw new WorktreeError(`找不到分支或提交 ${base}`);
+      commit = exists;
       args.push(exists);
     } else {
       args.push(info.commit);
@@ -190,7 +192,7 @@ export class WorktreeStore {
       threadId,
       path: target,
       root: info.root,
-      commit: info.commit,
+      commit,
       createdAt: Date.now(),
     };
     this.data.items.push(record);

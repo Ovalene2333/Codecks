@@ -12,7 +12,7 @@ import type { AgentRegistry } from "./agents/registry.js";
 import type { ThreadSummary } from "./types.js";
 
 const askReplies = (messages: MessageDeliveryQueue) =>
-  messages.list().filter((entry) => entry.text?.startsWith("[ask:"));
+  messages.list().filter((entry) => entry.text?.startsWith("[ask:") || entry.text?.startsWith("[deck:notice:"));
 
 class Agents extends EventEmitter {
   threads = new Map<string, ThreadSummary>();
@@ -193,8 +193,7 @@ test("replies to an idle master source deliver without waiting for user input", 
   assert.equal(fake.sends.length, 2);
   assert.equal(fake.sends[1].mode, "start");
   assert.match(fake.sends[1].text, /Idle reply/);
-  assert.equal(messages.list().filter((entry) => entry.buffered === true).length, 0);
-  assert.equal(messages.inbox("demo", "source").length, 0);
+  assert.equal(messages.list().filter((entry) => (entry as any).buffered === true).length, 0);
 });
 
 test("replies to a busy master source wait for idle instead of injecting", async (t) => {
@@ -206,7 +205,7 @@ test("replies to a busy master source wait for idle instead of injecting", async
   // 来源正在跑：不打断、不注入，排队等空闲。
   assert.deepEqual(fake.interrupts, []);
   assert.equal(fake.sends.length, 1);
-  assert.equal(messages.list().filter((entry) => entry.buffered === true).length, 0);
+  assert.equal(messages.list().filter((entry) => (entry as any).buffered === true).length, 0);
   fake.finish("source");
   await messages.tick();
   assert.equal(fake.sends.length, 2);
@@ -355,9 +354,10 @@ test("bound send supports multiple messages and completion never dumps final tex
   assert.equal(service.list()[1].status, "running");
   fake.finish(thread.id, "Very long private analysis that must stay in target history");
   await service.tick();
-  assert.equal(service.list()[1].status, "answered");
+  assert.equal(service.list()[1].status, "completed");
   fake.finish(first.thread.id);
   await messages.tick(); await messages.tick();
+  assert.equal(service.list()[1].status, "answered");
   assert.match(fake.sends[2].text, /Need clarification/);
   assert.doesNotMatch(fake.sends[2].text, /private analysis/);
   // queue 投递在目标空闲时才发送：第一条已让目标进入新回合，需再次结束才轮到第二条。
@@ -385,7 +385,7 @@ test("late send is allowed after a no-message completion and failures still noti
   const { thread } = await create(); await messages.tick(); await service.tick(); fake.finish(thread.id);
   await service.tick(); assert.equal(service.list()[0].status, "completed");
   await service.sendFrom("demo-review", thread.id, "Late result");
-  assert.equal(service.list()[0].status, "answered");
+  assert.equal(service.list()[0].status, "completed");
   const other = await create(); await messages.tick(); await service.tick();
   await service.sendFrom("demo-review", other.thread.id, "Progress before failure");
   fake.finish(other.thread.id, "Secret partial transcript", "failed");
@@ -416,7 +416,7 @@ test("completion events work without history and follow-up turns are tracked", a
   await service.sendFrom("demo-review", thread.id, "Follow-up result");
   emit("turn/completed", "follow-up", "completed");
   await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
-  assert.equal(service.list()[0].status, "answered");
+  assert.equal(service.list()[0].status, "completed");
   assert.equal(askReplies(messages).length, 1);
   emit("turn/started", "third-turn", "inProgress");
   emit("turn/completed", "third-turn", "failed");
@@ -641,7 +641,10 @@ test("detached results explicitly report truncation and do not treat commentary 
   await messages.tick(); await service.tick(); fake.finish(second.thread.id);
   fake.turns.get(second.thread.id)![0].items = [{ type: "agentMessage", phase: "commentary", text: "Still investigating" }];
   await service.tick();
-  assert.equal((await service.readResult(second.item.id)).result?.text, "");
+  const empty = await service.readResult(second.item.id);
+  assert.equal(empty.result, null);
+  assert.equal(empty.pending, false);
+  assert.equal(empty.item.resultState, "empty");
   assert.equal(askReplies(messages).length, 0);
 });
 
@@ -772,7 +775,7 @@ test("detached completion stays query-only for a master source", async (t) => {
   assert.equal(dones().length, 0, "主会话运行中不接收完成推送");
   const read = await service.readResult(item.id);
   assert.equal(read.result?.text, "Done work");
-  await (service as any).notifyDone((service as any).items[0]);
+  await service.tick();
   assert.equal(dones().length, 0, "重复完成事件也不补发通知");
 });
 
@@ -801,15 +804,165 @@ test("sanitizeInline folds lines and redacts credentials", () => {
   assert.equal(sanitizeInline(undefined), "");
 });
 
-test("master detection follows ask targets and decorate exposes buffered count", async (t) => {
-  const { create, service, messages } = await fixture(t);
-  assert.equal(service.isMaster("demo", "source"), true);
-  assert.equal(service.isMaster("demo-review", "ghost"), true);
+test("master detection follows ask targets", async (t) => {
+  const { create, service } = await fixture(t);
   const { thread } = await create();
-  assert.equal(service.isMaster("demo-review", thread.id), false);
   assert.equal(service.isMaster("demo", "source"), true);
-  assert.equal(service.decorate({ id: "source", agentId: "demo" } as any).bufferedCount, undefined);
-  await messages.enqueue("demo", "source", "queue", { text: "Buffered one" }, { id: "buf-1", buffered: true });
-  await messages.enqueue("demo", "source", "queue", { text: "Direct one" }, { id: "dir-1" });
-  assert.equal(service.decorate({ id: "source", agentId: "demo" } as any).bufferedCount, 1);
+  assert.equal(service.isMaster("demo-review", thread.id), false);
+});
+
+test("ordinary completion preserves the final answer across reload without sending a notification", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { thread, item } = await create();
+  await messages.tick(); await service.tick();
+  fake.finish(thread.id, "Consultation result even when send never succeeded");
+  await service.tick();
+  assert.equal(service.list()[0].status, "completed");
+  assert.equal(service.list()[0].resultState, "ready");
+  assert.equal(service.list()[0].currentTurnSentCount, 0);
+  assert.equal(messages.list().length, 1, "only the original question is enqueued");
+  service.close();
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  fake.readThread = async () => { throw new Error("demo backend offline"); };
+  const read = await restored.readResult(item.id);
+  assert.equal(read.result?.text, "Consultation result even when send never succeeded");
+  assert.equal(read.pending, false);
+  assert.equal(messages.list().length, 1);
+});
+
+test("a sent progress update does not imply final-result delivery or count toward a later turn", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread } = await create(); await messages.tick(); await service.tick();
+  const receipt = await service.sendFrom("demo-review", thread.id, "Progress only");
+  fake.finish(thread.id, "Final answer stays available separately"); await service.tick();
+  let view = service.list()[0];
+  assert.equal(view.status, "completed");
+  assert.equal(view.currentTurnSentCount, 1);
+  assert.equal(view.currentTurnDeliveredCount, 0);
+  assert.equal(view.outgoingMessages[0].status, "queued");
+  fake.finish("source"); await messages.tick();
+  assert.equal(messages.receipt(receipt.deliveryId!)?.status, "delivered");
+  assert.equal(service.list()[0].status, "answered");
+  fake.emit("event", { type: "agent.event", data: { agentId: "demo-review", method: "turn/started",
+    params: { threadId: thread.id, turn: { id: "next-demo-turn" } } } });
+  fake.turns.set(thread.id, [{ id: "next-demo-turn", status: "completed", items: [{ type: "agentMessage", text: "New final answer" }] }]);
+  fake.emit("event", { type: "agent.event", data: { agentId: "demo-review", method: "turn/completed",
+    params: { threadId: thread.id, turn: { id: "next-demo-turn", status: "completed" } } } });
+  await new Promise<void>((resolve) => setTimeout(resolve, 20)); await service.tick();
+  view = service.list()[0];
+  assert.equal(view.status, "completed");
+  assert.equal(view.sentCount, 1);
+  assert.equal(view.currentTurnSentCount, 0);
+  assert.equal(view.currentTurnDeliveredCount, 0);
+  assert.equal((await service.readResult(view.id)).result?.text, "New final answer");
+});
+
+test("accepted return messages expose actual delivery failures without losing the result", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { thread, item } = await create(); await messages.tick(); await service.tick();
+  const sent = await service.sendFrom("demo-review", thread.id, "Concise return");
+  fake.finish(thread.id, "Full final answer"); await service.tick();
+  fake.finish("source");
+  fake.sendMessage = async () => { throw new Error("demo transport lost"); };
+  await messages.tick();
+  const view = service.list()[0];
+  assert.equal(view.status, "completed");
+  assert.equal(view.currentTurnDeliveredCount, 0);
+  assert.equal(view.outgoingMessages[0].status, "failed");
+  assert.match(view.outgoingMessages[0].error!, /demo transport lost/);
+  assert.equal(messages.receipt(sent.deliveryId!)?.status, "failed");
+  assert.equal((await service.readResult(item.id)).result?.text, "Full final answer");
+  assert.equal(JSON.stringify(messages.receipt(sent.deliveryId!)).includes("Concise return"), false);
+});
+
+test("legacy ordinary results are captured on demand and old empty snapshots are not ready", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { thread, item } = await create(); await messages.tick(); await service.tick(); fake.finish(thread.id, "Recovered answer");
+  await service.tick(); service.close();
+  const stored = JSON.parse(await readFile(options.file, "utf8"));
+  stored.items[0].result.text = "";
+  await writeFile(options.file, JSON.stringify(stored));
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  assert.equal(restored.list()[0].resultAvailable, false);
+  assert.equal(restored.list()[0].resultState, "empty");
+  assert.equal((await restored.readResult(item.id)).result?.text, "Recovered answer");
+  assert.equal(messages.list().length, 1);
+});
+
+test("result queries preserve unread state until explicit collection", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  fake.finish(thread.id, "Saved result"); await service.tick();
+  assert.equal(service.list()[0].unread, true);
+  await service.readResult(item.id); await service.readResult(item.id);
+  assert.equal(service.list()[0].unread, true);
+  const collected = await service.collect([item.id]);
+  assert.equal(collected.items[0].result?.text, "Saved result");
+  assert.equal(service.list()[0].unread, false);
+});
+
+test("offline, retry, approval and unmatched history are observational waiting states", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  fake.online = false; await service.tick();
+  assert.equal(service.list()[0].waitingReason, "backend-offline");
+  assert.equal(service.list()[0].status, "running");
+  fake.online = true;
+  fake.threads.get(thread.id)!.status = "waiting";
+  await service.tick(); assert.equal(service.list()[0].waitingReason, undefined);
+  (fake as any).snapshot = () => ({ approvals: [{ agentId: "demo-review", request: { params: { threadId: thread.id } } }] });
+  await service.tick(); assert.equal(service.list()[0].waitingReason, "waiting-approval");
+  (fake as any).snapshot = () => ({ approvals: [] });
+  service.findRecord(item.id)!.lastProgressAt = Date.now() - 600_000;
+  await service.tick(); assert.equal(service.list()[0].waitingReason, "stalled");
+  fake.threads.get(thread.id)!.status = "idle";
+  await service.tick(); assert.equal(service.list()[0].waitingReason, "unresolved");
+  fake.finish(thread.id); await service.tick();
+  assert.equal(service.list()[0].waitingReason, undefined);
+  assert.equal(service.list()[0].status, "completed");
+});
+
+test("bounded result waits time out without acknowledging and abort promptly", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick();
+  assert.equal((await service.waitResult(item.id, 0)).timedOut, true);
+  const controller = new AbortController();
+  const pending = service.waitResult(item.id, 60, controller.signal);
+  controller.abort(); await assert.rejects(pending, /取消/);
+  fake.finish(thread.id, "Done"); await service.tick();
+  assert.equal((await service.waitResult(item.id, 60)).timedOut, false);
+  assert.equal(service.list()[0].unread, true);
+  await assert.rejects(service.waitResult(item.id, 61), /60/);
+});
+
+test("legacy completed tasks migrate as read without hiding new results", async (t) => {
+  const { create, fake, service, messages, options } = await fixture(t);
+  const { item, thread } = await create();
+  await messages.tick(); await service.tick(); fake.finish(thread.id); await service.tick();
+  service.close();
+  const data = JSON.parse(await readFile(options.file, "utf8")); delete data.readTrackingVersion;
+  await writeFile(options.file, JSON.stringify(data));
+  const restored = new AskService(options); await restored.load(); t.after(() => restored.close());
+  assert.equal(restored.list()[0].unread, false);
+  fake.threads.get(thread.id)!.status = "running"; fake.threads.get(thread.id)!.activeTurnId = "new-turn";
+  fake.emit("event", { type: "agent.event", data: { agentId: "demo-review", method: "turn/started", params: { threadId: thread.id, turn: { id: "new-turn" } } } });
+  fake.finish(thread.id, "New result"); await restored.tick();
+  assert.equal(restored.findRecord(item.id)?.turnId, "new-turn");
+  assert.equal(restored.list()[0].unread, true);
+});
+
+test("unread queries stay scoped to their source conversation", async (t) => {
+  const { create, fake, service, messages } = await fixture(t);
+  fake.threads.set("second-source", { ...fake.threads.get("source")!, id: "second-source" });
+  const first = await create(); const second = await create("queue", false, "demo", "second-source");
+  await messages.tick(); await service.tick();
+  fake.finish(first.thread.id); fake.finish(second.thread.id); await service.tick();
+  assert.equal(service.list({ unread: true }).length, 2);
+  assert.deepEqual(service.list({ source: "demo:source", unread: true }).map((item) => item.id), [first.item.id]);
+  await service.collect([first.item.id]);
+  assert.equal(service.list({ source: "demo:source", unread: true }).length, 0);
+  assert.deepEqual(service.list({ source: "demo:second-source", unread: true }).map((item) => item.id), [second.item.id]);
 });

@@ -82,6 +82,8 @@ export interface DeckPreferences extends ConnectionOverlay {
    * 给项目记默认值。缺省/false：沿用上次（旧行为）。
    */
   pinDefaults?: boolean;
+  /** 已删除会话的别名保留天数；0 表示不回收。 */
+  aliasRetentionDays?: number;
   recentDirs: string[];
 }
 
@@ -198,9 +200,28 @@ export interface TurnExtensionItem {
 export type DeckDeliveryMode = "queue" | "steer" | "interrupt";
 
 export interface AskSession {
+  unread?: boolean;
+  waitingReason?: "waiting-approval" | "backend-offline" | "unresolved" | "stalled";
+  waitingSince?: number;
+  waitingDetail?: string;
+  lastProgressAt?: number;
   /** 独立执行，正常结束与失败都不自动通知来源；仍允许显式 send。 */
   detached?: boolean;
   resultAvailable?: boolean;
+  /** 执行完成与最终文本交付分开记录；empty 不表示执行失败。 */
+  resultState?: "pending" | "ready" | "empty";
+  captureError?: string;
+  currentTurnSentCount?: number;
+  currentTurnDeliveredCount?: number;
+  /** 只列绑定来源的主动消息；显式 --to 通过 deliveryId 查询投递。 */
+  outgoingMessages?: {
+    id: string;
+    turnId?: string;
+    deliveryId?: string;
+    mode: DeckDeliveryMode;
+    status: "pending" | "unknown" | "queued" | "interrupting" | "sending" | "delivered" | "failed";
+    error?: string;
+  }[];
   sentCount?: number;
   id: string;
   /** 稳定短别名：由 id 派生后落盘，消息头与 --to @alias 使用。 */
@@ -252,11 +273,6 @@ export interface ThreadSummary {
   ask?: AskSession;
   /** 每个可见会话自动分配的稳定短别名，例如 `@s-3f9kq2pz`。 */
   alias?: string;
-  /**
-   * 旧版主从缓冲的未读计数。主会话消息现在走普通队列（空闲即送达），
-   * 正常流程不再产生缓冲；字段保留只为兼容旧快照，通常为 0。
-   */
-  bufferedCount?: number;
   agentId?: AgentId;
   id: string;
   providerId: string;

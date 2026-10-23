@@ -198,6 +198,49 @@ test("session aliases are assigned by default, persist, and survive thread remov
   assert.equal(reloaded.isDeleted("codex", "thread-1"), false, "同一 id 原生会话重新出现时撤销墓碑");
 });
 
+test("deleted session aliases are reclaimed after retention", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-alias-retention-"));
+  try {
+    const store = new ThreadSettingsStore(dir);
+    await store.load();
+    const { aliases } = await store.ensureSessionAliases([
+      { agentId: "codex", threadId: "thread-old" },
+      { agentId: "codex", threadId: "thread-live" },
+    ]);
+    const oldAlias = aliases.get(JSON.stringify(["codex", "thread-old"]))!;
+    const liveAlias = aliases.get(JSON.stringify(["codex", "thread-live"]))!;
+
+    await store.remove("codex", "thread-old");
+    assert.equal(store.isDeleted("codex", "thread-old"), true);
+    assert.deepEqual(store.findSessionByAlias(oldAlias), {
+      agentId: "codex",
+      threadId: "thread-old",
+    });
+
+    // 0 表示不回收，刚删除的记录也不会被清掉。
+    assert.equal(await store.pruneDeletedSessions(0), false);
+    assert.equal(await store.pruneDeletedSessions(2), false);
+    assert.equal(store.isDeleted("codex", "thread-old"), true);
+
+    (store as any).data.deletedSessions.codex["thread-old"].deletedAt =
+      Date.now() - 3 * 86_400_000;
+    assert.equal(await store.pruneDeletedSessions(2), true);
+    assert.equal(store.isDeleted("codex", "thread-old"), false);
+    assert.equal(store.sessionAlias("codex", "thread-old"), undefined);
+    assert.equal(store.findSessionByAlias(oldAlias), undefined);
+    // 活跃会话的别名不受回收影响。
+    assert.equal(store.sessionAlias("codex", "thread-live"), liveAlias);
+
+    const restored = new ThreadSettingsStore(dir);
+    await restored.load();
+    assert.equal(restored.isDeleted("codex", "thread-old"), false);
+    assert.equal(restored.findSessionByAlias(oldAlias), undefined);
+    assert.equal(restored.sessionAlias("codex", "thread-live"), liveAlias);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("session aliases avoid reserved identifiers", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "deck-thread-settings-alias-reserved-"));
   const store = new ThreadSettingsStore(dir);

@@ -24,3 +24,15 @@ test("ask defaults persist per target; empty manual configuration resets to nati
     assert.deepEqual(third.get("demo"), {});
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test("permission defaults and allowed choices stay independent without ordering native modes", async () => {
+  const { boundedAskPermissions } = await import("./ask-settings.js");
+  const defaults = { model: "demo", sandbox: "read-only" as const, permissionMode: "default" as const,
+    allowedPermissions: { sandbox: ["workspace-write" as const], permissionMode: ["plan" as const] } };
+  assert.deepEqual(resolveAskConfiguration(defaults, { model: "other" }), { model: "other", sandbox: "read-only", permissionMode: "default" });
+  assert.deepEqual(boundedAskPermissions(defaults, {}), { sandbox: "read-only", permissionMode: "default" });
+  assert.deepEqual(boundedAskPermissions(defaults, { sandbox: "workspace-write", permissionMode: "plan" }), { sandbox: "workspace-write", permissionMode: "plan" });
+  assert.throws(() => boundedAskPermissions(defaults, { sandbox: "danger-full-access" }), /允许集合/);
+  assert.throws(() => boundedAskPermissions({}, { approvalPolicy: "never" }), /允许集合/);
+  assert.deepEqual(boundedAskPermissions({ permissionMode: "bypassPermissions", allowedPermissions: { permissionMode: ["plan"] } }, { permissionMode: "plan" }), { permissionMode: "plan" });
+});

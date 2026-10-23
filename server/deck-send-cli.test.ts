@@ -101,12 +101,13 @@ test("deck-api detached creation and read-only result/inspect commands preserve 
   t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
   const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
   const script = "skills/deck-api/scripts/deck-api";
-  const { stdout } = await run("bash", [script, "create", "demo-review", "--detached", "--session", "demo:source", "--", "Do independent work"], { env });
+  const { stdout, stderr } = await run("bash", [script, "create", "demo-review", "--detached", "--session", "demo:source", "--", "Do independent work"], { env });
   assert.equal(requests[0].body.detached, true);
   assert.equal(requests[0].body.sessionExplicit, true);
   assert.equal(requests[0].body.returnMode, "queue");
-  assert.match(stdout, /完成\/失败\/中断不会推送通知，只能主动查询/);
-  assert.doesNotMatch(stdout, /本回合到此结束/);
+  assert.equal(JSON.parse(stdout).item.alias, "abcd1234");
+  assert.match(stderr, /完成\/失败\/中断不会推送通知，只能主动查询/);
+  assert.doesNotMatch(stderr, /本回合到此结束/);
   await run("bash", [script, "result", "@abcd1234"], { env });
   await run("bash", [script, "inspect", "@abcd1234", "--tail", "30"], { env });
   await run("bash", [script, "tasks"], { env });
@@ -331,4 +332,59 @@ test("instance discovery ignores stale URLs, rejects ambiguity, and verifies ide
   await register("first", false);
   await run("bash", [script, "agents"], { env: { ...env, DECK_INSTANCE_ID: "first" } });
   assert.equal(received.at(-1), "first");
+});
+
+
+test("deck-api send prints a usable delivery receipt and delivery reads it without resending", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-receipt-cli-"));
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    for await (const _chunk of req) { /* drain request */ }
+    requests.push(`${req.method} ${req.url}`);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(req.method === "POST"
+      ? JSON.stringify({ messageId: "demo-message", deliveryId: "ask:demo:demo-message" })
+      : JSON.stringify({ delivery: { id: "ask:demo:demo-message", status: "failed", error: "demo offline" } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  const sent = await run("bash", [script, "send", "--session", "demo:child", "--", "result"], { env });
+  assert.match(sent.stdout, /deliveryId ask:demo:demo-message/);
+  const receipt = await run("bash", [script, "delivery", "ask:demo:demo-message"], { env });
+  assert.equal(JSON.parse(receipt.stdout).delivery.status, "failed");
+  assert.deepEqual(requests, ["POST /api/deck/send", "GET /api/deck/deliveries/ask:demo:demo-message"]);
+  await assert.rejects(run("bash", [script, "delivery", "../other"], { env }));
+  assert.equal(requests.length, 2);
+});
+
+test("optional advanced commands preserve a short default workflow and encode their requests", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "deck-api-advanced-"));
+  const requests: { path: string; body: any }[] = [];
+  const server = createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    requests.push({ path: req.url!, body: JSON.parse(Buffer.concat(chunks).toString() || "{}") });
+    res.writeHead(200, { "Content-Type": "application/json" }); res.end('{"items":[],"timedOut":true}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { server.close(); await rm(dir, { recursive: true, force: true }); });
+  const env = { ...process.env, CODEX_DECK_HOME: dir, DECK_API_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}`, DECK_API_NO_FORWARD: "1", DECK_TOKEN: "" };
+  const script = "skills/deck-api/scripts/deck-api";
+  await run("bash", [script, "create", "demo", "--cwd", "/work/demo", "--worktree=feature/demo", "--sandbox", "read-only", "--approval", "untrusted", "--", "Review"], { env });
+  assert.equal(requests[0].body.targetCwd, "/work/demo");
+  assert.deepEqual(requests[0].body.worktree, { base: "feature/demo" });
+  assert.deepEqual(requests[0].body.permissions, { sandbox: "read-only", approvalPolicy: "untrusted" });
+  assert.notEqual(requests[0].body.cwd, requests[0].body.targetCwd);
+  await run("bash", [script, "tasks", "--unread"], { env });
+  assert.match(requests[1].path, /^\/api\/deck\/sessions\?unread=true&source=self&pid=\d+/);
+  await run("bash", [script, "collect", "@abcd1234", "@abcd5678"], { env });
+  assert.deepEqual(requests[2], { path: "/api/deck/collect", body: { references: ["abcd1234", "abcd5678"] } });
+  await run("bash", [script, "wait", "@abcd1234", "--timeout", "0"], { env });
+  assert.equal(requests[3].path, "/api/deck/sessions/abcd1234/result?wait=0");
+  await assert.rejects(run("bash", [script, "wait", "@abcd1234", "--timeout", "61"], { env }));
+  assert.equal(requests.length, 4);
+  const raw = await run("bash", [script, "--json", "send", "--", "Status"], { env });
+  assert.deepEqual(JSON.parse(raw.stdout), { items: [], timedOut: true });
+  assert.equal(requests[4].path, "/api/deck/send");
 });

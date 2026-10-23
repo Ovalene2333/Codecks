@@ -1,3 +1,4 @@
+import type { DeckNotices } from "./deck-notices.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +26,10 @@ export interface AskRecord extends AskSession {
   targetAlias?: string;
   question: string;
   result?: AskResult;
+  /** 完整回合已读取，但没有非空最终文本；不能冒充可领取结果。 */
+  emptyResultTurnId?: string;
+  /** 新完成回合后台同步；旧普通记录仅在 result 查询时补读，避免启动扫描全部历史。 */
+  capturePending?: boolean;
   createdAt: number;
   updatedAt: number;
   deliveryId?: string;
@@ -34,19 +39,17 @@ export interface AskRecord extends AskSession {
   wakeDeliveryId?: string;
   replyDeliveryId?: string;
   suppressFailureReply?: boolean;
-  sentMessages?: { id: string; text: string; mode: DeckDeliveryMode; deliveryId?: string }[];
+  suppressFailureNotice?: boolean;
+  sentMessages?: { id: string; text: string; mode: DeckDeliveryMode; deliveryId?: string; turnId?: string }[];
   turnSentOffset?: number;
   executionCompletion?: { turnId: string; status: string };
   executionFailure?: { turnId: string; message: string };
   /** detached 交付同步失败的最近一次原因；成功捕获后清除，供 UI 与排查使用。 */
   lastCaptureError?: string;
   captureAttempts?: number;
-  /** 来源最后一次领取交付对应的 turnId；仅供 done 通知抑制已读，不影响重复领取。 */
+  /** 显式 collect 推进的已读回合；result 查询不消耗。 */
   lastReadTurnId?: string;
-  /** detached 完成/失败通知的投递记录 ID；幂等 id 派生自 turnId，新回合重新通知。 */
-  doneDeliveryId?: string;
-  /** done 通知已覆盖的 turnId；跟随新回合推进，避免同回合重复打扰、跨回合漏通知。 */
-  doneTurnId?: string;
+  lastReadWaitingKey?: string;
   /**
    * 本轮在 Deck 侧开始的时刻。部分 Agent（如 OpenCode）结束后会把回合 id
    * 从 Deck 生成的 UUID 换回原生 user message id，单靠 turnId 会永远匹配
@@ -79,6 +82,7 @@ interface Options {
   sessionAliases?: SessionAliasProvision;
   onChanged?: () => void;
   timer?: boolean;
+  notices?: DeckNotices;
 }
 
 /**
@@ -104,15 +108,27 @@ export function sanitizeInline(text: string | undefined, limit = 160) {
   return single.slice(0, limit);
 }
 
-/** 完整对话留在原生历史；台账仅保存路由、状态与 detached 最新交付快照。 */
+/** 完整对话留在原生历史；台账仅保存路由、状态与本回合最终交付快照。 */
 export class AskService {  private items: AskRecord[] = [];
   private writes = Promise.resolve();
   private timer?: NodeJS.Timeout;
   private ticking = false;
   private closed = false;
+  private progressSavedAt = new Map<string, number>();
   private loadError?: string;
 
   private readonly onEvent = (event: any) => {
+    if (["agent.event", "codex.event"].includes(event?.type)) {
+      const data = event.data;
+      const item = this.items.find((entry) => !entry.deletedAt && ["queued", "running"].includes(entry.status) && entry.targetAgentId === (data?.agentId || "codex") && entry.targetThreadId === data?.params?.threadId);
+      if (item) {
+        item.lastProgressAt = Date.now();
+        if (Date.now() - (this.progressSavedAt.get(item.id) || 0) > 30_000) {
+          this.progressSavedAt.set(item.id, Date.now());
+          void this.save().catch((error) => console.error("进展状态保存失败:", error.message));
+        }
+      }
+    }
     if (!["agent.event", "codex.event"].includes(event?.type) || !["turn/started", "turn/completed"].includes(event.data?.method)) return;
     const data = event.data;
     const turn = data.params?.turn;
@@ -121,6 +137,9 @@ export class AskService {  private items: AskRecord[] = [];
       const item = this.items.find((entry) => !entry.deletedAt &&
         entry.targetAgentId === (data.agentId || "codex") && entry.targetThreadId === data.params?.threadId);
       if (!item || item.turnId === turn.id) return;
+      delete item.waitingReason;
+      delete item.waitingDetail;
+      delete item.waitingSince;
       item.turnId = turn.id;
       item.status = "running";
       // 显式重新发送会开启新回合；上一轮的停止意图不能继续套在新回合上。
@@ -138,10 +157,11 @@ export class AskService {  private items: AskRecord[] = [];
       delete item.replyDeliveryId;
       delete item.wakeDeliveryId;
       delete item.error;
+      delete item.suppressFailureNotice;
       delete item.result;
+      delete item.emptyResultTurnId;
+      delete item.capturePending;
       delete item.lastCaptureError;
-      delete item.doneDeliveryId;
-      delete item.doneTurnId;
       item.captureAttempts = 0;
       void this.save().catch((error) => console.error("会话回合状态保存失败:", error.message));
       return;
@@ -170,7 +190,7 @@ export class AskService {  private items: AskRecord[] = [];
     try {
       const data = JSON.parse(await readFile(this.options.file, "utf8"));
       if (data.version !== 1 || !Array.isArray(data.items)) throw new Error("询问台账格式无效");
-      let changed = false;
+      let changed = data.readTrackingVersion !== 1;
       this.items = data.items.filter((item: any) =>
         typeof item?.id === "string" && typeof item.sourceAgentId === "string" &&
         typeof item.sourceThreadId === "string" && typeof item.targetAgentId === "string" &&
@@ -178,7 +198,12 @@ export class AskService {  private items: AskRecord[] = [];
         ["queue", "steer", "interrupt"].includes(item.returnMode) &&
         ["creating", "queued", "running", "answered", "completed", "failed", "cancelled"].includes(item.status),
       );
-      for (const item of this.items) delete (item as unknown as Record<string, unknown>).wakeCode;
+      for (const item of this.items) {
+        const legacy = item as unknown as Record<string, unknown>;
+        delete legacy.wakeCode;
+        delete legacy.doneDeliveryId;
+        delete legacy.doneTurnId;
+      }
       // 先收下记录自带的别名，再为缺别名的旧记录补齐：入参里的保留集合
       // 可能包含本台账自己刚写入的别名，先补会把已落盘别名误判成撞车。
       const used = new Set<string>();
@@ -186,6 +211,8 @@ export class AskService {  private items: AskRecord[] = [];
         if (typeof item.alias === "string" && /^[a-z0-9]{8,32}$/.test(item.alias)) used.add(item.alias);
       }
       for (const item of this.items) {
+        if (data.readTrackingVersion !== 1 && ["answered", "completed", "failed", "cancelled"].includes(item.status))
+          item.lastReadTurnId = item.turnId || "creating";
         if (item.detached !== undefined && typeof item.detached !== "boolean") throw new Error("detached 模式无效");
         if (item.turnStartedAt !== undefined && !Number.isFinite(item.turnStartedAt)) throw new Error("回合开始时间无效");
         if (item.turnEndedAt !== undefined && !Number.isFinite(item.turnEndedAt)) throw new Error("回合结束时间无效");
@@ -196,13 +223,20 @@ export class AskService {  private items: AskRecord[] = [];
         if (item.sentMessages !== undefined && (!Array.isArray(item.sentMessages) || item.sentMessages.some((message) =>
           !message || typeof message.id !== "string" || typeof message.text !== "string" ||
           !["queue", "steer", "interrupt"].includes(message.mode) ||
-          (message.deliveryId !== undefined && typeof message.deliveryId !== "string"))))
+          (message.deliveryId !== undefined && typeof message.deliveryId !== "string") ||
+          (message.turnId !== undefined && typeof message.turnId !== "string"))))
           throw new Error("主动消息台账格式无效");
         for (const [field, valid] of [
           ["lastCaptureError", (value: any) => typeof value === "string"],
+          ["emptyResultTurnId", (value: any) => typeof value === "string"],
+          ["capturePending", (value: any) => typeof value === "boolean"],
+          ["lastReadWaitingKey", (value: any) => typeof value === "string"],
+          ["waitingReason", (value: any) => ["waiting-approval", "backend-offline", "unresolved", "stalled"].includes(value)],
+          ["waitingSince", (value: any) => Number.isFinite(value)],
+          ["waitingDetail", (value: any) => typeof value === "string"],
+          ["lastProgressAt", (value: any) => Number.isFinite(value)],
+          ["suppressFailureNotice", (value: any) => typeof value === "boolean"],
           ["lastReadTurnId", (value: any) => typeof value === "string"],
-          ["doneDeliveryId", (value: any) => typeof value === "string"],
-          ["doneTurnId", (value: any) => typeof value === "string"],
           ["captureAttempts", (value: any) => Number.isInteger(value) && value >= 0],
           ["cancelRequestedAt", (value: any) => Number.isFinite(value)],
           ["cancelledAt", (value: any) => Number.isFinite(value)],
@@ -212,6 +246,11 @@ export class AskService {  private items: AskRecord[] = [];
           ["cancelMode", (value: any) => ["after-turn", "now", "force"].includes(value)],
         ] as const) {
           if (item[field] !== undefined && !valid(item[field])) throw new Error(`询问台账 ${field} 字段无效`);
+        }
+        if (item.result && !item.result.text.trim()) {
+          item.emptyResultTurnId = item.result.turnId;
+          delete item.result;
+          changed = true;
         }
         if (item.status === "creating") {
           item.status = item.cancelRequestedAt ? "cancelled" : "failed";
@@ -299,11 +338,37 @@ export class AskService {  private items: AskRecord[] = [];
     };
   }
 
-  list() {
-    return this.items.map(({ response: _response, result, sentMessages, question: _question, lastCaptureError, ...item }) => ({
-      ...item, detached: item.detached === true, resultAvailable: !!result && result.turnId === item.turnId,
+  private summary(record: AskRecord) {
+    const { response: _response, result, sentMessages, question: _question, lastCaptureError, ...item } = record;
+    const offset = item.turnSentOffset ?? 0;
+    const outgoingMessages: NonNullable<AskSession["outgoingMessages"]> = (sentMessages || []).map((message, index) => {
+      const delivery = message.deliveryId ? this.options.messages.receipt(message.deliveryId) : undefined;
+      return {
+        id: message.id, turnId: message.turnId ?? (index >= offset ? item.turnId : undefined),
+        deliveryId: message.deliveryId, mode: message.mode,
+        status: delivery?.status ?? (message.deliveryId ? "unknown" : "pending"),
+        error: delivery?.error,
+      };
+    });
+    const current = outgoingMessages.filter((message) => item.turnId && message.turnId === item.turnId);
+    const delivered = current.filter((message) => message.status === "delivered").length;
+    const finished = ["completed", "answered"].includes(item.status);
+    const resultAvailable = !!result?.text.trim() && result.turnId === item.turnId;
+    const resultState: AskSession["resultState"] = !finished ? undefined : resultAvailable ? "ready"
+      : item.emptyResultTurnId === item.turnId && item.turnId ? "empty" : "pending";
+    return {
+      ...item, status: finished ? (delivered ? "answered" as const : "completed" as const) : item.status,
+      detached: item.detached === true, resultAvailable, resultState,
+      unread: !item.deletedAt && !item.archivedAt && ((item.lastReadTurnId !== (item.turnId || "creating") && (resultAvailable || item.status === "failed")) ||
+        (!!item.waitingReason && item.lastReadWaitingKey !== `${item.waitingReason}:${item.waitingSince}`)),
+      currentTurnSentCount: current.length, currentTurnDeliveredCount: delivered, outgoingMessages,
       sentCount: sentMessages?.length || 0, captureError: lastCaptureError,
-    }));
+    };
+  }
+
+  list(filter: { source?: string; unread?: boolean } = {}) {
+    return this.items.filter((item) => !filter.source || `${item.sourceAgentId}:${item.sourceThreadId}` === filter.source)
+      .map((item) => this.summary(item)).filter((item) => !filter.unread || item.unread);
   }
 
   /**
@@ -339,19 +404,57 @@ export class AskService {  private items: AskRecord[] = [];
     return item;
   }
 
-  /** 查询不投递消息、可重复领取；领取动作只推进 done 通知用的已读指针。 */
+  /** 查询不投递、不标为已读，可重复读取。 */
   async readResult(reference: string) {
     const item = this.lookup(reference);
-    if (item.detached && ["completed", "answered"].includes(item.status) && !item.result) {
+    if (["completed", "answered"].includes(item.status) && !item.result) {
       try { await this.captureResult(item); } catch { /* captureResult 已落态，保留待同步。 */ }
     }
     const result = item.result?.turnId === item.turnId ? item.result : undefined;
-    if (result && item.lastReadTurnId !== item.turnId) {
-      item.lastReadTurnId = item.turnId;
-      await this.save();
-    }
     return { item: this.list().find((entry) => entry.id === item.id)!, result: result || null,
-      pending: item.detached === true && ["completed", "answered"].includes(item.status) && !result };
+      pending: ["completed", "answered"].includes(item.status) && !result && (!item.turnId || item.emptyResultTurnId !== item.turnId) };
+  }
+
+  async waitResult(reference: string, seconds: number, signal?: AbortSignal) {
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > 60) throw new Error("wait 应为 0 至 60 秒的整数");
+    const deadline = Date.now() + seconds * 1000;
+    while (true) {
+      if (signal?.aborted || this.closed) throw new Error("等待已取消或服务已关闭");
+      const response = await this.readResult(reference);
+      if (signal?.aborted || this.closed) throw new Error("等待已取消或服务已关闭");
+      if (response.result || ["failed", "cancelled"].includes(response.item.status) || response.item.resultState === "empty") return { ...response, timedOut: false };
+      if (Date.now() >= deadline) return { ...response, timedOut: true };
+      await new Promise<void>((resolve) => {
+        const finish = () => { clearTimeout(timer); signal?.removeEventListener("abort", finish); resolve(); };
+        const timer = setTimeout(finish, Math.min(1000, deadline - Date.now()));
+        signal?.addEventListener("abort", finish, { once: true });
+        if (signal?.aborted) finish();
+      });
+    }
+  }
+
+  /** Explicit collection is the only action that acknowledges a result. */
+  async collect(references: string[]) {
+    const records = references.map((reference) => this.lookup(reference));
+    const results = await Promise.all(records.map((item) => this.readResult(item.id)));
+    for (let index = 0; index < records.length; index++) {
+      const item = records[index];
+      const snapshot = results[index];
+      if ((snapshot.result && snapshot.result.turnId === item.turnId) || (snapshot.item.status === "failed" && item.status === "failed" && snapshot.item.turnId === item.turnId))
+        item.lastReadTurnId = snapshot.result?.turnId || item.turnId || "creating";
+      if (snapshot.item.waitingReason === item.waitingReason && snapshot.item.waitingSince === item.waitingSince && item.waitingReason)
+        item.lastReadWaitingKey = `${item.waitingReason}:${item.waitingSince}`;
+    }
+    await this.save();
+    return { items: results.map((entry) => ({ ...entry, item: this.summary(this.lookup(entry.item.id)) })) };
+  }
+
+  private async waiting(item: AskRecord, reason?: AskSession["waitingReason"], detail?: string) {
+    if (item.waitingReason === reason && item.waitingDetail === detail) return;
+    item.waitingDetail = detail;
+    item.waitingReason = reason;
+    item.waitingSince = reason ? Date.now() : undefined;
+    await this.save();
   }
 
   async inspect(reference: string, tail = 40) {
@@ -364,14 +467,19 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   decorate(thread: ThreadSummary): ThreadSummary {
-    const count = this.options.messages.bufferedCount?.(thread.agentId || "codex", thread.id) ?? 0;
-    const base = count > 0 ? { ...thread, bufferedCount: count } : thread;
+    const base = thread;
     const item = this.items.find((item) => item.targetAgentId === (thread.agentId || "codex") && item.targetThreadId === thread.id);
     if (!item) return base;
+    const view = this.summary(item);
     return { ...base, ask: {
-      id: item.id, alias: item.alias, targetAlias: item.targetAlias, sourceAgentId: item.sourceAgentId, sourceThreadId: item.sourceThreadId, sourceProviderId: item.sourceProviderId,
-      returnMode: item.returnMode, status: item.status, error: item.error, sentCount: item.sentMessages?.length || 0,
-      detached: item.detached === true, resultAvailable: !!item.result && item.result.turnId === item.turnId,
+      id: view.id, alias: view.alias, targetAlias: view.targetAlias,
+      sourceAgentId: view.sourceAgentId, sourceThreadId: view.sourceThreadId, sourceProviderId: view.sourceProviderId,
+      returnMode: view.returnMode, status: view.status, error: view.error, sentCount: view.sentCount,
+      detached: view.detached, resultAvailable: view.resultAvailable, resultState: view.resultState,
+      unread: view.unread, waitingReason: view.waitingReason, waitingSince: view.waitingSince, waitingDetail: view.waitingDetail,
+      lastProgressAt: view.lastProgressAt,
+      captureError: view.captureError, currentTurnSentCount: view.currentTurnSentCount,
+      currentTurnDeliveredCount: view.currentTurnDeliveredCount,
     } };
   }
 
@@ -452,7 +560,7 @@ export class AskService {  private items: AskRecord[] = [];
           "正常结束、失败或中断都不会自动向来源发消息；完整执行过程留在原生历史，来源可用 deck-api inspect 查看。",
         ] : [
           "结束前必须 send 一条最终结论（关键依据、文件或产物位置）。即使没有新结论、或不需要来源采取行动，也请 send 一条简短状态（如“已完成，无新增结论”）；不要静默结束。",
-          "正常结束不会自动转发最终回复，也不会自动通知来源；来源只会看到你 send 的内容。启动或执行失败会由 Deck 自动通知。",
+          "正常结束不会自动转发或通知；Deck 会保存最终答复供来源用 result 查询，即使 send 失败也可领取。启动或执行失败沿用自动通知。",
         ]),
         "回传是异步的：send 返回成功后不要等待、轮询或反复追问来源；继续本会话工作或结束。来源的回复不会自动回到本会话，需要时由来源另行 send 到本会话。",
         "一条消息只放对来源下一步有帮助的内容；完整分析、工具日志和讨论留在本会话，不要为总结再调用其他模型。单条消息上限 80000 字符。",
@@ -471,7 +579,7 @@ export class AskService {  private items: AskRecord[] = [];
       for (const item of this.items) {
         try {
           if (item.deletedAt) continue;
-          if (item.detached && ["completed", "answered"].includes(item.status) && !item.result) {
+          if ((item.capturePending || item.detached) && ["completed", "answered"].includes(item.status) && !item.result && item.emptyResultTurnId !== item.turnId) {
             try { await this.captureResult(item); } catch { /* 结果同步不阻塞显式 send 的恢复。 */ }
           }
           for (const message of item.sentMessages || []) {
@@ -499,13 +607,12 @@ export class AskService {  private items: AskRecord[] = [];
             else await this.fail(item, "目标 Agent 已停用，询问无法继续", false);
             continue;
           }
-          if (!descriptor?.online && descriptor?.error) {
-            if (item.cancelRequestedAt) await this.cancelItem(item);
-            else await this.fail(item, descriptor.error);
+          if (!this.options.agents.messageBackendOnline(item.targetAgentId)) {
+            await this.waiting(item, "backend-offline", sanitizeInline(descriptor?.error) || undefined);
             continue;
           }
           if (!item.deliveryId) await this.start(item);
-          const delivery = this.options.messages.list().find((entry) => entry.id === item.deliveryId);
+          const delivery = this.options.messages.receipt(item.deliveryId!);
           if (!delivery) {
             // 初始投递被取消（stop、用户在待发送列表取消）不是执行失败，
             // 统一收口为 cancelled，避免给来源回一条失败消息。
@@ -537,11 +644,20 @@ export class AskService {  private items: AskRecord[] = [];
             else await this.fail(item, "询问会话已归档");
             continue;
           }
-          if (!state.ready) continue;
+          const approvals = this.options.agents.snapshot?.().approvals || [];
+          const approval = approvals.some((entry) => entry.agentId === item.targetAgentId &&
+            (entry.request?.params?.threadId === item.targetThreadId || entry.threadId === item.targetThreadId));
+          if (approval) { await this.waiting(item, "waiting-approval"); continue; }
+          if (!state.ready) {
+            await this.waiting(item, Date.now() - (item.lastProgressAt || item.turnStartedAt || item.updatedAt) >= 300_000 ? "stalled" : undefined);
+            continue;
+          }
           const full: any = await this.options.agents.readThread(item.targetAgentId, item.targetThreadId!, { background: true });
           const turns: any[] = full?.turns || full?.thread?.turns || [];
           const turn = this.findTurn(item, turns);
-          if (!turn || ["inProgress", "running", "pending"].includes(turn.status)) continue;
+          if (!turn) { await this.waiting(item, "unresolved"); continue; }
+          await this.waiting(item);
+          if (["inProgress", "running", "pending"].includes(turn.status)) continue;
           const failed = ["failed", "error", "interrupted", "cancelled"].includes(turn.status);
           if (failed) {
             const message = state.thread.lastError || `询问未正常完成（${turn.status}）`;
@@ -560,6 +676,7 @@ export class AskService {  private items: AskRecord[] = [];
           else console.error(`询问 ${item.id} 等待恢复:`, error.message);
         }
       }
+      await this.options.notices?.tick(this.list());
     } finally { this.ticking = false; }
   }
 
@@ -655,7 +772,7 @@ export class AskService {  private items: AskRecord[] = [];
     catch { return undefined; }
   }
 
-  /** 取消自动投递（初始询问、失败回传、detached done）；显式 send 不在此列。 */
+  /** 取消自动投递（初始询问、遗留失败回传）；显式 send 不在此列。 */
   private async cancelPendingDeliveries(item: AskRecord) {
     const cancel = async (id: string | undefined, agentId: AgentId, threadId: string) => {
       if (!id) return;
@@ -665,10 +782,12 @@ export class AskService {  private items: AskRecord[] = [];
     if (item.targetThreadId)
       await cancel(item.deliveryId, item.targetAgentId, item.targetThreadId);
     await cancel(item.replyDeliveryId, item.sourceAgentId, item.sourceThreadId);
-    await cancel(item.doneDeliveryId, item.sourceAgentId, item.sourceThreadId);
   }
 
   private async cancelItem(item: AskRecord) {
+    delete item.waitingReason;
+    delete item.waitingDetail;
+    delete item.waitingSince;
     item.status = "cancelled";
     item.cancelledAt ??= Date.now();
     item.turnEndedAt ??= Date.now();
@@ -678,8 +797,6 @@ export class AskService {  private items: AskRecord[] = [];
     delete item.executionCompletion;
     delete item.executionFailure;
     delete item.error;
-    delete item.doneDeliveryId;
-    delete item.doneTurnId;
     await this.save();
   }
 
@@ -719,9 +836,9 @@ export class AskService {  private items: AskRecord[] = [];
     if (message && (message.text !== text || message.mode !== (mode || item.returnMode)))
       throw new Error("requestId 已用于不同内容或投递方式");
     if (!message) {
-      message = { id: requestId || randomUUID(), text, mode: mode || item.returnMode };
+      message = { id: requestId || randomUUID(), text, mode: mode || item.returnMode, turnId: item.turnId };
       messages.push(message);
-      if (["completed", "cancelled"].includes(item.status)) item.status = "answered";
+      if (item.status === "cancelled") item.status = "completed";
       // 新的显式回传意味着会话重新工作；上一轮停止意图随之失效。
       delete item.cancelRequestedAt;
       delete item.cancelMode;
@@ -818,7 +935,7 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async captureResult(item: AskRecord, turn?: any) {
-    if (!item.detached || !item.targetThreadId || !item.turnId || item.result ||
+    if (!item.targetThreadId || !item.turnId || item.result ||
       !["completed", "answered"].includes(item.status)) return;
     const turnId = item.turnId;
     if (!turn) {
@@ -837,9 +954,25 @@ export class AskService {  private items: AskRecord[] = [];
     if (!turn || turn.status !== "completed" || !Array.isArray(turn.items) ||
       item.turnId !== turnId || !["completed", "answered"].includes(item.status)) return;
     const text = finalAnswer(turn);
+    if (!text) {
+      item.emptyResultTurnId = turnId;
+      delete item.capturePending;
+      delete item.lastCaptureError;
+      try { await this.save(); }
+      catch (error) {
+        if (item.emptyResultTurnId === turnId) {
+          delete item.emptyResultTurnId;
+          item.capturePending = true;
+        }
+        throw error;
+      }
+      return;
+    }
     // 结果始终记 Deck 侧的 turnId：readResult 用它判断“本回合已交付”。
     const result = { turnId, text: text.slice(0, ASK_OUTPUT_LIMIT), completedAt: Date.now(), truncated: text.length > ASK_OUTPUT_LIMIT };
     item.result = result;
+    delete item.emptyResultTurnId;
+    delete item.capturePending;
     delete item.lastCaptureError;
     item.captureAttempts = 0;
     try { await this.save(); }
@@ -847,6 +980,7 @@ export class AskService {  private items: AskRecord[] = [];
       if (item.result === result) {
         delete item.result;
         item.captureAttempts = undefined;
+        item.capturePending = true;
       }
       throw error;
     }
@@ -858,14 +992,17 @@ export class AskService {  private items: AskRecord[] = [];
       if (!item.deletedAt) await this.cancelItem(item);
       return;
     }
-    // 纯双向通信：正常结束不产生任何自动通知，来源只会看到目标主动 send
-    // 的内容；status 仍记录 answered/completed 供 UI 与后续 send 路由使用。
-    item.status = item.sentMessages?.length ? "answered" : "completed";
+    // 保存结果与通知分离：正常结束仍然静默，主动消息的投递状态单独查询。
+    delete item.waitingReason;
+    delete item.waitingDetail;
+    delete item.waitingSince;
+    item.status = "completed";
+    item.capturePending = true;
     item.turnEndedAt ??= Date.now();
     item.updatedAt = Date.now();
     await this.save();
     try { await this.captureResult(item, turn); } catch { /* 状态已保存；历史恢复后再同步结果。 */ }
-    await this.notifyDone(item);
+
   }
 
   private async fail(item: AskRecord, message: string, notify = true) {
@@ -873,7 +1010,11 @@ export class AskService {  private items: AskRecord[] = [];
       if (!item.deletedAt) await this.cancelItem(item);
       return;
     }
-    notify = notify && !item.detached;
+    item.suppressFailureNotice = !notify;
+    notify = notify && !item.detached && !this.options.notices;
+    delete item.waitingReason;
+    delete item.waitingDetail;
+    delete item.waitingSince;
     item.status = "failed";
     item.turnEndedAt ??= Date.now();
     item.updatedAt = Date.now();
@@ -882,43 +1023,13 @@ export class AskService {  private items: AskRecord[] = [];
     item.response = notify ? `询问失败：${item.error}` : undefined;
     await this.save();
     if (notify) await this.reply(item);
-    else await this.notifyDone(item);
-  }
 
-  /**
-   * detached 完成/失败的一行通知（queue-only，绝不 steer/interrupt）。
-   * 正文留在 result/inspect 快照里；通知只带指针，丢失走会话待发送列表兜底。
-   */
-  private async notifyDone(item: AskRecord) {
-    if (!item.detached || !item.targetThreadId || item.deletedAt || item.status === "cancelled") return;
-    // 主会话（人创建的来源）永不接收 agent 推送，包括 detached 完成指针：
-    // 它可能正在跑用户回合，结果只能由 tasks/result/inspect 主动查询。
-    // 目前 create 的源必须不是询问目标，因此这里实际覆盖所有正常来源；
-    // 保留判断是为了将来允许非主节点发起询问时不把通知重新漏进用户回合。
-    if (this.isMaster(item.sourceAgentId, item.sourceThreadId)) return;
-    // 同一回合只通知一次；新回合推进时重新通知。
-    if (item.doneTurnId === item.turnId) return;
-    // 来源已领取本回合交付时不再打扰；领取早于完成事件时通知直接省略。
-    if (item.status !== "failed" && item.lastReadTurnId && item.lastReadTurnId === item.turnId) return;
-    const headline = item.status === "failed"
-      ? `[done:${item.alias}] detached 已失败：${sanitizeInline(item.error) || "原因未知"}，详情 inspect @${item.alias}`
-      : `[done:${item.alias}] detached 已完成，用 result @${item.alias} 领取（/s/${item.alias}）`;
-    const delivery = await this.options.messages.enqueue(
-      item.sourceAgentId, item.sourceThreadId, "queue",
-      { text: headline },
-      // 幂等 id 含 turnId：同回合重复投递（重启恢复）只入队一次，新回合重新通知。
-      { id: `ask:${item.id}:done:${item.turnId || "creating"}` },
-    );
-    item.doneDeliveryId = delivery.id;
-    item.doneTurnId = item.turnId;
-    item.updatedAt = Date.now();
-    await this.save();
   }
 
   private async reply(item: AskRecord) {
     if (item.detached || item.replyDeliveryId || item.deletedAt || item.status === "cancelled") return;
     const body = `${this.reference(item)}\n\n${item.response || ""}`;
-    const prompt = `[ask:${item.alias}] ` + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
+    const prompt = `[deck:notice:${item.alias}] ` + (body.length > 99_000 ? body.slice(0, 98_800) + "\n\n[内容已截断，完整回答请查看询问会话]" : body);
     const master = this.isMaster(item.sourceAgentId, item.sourceThreadId);
     const mode = master ? "queue" : item.returnMode;
     const delivery = await this.options.messages.enqueue(
@@ -939,7 +1050,7 @@ export class AskService {  private items: AskRecord[] = [];
   }
 
   private async save() {
-    const snapshot = JSON.stringify({ version: 1, items: this.items });
+    const snapshot = JSON.stringify({ version: 1, readTrackingVersion: 1, items: this.items });
     const write = this.writes.catch(() => undefined).then(async () => {
       await mkdir(path.dirname(this.options.file), { recursive: true });
       const temp = `${this.options.file}.${process.pid}.tmp`;

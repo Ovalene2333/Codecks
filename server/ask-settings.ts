@@ -2,17 +2,46 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
-export const askConfigurationSchema = z.object({
+export const askModelConfigurationSchema = z.object({
   providerId: z.string().trim().max(200).optional(),
   model: z.string().trim().max(300).optional(),
   reasoningEffort: z.string().trim().max(100).optional(),
 });
+export const askPermissionSchema = z.object({
+  approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+  sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
+  permissionMode: z.enum(["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"]).optional(),
+});
+const permissionChoicesSchema = z.object({
+  approvalPolicy: z.array(askPermissionSchema.shape.approvalPolicy.unwrap()).max(10).optional(),
+  sandbox: z.array(askPermissionSchema.shape.sandbox.unwrap()).max(10).optional(),
+  permissionMode: z.array(askPermissionSchema.shape.permissionMode.unwrap()).max(10).optional(),
+});
+export const askConfigurationSchema = askModelConfigurationSchema.extend(askPermissionSchema.shape).extend({
+  allowedPermissions: permissionChoicesSchema.optional(),
+});
 export type AskConfiguration = z.infer<typeof askConfigurationSchema>;
 
-/** Explicit model/provider overrides must not inherit settings from a different model. */
+/** Model replacement preserves independent user permission defaults, never the allowed-choice policy. */
 export function resolveAskConfiguration(defaults: AskConfiguration, override?: AskConfiguration): AskConfiguration {
-  if (!override) return { ...defaults };
-  return Object.fromEntries(Object.entries(override).filter(([, value]) => !!value));
+  if (!override) { const { allowedPermissions: _allowed, ...configuration } = defaults; return configuration; }
+  const permissions = Object.fromEntries(Object.keys(askPermissionSchema.shape).map((key) => [key, defaults[key as keyof AskConfiguration]]).filter(([, value]) => !!value));
+  const { allowedPermissions: _allowed, ...configuration } = override;
+  return { ...permissions, ...Object.fromEntries(Object.entries(configuration).filter(([, value]) => !!value)) };
+}
+
+/** Native modes are not ordered. The host's user-maintained allowlist defines choices. */
+export function boundedAskPermissions(defaults: AskConfiguration, requested: z.infer<typeof askPermissionSchema>) {
+  const result: Record<string, string> = {};
+  for (const key of Object.keys(askPermissionSchema.shape) as (keyof z.infer<typeof askPermissionSchema>)[]) {
+    const value = requested[key];
+    const allowed = defaults.allowedPermissions?.[key] as string[] | undefined;
+    if (value !== undefined) {
+      if (!allowed?.includes(value)) throw new Error(`所请求的 ${key} 不在用户允许集合中`);
+      result[key] = value;
+    } else if (defaults[key]) result[key] = defaults[key];
+  }
+  return askPermissionSchema.parse(result);
 }
 
 export class AskSettingsStore {
@@ -29,7 +58,7 @@ export class AskSettingsStore {
   }
   get(agentId: string) { return { ...this.data[agentId] }; }
   async set(agentId: string, configuration: AskConfiguration) {
-    this.data[agentId] = resolveAskConfiguration({}, configuration);
+    this.data[agentId] = askConfigurationSchema.parse(configuration);
     const snapshot = JSON.stringify(this.data, null, 2);
     const write = this.writes.catch(() => {}).then(async () => {
       await mkdir(path.dirname(this.file), { recursive: true });

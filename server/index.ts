@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvFile } from "node:process";
@@ -64,13 +65,18 @@ import { ThreadSummaryCache } from "./thread-summary-cache.js";
 import { ActivityTracker } from "./activity.js";
 import { backgroundWork, closeBackgroundWork, BackgroundWorkError } from "./background-work.js";
 import type { HostStats as BackgroundHostStats } from "./types.js";
+import {
+  normalizeSessionAliasRetentionDays,
+  SESSION_ALIAS_RETENTION_DAYS_MAX,
+} from "../shared/session-alias.js";
 import { ThreadSettingsStore } from "./thread-settings.js";
 import { ModelAffinityStore } from "./model-affinity.js";
 import { AgentSettingsStore } from "./agent-settings.js";
 import { BackgroundSearchStore } from "./session-search-background.js";
 import { SessionSearchIndexer } from "./session-search-indexer.js";
 import { WakeOutbox } from "./wake-outbox.js";
-import { AskSettingsStore, askConfigurationSchema, resolveAskConfiguration } from "./ask-settings.js";
+import { AskSettingsStore, askConfigurationSchema, askModelConfigurationSchema, askPermissionSchema, boundedAskPermissions, resolveAskConfiguration } from "./ask-settings.js";
+import { DeckNotices, noticePolicySchema } from "./deck-notices.js";
 import { AskService } from "./ask-service.js";
 import { buildLaneScenarios, laneThreadsFromSummary, readLaneUserMessages, selectLaneAsks } from "./deck-api-lanes.js";
 import {
@@ -383,12 +389,16 @@ const ensureThreadAliases = async (
     targets.push({ agentId: thread.agentId || "codex", threadId });
   }
   if (!targets.length) return { aliases: new Map<string, string>(), changed: false };
-  const result = await threadSettings.ensureSessionAliases(targets, reservedSessionAliases());
+  // ensureSessionAliases 自己已经避开全部已知会话别名；这里只处理新会话。
+  const result = await threadSettings.ensureSessionAliases(targets);
   if (result.changed) broadcastSnapshotSoon();
   return result;
 };
 
+const deckNotices = new DeckNotices(path.join(dataDir, "deck-notices.json"), messageDeliveries);
+await deckNotices.load();
 const askService = new AskService({
+  notices: deckNotices,
   file: path.join(dataDir, "ask-sessions.json"), agents, messages: messageDeliveries,
   reservedAliases: reservedSessionAliases,
   sessionAliases: {
@@ -426,7 +436,27 @@ const scheduleThreadAliases = (
   return sessionAliasSync;
 };
 
+await threadSettings.pruneDeletedSessions(
+  normalizeSessionAliasRetentionDays(
+    projects.getPreferences().aliasRetentionDays,
+  ),
+);
 await scheduleThreadAliases(initialThreads);
+// 没有新删除或改设置时，按小时检查一次到期墓碑；unref 不影响进程退出。
+setInterval(() => {
+  void threadSettings
+    .pruneDeletedSessions(
+      normalizeSessionAliasRetentionDays(
+        projects.getPreferences().aliasRetentionDays,
+      ),
+    )
+    .then((changed) => {
+      if (changed) broadcastSnapshotSoon();
+    })
+    .catch((error) => {
+      console.error("会话别名回收失败:", error?.message || error);
+    });
+}, 60 * 60_000).unref();
 
 async function withSessionAlias<T>(agentId: AgentId, thread: T): Promise<T> {
   if (!thread || typeof thread !== "object" || Array.isArray(thread)) return thread;
@@ -597,7 +627,6 @@ const fullSnapshotRaw = () => ({
   preferences: projects.getPreferences(),
   wakeDeliveries: wakeOutbox.list(),
   messageDeliveries: messageDeliveries.list(),
-  sessionAliases: threadSettings.listSessionAliases(),
   wakeWatchers: watcherCache.current(),
   wakeLost: watcherLedger.lost(),
   // 工具列表是静态的几条描述：随快照下发 + 前端缓存，工具页（桌面端是新标签页）
@@ -856,10 +885,46 @@ const assertDeckLifecycleOwner = (
     throw new DeckRecipientError("FORBIDDEN", 403,
       "只能停止/删除自己发起或自己所在的询问；确需操作其他会话请加 --force");
 };
-app.get(["/api/deck/sessions", "/api/send/asks"], route(async () => ({ items: askService.list() })));
-app.get("/api/deck/sessions/:reference/result", route(async (req) =>
-  askService.readResult(param(req.params.reference)),
-));
+app.get("/api/deck/deliveries/:id", route(async (req, res) => {
+  const delivery = messageDeliveries.receipt(param(req.params.id));
+  if (!delivery) {
+    res.status(404).json({ code: "UNKNOWN_DELIVERY", error: "投递记录不存在" });
+    return;
+  }
+  return { delivery };
+}));
+app.get(["/api/deck/sessions", "/api/send/asks"], route(async (req) => {
+  let source = z.string().max(500).optional().parse(req.query.source);
+  if (source === "self") {
+    const caller = await resolveWakeCaller(wakePrepareSchema.parse({
+      pid: req.query.pid ? Number(req.query.pid) : undefined,
+      session: req.query.session, sessionExplicit: req.query.sessionExplicit === "true",
+      codexThread: req.query.codexThread, cwd: req.query.cwd,
+    }));
+    if (!caller.ok) throw new DeckRecipientError("CALLER_UNRESOLVED", 409, "无法识别来源；请明确指定 source=agentId:threadId");
+    source = `${caller.agentId}:${caller.threadId}`;
+  }
+  return { items: askService.list({ source, unread: req.query.unread === "true" }) };
+}));
+app.get("/api/deck/notices/:agentId/:threadId", route(async (req) => ({
+  policy: deckNotices.get(agentId(req.params.agentId), param(req.params.threadId)),
+  status: deckNotices.status(agentId(req.params.agentId), param(req.params.threadId)),
+})));
+app.post("/api/deck/notices/:agentId/:threadId", route(async (req) => ({
+  policy: await deckNotices.configure(agentId(req.params.agentId), param(req.params.threadId), noticePolicySchema.parse(req.body)),
+})));
+app.post("/api/deck/collect", route(async (req) => {
+  const input = z.object({ references: z.array(z.string().min(1).max(200)).max(100) }).parse(req.body);
+  return askService.collect(input.references);
+}));
+app.get("/api/deck/sessions/:reference/result", route(async (req, res) => {
+  const seconds = z.coerce.number().int().min(0).max(60).default(0).parse(req.query.wait);
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  res.on("close", cancel);
+  try { return await askService.waitResult(param(req.params.reference), seconds, controller.signal); }
+  finally { res.off("close", cancel); }
+}));
 app.get("/api/deck/sessions/:reference/inspect", route(async (req) =>
   askService.inspect(param(req.params.reference), z.coerce.number().int().min(1).max(200).default(40).parse(req.query.tail)),
 ));
@@ -980,6 +1045,8 @@ app.delete("/api/deck/sessions/:reference", route(async (req) => {
 app.get(["/api/deck/agents", "/api/send/agents"], route(async () => ({
   items: agents.list().filter((agent) => agent.enabled !== false && !agent.standby).map((agent) => ({
     id: agent.id, name: agent.name, online: agent.online,
+    capabilities: { deliveryModes: agent.capabilities.messages?.deliveryModes || [],
+      steer: agent.capabilities.messages?.busyBehavior === "steer", interrupt: agent.capabilities.interrupt },
     // 调用方据此判断目标是否支持 steer（即时追加到当前回合，不打断）。
     steer: agent.capabilities.messages?.busyBehavior === "steer" &&
       agent.capabilities.messages?.deliveryModes?.includes("feedback"),
@@ -1000,7 +1067,9 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     providerId: z.string().max(200).optional(),
     model: z.string().max(300).optional(),
     reasoningEffort: z.string().max(100).optional(),
-    configuration: askConfigurationSchema.optional(),
+    configuration: askModelConfigurationSchema.strict().optional(),
+    permissions: askPermissionSchema.strict().optional(),
+    targetCwd: z.string().trim().min(1).max(4096).optional(),
     name: z.string().max(200).optional(),
     /** 委派到独立的 Git worktree，避免和来源会话共用同一个 checkout。 */
     worktree: z
@@ -1015,17 +1084,19 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   const descriptor = agents.list().find((agent) => agent.id === input.targetAgentId);
   if (!descriptor?.online || descriptor.enabled === false || descriptor.standby) throw new Error("目标 agent 未上线或未启用");
   if (resolution.thread.archived) throw new Error("发起会话已归档");
-  const sourceCapabilities = agents.messageState(resolution.agentId, resolution.threadId).capabilities;
-  if (!input.detached && (!sourceCapabilities.messages?.deliveryModes?.includes(input.returnMode === "queue" ? "queue" : "feedback") ||
-    (input.returnMode === "interrupt" && !sourceCapabilities.interrupt))) throw new Error("发起 agent 不支持所选回传方式");
-  if (!input.detached && input.returnMode === "steer" && sourceCapabilities.messages?.busyBehavior !== "steer")
-    throw new Error("发起会话不支持即时追加（需要 Codex 这类支持转向当前回合的会话）；空闲时用 queue 会立即发送，运行时想打断请用 interrupt");
+  // Human-owned source sessions always receive queue delivery; validate the effective mode.
+  const effectiveReturnMode = askService.isMaster(resolution.agentId, resolution.threadId) ? "queue" : input.returnMode;
+  if (!input.detached && !agents.messageState(resolution.agentId, resolution.threadId).capabilities.messages?.deliveryModes?.includes("queue"))
+    throw new Error("发起 Agent 不支持排队回传");
   if (!descriptor.capabilities.messages?.deliveryModes?.includes("queue")) throw new Error("目标 agent 不支持询问消息投递");
   if (askService.decorate(resolution.thread).ask) throw new Error("询问会话不能再次发起询问，请由原会话发起，避免循环调用");
   const profiles = agents.profiles(input.targetAgentId);
   const explicit = input.providerId || input.model || input.reasoningEffort
     ? { providerId: input.providerId, model: input.model, reasoningEffort: input.reasoningEffort } : undefined;
-  const configuration = resolveAskConfiguration(askSettings.get(input.targetAgentId), input.configuration ?? explicit);
+  const defaults = askSettings.get(input.targetAgentId);
+  const configuration = { ...resolveAskConfiguration(defaults, input.configuration ?? explicit), ...boundedAskPermissions(defaults, input.permissions || {}) };
+  const targetCwd = input.targetCwd ? path.resolve(resolution.thread.cwd, input.targetCwd) : resolution.thread.cwd;
+  if (input.targetCwd && !(await stat(targetCwd)).isDirectory()) throw new Error("目标 cwd 必须是现有目录");
   const providerId = configuration.providerId || profiles.find((profile) => profile.current)?.id ||
     (profiles.length === 1 ? profiles[0].id : undefined);
   if (configuration.providerId && !profiles.some((profile) => profile.id === configuration.providerId))
@@ -1033,7 +1104,7 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   if (input.targetAgentId === "codex" && !providerId)
     throw new Error("目标没有默认供应商，请在 Deck 询问面板中手动设置默认配置");
   if (configuration.reasoningEffort) {
-    const models = await agents.models(input.targetAgentId, providerId, resolution.thread.cwd);
+    const models = await agents.models(input.targetAgentId, providerId, targetCwd);
     const model = models.find((model) => configuration.model ? model.id === configuration.model || model.model === configuration.model : model.isDefault);
     if (!model?.supportedReasoningEfforts?.some((effort) => effort.reasoningEffort === configuration.reasoningEffort))
       throw new Error("所选模型不支持该 effort，请在 Deck 询问面板中重新选择");
@@ -1042,14 +1113,14 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
   // 两边的改动会互相覆盖。失败则回滚刚建的目录，不留下空壳。
   const worktreeId = input.worktree ? randomBytes(6).toString("hex") : undefined;
   const prepared = worktreeId
-    ? await worktrees.create(worktreeId, resolution.thread.cwd, input.worktree!)
+    ? await worktrees.create(worktreeId, targetCwd, input.worktree!)
     : undefined;
   let result: Awaited<ReturnType<typeof askService.create>>;
   try {
     result = await askService.create({
       sourceAgentId: resolution.agentId, sourceThreadId: resolution.threadId,
-      targetAgentId: input.targetAgentId, question: input.question, returnMode: input.returnMode, detached: input.detached,
-      settings: { ...configuration, cwd: prepared?.path || resolution.thread.cwd, providerId, name: input.name },
+      targetAgentId: input.targetAgentId, question: input.question, returnMode: effectiveReturnMode, detached: input.detached,
+      settings: { ...configuration, cwd: prepared?.path || targetCwd, providerId, name: input.name },
     });
   } catch (error) {
     if (worktreeId) await worktrees.remove(worktreeId, { force: true }).catch(() => undefined);
@@ -1063,7 +1134,21 @@ app.post(["/api/deck/create", "/api/send/ask"], route(async (req, res) => {
     result.thread = await withSessionAlias(result.item.targetAgentId, result.thread);
   }
   broadcastSnapshotSoon();
-  res.status(202).json(result);
+  const effective = (observed: unknown, requested: unknown, saved: unknown) => observed !== undefined && observed !== null && observed !== "default"
+    ? { value: observed, source: "adapter" }
+    : requested !== undefined ? { value: requested, source: "request", confirmed: false }
+    : saved !== undefined ? { value: saved, source: "default", confirmed: false }
+    : { value: null, source: "native", confirmed: false };
+  res.status(202).json({ ...result, effectiveConfiguration: {
+    providerId: effective(result.thread.providerId, input.configuration?.providerId || input.providerId || undefined, providerId),
+    model: effective(result.thread.model, input.configuration?.model || input.model || undefined, configuration.model),
+    reasoningEffort: effective(result.thread.reasoningEffort, input.configuration?.reasoningEffort || input.reasoningEffort || undefined, configuration.reasoningEffort),
+    approvalPolicy: effective(result.thread.approvalPolicy, input.permissions?.approvalPolicy, defaults.approvalPolicy),
+    sandbox: effective(result.thread.sandbox, input.permissions?.sandbox, defaults.sandbox),
+    permissionMode: effective(result.thread.permissionMode, input.permissions?.permissionMode, defaults.permissionMode),
+    cwd: { value: result.thread.cwd || prepared?.path || targetCwd, source: prepared ? "worktree" : input.targetCwd ? "request" : "source" },
+    returnMode: { value: effectiveReturnMode, source: "host-policy" },
+  }, worktree: prepared || null });
 }));
 // Discovery is authenticated and read-only. Identity prevents stale ports resolving to a different Deck.
 app.post("/api/deck/discover", route(async (req) => {
@@ -1126,7 +1211,7 @@ app.post("/api/deck/send", route(async (req, res) => {
   const target = recipient.target;
   const alias = recipient.alias;
   const kind = recipient.kind;
-  // 主从结构：主会话永不接受注入。steer/interrupt 对主节点降级为缓冲，
+  // 主会话保护：steer/interrupt 对主会话降级为普通 queue，
   // 202 受理并注明，不报错，避免调用方误判失败而升级重试。
   const master = askService.isMaster(target.agentId, target.threadId);
   const mode = master ? "queue" : input.mode || "queue";
@@ -2492,11 +2577,20 @@ app.put(
           ])
           .optional(),
         pinDefaults: z.boolean().optional(),
+        aliasRetentionDays: z
+          .number()
+          .int()
+          .min(0)
+          .max(SESSION_ALIAS_RETENTION_DAYS_MAX)
+          .optional(),
         recentDirs: z.array(z.string()).optional(),
       })
       .merge(connectionOverlaySchema)
       .parse(req.body);
     await projects.updatePreferences(input);
+    if (input.aliasRetentionDays !== undefined) {
+      await threadSettings.pruneDeletedSessions(input.aliasRetentionDays);
+    }
     return fullSnapshot();
   }),
 );

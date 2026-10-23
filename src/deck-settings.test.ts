@@ -54,6 +54,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
     sidebarWidth: 260,
     initialTurns: 10,
     sidebarLayout: DEFAULT_DECK_SETTINGS.sidebarLayout,
+    developerMode: false,
   });
 
   const mixed = normalizeDeckSettings({
@@ -69,6 +70,7 @@ test("normalizeDeckSettings keeps valid values and rejects invalid ones", () => 
   assert.equal(mixed.toolOpenTarget, DEFAULT_DECK_SETTINGS.toolOpenTarget);
   assert.deepEqual(mixed.hiddenTools, DEFAULT_DECK_SETTINGS.hiddenTools);
   assert.equal(mixed.sidebarWidth, 0);
+  assert.equal(normalizeDeckSettings({ developerMode: true }).developerMode, true);
 });
 
 test("normalizeInitialTurns clamps to the usable range", () => {

@@ -6,8 +6,9 @@ import { agentShortName, threadPath } from "../agents";
 import { relativeTime, sessionKey } from "../format";
 import { sessionPath } from "../deck-history";
 import { askStatusLabel } from "../session/AskNotice";
+import { DeckCommunicationSettings } from "./DeckCommunicationSettings";
 import { AskResult } from "./AskResult";
-import type { LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
+import type { AskSession, LostWakeWatcher, ThreadSummary, WakeWatcher } from "../types";
 import { Badge, Button, Group, Row, Section } from "../kit";
 import { ConfirmDialog, Modal } from "../ui";
 
@@ -24,6 +25,9 @@ type AskItem = {
   returnMode: "queue" | "steer" | "interrupt";
   detached?: boolean;
   resultAvailable?: boolean;
+  unread?: boolean;
+  waitingReason?: AskSession["waitingReason"];
+  resultState?: AskSession["resultState"];
   status: "creating" | "queued" | "running" | "answered" | "completed" | "failed" | "cancelled";
   sentCount: number;
   updatedAt: number;
@@ -91,7 +95,7 @@ export function WakeModal({
     const sourceAgent = thread.agentId || "codex";
     const load = async () => {
       try {
-        const { items } = await api<{ items: AskItem[] }>("/deck/sessions");
+        const { items } = await api<{ items: AskItem[] }>(`/deck/sessions?${new URLSearchParams({ source: `${sourceAgent}:${thread.id}` })}`);
         if (cancelled) return;
         setAsks(items.filter((item) =>
           item.sourceAgentId === sourceAgent && item.sourceThreadId === thread.id
@@ -234,6 +238,11 @@ export function WakeModal({
           ) : <p className="ui-section__desc">暂时无法读取会话代号</p>}
         </Section>
 
+        <details>
+          <summary>通信与创建设置</summary>
+          <DeckCommunicationSettings agentId={thread.agentId || "codex"} threadId={thread.id} />
+        </details>
+
         {loaded && (code || liveWatchers.length + openLost.length > 0) && (
           <Section
             title={
@@ -363,6 +372,14 @@ export function WakeModal({
               </>
             }
           >
+            {visibleAsks.some((item) => item.unread) && <Button size="sm" variant="ghost" disabled={busy} onClick={async () => {
+              setBusy(true); setAsksError("");
+              try {
+                await post("/deck/collect", { references: visibleAsks.filter((item) => item.unread).slice(0, 100).map((item) => item.id) });
+                setAsksVersion((version) => version + 1);
+              } catch (error: any) { setAsksError(error.message || "批量领取失败"); }
+              finally { setBusy(false); }
+            }}>全部标为已读（{visibleAsks.filter((item) => item.unread).length}）</Button>}
             <Group>
               {visibleAsks.map((item) => {
                 const target = item.targetThreadId
@@ -372,10 +389,7 @@ export function WakeModal({
                       id: item.targetThreadId,
                     })
                   : "";
-                const noReply =
-                  !item.detached &&
-                  item.status === "completed" &&
-                  !item.sentCount;
+                const noReply = item.resultState === "empty";
                 const active = ["creating", "queued", "running"].includes(item.status);
                 const finished = !active && !item.archivedAt;
                 return (
@@ -480,14 +494,12 @@ export function WakeModal({
                     {item.error && (
                       <p className="wake-ask-error">{item.error}</p>
                     )}
-                    {item.detached && (
-                      <div className="wake-ask-result">
-                        <AskResult
-                          key={item.turnId || item.id}
-                          reference={item.alias || item.id}
-                        />
-                      </div>
-                    )}
+                    <div className="wake-ask-result">
+                      <AskResult
+                        key={item.turnId || item.id}
+                        reference={item.alias || item.id}
+                      />
+                    </div>
                   </div>
                 );
               })}

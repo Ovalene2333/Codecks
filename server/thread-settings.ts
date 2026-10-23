@@ -107,12 +107,18 @@ export class ThreadSettingsStore {
   private data: StoredThreadSettings = empty();
   private file: string;
   private writes = Promise.resolve();
+  /** 别名 -> 首个拥有者；findSessionByAlias 不再线性扫台账。 */
+  private aliasOwners = new Map<string, { agentId: AgentId; threadId: string }>();
+  /** 会话 key -> 别名；ensureSessionAliases 只处理缺失项。 */
+  private threadAliases = new Map<string, string>();
 
   constructor(private dataDir: string) {
     this.file = path.join(dataDir, "thread-settings.json");
   }
 
   async load() {
+    this.aliasOwners.clear();
+    this.threadAliases.clear();
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8"));
       if (parsed?.version !== 1 || !parsed?.settings) return;
@@ -226,6 +232,7 @@ export class ThreadSettingsStore {
         }
       }
       this.data = { version: 1, settings, sessionAliases, deletedSessions, turnModels, turnStats, deferred };
+      this.rebuildAliasIndex();
     } catch (error: any) {
       // 脏 JSON（崩溃写一半、手工改坏）视为可恢复：回退空设置并保留现场文件，
       // 绝不能因此杀死整机启动。ENOENT（首次运行）同样走这里。
@@ -264,6 +271,7 @@ export class ThreadSettingsStore {
     threadId: string,
     settings: ThreadSettingsInput,
   ) {
+    const previousAlias = this.sessionAlias(agentId, threadId);
     const next = clean(settings);
     const group = (this.data.settings[agentId] ||= {});
     const pending = this.data.deferred?.[agentId]?.[threadId];
@@ -280,6 +288,8 @@ export class ThreadSettingsStore {
     if (settings.reasoningEffort === "" || pending?.reasoningEffort === "") delete merged.reasoningEffort;
     if (!Object.keys(merged).length) delete group[threadId];
     else group[threadId] = merged;
+    if (this.sessionAlias(agentId, threadId) !== previousAlias)
+      this.rebuildAliasIndex();
     await this.save();
     return this.get(agentId, threadId);
   }
@@ -478,10 +488,7 @@ export class ThreadSettingsStore {
     alias: string,
   ): { agentId: AgentId; threadId: string } | undefined {
     if (!ThreadSettingsStore.SESSION_ALIAS_RE.test(alias)) return undefined;
-    for (const mapping of this.sessionAliasMappings()) {
-      if (mapping.alias === alias) return { agentId: mapping.agentId, threadId: mapping.threadId };
-    }
-    return undefined;
+    return this.aliasOwners.get(alias);
   }
 
   listSessionAliases(): { agentId: AgentId; threadId: string; alias: string }[] {
@@ -495,36 +502,35 @@ export class ThreadSettingsStore {
     const uniqueTargets = new Map<string, { agentId: AgentId; threadId: string }>();
     for (const target of targets) {
       if (!target?.agentId || !target?.threadId) continue;
-      uniqueTargets.set(JSON.stringify([target.agentId, target.threadId]), target);
+      uniqueTargets.set(this.threadKey(target.agentId, target.threadId), target);
     }
-    const orderedTargets = [...uniqueTargets.values()].sort((left, right) =>
-      left.agentId === right.agentId
-        ? (left.threadId < right.threadId ? -1 : left.threadId > right.threadId ? 1 : 0)
-        : (left.agentId < right.agentId ? -1 : 1),
-    );
-    const mappings = this.sessionAliasMappings();
-    const owners = new Map<string, string>();
-    for (const mapping of mappings) {
-      if (!owners.has(mapping.alias))
-        owners.set(mapping.alias, JSON.stringify([mapping.agentId, mapping.threadId]));
-    }
-    const used = new Set<string>(mappings.map((mapping) => mapping.alias));
+    // 只把已知别名放进占用集合；不再为了检查而遍历/排序全部台账。
+    const used = new Set<string>(this.aliasOwners.keys());
     for (const reserved of reservedAliases) {
       if (typeof reserved === "string" && reserved) used.add(reserved);
     }
 
     let changed = false;
     const assigned = new Map<string, string>();
-    for (const target of orderedTargets) {
-      const key = JSON.stringify([target.agentId, target.threadId]);
+    for (const target of uniqueTargets.values()) {
+      const key = this.threadKey(target.agentId, target.threadId);
       // 原生会话以同一 id 重新出现时，撤销墓碑；否则 @s-… 会一直被当成已删除。
       if (this.data.deletedSessions?.[target.agentId]?.[target.threadId]) {
         delete this.data.deletedSessions[target.agentId]![target.threadId];
         changed = true;
       }
-      const current = this.sessionAlias(target.agentId, target.threadId);
+      const current =
+        this.threadAliases.get(key) ??
+        this.sessionAlias(target.agentId, target.threadId);
+      const owner = current ? this.aliasOwners.get(current) : undefined;
       // 保留属于本会话的代号；保留列表也可能包含它，不能据此重新分配。
-      if (current && owners.get(current) === key) {
+      if (
+        current &&
+        (!owner ||
+          (owner.agentId === target.agentId && owner.threadId === target.threadId))
+      ) {
+        this.threadAliases.set(key, current);
+        if (!owner) this.aliasOwners.set(current, { ...target });
         assigned.set(key, current);
         used.add(current);
         continue;
@@ -542,12 +548,61 @@ export class ThreadSettingsStore {
         agentLedger[target.threadId] = alias;
         changed = true;
       }
-      owners.set(alias, key);
+      this.threadAliases.set(key, alias);
+      if (!this.aliasOwners.has(alias))
+        this.aliasOwners.set(alias, { ...target });
       used.add(alias);
       assigned.set(key, alias);
     }
     if (changed) await this.save();
     return { aliases: assigned, changed };
+  }
+
+  /** 回收超过保留期的删除墓碑与别名；0 表示不回收。 */
+  async pruneDeletedSessions(retentionDays: number): Promise<boolean> {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) return false;
+    const cutoff = Date.now() - retentionDays * 86_400_000;
+    let changed = false;
+    for (const [agentId, group] of Object.entries(
+      this.data.deletedSessions ?? {},
+    )) {
+      if (!group) continue;
+      const aliases = this.data.sessionAliases?.[agentId as AgentId];
+      for (const [threadId, tombstone] of Object.entries(group)) {
+        if (!tombstone || tombstone.deletedAt > cutoff) continue;
+        // 原生会话重新出现但尚未同步别名时，不把仍在用的别名回收掉。
+        if (this.data.settings[agentId as AgentId]?.[threadId]) continue;
+        delete group[threadId];
+        if (aliases?.[threadId]) delete aliases[threadId];
+        changed = true;
+      }
+      if (!Object.keys(group).length)
+        delete this.data.deletedSessions![agentId as AgentId];
+      if (aliases && !Object.keys(aliases).length)
+        delete this.data.sessionAliases![agentId as AgentId];
+    }
+    if (!changed) return false;
+    this.rebuildAliasIndex();
+    await this.save();
+    return true;
+  }
+
+  private threadKey(agentId: AgentId, threadId: string) {
+    return JSON.stringify([agentId, threadId]);
+  }
+
+  private rebuildAliasIndex() {
+    this.aliasOwners.clear();
+    this.threadAliases.clear();
+    for (const mapping of this.sessionAliasMappings()) {
+      const key = this.threadKey(mapping.agentId, mapping.threadId);
+      this.threadAliases.set(key, mapping.alias);
+      if (!this.aliasOwners.has(mapping.alias))
+        this.aliasOwners.set(mapping.alias, {
+          agentId: mapping.agentId,
+          threadId: mapping.threadId,
+        });
+    }
   }
 
   private sessionAliasMappings(): { agentId: AgentId; threadId: string; alias: string }[] {

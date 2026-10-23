@@ -7,6 +7,7 @@ import type { AgentId } from "./types.js";
  * 状态码映射（404 / 409）也只在这一处定义，CLI 与 UI 依赖同一套语义。
  */
 export type RecipientErrorCode =
+  | "CALLER_UNRESOLVED"
   | "UNKNOWN_ALIAS"
   | "ARCHIVED"
   | "DELETED"

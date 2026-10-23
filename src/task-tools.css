@@ -411,3 +411,24 @@
     min-height: 42px;
   }
 }
+
+.deck-communication-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.deck-communication-fields label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.deck-communication-fields input:not([type="checkbox"]), .deck-communication-fields select {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 150px;
+}
+
+.deck-communication-fields label { min-height: 36px; }
+.deck-communication-fields summary { cursor: pointer; margin: 8px 0; color: var(--text-dim); }
+.deck-communication-fields input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--text); }

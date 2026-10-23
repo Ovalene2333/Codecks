@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentRegistry } from "./agents/registry.js";
@@ -9,6 +9,8 @@ interface StoredMessage extends MessageDelivery {
   originTurnId?: string;
   forceInterrupt?: boolean;
   external?: boolean;
+  compacted?: boolean;
+  textHash?: string;
 }
 
 interface Options {
@@ -52,8 +54,8 @@ export class MessageDeliveryQueue {
         for (const item of this.items) {
           this.persisted.add(item.id);
           // 旧版主会话缓冲不再使用：历史缓冲转为普通排队，空闲时正常送达。
-          if (item.buffered) {
-            delete item.buffered;
+          if ((item as any).buffered) {
+            delete (item as any).buffered;
             migrated = true;
           }
           if (item.status === "sending" || item.status === "interrupting") {
@@ -71,6 +73,7 @@ export class MessageDeliveryQueue {
       if (error?.code !== "ENOENT") console.error("消息队列读取失败，原文件保留:", error?.message);
     }
     if (recovered || migrated) await this.save();
+    await this.changed();
     this.options.agents.on("event", this.onEvent);
     if (this.options.timer !== false) {
       this.timer = setInterval(() => void this.tick().catch((error) => console.error("消息队列调度失败:", error?.message)), 1000);
@@ -80,7 +83,7 @@ export class MessageDeliveryQueue {
   }
 
   list(): MessageDelivery[] {
-    return this.items.map(({ input, originTurnId: _origin, ...item }) => ({
+    return this.items.filter((item) => !item.compacted).map(({ input, originTurnId: _origin, textHash: _hash, compacted: _compacted, ...item }) => ({
       ...item,
       // 受理回执可能先于 transcript 到达；最近 50 条完成记录也保留全文，
       // 前端确认聊天记录出现对应消息后才移除气泡。图片本体不进快照。
@@ -89,15 +92,25 @@ export class MessageDeliveryQueue {
     }));
   }
 
+  /** 只读投递回执，不带消息正文、图片或调用者凭据。 */
+  receipt(id: string) {
+    const item = this.items.find((entry) => entry.id === id);
+    if (!item) return undefined;
+    return { id: item.id, agentId: item.agentId, threadId: item.threadId,
+      mode: item.mode, status: item.status, turnId: item.turnId,
+      error: item.error, canRetry: item.canRetry, updatedAt: item.updatedAt };
+  }
+
   async enqueue(agentId: string, threadId: string, mode: MessageDeliveryMode, input: AgentMessageInput,
-    options?: { id: string; forceInterrupt?: boolean; buffered?: boolean }) {
+    options?: { id: string; forceInterrupt?: boolean }) {
     const existing = options && this.items.find((item) => item.id === options.id);
     if (existing) {
       await this.writes;
       if (!this.persisted.has(existing.id)) throw new Error("消息尚未持久化");
-      if (existing.agentId !== agentId || existing.threadId !== threadId || existing.input.text !== input.text)
+      if (existing.agentId !== agentId || existing.threadId !== threadId || (existing.compacted ? existing.textHash !== createHash("sha256").update(input.text).digest("hex") : existing.input.text !== input.text))
         throw new Error("消息标识冲突");
-      return this.list().find((entry) => entry.id === existing.id)!;
+      const { input: _input, originTurnId: _origin, textHash: _hash, compacted: _compacted, ...delivery } = existing;
+      return { ...delivery, text: existing.compacted ? undefined : existing.input.text, imageCount: existing.input.images?.length || 0 };
     }
     const state = this.options.agents.messageState(agentId, threadId);
     if (!state.capabilities.messages?.deliveryModes?.includes(mode))
@@ -111,8 +124,6 @@ export class MessageDeliveryQueue {
     const item: StoredMessage = {
       id: options?.id ?? randomUUID(), agentId, threadId, mode, status: "queued",
       external: Boolean(options), forceInterrupt: options?.forceInterrupt,
-      // 主会话缓冲：落盘即受理，tick 永远跳过，只等自取（inbox/claim）。
-      buffered: options?.buffered === true ? true : undefined,
       preview: input.text.trim().slice(0, 300) || `[${input.images?.length ?? 0} 张图片]`,
       input: { text: input.text, images: input.images },
       originTurnId: mode === "feedback" ? state.thread.activeTurnId : undefined,
@@ -131,10 +142,12 @@ export class MessageDeliveryQueue {
     const item = this.find(id, agentId, threadId);
     if (item.status === "sending" || item.status === "delivered")
       throw new AgentMessageError("busy", "消息已在发送或已受理，无法取消");
+    const draft = { text: item.input.text, images: item.input.images ?? [] };
     this.items.splice(this.items.indexOf(item), 1);
     this.persisted.delete(id);
     this.inflight.get(id)?.abort();
     await this.changed();
+    return draft;
   }
 
   async retry(id: string, agentId: string, threadId: string) {
@@ -189,41 +202,13 @@ export class MessageDeliveryQueue {
     if (this.closed) return;
     const targets = new Map<string, StoredMessage>();
     for (const item of this.items) {
-      if (item.status !== "queued" || !this.persisted.has(item.id) || item.buffered) continue;
+      if (item.status !== "queued" || !this.persisted.has(item.id)) continue;
       const key = JSON.stringify([item.agentId, item.threadId]);
       if (this.activeTargets.has(key)) continue;
       const previous = targets.get(key);
       if (!previous || (item.mode === "feedback" && previous.mode === "queue")) targets.set(key, item);
     }
     await Promise.all([...targets.values()].map((item) => this.deliver(item)));
-  }
-
-  /** 主会话缓冲区的只读视图：UI 徽标与搭车摘要的数据来源，不消耗缓冲。 */
-  inbox(agentId: string, threadId: string): MessageDelivery[] {
-    return this.list().filter((item) =>
-      item.agentId === agentId && item.threadId === threadId &&
-      item.buffered === true && item.status === "queued");
-  }
-
-  bufferedCount(agentId: string, threadId: string): number {
-    return this.inbox(agentId, threadId).length;
-  }
-
-  /**
-   * 原子领取：把目标会话缓冲区的消息取走并从队列移除，落盘后返回。
-   * 搭车进用户输入成功后调用；失败则缓冲原样保留，下次再领。
-   */
-  async claim(agentId: string, threadId: string, limit = 20): Promise<MessageDelivery[]> {
-    const claimed = this.inbox(agentId, threadId).slice(0, Math.max(1, limit));
-    if (!claimed.length) return [];
-    const ids = new Set(claimed.map((item) => item.id));
-    for (const item of this.items.filter((entry) => ids.has(entry.id))) {
-      this.inflight.get(item.id)?.abort();
-      this.items.splice(this.items.indexOf(item), 1);
-      this.persisted.delete(item.id);
-    }
-    await this.changed();
-    return claimed;
   }
 
   close() {
@@ -345,6 +330,15 @@ export class MessageDeliveryQueue {
     for (const item of completed.slice(0, Math.max(0, completed.length - 50))) {
       this.items.splice(this.items.indexOf(item), 1);
       this.persisted.delete(item.id);
+    }
+    const external = this.items.filter((item) => item.external && item.status === "delivered" && !item.compacted);
+    const cutoff = Date.now() - 7 * 86400_000;
+    for (let index = 0; index < external.length; index++) {
+      const item = external[index];
+      if (index < external.length - 500 || item.updatedAt < cutoff) {
+        item.textHash = createHash("sha256").update(item.input.text).digest("hex");
+        item.input = { text: "" }; item.preview = ""; item.compacted = true;
+      }
     }
     await this.save();
     this.options.onChanged?.();

@@ -300,38 +300,40 @@ test("offline backends preserve the queue until they are online", async (t) => {
   assert.equal(transport.sent.length, 1);
 });
 
-test("buffered messages wait for claim and never auto-deliver", async (t) => {
-  const { transport, deliveries, file } = await fixture(t, "reject");
-  await deliveries.enqueue("agent", "t", "queue", { text: "Buffered one" }, { id: "b1", buffered: true });
-  await deliveries.enqueue("agent", "t", "queue", { text: "Direct one" }, { id: "d1" });
-  assert.equal(deliveries.bufferedCount("agent", "t"), 1);
-  assert.equal(deliveries.bufferedCount("agent", "other"), 0);
-  assert.equal(deliveries.inbox("agent", "t").length, 1);
-  transport.finish();
-  await deliveries.tick();
-  assert.equal(transport.sent.length, 1, "tick 只投递非缓冲条目");
-  assert.equal(transport.sent[0].text, "Direct one");
-  assert.equal(deliveries.inbox("agent", "t").length, 1);
-  const claimed = await deliveries.claim("agent", "t");
-  assert.equal(claimed.length, 1);
-  assert.match(claimed[0].text!, /Buffered one/);
-  assert.equal(deliveries.inbox("agent", "t").length, 0);
-  const stored = JSON.parse(await readFile(file, "utf8"));
-  assert.ok(!stored.items.some((item: any) => item.id === "b1"), "领取即落盘移除");
-  assert.deepEqual(await deliveries.claim("agent", "t"), []);
-});
-
 test("legacy buffered entries become normal queued messages after reload", async (t) => {
   const { transport, deliveries, file } = await fixture(t, "queue");
-  await deliveries.enqueue("agent", "t", "queue", { text: "Buffered" }, { id: "b2", buffered: true });
+  await deliveries.enqueue("agent", "t", "queue", { text: "Buffered" }, { id: "b2" });
   deliveries.close();
+  const stored = JSON.parse(await readFile(file, "utf8"));
+  stored.items[0].buffered = true;
+  await writeFile(file, JSON.stringify(stored));
   const restored = new MessageDeliveryQueue({ file, agents: transport as unknown as AgentRegistry, timer: false });
   await restored.load();
   t.after(() => restored.close());
   // 旧版缓冲不再无限期等待用户输入，重启后按普通队列空闲即送达。
-  assert.equal(restored.bufferedCount("agent", "t"), 0);
+  assert.equal((restored.list()[0] as any).buffered, undefined);
   transport.finish();
   await restored.tick();
   assert.equal(transport.sent.length, 1);
   assert.match(transport.sent[0].text, /Buffered/);
+});
+
+test("old external bodies compact but receipt and dedup survive restart", async (t) => {
+  const { transport, deliveries, file } = await fixture(t, "queue");
+  transport.finish();
+  await deliveries.enqueue("agent", "t", "queue", { text: "Original body", images: [{ url: "data:image/png;base64,a" }] }, { id: "external-old" });
+  await deliveries.tick(); deliveries.close();
+  const stored = JSON.parse(await readFile(file, "utf8"));
+  stored.items[0].updatedAt = Date.now() - 8 * 86400_000;
+  await writeFile(file, JSON.stringify(stored));
+  const restored = new MessageDeliveryQueue({ file, agents: transport as unknown as AgentRegistry, timer: false });
+  await restored.load(); t.after(() => restored.close());
+  assert.equal(restored.list().length, 0);
+  assert.equal(restored.receipt("external-old")?.status, "delivered");
+  const disk = JSON.parse(await readFile(file, "utf8"));
+  assert.equal(disk.items[0].input.text, ""); assert.equal(disk.items[0].input.images, undefined);
+  const duplicate = await restored.enqueue("agent", "t", "queue", { text: "Original body" }, { id: "external-old" });
+  assert.equal(duplicate.status, "delivered");
+  await assert.rejects(restored.enqueue("agent", "t", "queue", { text: "Changed body" }, { id: "external-old" }), /冲突/);
+  await restored.tick(); assert.equal(transport.sent.length, 1);
 });

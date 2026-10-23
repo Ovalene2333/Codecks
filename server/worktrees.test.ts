@@ -100,10 +100,15 @@ test("a branch base is validated before creating the worktree", async (t) => {
   });
   const store = new WorktreeStore(dataDir);
   await store.load();
+  await writeFile(path.join(root, "README.md"), "# newer main\n");
+  await git(root, ["add", "."]);
+  await git(root, ["commit", "-qm", "advance main"]);
   const record = await store.create("thread-3", root, { base: "feature/demo" });
   const head = (await git(record.path, ["rev-parse", "HEAD"])).trim();
   const branch = (await git(root, ["rev-parse", "feature/demo"])).trim();
   assert.equal(head, branch);
+  assert.equal(record.commit, branch);
+  assert.notEqual(record.commit, (await git(root, ["rev-parse", "HEAD"])).trim());
   await assert.rejects(
     store.create("thread-4", root, { base: "-not-a-branch" }),
     /找不到分支或提交/,

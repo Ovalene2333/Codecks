@@ -17,8 +17,10 @@ import {
   Palette,
   Plug,
   RefreshCw,
+  Terminal,
   Wrench,
 } from "lucide-react";
+import { useDeckSettings } from "../deck-settings";
 import type { DeckNotificationPermission } from "../notifications";
 import { Button, Note } from "../kit";
 import { OpenCodeAgentsSection } from "../overlays/OpenCodeAgentsSection";
@@ -29,6 +31,7 @@ import { AgentsPanel, ReloadAllButton } from "./AgentsPanel";
 import { CodexBackendSection, LocalBackendSection } from "./BackendSection";
 import { CodexPage } from "./CodexPage";
 import { DataPage } from "./DataPage";
+import { DeveloperPage } from "./DeveloperPage";
 import { DirtyContext } from "./dirty";
 import { InterfacePage, type AppearanceControl } from "./InterfacePage";
 import { ProvidersPage, ReloadProvidersButton } from "./ProvidersPage";
@@ -45,7 +48,8 @@ export type SettingsPage =
   | "shortcuts"
   | "data"
   | "about"
-  | "providers";
+  | "providers"
+  | "developer";
 /** 有详情页的 Agent。其余 Agent 只有列表里的启用/重载。 */
 type AgentDetail = "codex" | "claude" | "opencode";
 /** 打开设置时直达的位置：一级页面，或某个 Agent 的详情。 */
@@ -77,7 +81,19 @@ const GROUPS: { label: string; items: SettingsPage[] }[] = [
   { label: "模型与 Agent", items: ["agents", "providers"] },
   { label: "系统", items: ["tools", "data", "about"] },
 ];
-const ALL_NAV = NAV;
+const DEVELOPER_NAV: NavItem = {
+  id: "developer",
+  label: "开发者",
+  icon: Terminal,
+  desc: "deck-api、别名回收与紧急停止。",
+};
+const ALL_NAV = [...NAV, DEVELOPER_NAV];
+const groupsFor = (developerMode: boolean) =>
+  GROUPS.map((group) =>
+    developerMode && group.label === "系统"
+      ? { ...group, items: [...group.items, "developer" as SettingsPage] }
+      : group,
+  );
 const AGENT_DETAILS: Record<AgentDetail, string> = {
   claude: "管理 Claude Code 使用的本机 CLI 版本。",
   codex: "Codex 为核心 Agent：供应商与共享运行时依附于它。",
@@ -148,6 +164,8 @@ export function SettingsModal({
   onOpenTool?: (path: string) => void;
 }) {
   const compact = useCompact();
+  const deckSettings = useDeckSettings();
+  const groups = groupsFor(deckSettings.developerMode);
   const initial = resolveInitial(initialTab);
   // 手机：没指定入口时先显示分类列表（page=null），点进去才是具体页面。
   const [page, setPage] = useState<SettingsPage | null>(() =>
@@ -241,10 +259,10 @@ export function SettingsModal({
   /** 手机的分类列表：与桌面同构的三个分组。 */
   const compactIndex = (
     <div className="settings-index">
-      {GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.label} className="ui-group">
           {group.items.map((id) => {
-            const item = NAV.find((entry) => entry.id === id)!;
+            const item = ALL_NAV.find((entry) => entry.id === id)!;
             const Icon = item.icon;
             return (
               <button
@@ -374,12 +392,22 @@ export function SettingsModal({
       case "data":
         return (
           <DataPage
-            snapshot={snapshot}
             preferences={snapshot.preferences}
             appearance={appearance}
             onSaved={onSaved}
             onToast={onToast}
             onConfirm={onConfirm}
+          />
+        );
+      case "developer":
+        return (
+          <DeveloperPage
+            snapshot={snapshot}
+            preferences={snapshot.preferences}
+            onSaved={onSaved}
+            onToast={onToast}
+            onConfirm={onConfirm}
+            onOpenTool={onOpenTool}
           />
         );
       case "about":
@@ -438,11 +466,11 @@ export function SettingsModal({
           <div className="settings-layout">
             {!compact ? (
               <nav className="settings-nav" aria-label="设置分类">
-                {GROUPS.map((group) => (
+                {groups.map((group) => (
                   <div key={group.label} className="settings-nav__group">
                     <p className="settings-nav__label">{group.label}</p>
                     {group.items.map((id) =>
-                      navItem(NAV.find((entry) => entry.id === id)!),
+                      navItem(ALL_NAV.find((entry) => entry.id === id)!),
                     )}
                   </div>
                 ))}

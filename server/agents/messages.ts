@@ -29,11 +29,7 @@ export interface MessageDelivery {
   disposition?: AgentMessageAcceptance["disposition"];
   error?: string;
   canRetry?: boolean;
-  /**
-   * 主从缓冲：发往主会话的 agent 消息永不直接注入回合，只在缓冲里等待
-   * 自取（UI 待发送列表可见，搭车进下一轮用户输入）。tick 永远跳过。
-   */
-  buffered?: boolean;
+
 }
 
 export interface AgentMessageInput {

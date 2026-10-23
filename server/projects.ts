@@ -1,5 +1,9 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  DEFAULT_SESSION_ALIAS_RETENTION_DAYS,
+  normalizeSessionAliasRetentionDays,
+} from "../shared/session-alias.js";
 import type {
   AgentId,
   ClaudePermissionMode,
@@ -12,7 +16,10 @@ import type {
   SandboxMode,
 } from "./types.js";
 
-const emptyPrefs = (): DeckPreferences => ({ recentDirs: [] });
+const emptyPrefs = (): DeckPreferences => ({
+  aliasRetentionDays: DEFAULT_SESSION_ALIAS_RETENTION_DAYS,
+  recentDirs: [],
+});
 
 /** 原子写 JSON：先落临时文件再 rename，避免崩溃写一半产生脏文件。 */
 async function writeJsonAtomic(file: string, content: string) {
@@ -177,6 +184,9 @@ export class ProjectStore {
       this.prefs.recentDirs = Array.isArray(this.prefs.recentDirs)
         ? this.prefs.recentDirs
         : [];
+      this.prefs.aliasRetentionDays = normalizeSessionAliasRetentionDays(
+        this.prefs.aliasRetentionDays,
+      );
     } catch (error: any) {
       if (error.code !== "ENOENT") throw error;
       this.prefs = emptyPrefs();

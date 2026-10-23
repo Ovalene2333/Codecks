@@ -1005,7 +1005,9 @@ export function App() {
       activityKey(item.agentId, item.threadId!) === key;
     const watchers = (snapshot.wakeWatchers || []).filter(mine);
     return {
-      code: (snapshot.sessionAliases || []).find(mine)?.alias,
+      code:
+        thread.alias ??
+        (snapshot.sessionAliases || []).find(mine)?.alias,
       watcher: watchers[0],
       watchers,
       lost: (snapshot.wakeLost || []).filter(mine),

@@ -1,14 +1,6 @@
-import { useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Download,
-  Hand,
-  RotateCcw,
-  Trash2,
-  Upload,
-} from "lucide-react";
-import { agentName, threadForceStopPath } from "../agents";
-import { getToken, post, put } from "../api";
+import { useMemo, useRef } from "react";
+import { Download, RotateCcw, Trash2, Upload } from "lucide-react";
+import { getToken, put } from "../api";
 import { normalizeAppearancePreferences } from "../appearance";
 import { localCacheUsage, requestLocalCacheClear } from "../cache";
 import {
@@ -16,15 +8,17 @@ import {
   normalizeDeckSettings,
   resetDeckSettings,
   updateDeckSettings,
+  useDeckSettings,
 } from "../deck-settings";
-import { Button, Group, Row, Section } from "../kit";
+import { Button, Group, Row, Section, Switch } from "../kit";
 import type { DeckPreferences, Snapshot } from "../types";
 import type { AppearanceControl } from "./InterfacePage";
 import type { ConfirmFn } from "./useAgentActions";
 
-/** 可导出/导入的服务端偏好：只含新会话默认值，不含最近目录与 Runtime 连接参数。 */
+/** 可导出/导入的服务端偏好：新会话默认值与别名保留期，不含最近目录与 Runtime 连接参数。 */
 const SERVER_KEYS = [
   "pinDefaults",
+  "aliasRetentionDays",
   "lastAgentId",
   "lastProviderId",
   "lastModel",
@@ -64,14 +58,12 @@ function pickServerPrefs(input: unknown): Partial<DeckPreferences> {
 
 /** 数据：设置的导出/导入、本地缓存、最近目录、恢复默认、本机令牌。 */
 export function DataPage({
-  snapshot,
   preferences,
   appearance,
   onSaved,
   onToast,
   onConfirm,
 }: {
-  snapshot?: Snapshot;
   preferences?: DeckPreferences;
   appearance: AppearanceControl;
   onSaved: (snapshot: Snapshot) => void;
@@ -82,30 +74,7 @@ export function DataPage({
   const usage = useMemo(localCacheUsage, []);
   const recentCount = preferences?.recentDirs?.length || 0;
   const hasToken = Boolean(getToken());
-  const [stopping, setStopping] = useState<string | null>(null);
-  const agents = snapshot?.agents;
-  const busyThreads = (snapshot?.threads || []).filter(
-    (thread) => thread.status === "running" || thread.status === "waiting",
-  );
-  const busyNote = busyThreads.length
-    ? busyThreads
-        .map((thread) => `${agentName(agents, thread)}「${thread.name}」`)
-        .join("、")
-    : "没有运行中或等待确认的会话";
-  const stopOne = async (thread: Snapshot["threads"][number]) => {
-    setStopping(thread.id);
-    try {
-      const result = await post<{ snapshot: Snapshot }>(
-        threadForceStopPath(thread),
-      );
-      if (result.snapshot) onSaved(result.snapshot);
-      return null;
-    } catch (error: any) {
-      return String(error?.message || error || "紧急停止失败");
-    } finally {
-      setStopping(null);
-    }
-  };
+  const deckSettings = useDeckSettings();
 
   const exportSettings = () => {
     const payload: SettingsExport = {
@@ -152,7 +121,7 @@ export function DataPage({
         body: (
           <p>
             会覆盖本设备的外观、输入、提醒、工具偏好
-            {Object.keys(server).length ? "，以及服务端的新会话默认值" : ""}。
+            {Object.keys(server).length ? "，以及服务端的新会话默认值与别名保留期" : ""}。
             导出时间：{parsed.exportedAt?.slice(0, 19).replace("T", " ") || "未知"}。
           </p>
         ),
@@ -247,54 +216,11 @@ export function DataPage({
       },
     );
 
-  const forceStop = (thread: Snapshot["threads"][number]) => {
-    const label = `${agentName(agents, thread)}「${thread.name}」`;
-    onConfirm(
-      {
-        title: `紧急停止 ${label}？`,
-        body: (
-          <p>
-            先尽力打断该会话正在执行的任务，然后不经校验把卡住的状态强制归位空闲，并撤掉挂起的审批。会话本身保留，之后可以继续使用。
-          </p>
-        ),
-        confirmLabel: "强制停止",
-        danger: true,
-      },
-      async () => {
-        const error = await stopOne(thread);
-        onToast(error || "已紧急停止");
-      },
-    );
-  };
-
-  const forceStopAll = () =>
-    onConfirm(
-      {
-        title: `紧急停止全部 ${busyThreads.length} 个会话？`,
-        body: (
-          <p>
-            {busyNote}
-            。先尽力打断每个会话正在执行的任务，然后把卡住的状态强制归位空闲。会话本身保留。
-          </p>
-        ),
-        confirmLabel: "全部停止",
-        danger: true,
-      },
-      async () => {
-        const errors: string[] = [];
-        for (const thread of busyThreads) {
-          const error = await stopOne(thread);
-          if (error) errors.push(`${thread.name}：${error}`);
-        }
-        onToast(errors.length ? errors.join("；") : "已全部紧急停止");
-      },
-    );
-
   return (
     <>
       <Section
         title="设置备份"
-        desc="导出本设备偏好与新会话默认值，不含访问令牌与 API 密钥。"
+        desc="导出本设备偏好与服务端设置，不含访问令牌与 API 密钥。"
       >
         <Group>
           <Row
@@ -388,59 +314,21 @@ export function DataPage({
           ) : null}
         </Group>
       </Section>
-      <Section
-        title="紧急停止"
-        desc="会话卡在「运行中 / 待确认」且常规停止、删除都失效时，在这里强制解除占用。"
-      >
+      <Section title="开发者" desc="高级调试与兜底操作，默认隐藏。">
         <Group>
           <Row
-            dot={busyThreads.length ? "busy" : "ok"}
-            title={
-              busyThreads.length
-                ? `${busyThreads.length} 个会话正在占用`
-                : "没有需要紧急停止的会话"
+            title="开发者模式"
+            desc="在设置中显示 deck-api 与紧急停止。"
+            side={
+              <Switch
+                label="开发者模式"
+                checked={deckSettings.developerMode}
+                onChange={(developerMode) =>
+                  updateDeckSettings({ developerMode })
+                }
+              />
             }
-            desc={busyNote}
           />
-          {busyThreads.map((thread) => (
-            <Row
-              key={thread.id}
-              dot={thread.status === "waiting" ? "warn" : "busy"}
-              title={thread.name}
-              desc={`${agentName(agents, thread)}，${
-                thread.status === "waiting" ? "等待确认" : "运行中"
-              }`}
-              side={
-                <Button
-                  size="sm"
-                  variant="danger"
-                  busy={stopping === thread.id}
-                  onClick={() => forceStop(thread)}
-                >
-                  <Hand />
-                  强制停止
-                </Button>
-              }
-            />
-          ))}
-          {busyThreads.length ? (
-            <Row
-              title="全部强制停止"
-              desc="逐个打断并归位上面列出的所有会话"
-              side={
-                <Button
-                  size="sm"
-                  variant="danger"
-                  busy={busyThreads.some((thread) => stopping === thread.id)}
-                  disabled={busyThreads.some((thread) => stopping === thread.id)}
-                  onClick={forceStopAll}
-                >
-                  <AlertTriangle />
-                  全部停止
-                </Button>
-              }
-            />
-          ) : null}
         </Group>
       </Section>
     </>

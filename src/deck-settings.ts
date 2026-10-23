@@ -43,6 +43,8 @@ export interface DeckLocalSettings {
   initialTurns: number;
   /** 侧栏手动排序：项目路径顺序与会话键顺序。 */
   sidebarLayout: SidebarLayout;
+  /** 显示 deck-api、别名回收与紧急停止等高级设置。 */
+  developerMode: boolean;
 }
 
 export const DECK_SETTINGS_KEY = "codex-deck:settings:v1";
@@ -60,6 +62,7 @@ export const DEFAULT_DECK_SETTINGS: DeckLocalSettings = {
   sidebarWidth: 0,
   initialTurns: 10,
   sidebarLayout: EMPTY_SIDEBAR_LAYOUT,
+  developerMode: false,
 };
 
 const oneOf = <T extends string>(value: unknown, options: T[], fallback: T) =>
@@ -135,6 +138,7 @@ export function normalizeDeckSettings(value: unknown): DeckLocalSettings {
     sidebarWidth: normalizeSidebarWidth(input.sidebarWidth),
     initialTurns: normalizeInitialTurns(input.initialTurns),
     sidebarLayout: normalizeSidebarLayout(input.sidebarLayout),
+    developerMode: bool(input.developerMode, d.developerMode),
   };
 }
 

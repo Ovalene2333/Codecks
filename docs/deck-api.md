@@ -101,8 +101,8 @@ bash "$DA" create codex -- '请复核下面的方案，重点看并发安全：�
 # 较长的问题从文件读取
 bash "$DA" create claude --name '方案复核' --file ./question.txt
 
-# Codex 来源推荐 steer：回传直接追加到当前回合
-bash "$DA" create codex --mode steer -- '请给出第二意见'
+# 人创建的来源会话使用 queue，不注入当前回合
+bash "$DA" create codex --mode queue -- '请给出第二意见'
 ```
 
 `create` 每次都会新建独立原生会话。目标看不到发起会话的历史，问题必须自包含。目标会话会收到自己的短别名（例如 `7f3a2c`）和一次性身份信息。
@@ -120,7 +120,7 @@ bash "$DA" send --file ./result.txt
 bash "$DA" send --session demo-review:01a1503d-… -- '需要确认：超时是否包含排队时间？'
 ```
 
-默认 send 模式可以多次调用 `send`，不会结束会话。正常结束时不会自动转发最终回复；**目标不主动 `send`，来源就收不到任何消息**。所以该模式要求目标即使没有新结论，也发送一条简短状态。detached 模式则直接留下最终答复，由来源自行获取。
+默认 send 模式可以多次调用 `send`，不会结束会话。正常结束时不会自动转发最终回复；**目标不主动 `send`，来源就收不到任何消息**。普通模式同样保存最终答复，来源可用 `result` 查询，不需要为了领取结果再创建或重跑任务。detached 模式直接留下最终答复，由来源自行获取。
 
 ### Detached：独立执行，稍后领取
 
@@ -136,27 +136,28 @@ bash "$DA" send --to @7f3a2c90 -- '补充约束：并发上限为 8。'
 | | 默认 send 模式 | detached 模式 |
 | --- | --- | --- |
 | 常规交付 | 目标主动 `send` | 目标在本会话最终答复中交付 |
-| 正常结束 | 不自动转发 | 保存最终答复，不推送任何通知；用 `result` 查询 |
-| 真实失败 | 自动通知来源 | 保存状态和 error，不推送通知；用 `result`/`tasks` 查询 |
+| 正常结束 | 保存最终答复，不自动转发；可用 `result` 查询 | 保存最终答复，不推送任何通知；用 `result` 查询 |
+| 真实失败 | 默认通知来源（可关闭） | 保存状态和 error，不推送通知；用 `result`/`tasks` 查询 |
 | 中止 / 取消 | 静默，不自动通知 | 同样静默；状态标记为 `cancelled` |
-| 来源如何获取 | 等待回传 | 用 `result` 领取，或按需读取 |
+| 来源如何获取 | 主动回传，或用 `result` 领取 | 用 `result` 领取，或按需读取 |
 | 显式 `send` | 投递消息 | 同样投递消息 |
 
-detached 控制默认通知策略，`--mode queue|steer|interrupt` 控制显式 `send` 的默认投递方式，两者独立。普通询问不发 `send` 并不等于 detached。detached 完成/失败时**不向来源推送任何消息**：来源可能是正在运行的主会话，自动返回会打断或污染用户回合；状态和正文只放在 `result`/`inspect`/`tasks` 里，由来源主动查询。
+以下为未另行订阅时的行为。雷达面板中系统通知订阅可分别配置普通与 detached 失败；取消/中断始终静默。detached 控制默认通知策略，`--mode queue|steer|interrupt` 控制显式 `send` 的默认投递方式，两者独立。普通询问不发 `send` 并不等于 detached。detached 完成/失败时**不向来源推送任何消息**：来源可能是正在运行的主会话，自动返回会打断或污染用户回合；状态和正文只放在 `result`/`inspect`/`tasks` 里，由来源主动查询。
 
 `result @<alias>`（也可用完整询问 ID）返回：
 
-- `item`：当前状态、detached、resultAvailable、错误等元数据。
+- `item`：当前状态、detached、resultAvailable、resultState、错误和逐条回传投递元数据。`resultState` 为 pending（待同步）、ready（可领取）、empty（没有最终文本）。
+- `outgoingMessages`：绑定来源消息的 ID、回合、deliveryId、投递状态和错误；`currentTurnSentCount` / `currentTurnDeliveredCount` 为本回合提交与送达数。已提交不等于已送达，已送达也不证明有最终结论或对方已读。显式 `--to` 的投递另用 `delivery <deliveryId>` 查询。
 - `result`：本回合的 `turnId`、`text`、`completedAt`、`truncated`；尚无结果时为 null。
 - `pending`：回合已完成，但原生历史尚未同步出结果。可稍后再查询，不要重新创建任务。
 
-结果只保存最终答复快照，不复制完整会话。优先提取原生 `final_answer`；无阶段标记的后端提取工具执行之后的尾部答复。没有文本时保留空交付，用户可打开子会话核对产物。超过 80,000 字符显式标记 truncated，全文保留在原生会话中。同步失败时 item 带 `captureError`（第 N 次失败原因），下次 tick/查询自动重试一次，成功后清除；不要把 `pending` 误判成任务失败而重建会话。
+普通和 detached 模式都保存本回合最终答复，结果查询不触发聊天。旧普通任务在首次 result 查询时按需补读，避免启动时扫描全部历史。结果只保存最终答复快照，不复制完整会话。优先提取原生 `final_answer`；无阶段标记的后端提取工具执行之后的尾部答复。没有文本时返回 result=null、resultState=empty、pending=false，不把空字符串当成交付；用户可打开子会话核对产物。超过 80,000 字符显式标记 truncated，全文保留在原生会话中。同步失败时 item 带 `captureError`（第 N 次失败原因），下次 tick/查询自动重试一次，成功后清除；不要把 `pending` 误判成任务失败而重建会话。
 
 查询不会触发来源执行，也不会消耗结果；已保存交付可在 Deck 重启、目标离线后重复读取。继续追问启动新回合后，旧结果清除，新回合结束后保存新交付，避免把旧答复当成新结果。
 
 `inspect` 返回近期回复、命令输出和文件路径，不包含推理；默认 40 行，可设置 1–200 行，最多 80,000 字符，裁剪时返回 truncated。它需要读取原生会话，后端不可用时会报错，不会伪装成仍在运行。
 
-来源可以继续自己的工作，按需读取状态与结果；不要紧密轮询。**detached 完成/失败不会通知来源，也不会用 steer/interrupt 把来源唤醒。** 只有主动 `result`/`inspect`/`tasks` 才能拿到状态与正文。
+来源可以继续自己的工作，按需读取状态与结果；不要紧密轮询。**detached 默认完成/失败不通知来源；显式订阅的系统通知也仅用 queue。** 只有主动 `result`/`inspect`/`tasks` 才能拿到状态与正文。
 
 ### 3. 来源继续追问
 
@@ -183,7 +184,7 @@ bash "$DA" kill @7f3a2c --now          # kill 是 stop 的别名
 # 让当前回合自然结束后再标记已停止；之后仍可 send 重新拉起
 bash "$DA" stop @7f3a2c --after-turn
 
-# 删除原生会话与台账；别名保留为墓碑，不再复用
+# 删除原生会话与台账；别名默认保留 2 天后回收
 bash "$DA" delete @7f3a2c
 bash "$DA" del @7f3a2c --keep-worktree
 
@@ -197,14 +198,14 @@ bash "$DA" unarchive @7f3a2c
 | `stop --now` | 取消待投递、打断当前回合、标记 `cancelled` | 默认；不发送任何自动消息 |
 | `stop --after-turn` | 取消待投递，等当前回合结束再标记 | 适合“别再开新回合” |
 | `stop --force` | 打断失败时再紧急归位 | 仍会清挂起审批 |
-| `delete` | 停止（必要时）→ 删原生会话 → 台账转墓碑 → 清理 worktree/watcher | 不可恢复 |
+| `delete` | 停止（必要时）→ 删原生会话 → 台账转墓碑（默认保留 2 天）→ 清理 worktree/watcher | 不可恢复 |
 | `archive` | 软隐藏，保留历史与别名 | 运行中不能归档 |
 
 - 删除会取消询问的初始投递、失败回传和 detached done 通知；显式 `send` 不在此列。
 - 删除默认停止该会话绑定的 watcher；`--keep-watchers` 保留并提示。
 - worktree 默认只清理 Deck 创建且无未提交改动的目录；dirty worktree 保留并报告路径。`--force` 会连同 dirty worktree 一起清理，请先确认没有未提交成果。
 - Claude 等需要关闭 Deck 连接的会话删除时加 `--close-connection`；被外部进程占用时会拒绝删除。
-- 删除后的询问和会话别名仍保留，`result` / `inspect` / `send` 返回 `DELETED`（410），不会 404 或误投。
+- 删除后的询问和会话别名在保留期内仍可定位，`result` / `inspect` / `send` 返回 `DELETED`（410），不会 404 或误投；保留期默认 2 天，到期后释放。
 - `stop` 只允许来源会话停止自己的子任务，或子任务停止自己；其他 Agent 需要显式 `--force`。浏览器 UI 按本机用户授权处理。
 
 ### 5. 监督外部任务
@@ -283,7 +284,7 @@ bash "$DA" wake poll -l job-4821 -i 120 -- \
 | --- | --- | --- |
 | `UNKNOWN_ALIAS` | 404 | 别名不存在 |
 | `ARCHIVED` | 409 | 目标会话已归档 |
-| `DELETED` | 410 | 询问或会话已删除；别名保留为墓碑，不会复用 |
+| `DELETED` | 410 | 询问或会话已删除；别名在保留期内返回 410，到期后释放 |
 | `AMBIGUOUS` | 409 | 同一目标绑定了多个不同来源的询问，带候选列表（仅 alias/status 等安全字段），必须显式指定 |
 | `BAD_FORMAT` | 400 | `--to` 格式无效 |
 | `NOT_CANCELLABLE` | 409 | 询问已结束，不能再 stop |
@@ -306,9 +307,10 @@ bash "$DA" wake poll -l job-4821 -i 120 -- \
 `@s-xxxxxxx` 形式的会话别名，不需要任何开关：
 
 - 固定 7 位小写字母数字，前缀 `s-`，与会话一一对应。
-- 首次生成后落盘，之后**永不重算**；服务重启、会话归档都不会改变。
-- 会话删除后别名仍保留在台账里，不会被新会话复用，旧链接不会指向错的对象；收件人解析和查询会明确返回 `DELETED`（410），而不是继续尝试投递。
-- 快照的 `sessionAliases` 字段和 `session.threads[].alias` 会下发当前映射；`GET /s/s-…` 直接跳转到会话。
+- 首次生成后落盘，会话活跃期间**永不重算**；服务重启、归档都不会改变。
+- 会话删除后别名进入墓碑，默认保留 2 天：期间收件人解析和查询返回 `DELETED`（410），旧链接不会指向别的会话；到期后回收，旧链接可能指向新会话。
+- 保留期在「设置 → 开发者 → deck-api」调整，`0` 表示不回收。
+- 快照的 `session.threads[].alias` 会下发当前映射；`GET /s/s-…` 直接跳转到会话。
 - 完整 session key 仍是唯一真源，只用于台账、API 和调试。
 
 用法：
@@ -385,11 +387,11 @@ bash "$DA" wake @s-0e67727 -- ssh demo-box 'wait-for-job'
 ## 界面与持久化
 
 - 会话头部雷达按钮打开「deck-api · 任务回传」：查看询问、子会话、状态、回传统计、模型与 effort，可复制会话别名、停止/归档/删除子任务并管理 watcher。
-- 删除前会确认；删除后询问从列表消失，原生会话、Deck 创建且干净的 worktree 与绑定 watcher 一并清理，别名保留墓碑。
+- 删除前会确认；删除后询问从列表消失，原生会话、Deck 创建且干净的 worktree 与绑定 watcher 一并清理，别名在保留期内保留墓碑。
 - 总览首页的「deck-api 监督中」列出本机 watcher；失联记录出现在「需要处理」。
-- 询问完成但一条都没回传时会标红，点目标可打开子会话核对。
-- detached 完成不因未发送回传而标红；雷达面板可选择协作方式创建任务，并点击「读取结果」获取交付，来源和子会话均显示 detached 标识。
-- 完成但未回传的询问不占用总览的「新回复 / 最近会话」，审批和异常仍正常显示。
+- 完成状态与主动消息投递分开显示；已发进度、旧回合消息或仍在排队的消息都不等于本回合最终交付。无最终文本时单独标记，可打开子会话核对。
+- 雷达面板中普通与 detached 任务均可点击「读取结果」，查看最终答复、同步错误和主动消息的投递状态；创建任务使用 CLI。
+- 总览「最近会话」包含各状态会话，按最近活动排序。
 - 询问关联、待发送消息、消息队列和唤醒 outbox 都会持久化，服务重启后继续处理。detached 交付的同步状态（`captureError`/重试计数）与已读指针同样落盘，重启后不重不漏。
 - 向绑定来源 `send` 期间重启导致受理结果不确定时，先检查会话，再用同一个 `--request-id` 重试，或新建会话；显式目标没有 `--request-id`，只能检查会话后再决定是否重发。
 
@@ -427,12 +429,13 @@ bash "$DA" wake @s-0e67727 -- ssh demo-box 'wait-for-job'
 | `GET` | `/api/deck/agents` | 可用 Agent、配置和 steer 能力 |
 | `GET` | `/api/deck/sessions` | 询问台账、状态、别名、回传统计 |
 | `GET` | `/api/deck/lanes` | 解析实际协作泳道；`q` 匹配询问/会话，或 `ask` / `session` / `project` 收窄 |
-| `GET` | `/api/deck/sessions/:reference/result` | 按别名或询问 ID 读取状态与 detached 最终交付 |
+| `GET` | `/api/deck/sessions/:reference/result` | 按别名或询问 ID 读取状态与本回合最终交付 |
+| `GET` | `/api/deck/deliveries/:id` | 读取单条投递回执，不返回消息正文 |
 | `GET` | `/api/deck/sessions/:reference/inspect?tail=40` | 查看原生会话近期输出 |
 | `POST` | `/api/deck/sessions/:reference/stop` | 停止未结束的询问；`mode=after-turn\|now\|force` |
 | `POST` | `/api/deck/sessions/:reference/archive` | 归档询问会话 |
 | `POST` | `/api/deck/sessions/:reference/unarchive` | 恢复归档 |
-| `DELETE` | `/api/deck/sessions/:reference` | 删除原生会话与台账，别名保留墓碑 |
+| `DELETE` | `/api/deck/sessions/:reference` | 删除原生会话与台账，别名在保留期内保留墓碑 |
 | `GET` | `/api/deck/targets` | 默认会话别名 |
 | `POST` | `/api/deck/events/:code` | 按会话别名投递外部事件 |
 | `GET` | `/s/:alias` | `s-…` 跳转到会话；询问别名跳转到询问子会话 |
@@ -462,3 +465,55 @@ bash "$DA" wake @s-0e67727 -- ssh demo-box 'wait-for-job'
 **升级后旧 watcher 无法投递**
 
 自动发现模式会刷新令牌；显式 URL 模式需检查所设置的 DECK_TOKEN 是否仍有效。
+
+
+## 可选能力：未读、通知和脚本等待
+
+常用 Agent 流程仍是 `create / send / tasks / result`。以下能力供用户或脚本选择，不要求每次调用，不要求 `send --final`。Deck 当前是宿主；这些行为不代表已发布独立核心库。
+
+```bash
+bash "$DA" tasks --unread
+bash "$DA" collect @7f3a2c90 @8a4b6d20
+bash "$DA" wait @7f3a2c90 --timeout 30
+bash "$DA" create codex --cwd /work/demo --worktree=main -- '复核并验证'
+```
+
+- `result` / `inspect` / 投递回执均只读。`collect` 最多批量处理 100 个引用，返回可重复读取的结果，并推进已读标记，不删除结果。`unread` 表示当前回合有未领取结果/失败，或有未确认的等待变化；不是消息接收者的阅读回执。
+- `waitingReason` 为 `waiting-approval`、`backend-offline`、`unresolved`、`stalled`，分别表示实际待处理审批、后端离线、空闲但历史无法匹配、运行中 5 分钟未见事件。`waitingSince` / `lastProgressAt` 用于排障；这些状态不自动中止或判失败。原生 retry 不会仅因 status=waiting 就被当成审批。
+- `wait` / `GET /api/deck/sessions/:reference/result?wait=0..60` 最多等待 60 秒；就绪、失败、取消或空最终答复立即返回，超时返回 `timedOut=true`。请求断开会取消等待，服务重启是连接中断，调用方重连后可查询，不能当作成功。wait 不推进已读，也不向会话发消息；skill 不推荐 Agent 把它作为默认流程。
+
+雷达「通信与创建设置」是配置客户端；同样可用 HTTP 读写，不需要通过聊天配置：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/deck/sessions?unread=true` | 筛选未读摘要 |
+| `POST /api/deck/collect`，`{references:["alias",…]}` | 显式批量领取 |
+| `GET/POST /api/deck/notices/:agentId/:threadId` | 来源的系统通知策略 |
+| `GET /api/deck/agents` | 目标与默认配置 |
+| `POST /api/deck/agents/:agentId/configuration` | 用户设置目标默认配置 |
+
+通知配置为 `{resultReady:false,failure:true,detachedFailure:false,waiting:false,windowSeconds:5,minIntervalSeconds:60}`，窗口范围 0–3600 秒，间隔范围 0–86400 秒。普通失败与 detached 失败分别由 failure/detachedFailure 控制，保存其它设置不会隐式改变 detached 失败默认值。只聚合系统指针，不合并 send，不搬运最终答复全文。每任务/回合/事件去重，digest 在入队前落盘，重启复用同一投递 ID。已观察到但未订阅的旧事件不会在之后开启订阅时集中补推。遗留已发送失败回执不会重新通知。
+
+## 目标目录与创建权限
+
+`create --cwd` 对应 JSON 的 `targetCwd`，用于目标目录；已有 `cwd` 仍是调用者身份识别线索。相对目标目录以来源会话目录解析。`--worktree` 使用目标目录 HEAD，`--worktree=<base>` 使用指定分支/提交，并准确记录基准提交。
+
+创建回执 `effectiveConfiguration` 的每项包含 `value` 和 `source`：adapter 表示适配器回显，request/default 表示传入或用户默认但未获确认（`confirmed:false`），native 表示原生默认且具体值未知（value=null）。不把传给适配器的请求值冒充适配器确认值。cwd/returnMode 也显示选择来源，主会话的有效回传方式是 queue。`worktree` 返回独立工作区记录。
+
+用户保存的目标默认配置可含 `approvalPolicy`、`sandbox`、`permissionMode`，另有独立的 `allowedPermissions`：
+
+```json
+{"sandbox":"read-only","allowedPermissions":{"sandbox":["read-only","workspace-write"]}}
+```
+
+默认值与允许集合互不代替。未请求权限时使用默认值；默认值为空则交给原生工具。可选 `permissions`（CLI `--approval` / `--sandbox` / `--permission-mode`）必须属于用户对应允许集合，空集合禁止 Agent 自选；不对不同原生模式做高低排序。模型覆盖保留权限默认值，但不会把允许集合透传给适配器。
+
+目标 cwd 由用户自由选择；workspace-write 的工作区范围随它改变，不意味着仍受来源项目目录限制。配置接口与其它管理接口共享可信本机鉴权，无法防止持有同一 token 的调用方改配置，不构成恶意 Agent 或跨用户安全隔离。
+
+Agent 常用命令不增加步骤；脚本可用 `deck-api --json send …` 取得原始 JSON，create 的提示写 stderr，stdout 只保留 JSON。未读查询可用 `source=self`（附调用者身份线索）或 `source=agentId:threadId`；CLI `tasks --unread` 默认只看当前来源，`--source` 可显式选择。UI 也按来源查询。升级时已有终态记录迁移为已读，之后新结果正常标记未读。
+
+系统通知台账损坏只暂停通知并在雷达设置中提示，原文件保留，任务/result 仍可使用；投递采用有限退避重试，永久错误标为 dead。通知正文历史保留 7 天、最多 5000 条事件和 1000 条已结束 digest；紧凑事件键保留以防修剪、时钟变化或重启后重推，不承诺总去重元数据恒定。
+
+旧 external 已送达消息正文最多保留最近 500 条且不超过 7 天，之后清除正文/图片并从快照移除。紧凑回执和内容摘要保留用于投递查询与 Deck 内部派生 ID 去重；元数据保留不等于无限保留完整聊天内容。
+
+通用契约与宿主策略的后续拆分见 [通用 API 边界](deck-api-boundary.md)。本轮不抽核心库，也未实现版本化通用 API。

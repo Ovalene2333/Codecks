@@ -104,6 +104,8 @@ test("history drafts only reuse safe inline images", () => {
 });
 
 test("deck-injected user messages are distinguished from human-typed ones", () => {
+  assert.equal(deckPushKind("[deck:notice:demo1234] task failed"), "notice");
+  assert.equal(deckPushKind("[deck:notice] @demo1234 result ready"), "notice");
   assert.equal(deckPushKind("帮我看看这段代码"), undefined);
   assert.equal(deckPushKind("[wake:abc123] [label] watcher 已失联：oops"), "wake");
   assert.equal(deckPushKind("[ask:7f3a2c] 结论：用 B"), "ask");

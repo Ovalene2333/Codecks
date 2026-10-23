@@ -31,10 +31,11 @@ export function visibleUserText(text: string) {
  * 人在输入框里手打的则没有；据此前缀在时间线里把“人发的”和
  * “send / 唤醒送进来的”区分展示。正文原样保留，只做标记。
  */
-export type DeckPushKind = "ask" | "send" | "wake" | "ask-create";
+export type DeckPushKind = "ask" | "send" | "wake" | "ask-create" | "notice";
 
 export const DECK_PUSH_LABEL: Record<DeckPushKind, string> = {
   ask: "询问回传",
+  notice: "系统通知",
   send: "消息推送",
   wake: "唤醒推送",
   "ask-create": "询问发起",
@@ -42,6 +43,7 @@ export const DECK_PUSH_LABEL: Record<DeckPushKind, string> = {
 
 export function deckPushKind(text: string): DeckPushKind | undefined {
   const trimmed = text.trimStart();
+  if (/^\[deck:notice(?::[^\]\s]+)?\]/.test(trimmed)) return "notice";
   if (/^\[ask:[^\]\s]+\]/.test(trimmed)) return "ask";
   if (/^\[send:[^\]\s]+\]/.test(trimmed)) return "send";
   // 兼容旧版：ask 回传曾经复用过 [wake:…] 前缀。

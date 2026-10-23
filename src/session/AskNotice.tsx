@@ -2,17 +2,21 @@ import { sessionKey } from "../format";
 import { sessionPath } from "../deck-history";
 import type { AskSession, ThreadSummary } from "../types";
 
-export const ASK_STATUS = { creating: "创建中", queued: "等待发送", running: "处理中", answered: "已完成（已回传）", completed: "已完成（未回传）", failed: "失败", cancelled: "已停止" };
+export const ASK_STATUS = { creating: "创建中", queued: "等待发送", running: "处理中", answered: "已完成", completed: "已完成", failed: "失败", cancelled: "已停止" };
 
-export function askStatusLabel(ask: Pick<AskSession, "status" | "detached" | "resultAvailable" | "sentCount"> & {
+export function askStatusLabel(ask: Pick<AskSession, "status" | "detached" | "resultAvailable" | "sentCount" | "resultState" | "waitingReason" | "unread"> & {
   archivedAt?: number;
   deletedAt?: number;
 }) {
   if (ask.deletedAt) return "已删除";
   if (ask.archivedAt) return "已归档";
-  if (ask.detached && ["completed", "answered"].includes(ask.status))
-    return ask.resultAvailable ? "已完成（结果可读取）" : "已完成（结果待同步）";
-  return ask.status === "completed" && ask.sentCount ? ASK_STATUS.answered : ASK_STATUS[ask.status];
+  if (ask.waitingReason && ["running", "queued"].includes(ask.status)) return ({ "waiting-approval": "等待审批", "backend-offline": "后端离线", unresolved: "等待匹配历史回合", stalled: "长时间无进展" })[ask.waitingReason];
+  if (["completed", "answered"].includes(ask.status)) {
+    if (ask.resultAvailable) return ask.unread ? "已完成（结果未读）" : "已完成（结果可读取）";
+    if (ask.resultState === "empty") return "已完成（无最终文本）";
+    return "已完成（结果待同步）";
+  }
+  return ASK_STATUS[ask.status];
 }
 
 export function AskNotice({ thread }: { thread: ThreadSummary }) {
@@ -32,7 +36,7 @@ export function AskNotice({ thread }: { thread: ThreadSummary }) {
     {ask.alias && <span>询问别名 @{ask.alias}</span>}
     {sessionAlias && <span>会话别名 @{sessionAlias}</span>}
     <span>模型：{thread.model && thread.model !== "default" ? thread.model : "原生默认"}，推理强度：{thread.reasoningEffort || "原生默认"}</span>
-    <span>累计提交回传 {ask.sentCount || 0} 条</span>
+    <span>本回合回传：已送达 {ask.currentTurnDeliveredCount || 0} / 已提交 {ask.currentTurnSentCount || 0} 条</span>
     <a href={sessionPath(source)}>查看发起会话</a>
     {ask.error && <span className="error-text">{ask.error}</span>}
   </div>;

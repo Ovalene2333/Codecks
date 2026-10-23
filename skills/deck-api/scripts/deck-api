@@ -42,23 +42,36 @@ deck-api create <agentId> [--detached] [--mode queue|steer|interrupt] [--name ti
     --detached 独立执行：目标在最终答复中交付，不要求 send；完成/失败不向来源推送通知，结果用 result/tasks 查询。
     来源可继续自己的工作，在合适时机用 result @alias 领取结果、inspect @alias 查看输出。
     detached 仍可显式 send 联系来源；--mode 只控制这些主动消息的默认投递方式。
-    --mode 是目标消息回传到来源时的默认投递方式，默认 queue。
-    queue 等来源空闲；steer 若来源正在运行则直接追加到当前回合（codex turn/steer，不打断），空闲时直接发送；
-    interrupt 先停止来源当前回合再发送。steer 只支持 codex 这类可转向的会话。
+    主会话的有效回传方式固定 queue；回执显示 effectiveConfiguration.returnMode。
+    --mode 仅对不受主会话保护的来源生效，具体语义见 help send。
+    --cwd dir 指定目标工作目录；--worktree 或 --worktree=base 使用独立 checkout。
+    --approval / --sandbox / --permission-mode 只能在用户明确配置的允许集合内选择，不自行提权。
+    create 回执的 effectiveConfiguration 显示 value/source；confirmed=false 表示未获适配器确认。
     --session agent:thread 显式指定创建来源；默认由 Deck 识别（无法佐证时必须显式给出）。
     仅用户明确要求时使用 --provider id / --model id / --effort value；否则使用 Deck 默认。
 EOF
       ;;
-    result|inspect)
+    result|inspect|wait)
       cat <<'EOF'
-deck-api result @alias                       读取状态与已保存的 detached 最终答复
+deck-api result @alias                       读取状态与已保存的本回合最终答复
 deck-api inspect @alias [--tail 40]           查看原生会话最近输出（1 至 200 行）
+deck-api wait @alias [--timeout 60]           可选脚本等待，0 至 60 秒；超时 timedOut=true
+    wait 不标已读，断连/重启不是成功；Agent 默认不用等待。
     也可用 create 返回的完整询问 ID。查询只读，不唤醒来源、不消耗结果，可重复读取。
-    result 返回 item、result（turnId/text/completedAt/truncated）、pending。
+    result 返回 item、result（turnId/text/completedAt/truncated）、pending。所有模式均可读取。
+    item.resultState 为 pending/ready/empty：待同步/可领取/未生成最终文本；空答复不算交付。
     pending 表示回合已结束但原生历史尚未同步；运行中或失败时 result 为 null，请看状态/error。
     inspect 返回近期回复、命令输出和文件路径，不包含推理；原生后端不可用时会报错。
     result 的截断由 truncated 标记；全文保留在原生会话，可用短链接打开。
     不要紧密轮询；先推进独立工作，再按需检查。来源结束回合后不会自行被唤醒。
+EOF
+      ;;
+    collect)
+      cat <<'EOF'
+deck-api tasks --unread                      筛选未领取结果/失败/等待变化
+deck-api collect @alias [@alias ...]           显式批量领取，最多 100 条
+    result 查询不标已读；collect 推进已读指针，结果仍可重复读取。
+    这是可选脚本/UI 能力，普通 Agent 流程无需额外执行。
 EOF
       ;;
     send)
@@ -68,7 +81,8 @@ deck-api send [--mode queue|steer|interrupt] [--to agent:thread|@alias] [--file 
     消息必须放在 -- 之后；旧式 `send <会话别名> <消息>` 不接受。
     --to @alias 指向询问回执；--to @s-xxxxxxx 指向会话本身（由 Deck 在创建时默认分配）。
     两者都不需要完整 thread ID；回执给哪个就用哪个，跨会话协作通常用 @s-…。
-    steer 即时追加到对方当前回合（运行时直接可见，不打断；codex 支持，需要时可用 agents 确认 steer 字段）；
+    人创建的主会话始终按 queue 投递；steer/interrupt 不会注入主会话。
+    对其他支持转向的会话，steer 即时追加到对方当前回合（运行时直接可见，不打断）；
     对方空闲时与直接发送相同，回合已变化时会失败（用 --request-id 重试）。
     --to 显式指定其他目标时默认 queue；send 直接进消息队列。
     --session agent:thread 指定当前发送会话（不是收件人）；多会话或跨平台时建议显式带上。
@@ -117,11 +131,12 @@ EOF
       ;;
     *)
       cat <<'EOF'
-deck-api help [create|send|result|inspect|stop|delete|archive|wake] 查看用法
+deck-api [--json] help [create|send|result|inspect|collect|wait|stop|delete|archive|wake] 查看用法
 
 deck-api create …                             创建独立会话并绑定来源（help create 看详情）
 deck-api create <agentId> --detached …         独立执行，不自动通知来源
 deck-api result @alias / inspect @alias        按需领取结果 / 查看执行输出
+deck-api delivery <deliveryId>                查询单条消息的投递状态（不代表已读）
 deck-api send …                               向来源或指定会话发消息（help send 看详情）
 deck-api stop @alias                          停止未结束的询问（别名 kill，静默不回报）
 deck-api delete @alias                        删除原生会话与台账（别名 del，别名保留墓碑）
@@ -153,6 +168,18 @@ json_str() {
   s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$'\t'/\\t}
   s=$(printf '%s' "$s" | LC_ALL=C tr -d '\000-\010\013\014\016-\037')
   printf '"%s"' "$s"
+}
+
+url_encode() {
+  local value=$1 encoded='' char hex index
+  local LC_ALL=C
+  for ((index=0; index<${#value}; index++)); do
+    char=${value:index:1}
+    case "$char" in [a-zA-Z0-9.~_-]) encoded+="$char" ;;
+      *) printf -v hex '%%%02X' "'$char"; encoded+="$hex" ;;
+    esac
+  done
+  printf '%s' "$encoded"
 }
 
 # json_field JSON KEY —— 取顶层字符串字段（够用即可，不依赖 jq）。
@@ -394,24 +421,51 @@ run_poll() { # code label interval done_re all -- cmd...
   done
 }
 
+json_output=false
+if [ "${1-}" = --json ]; then json_output=true; shift; fi
 cmd=${1:-help}; shift || true
 if [ "$cmd" = wake ]; then
   case "${1-}" in watch|poll|ps|stop) cmd=$1; shift ;; *) cmd=watch ;; esac
 fi
+if [ "$json_output" = true ]; then
+  case "$cmd" in create|ask|send|tasks|sessions|asks|agents|result|inspect|wait|collect|delivery) ;;
+    *) die "该命令未提供 --json 模式" ;;
+  esac
+fi
 if [ "${1-}" = --help ]; then usage "${cmd-}"; exit 0; fi
 case "$cmd" in
   agents|asks|sessions|tasks)
-    if [ "$cmd" = agents ]; then api GET /api/deck/agents; else api GET /api/deck/sessions; fi
+    endpoint=/api/deck/sessions; unread=false; source=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --unread) unread=true; shift ;;
+        --source) source=${2:?缺少来源}; shift 2 ;;
+        *) die "未知参数 $1" ;;
+      esac
+    done
+    if [ "$cmd" = agents ]; then endpoint=/api/deck/agents
+    elif [ "$unread" = true ] || [ -n "$source" ]; then
+      endpoint+='?unread='"$unread"
+      if [ -n "$source" ]; then endpoint+="&source=$(url_encode "$source")"
+      else endpoint+="&source=self&pid=$PID&codexThread=$(url_encode "${CODEX_THREAD_ID-}")&session=$(url_encode "${CODEX_DECK_SESSION-}")"; fi
+    fi
+    api GET "$endpoint"
     ;;
   ask|create)
     if [ "${1-}" = --help ]; then usage create; exit 0; fi
     target=${1:?缺少目标 agentId}; shift
-    mode=queue; detached=false; provider=''; model=''; effort=''; name=''; file=''
+    mode=queue; detached=false; provider=''; model=''; effort=''; name=''; file=''; target_cwd=''; worktree=''; sandbox=''; approval=''; permission=''
     session=${CODEX_DECK_SESSION-}; session_explicit=false
     while [ $# -gt 0 ]; do
       case "$1" in
         --mode) mode=${2:?缺少 mode}; shift 2 ;;
         --detached) detached=true; shift ;;
+        --cwd) target_cwd=${2:?缺少目录}; shift 2 ;;
+        --worktree) worktree=head; shift ;;
+        --worktree=*) worktree=${1#*=}; [ -n "$worktree" ] || die "缺少 base"; shift ;;
+        --sandbox) sandbox=${2:?缺少 sandbox}; shift 2 ;;
+        --approval) approval=${2:?缺少 approval}; shift 2 ;;
+        --permission-mode) permission=${2:?缺少 permissionMode}; shift 2 ;;
         --provider) provider=${2:?缺少 provider}; shift 2 ;;
         --model) model=${2:?缺少 model}; shift 2 ;;
         --effort) effort=${2:?缺少 effort}; shift 2 ;;
@@ -434,19 +488,44 @@ case "$cmd" in
       "$(json_str "$target")" "$(json_str "$mode")" "$detached" "$(json_str "$provider")" "$(json_str "$model")" \
       "$(json_str "$effort")" "$(json_str "$name")" "$(json_str "$session")" "$session_explicit" \
       "$(json_str "${CODEX_THREAD_ID-}")" "$(json_str "$PWD")" "$PID" "$(json_str "$question")")
+    extra=''
+    [ -z "$target_cwd" ] || extra+=",\"targetCwd\":$(json_str "$target_cwd")"
+    [ -z "$worktree" ] || extra+=",\"worktree\":{\"base\":$(json_str "$worktree")}"
+    permissions=''; sep=''
+    for key in sandbox approvalPolicy permissionMode; do
+      case "$key" in sandbox) value=$sandbox ;; approvalPolicy) value=$approval ;; permissionMode) value=$permission ;; esac
+      if [ -n "$value" ]; then permissions+="$sep$(json_str "$key"):$(json_str "$value")"; sep=,; fi
+    done
+    body="${body%?}$extra,\"permissions\":{$permissions}}"
     api POST /api/deck/create "$body" || exit 1
     if [ "$detached" = true ]; then
-      echo 'Detached 会话已创建；可继续自己的工作，稍后用 result @alias 领取或 inspect @alias 查看。完成/失败/中断不会推送通知，只能主动查询；不要紧密轮询。'
+      echo 'Detached 会话已创建；可继续自己的工作，稍后用 result @alias 领取或 inspect @alias 查看。默认完成/失败/中断不会推送通知，只能主动查询（用户另行订阅除外）；不要紧密轮询。' >&2
     else
-      echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 就不会有通知，失败会自动通知。'
+      echo '会话已创建；本回合到此结束，不要 sleep、轮询或等待。目标会主动 send 回传；它没有 send 时可用 result 查询最终答复；系统通知按用户订阅，失败默认通知。' >&2
     fi
     ;;
-  result|inspect)
+  collect)
+    [ $# -gt 0 ] || die "用法：deck-api collect @alias [@alias ...]"
+    refs=''; separator=''
+    for ref in "$@"; do
+      reference=$(resolve_ask_reference "$ref") || exit 1
+      refs+="$separator$(json_str "$reference")"; separator=,
+    done
+    api POST /api/deck/collect "{\"references\":[$refs]}" || exit 1
+    ;;
+  delivery)
+    delivery_id=${1:?缺少投递 ID}
+    [[ $delivery_id =~ ^[a-zA-Z0-9:_-]{1,200}$ ]] || die "无效投递 ID"
+    [ $# -eq 1 ] || die "用法：deck-api delivery <deliveryId>"
+    api GET "/api/deck/deliveries/$delivery_id" || exit 1
+    ;;
+  result|inspect|wait)
     reference=$(resolve_ask_reference "${1-}") || exit 1
     shift
-    tail=40
+    tail=40; timeout=60
     while [ $# -gt 0 ]; do
       case "$1" in
+        --timeout) [ "$cmd" = wait ] || die "--timeout 仅用于 wait"; timeout=${2:?缺少秒数}; shift 2 ;;
         --tail) [ "$cmd" = inspect ] || die "--tail 仅用于 inspect"; tail=${2:?缺少行数}; shift 2 ;;
         *) die "未知参数 $1" ;;
       esac
@@ -454,6 +533,10 @@ case "$cmd" in
     [[ $tail =~ ^[0-9]{1,3}$ ]] && [ "$tail" -ge 1 ] && [ "$tail" -le 200 ] || die "tail 应为 1 至 200 的整数"
     endpoint="/api/deck/sessions/$reference/$cmd"
     [ "$cmd" != inspect ] || endpoint+="?tail=$tail"
+    if [ "$cmd" = wait ]; then
+      [[ $timeout =~ ^[0-9]{1,2}$ ]] && [ "$timeout" -le 60 ] || die "timeout 应为 0 至 60 秒的整数"
+      endpoint="/api/deck/sessions/$reference/result?wait=$timeout"
+    fi
     api GET "$endpoint" || exit 1
     ;;
   whoami)
@@ -509,12 +592,14 @@ case "$cmd" in
     [ -z "$request_id" ] || body+=",\"requestId\":$(json_str "$request_id")"
     body+="}"
     resp=$(api POST /api/deck/send "$body") || exit 1
-    # 2xx 只代表持久受理。响应里的 messageId 是唯一可追溯凭据：重要消息发完后
-    # 用 sessions 查目标状态核实落地震，避免"受理≠送达"的静默失败（2026-10-19 两次实证）。
+    if [ "$json_output" = true ]; then printf '%s\n' "$resp"; exit 0; fi
+    # 2xx 只代表持久受理；使用 deliveryId 查询单条消息的真实投递状态。
+    delivery_id=$(json_field "$resp" deliveryId)
+    [ -n "$delivery_id" ] || delivery_id=$(json_field "$resp" id)
     mid=$(json_field "$resp" messageId)
     [ -n "$mid" ] || mid=$(json_field "$resp" id)
     if [ -n "$mid" ]; then
-      echo "消息已持久受理：messageId $mid（受理≠送达，重要消息用 sessions 核实对方状态）"
+      echo "消息已持久受理：messageId $mid；deliveryId $delivery_id（受理≠送达，用 deck-api delivery $delivery_id 查询）"
     else
       echo '消息已持久受理，将按投递方式发送。'
     fi
@@ -652,19 +737,6 @@ case "$cmd" in
     ;;
   ps)
     ps -eo pid,etime,args | grep -E '[d]eck-(api|send|wake) _(watch|poll)' || echo "没有运行中的 watcher"
-    ;;
-  stop)
-    pid=${1-}
-    [[ $pid =~ ^[0-9]+$ ]] || die "用法：deck-api stop <pid>"
-    # 优先经 Deck 停止：Deck 会记为主动停止，不报失联。
-    if api POST "/api/monitor/watchers/$pid/stop" '{}' >/dev/null 2>&1; then
-      echo "已停止 watcher $pid"
-      exit 0
-    fi
-    args=$(ps -o args= -p "$pid" 2>/dev/null) || die "进程 $pid 不存在"
-    [[ $args =~ deck-(api|send|wake)\ _(watch|poll) ]] || die "pid $pid 不是 deck-api watcher"
-    kill -USR1 -- "-$pid" 2>/dev/null || kill -USR1 "$pid" || die "无法停止 $pid"
-    echo "已停止 watcher $pid"
     ;;
   help|-h|--help) usage "$@" ;;
   *) usage; exit 1 ;;
